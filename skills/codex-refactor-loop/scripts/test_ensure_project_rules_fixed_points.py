@@ -24,6 +24,13 @@ SCRIPT_PATH = Path(__file__).with_name("ensure_project_rules_fixed_points.py")
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+CANONICAL_HUMAN_LABELS = {"🤖 human:auto-推进", "👤 human:需-maintainer-决策"}  # refactor helper, no behavior change
+NON_AUTO_HUMAN_LABEL = "👤 human:需-maintainer-决策"  # refactor helper, no behavior change
+REMOVED_HUMAN_LABELS = {"🆘 human:卡死", "🆘 human:卡死-需-rework"}  # refactor helper, no behavior change
+
 PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "audit.md",
     "design-issue-reply.md",
@@ -507,6 +514,115 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("codex-floor-deficit", skill_text)
         self.assertNotIn("ACTIVE <= 2", skill_text)
         self.assertEqual(skill_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
+
+
+class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
+    # Refactor (iter3/skill-human-label-taxonomy):
+    #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+    #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+    def skill_text(self) -> str:
+        return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    def label_group_2(self) -> str:
+        text = self.skill_text()
+        start = text.index("### Label 组 2 — Human")
+        end = text.index("### Bootstrap", start)
+        return text[start:end]
+
+    def bootstrap_block(self) -> str:
+        text = self.skill_text()
+        start = text.index("# 创建所有 human label")
+        end = text.index("### 转移时刻代码模板", start)
+        return text[start:end]
+
+    def test_human_label_taxonomy_has_single_non_auto_label(self) -> None:
+        label_group = self.label_group_2()
+        bootstrap = self.bootstrap_block()
+
+        for label in CANONICAL_HUMAN_LABELS:
+            with self.subTest(canonical=label):
+                self.assertIn(label, label_group)
+                self.assertIn(f'gh label create "{label}"', bootstrap)
+
+        self.assertEqual(label_group.count("| `🤖 human:auto-推进` |"), 1)
+        self.assertEqual(label_group.count("| `👤 human:需-maintainer-决策` |"), 1)
+        self.assertEqual(bootstrap.count("gh label create"), 2)
+
+        for label in REMOVED_HUMAN_LABELS:
+            with self.subTest(removed=label):
+                self.assertNotIn(label, label_group)
+                self.assertNotIn(f'gh label create "{label}"', bootstrap)
+
+    def test_human_escalation_routes_use_reason_surface(self) -> None:
+        skill = self.skill_text()
+        route_start = skill.index("Policy:the loop continues")
+        route_end = skill.index("### When to trigger Phase 9", route_start)
+        route_table = skill[route_start:route_end]
+        meta_start = skill.index("## Meta-layer escalation")
+        meta_end = skill.index("## CI 监控即时推进", meta_start)
+        meta_layer = skill[meta_start:meta_end]
+        ci_start = skill.index("### CI red 处理流水")
+        ci_end = skill.index("## Codex 进展实时上报", ci_start)
+        ci_flow = skill[ci_start:ci_end]
+        combined = "\n".join([route_table, meta_layer, ci_flow])
+
+        self.assertIn("META_RESOLVED:escalate-human", combined)
+        self.assertIn(NON_AUTO_HUMAN_LABEL, combined)
+        for token in ("reason", "banner", "PushNotification", "ci-stuck"):
+            with self.subTest(reason_surface=token):
+                self.assertIn(token, combined)
+        for label in REMOVED_HUMAN_LABELS:
+            with self.subTest(removed=label):
+                self.assertNotIn(f"label `{label}`", combined)
+                self.assertNotIn(f"`{label}` + PushNotification", combined)
+
+    def test_monitor_waiting_predicate_only_accepts_maintainer_decision(self) -> None:
+        sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+        old_env = os.environ.copy()
+        os.environ.setdefault("REPO_ROOT", str(REPO_ROOT))
+        try:
+            import importlib
+            import concurrency_monitor
+
+            monitor = importlib.reload(concurrency_monitor)
+            base = {"number": 1, "kind": "issue", "phase": "🔍 phase:design-solving"}
+
+            expected, _ = monitor.compute_expected([{**base, "human": NON_AUTO_HUMAN_LABEL}])
+            self.assertEqual(expected, 0)
+
+            for label in REMOVED_HUMAN_LABELS:
+                with self.subTest(removed=label):
+                    expected, _ = monitor.compute_expected([{**base, "human": label}])
+                    self.assertEqual(expected, 1)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_controller_cleanup_removes_removed_human_labels_without_producing_them(self) -> None:
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+
+        for label in REMOVED_HUMAN_LABELS | {NON_AUTO_HUMAN_LABEL}:
+            with self.subTest(cleanup_label=label):
+                self.assertIn(f'--remove-label "{label}"', controller_lib)
+
+        for line in controller_lib.splitlines():
+            with self.subTest(line=line):
+                self.assertFalse("--add-label" in line and "🆘 human:" in line)
+
+    def test_peek_hints_do_not_recommend_emergency_human_label(self) -> None:
+        peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
+
+        self.assertIn('META_RESOLVED:escalate-human:*) hint="→ label 👤 + reason banner + push notify" ;;', peek)
+        self.assertNotIn("label 🆘 + push notify", peek)
+
+        for line in peek.splitlines():
+            if "🆘" in line:
+                with self.subTest(legacy_line=line):
+                    self.assertTrue(
+                        "startswith(\"🆘\")" in line
+                        or "lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))" in line
+                        or "Old: 四个 Human label(含两个 🆘)" in line
+                    )
 
 
 class NamingPolicySourceRegressionTests(unittest.TestCase):

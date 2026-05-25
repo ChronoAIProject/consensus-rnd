@@ -168,13 +168,18 @@ gh issue view <N> --json comments --jq '
 输出格式稳定,易于直接判断派什么。
 
 ### 0 codex + active task = bug(强制)
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `spawn-codex.sh` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
 **Controller wakeup 第一动作**:`bash .claude/skills/codex-refactor-loop/scripts/peek.sh`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
 2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
-3. 如果所有 active issue/PR 都真在等 maintainer(全是 `🆘 human:卡死` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
+3. 如果所有 active issue/PR 都真在等 maintainer(全是 `👤 human:需-maintainer-决策` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
 
 **concurrency_monitor.py** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
@@ -198,22 +203,27 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 派出后 ScheduleWakeup;**不允许** "wakeup → sweep → 0 派出 → 下 wakeup" pattern(空 wakeup)。
 
 ### Controller 严禁自升 escalate(强制 — 防偷懒标人)
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
-controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/round 多 / 触及 Tier 或哲学"等理由直接 label `🆘 human:卡死`。
+controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/round 多 / 触及 Tier 或哲学"等理由直接 label `👤 human:需-maintainer-决策`。
 
 **判定铁律**:
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
 | `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
-| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `🆘 human` |
+| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `👤 human` |
 | `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
 | 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
 
-**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `🆘 human:卡死` + ASCII A/B/C banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
+**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `👤 human:需-maintainer-决策` + ASCII A/B/C reason banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
 
-结构性教训:controller 曾把多数 issue 误升为 `🆘 human:卡死`,根因是没有严格区分 `converge`、`stalled`、`philosophy` 三类 judge marker。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver,`stalled` 先派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
+结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、`stalled`、`philosophy` 三类 judge marker。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver,`stalled` 先派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
 
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
@@ -273,6 +283,11 @@ validate_prompt out.md                                    # check 0 unresolved {
 - PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
 
 **Label 生命周期(强制状态机)**:
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
 ```
 issue/PR 状态 → 期望 label
@@ -280,14 +295,14 @@ issue/PR 状态 → 期望 label
 design issue:
   open + 🤖 ai → 🔍 design-solving       (solver/judge 跑)
   open + 🤖 ai → 🛠 implementing         (implement 派出)
-  open + 🆘 human:卡死-需-rework         (escalate philosophy/split)
+  open + 👤 human:需-maintainer-决策     (rework/deadlock reason in banner/comment)
   closed       → 🎉 phase:merged          (via PR merge)
   closed       → wontfix                  (per maintainer drop directive)
 
 cluster PR:
   open + 🤖 ai → 🚀 phase:pr-open + 👀 reviewing  (reviewer 派出)
   open + 🤖 ai → 🚀 phase:pr-open + 🔧 fixing     (fix codex)
-  open + 🆘 human:卡死-需-rework                  (reflector escalate-human)
+  open + 👤 human:需-maintainer-决策              (reflector escalate-human with reason banner)
   closed merged → 🎉 phase:merged                  (via merge_pr)
   closed       → (no phase, branch deleted)
 
@@ -587,7 +602,7 @@ Controller turn 间 / session 间 / `/clear` 后,**后台 codex 继续跑不中�
      #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
-2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 3 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
+2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
@@ -1666,9 +1681,14 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
 - ❌ r2 verdict 变化但未 unanimous,controller 以"看起来卡了"自判 stalled。
 
-reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `🆘 human:卡死`;这只用于"共识机制本身无法收敛",非"触及 Tier/哲学/签名"。
+reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `👤 human:需-maintainer-决策` 并写 reason banner;这只用于"共识机制本身无法收敛",非"触及 Tier/哲学/签名"。
 
 ### Reflector 完成 → 立即回到共识阶段(强制)
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
 **关键 bug**:之前 `escalate:stalled` 触发后挂 `auto-loop-stuck` + `👤 human:需-maintainer-决策` label,**reflector 完成后没清掉**,导致 issue 视觉上仍卡在"等人"状态;controller sweep 时也会看到 stuck label 误以为不需处理。
 
@@ -1679,13 +1699,14 @@ gh issue edit <N> \
   --remove-label "auto-loop-stuck" \
   --remove-label "👤 human:需-maintainer-决策" \
   --remove-label "🆘 human:卡死" \
+  --remove-label "🆘 human:卡死-需-rework" \
   --add-label "🔍 phase:design-solving" \
   --add-label "🤖 human:auto-推进"
 ```
 
 然后按 `META_RESOLVED:<kind>` 路由立刻做下一步(派 fresh 3 solver 轮 / 关 issue / re-cluster);**不允许**停在"reflector done but stuck label still on"暧昧态。整个系统核心是多角色多角度共识——reflector 是中介调和角色,完成后必须把控制权交回 solver 共识循环。
 
-唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `🆘 human:卡死` label,这才是真正 human 介入态;它必须说明为什么 3 solver + meta-judge + reflector 的共识机制无法继续收敛。
+唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `👤 human:需-maintainer-决策` label 并写明 reason/banner,这才是真正 human 介入态;它必须说明为什么 3 solver + meta-judge + reflector 的共识机制无法继续收敛。
 
 ### Daemon → controller event channel + 自适应 wakeup(强制, 关于 daemon detect → controller 25 min gap 问题)
 
@@ -1745,7 +1766,7 @@ ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 
 ### Stuck label 4h 超时自动新一轮 meta-reflect(强制)
 
-每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` OR `🆘 human:卡死` label 的 issue:
+每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` label 的 issue:
 
 ```bash
 last_human_at=$(gh issue view <N> --json comments --jq '[.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .createdAt][-1] // .createdAt' | tr -d '"')
@@ -1917,7 +1938,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
   - `re-design` → reset Phase 9 round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
-  - `escalate-human` → `🆘 human:卡死` + PushNotification(仅 reflector 也无解)
+  - `escalate-human` → `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not repeat a framing that prior rounds showed to be underspecified without adding new exact text/evidence; doing so counts toward stall detection.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -2204,6 +2225,11 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - ❌ "需要人介入"用模糊措辞 → 人类还是不知道要不要看
 
 ## Meta-layer escalation — 强制
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
 **问题**:Phase 8 fix r6 仍 reject,或 CI same-check 6 次仍 fail,**第一反应不是喊 human**,而是**反思上一层是否本身错了**。喊 human 是最后的手段。
 
@@ -2213,7 +2239,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 3. **Phase 9 re-design**:重派 3 solver + meta-judge,prompt 带 "previous design caused 6 round non-converge"
 4. **Cluster re-split**:audit 阶段 re-evaluate,把当前 cluster 拆 / 合 / 撤回
 5. **Drop / wontfix**:确认任务本身价值不足,关 PR + close issue with wontfix
-6. **Human escalation**:`🆘 human:卡死` + PushNotification(只在 meta-layer 也无法解时)
+6. **Human escalation**:`👤 human:需-maintainer-决策` + reason banner + PushNotification(只在 meta-layer 也无法解时)
 
 ### 触发 meta-layer 反思
 
@@ -2242,7 +2268,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - `META_RESOLVED:re-design`: design 错位,关 PR / 撤回当前 implement,re-Phase 9 with reflector prompt
 - `META_RESOLVED:re-cluster`: cluster scope 错位,关 PR + audit 阶段 re-split(拆为 2-3 个小 cluster)
 - `META_RESOLVED:drop`: 任务价值不足或代价 > 收益,关 PR + close issue wontfix
-- `META_RESOLVED:escalate-human`: meta-layer 也无法解,真的需要 maintainer 决策
+- `META_RESOLVED:escalate-human`: meta-layer 也无法解,真的需要 maintainer 决策(reason 必须说明 rework / deadlock / ci-stuck 等原因)
 
 ```bash
 .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
@@ -2257,7 +2283,7 @@ Controller 读 marker 后路由:
 - `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
-- `escalate-human` → label `🆘 human:卡死` + PushNotification(只 meta-layer 也无路时)
+- `escalate-human` → label `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时)
 
 ### 反面(❌ 禁止)
 
@@ -2298,7 +2324,7 @@ done
    - codecov/patch → 派 `prompts/test-add.md` codex(uncovered patch lines)
 3. **label 转 `🔧 phase:fixing`** + post `## 📊` banner
 4. **fix codex 完成 → controller 立刻 commit + push + 重 watch CI**
-5. **3 次 fix 同 check 仍 fail → label 升 `🆘 human:卡死-需-rework` + PushNotification + 停 loop**
+5. **3 次 fix 同 check 仍 fail → label 升 `👤 human:需-maintainer-决策` + `ci-stuck` reason banner + PushNotification + 停 loop**
 
 ### 反面(❌ 禁止)
 
@@ -2369,12 +2395,16 @@ echo "{}" > .refactor-loop/codex-progress-state.json
 | `⏸️ phase:blocked` | blocked-on(等其他 issue) | dependency 链上游未完成 |
 
 ### Label 组 2 — Human(任意时刻**恰好一个**)
+<!--
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+-->
 
 | Label | 含义 | 触发 |
 |---|---|---|
 | `🤖 human:auto-推进` | 完全自动,**不需要人介入** | 默认 |
-| `👤 human:需-maintainer-决策` | 共识机制无法继续收敛,需要外部输入 | 仅 `META_RESOLVED:escalate-human` |
-| `🆘 human:卡死-需-rework` | 2 次 fix 仍失败 | fix r2 仍 reject / CI 2 次 fail |
+| `👤 human:需-maintainer-决策` | 共识机制无法继续收敛或自动修复耗尽,需要外部输入 | `META_RESOLVED:escalate-human` / rework / ci-stuck / deadlock reason |
 
 ### Bootstrap(一次性 - controller 在首次跑 loop 时确保 label 存在)
 
@@ -2388,7 +2418,6 @@ done
 # 创建所有 human label
 gh label create "🤖 human:auto-推进" --color "0e8a16" 2>/dev/null || true
 gh label create "👤 human:需-maintainer-决策" --color "d93f0b" 2>/dev/null || true
-gh label create "🆘 human:卡死-需-rework" --color "b60205" 2>/dev/null || true
 ```
 
 ### 转移时刻代码模板
@@ -2418,8 +2447,8 @@ PR 同理(`gh pr edit` instead of `gh issue edit`)。
 
 - **Label 与 banner 同步发**:不允许 label 转移但不发 banner,或发 banner 但 label 没改。
 - **同一组只允许一个**:不能同时有 `🛠️ phase:implementing` 和 `🚀 phase:pr-open`(实施完成 → 立刻改 pr-open)。
-- **`👤` 与 `🆘` 出现 = 共识机制停滞**:其他 label(`🤖`) = 完全自动。人类只 watch `👤` / `🆘` issue 即可。
-- **escalation 不等于人工授权 gate**:Phase 9 只有 `escalate:stalled` → reflector;只有 `META_RESOLVED:escalate-human` 才配 `👤` 或 `🆘`。
+- **`👤` 出现 = 共识机制停滞或自动修复耗尽**:其他 active human label(`🤖`) = 完全自动。`🆘 human:` 只允许作为 legacy cleanup target。
+- **escalation 不等于人工授权 gate**:Phase 9 只有 `escalate:stalled` → reflector;只有 `META_RESOLVED:escalate-human` 才配 `👤`。
 
 ### 反面(❌ 禁止)
 

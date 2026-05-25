@@ -110,6 +110,9 @@ if [ "$n" -gt 0 ]; then
 fi
 
 # 2. Recently finished markers (last 60 min) + routing hint
+# Refactor (iter3/skill-human-label-taxonomy):
+#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 echo ""
 echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
 find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
@@ -139,7 +142,7 @@ find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while rea
     META_RESOLVED:re-design:*)   hint="→ close PR + Phase 9 fresh round" ;;
     META_RESOLVED:re-cluster:*)  hint="→ close PR + audit re-split" ;;
     META_RESOLVED:drop:*)        hint="→ close PR + close issue wontfix" ;;
-    META_RESOLVED:escalate-human:*) hint="→ label 🆘 + push notify" ;;
+    META_RESOLVED:escalate-human:*) hint="→ label 👤 + reason banner + push notify" ;;
     AUDIT_DONE:*)            hint="→ 验证 cluster evidence + 开 design issues + 派 implement" ;;
     AUDIT_INCOMPLETE:*)      hint="→ re-dispatch audit with missing pieces" ;;
     TEST_ADD_DONE:*)         hint="→ commit/push 等 CI" ;;
