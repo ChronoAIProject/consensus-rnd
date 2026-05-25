@@ -1339,7 +1339,7 @@ gh issue edit <N> \
 ### Daemon → controller event channel + 自适应 wakeup(强制, 关于 daemon detect → controller 25 min gap 问题)
 
 **问题**:`comment-monitor.sh` 30s 周期 detect maintainer 评论 ✓ + eyes react ✓ + daemon banner ✓,但若没有 mounted Monitor bridge,controller wakeup 默认可能只靠 1500s(25 min) ScheduleWakeup,maintainer 评论到 controller 派 fresh round 最长 25 min gap — maintainer 看 daemon banner 后等 controller。
-**修法**:daemon writes durable event file → persistent Monitor wakes controller immediately → existing per-wakeup offset sweep processes events idempotently. ScheduleWakeup remains a fallback lane, not the immediate daemon-event lane.
+**修法**:daemon writes durable event file → persistent Monitor wakes controller immediately → existing per-wakeup offset sweep processes events idempotently. ScheduleWakeup remains a fallback lane, not the immediate daemon-event lane. <!-- Refactor (iter3/skill-monitor-wake-source): Old pattern: 2-lane wake source(harness task-notification + ScheduleWakeup). New principle: 3-lane wake source adds daemon-event Monitor lane(daemon writes event file -> mounted persistent Monitor bridge -> controller wakes immediately; daemon alone is not a wake source). -->
 
 Mount a persistent Monitor or equivalent harness bridge that forwards every non-empty line from both durable daemon event files, filtering only `tail -F` file headers:
 ```bash
