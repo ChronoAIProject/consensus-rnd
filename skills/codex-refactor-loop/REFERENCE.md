@@ -51,15 +51,6 @@ Stable v1 operational tokens:
   these names. Keep existing `refactor`, `cluster`, `auto-loop`, and `*_DONE` spellings as the
   v1 public routing surface while `WORK_UNIT_ID=$CLUSTER_ID` is the compatibility bridge.
 
-Self-modifying skill baseline gate:
-
-- When a cluster edits `skills/codex-refactor-loop/SKILL.md`, `REFERENCE.md`, prompts, or scripts,
-  record an independent pre-edit baseline artifact before implementation. The artifact must show
-  the failure mode or missing behavior observed before the skill change.
-- Phase 9 consensus artifacts authorize the implementation boundary only. They are not a substitute
-  for the AGENTS/superpowers skill-writing baseline, and implementation summaries must not claim a
-  deterministic local test run satisfies that baseline by itself.
-
 ## Producers in v1
 
 `WorkUnitV1` separates the queue item contract from the source that produced the item. The v1

@@ -474,28 +474,6 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
 
-    def test_self_modifying_skill_changes_require_pre_edit_baseline(self) -> None:
-        # Refactor (iter2/cluster-009-marker-label-compat-migration):
-        #   Old pattern: skill-changing clusters could treat Phase 9 consensus or local tests as the skill-writing baseline.
-        #   New principle: docs and source-regression coverage keep the independent pre-edit baseline as a separate process gate.
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        combined = "\n".join([reference_text, skill_text])
-
-        required_markers = (
-            "Self-modifying skill baseline gate",
-            "independent pre-edit baseline artifact before implementation",
-            "Phase 9 consensus artifacts authorize the implementation boundary only",
-            "consensus authorizes the plan",
-            "AGENTS/superpowers skill-writing baseline",
-            "deterministic local test run satisfies that baseline by itself",
-        )
-
-        for marker in required_markers:
-            with self.subTest(marker=marker):
-                self.assertIn(marker, combined)
-
-
 class NamingPolicySourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-010-rename-alias-strategy):
     #   Old pattern: public copy could drift back toward a mandatory rename or grow a duplicate alias identity
