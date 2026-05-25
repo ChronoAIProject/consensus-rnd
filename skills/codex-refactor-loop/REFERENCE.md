@@ -21,7 +21,7 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
 
-**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)。
+**6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
 
 **单例强制**(尤其 `dev_sync_daemon` 多实例会 race):每 wakeup `pgrep -f <daemon>` 应 = 1(`comment-monitor.sh` 偶显 2 是 script+内部子循环,正常)。重复 → `pkill -f <daemon>` 全清后按上面 pattern 重启 1 个,验 `pgrep` = 1。
 
@@ -361,7 +361,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 
 ### 首次唤醒强制序列(MANDATORY — 按序跑完才能 end turn)
 
-> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 5 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
+> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 6 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
 
 0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
@@ -377,13 +377,13 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
-3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只 bootstrap state + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
+- ❌ 只 bootstrap state + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -866,12 +866,44 @@ Daemon 工作流:
 8. codex 在同一 worktree resolve 文件 + `git add` + `git merge --continue`(不 push,daemon 后续 push)
 9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
 
+### Phase 9 router daemon command body
+
+`phase9_router_daemon.py` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:
+
+```bash
+nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/phase9_router_daemon.py --daemon --repo-root "$REPO_ROOT"' \
+  >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 &
+disown
+```
+
+One-shot / monitor:
+
+```bash
+python3 <skill-root>/scripts/phase9_router_daemon.py --once --repo-root "$REPO_ROOT"
+python3 <skill-root>/scripts/phase9_router_daemon.py --once --dry-run --repo-root "$REPO_ROOT"
+tail -50 .refactor-loop/logs/phase9-router-daemon.log
+```
+
+Allowlist(唯一 direct spawn authority):
+- `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
+- `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector.
+
+Everything else is fallback only: `META_JUDGE_DONE:consensus`, `IMPLEMENT_DONE`, `VERIFY_DONE`, `REVIEW_DONE`, `FIX_DONE`, `FIX_BLOCKED`, `TEST_ADD_DONE`, `META_RESOLVED`, and unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority.
+
+Ledger: append-only `.refactor-loop/phase9-router-ledger.jsonl`, one JSON line per dispatch: `{key, marker, log_path, dispatched_at}` where `key="<issue>-<round>-<role/judge>"`. Fallback event uses the same JSON fields and is appended to `.controller-pending-events.log` with a `phase9-router-fallback` prefix.
+
+Duplicate-dispatch recovery: if daemon crashes after spawn but before ledger, unfinished target log or a live `spawn-codex.sh --log <target>` is treated as in-flight and suppresses re-dispatch. If two daemons start, the lock file `.refactor-loop/phase9-router.lock` permits only one. If duplicate ledger rows ever appear, keep the first row and do not delete logs; controller fallback sweep can reconcile the completed marker.
+
+Staged expansion gates: r2 may add `META_JUDGE_DONE:consensus -> implement` only after r1 shows no duplicate dispatch and no missed Phase 9 continuation in one live round or equivalent replay. r3 may add Phase 8 reviewer/fix dispatch only after the route ledger proves triplet aggregation. Lifecycle/CI/banner/floor/merge_pr require later evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
+
 ### Daemon vs controller 分工
 
 | 任务 | 谁做 |
 |---|---|
 | dev → auto-refact-dev sync(常规 + 冲突解决) | **daemon**(600s 自主) |
-| 处理 design issue / Phase 9 / Phase 8 fix loop | controller(wakeup) |
+| Phase 9 triplet/converge/valid-stalled continuation | **phase9_router_daemon.py** narrow allowlist; controller fallback sweep retained |
+| 处理 design issue / Phase 9 consensus/implement / Phase 8 fix loop | controller(wakeup) |
 | 派 reviewer / fix / implement codex | controller |
 | 监控 daemon liveness + restart | controller per-wakeup |
 | Sync 异常 escalation(DEV_SYNC_BLOCKED) | controller 读 daemon log + escalate |
@@ -1292,13 +1324,15 @@ envsubst < <skill-root>/prompts/meta-judge.md \
   --stall 3600
 ```
 
+This triplet dispatch is now the first Phase 9 daemon-first route: `phase9_router_daemon.py` may do it directly after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains required.
+
 Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**:
 
 | Decision | Category | Controller 动作 |
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action";implement 可改 Tier I/II/CLAUDE.md/SPEC/核心抽象) |
-| `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt) |
-| `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人 |
+| `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt); `phase9_router_daemon.py` may direct-dispatch this route |
+| `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走 meta-layer reflect 节);**禁止**直接 label 人; `phase9_router_daemon.py` may direct-dispatch only when the stalled predicate holds |
 | `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge` / `escalate:stalled`;**禁止**直接 label 人 |
 
 结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。原因是路由只写了"escalate → label",没有明确 `stalled` 子类必须 reflector 优先。上表 `escalate:stalled` 行强制 reflector。
@@ -1940,7 +1974,7 @@ CI sweep contract: every controller wakeup checks open auto-loop PR checks, imme
 
 ## Codex 进展实时上报 — 强制
 
-`codex-progress-reporter.sh` is one of the five required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment when the codex finishes, and uses only log-tail `^EXIT=` for finished detection.
+`codex-progress-reporter.sh` is one of the six required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment when the codex finishes, and uses only log-tail `^EXIT=` for finished detection.
 
 <a id="label-bootstrap-loops"></a>
 ## Label bootstrap loops

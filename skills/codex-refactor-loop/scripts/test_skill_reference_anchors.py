@@ -71,7 +71,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         skill_lines = len(self.skill.splitlines())
 
         self.assertGreaterEqual(reference_lines, 2000)
-        self.assertLessEqual(reference_lines, 2450)
+        self.assertLessEqual(reference_lines, 2505)
         self.assertGreater(reference_lines, skill_lines * 2)
 
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
@@ -102,6 +102,15 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         scripts_dir = SKILL_ROOT / "scripts"
         self.assertFalse((scripts_dir / "daemon_event_monitor.sh").exists())
         self.assertFalse((scripts_dir / "daemon-event-monitor-bridge.sh").exists())
+
+    def test_reference_documents_phase9_router_daemon_boundary(self) -> None:
+        self.assertIn("phase9_router_daemon.py --daemon --repo-root", self.reference)
+        self.assertIn("Allowlist(唯一 direct spawn authority)", self.reference)
+        self.assertIn("clean `^EXIT=0`", self.reference)
+        self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.reference)
+        self.assertIn(".controller-pending-events.log", self.reference)
+        self.assertIn("no lifecycle authority", self.reference)
+        self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.reference)
 
 
 if __name__ == "__main__":

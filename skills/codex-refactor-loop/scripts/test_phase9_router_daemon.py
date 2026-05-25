@@ -1,0 +1,155 @@
+#!/usr/bin/env python3
+"""Behavior tests for the narrow Phase 9 router daemon."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from phase9_router_daemon import Phase9Router
+
+
+class Phase9RouterDaemonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.commands: list[list[str]] = []
+        self.router = Phase9Router(self.repo, command_runner=self.commands.append)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
+        path = self.repo / ".refactor-loop" / "logs" / name
+        tail = ["EXIT=0"] if exit_zero else ["EXIT=1"]
+        path.write_text("\n".join([*lines, *tail, ""]), encoding="utf-8")
+        return path
+
+    def ledger_entries(self) -> list[dict]:
+        path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def pending_events(self) -> str:
+        path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue{issue}-r{round_no}-{role}.log",
+                f"SOLVER_DONE:{role}:{verdict}:summary",
+            )
+
+    def test_phase9_router_clean_exit_gating_requires_tail_exit_zero(self) -> None:
+        self.write_log("phase9-issue37-r4-minimal.log", "SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue37-r4-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue37-r4-delete.log", "SOLVER_DONE:delete:ok:x", exit_zero=False)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_unknown_marker_fallback_appends_event_only(self) -> None:
+        self.write_log("phase9-issue37-r4-judge.log", "SOMETHING_DONE:surprise:payload")
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertIn("SOMETHING_DONE:surprise:payload", self.pending_events())
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_idempotency_spawns_once_per_dedupe_key(self) -> None:
+        self.solver_triplet()
+
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
+
+    def test_phase9_router_placeholder_exclusion_ignores_prompt_echo(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue37-r4-{role}.log",
+                f"prompt template says SOLVER_DONE:<{role}>:<verdict>:<summary>",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        command = self.commands[0]
+        self.assertIn(str(self.repo.resolve()), command)
+        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
+        self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
+
+    def test_phase9_router_converge_dispatches_next_round_solvers(self) -> None:
+        self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue37-r5-minimal.log", logs)
+        self.assertIn("phase9-issue37-r5-structural.log", logs)
+        self.assertIn("phase9-issue37-r5-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["37-5-delete", "37-5-minimal", "37-5-structural"],
+        )
+
+    def test_phase9_router_stalled_requires_valid_predicate(self) -> None:
+        self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.router.tick()
+        self.assertEqual(self.commands, [])
+
+        self.commands.clear()
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=38, round_no=round_no, verdict="same")
+        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        self.assertTrue(any("phase9-issue38-r3-reflector.log" in " ".join(command) for command in self.commands))
+        self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_lifecycle_markers_never_spawn(self) -> None:
+        markers = (
+            "META_JUDGE_DONE:consensus:structural:summary",
+            "IMPLEMENT_DONE:cluster:ok",
+            "VERIFY_DONE:cluster:ok",
+            "REVIEW_DONE:pr:quality:approve",
+            "FIX_DONE:pr:ok",
+            "FIX_BLOCKED:pr:reason",
+            "TEST_ADD_DONE:pr:ok",
+            "META_RESOLVED:retry-fix:reason",
+        )
+        for index, marker in enumerate(markers, start=1):
+            self.write_log(f"phase9-issue{index}-r1-judge.log", marker)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        events = self.pending_events()
+        for marker in markers:
+            self.assertIn(marker, events)
+
+
+if __name__ == "__main__":
+    unittest.main()
