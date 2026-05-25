@@ -4,7 +4,7 @@
 
 ## 必读
 
-1. `$REPO_ROOT/CLAUDE.md` 全部强制条款。
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款。
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 的 "${CLUSTER_ID}" 一节。
 3. `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md` 实施摘要。
 4. `git diff HEAD` —— 完整改动 diff。

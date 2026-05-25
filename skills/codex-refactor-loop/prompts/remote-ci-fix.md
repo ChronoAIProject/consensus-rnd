@@ -5,7 +5,7 @@ PR: `${PR_NUMBER}`，失败 check: `${CHECK_NAME}`，run url: `${RUN_URL}`。
 
 ## 必读
 
-1. `$REPO_ROOT/CLAUDE.md`
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`
 2. 失败日志：`${FAILURE_LOG_PATH}` —— 完整 stderr/stdout 的最后 200-1000 行
 3. 最近 commits（可能引入失败的）：通过 `git log --oneline -10 origin/${BASE_BRANCH}..HEAD` 查看
 4. 失败 check 对应的本地 job 脚本（如有，位于 `.github/workflows/`）
@@ -25,7 +25,7 @@ PR: `${PR_NUMBER}`，失败 check: `${CHECK_NAME}`，run url: `${RUN_URL}`。
    - **如本地复现** → 继续
 
 3. **修复**：
-   - 按 CLAUDE.md 原则修复，**不破坏已合并 cluster 的成果**
+   - 按 PROJECT_RULES 原则修复，**不破坏已合并 cluster 的成果**
    - 改动**最小化**：只动失败 test 直接相关的代码 + test
    - 如失败是 test 写错（不是产线 bug），改 test；如失败是产线 bug，改产线
    - 加 `// Fix (remote-ci/${CHECK_NAME}):` 注释说明根因

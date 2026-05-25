@@ -8,13 +8,13 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` — cluster spec.
-3. `$REPO_ROOT/CLAUDE.md` + `$REPO_ROOT/AGENTS.md` — clauses that frame the violation.
+3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 4. `$REPO_ROOT/$REPO_ROOT 的架构/词汇文档(若有)` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).
 5. The actual source files cited in the audit `evidence:` block (open them; verify line numbers).
 
 ## Procedure
 
-1. **Restate the violation** in CLAUDE-clause-precise terms. Which clause is it, exactly? Quote it.
+1. **Restate the violation** in PROJECT_RULES-clause-precise terms. Which clause is it, exactly? Quote it.
 2. **Map the clean structural solution**:
    - Which existing repo primitives apply (`IAsyncEnumerable`, `Channel`, actor inbox, projection pipeline, event envelope, etc.)?
    - What new abstraction is required, IF any (named precisely)?
@@ -44,8 +44,8 @@ cluster: ${CLUSTER_ID}
 verdict: propose | abstain | escalate
 ---
 
-## CLAUDE clause violated (quoted verbatim)
-> <exact CLAUDE.md text>
+## PROJECT_RULES clause violated (quoted verbatim)
+> <exact PROJECT_RULES text>
 
 ## Recommended framing (English)
 <one paragraph: what new structure, where, why it eliminates the violation by construction (not by exception)>
@@ -59,7 +59,7 @@ verdict: propose | abstain | escalate
 - LOC delta: ~+N / -M
 - Tests to add: <list with what behavior each asserts>
 - proto changes (if any): <field name + number + .proto file>
-- Philosophy/CLAUDE.md/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- Philosophy/PROJECT_RULES/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Runtime cost: <latency estimate, allocation estimate>
 
 ## Risks

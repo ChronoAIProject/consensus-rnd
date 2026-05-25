@@ -15,8 +15,8 @@ You explicitly resist adding code. If after honest evaluation the feature must s
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments.
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`.
-3. `$REPO_ROOT/CLAUDE.md` "## 架构哲学" → "删除优先" clause; "Deletion-first" principle.
-4. If deletion requires changing CLAUDE.md/AGENTS.md, L0/L1/L2 clauses, Tier boundaries, SPEC/conformance/trusted_base wording, or architecture vocabulary, treat that change as part of the deletion plan rather than a reason to escalate.
+3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "删除优先" clause; "Deletion-first" principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
+4. If deletion requires changing PROJECT_RULES/AGENTS.md, L0/L1/L2 clauses, Tier boundaries, SPEC/conformance/trusted_base wording, or architecture vocabulary, treat that change as part of the deletion plan rather than a reason to escalate.
 5. Call sites of the violating code:
    ```bash
    # Find all callers

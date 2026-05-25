@@ -15,7 +15,7 @@ Your job: read every reviewer's reject/comment evidence and apply concrete fixes
    - `${REVIEW_TESTS_PATH}`
    - `${REVIEW_QUALITY_PATH}`
 4. Cluster source: audit `${AUDIT_PATH}` and implement summary `${IMPLEMENT_SUMMARY_PATH}`.
-5. `$REPO_ROOT/CLAUDE.md` — every fix must comply with these clauses.
+5. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — every fix must comply with these clauses.
 
 ## Procedure
 
@@ -24,13 +24,13 @@ Your job: read every reviewer's reject/comment evidence and apply concrete fixes
 Open the 3 reviewer files. For each `reject` AND each `comment`, extract:
 - file:line citations
 - the exact "What would change your verdict" / suggestion text
-- which CLAUDE/AGENTS clause is cited (if any)
+- which PROJECT_RULES/AGENTS clause is cited (if any)
 
 Categorize each demand into one of:
 
 - **(A) Fixable in-scope** — concrete code change within `scope_paths` of this cluster. Apply it.
 - **(B) Fixable but scope-extend** — concrete code change outside scope_paths. Print `SCOPE_EXTEND: <file> <reason>` and apply it ONLY if rejecting this demand would block consensus AND the file is in the same logical refactor (e.g. add missing test file for the new public method).
-- **(C) False positive** — the reviewer mis-read (e.g. cited a file not in the PR, cited a deletion that never happened, demand contradicts CLAUDE.md). Do NOT apply. Record in `FIX_REPORT.md` with evidence proving it's a false positive.
+- **(C) False positive** — the reviewer mis-read (e.g. cited a file not in the PR, cited a deletion that never happened, demand contradicts `$PROJECT_RULES`). Do NOT apply. Record in `FIX_REPORT.md` with evidence proving it's a false positive.
 - **(D) Conflicting demands** — Architect demands X, Quality demands ¬X. Do NOT apply either side without resolution. Record both sides in `FIX_REPORT.md` and emit `FIX_BLOCKED:conflict:<short>` at the end.
 - **(E) Outside fix-codex authority** — demand requires a design decision (e.g. "delete this feature entirely" / "split this into 3 PRs" / "rename core type that other clusters depend on"). Record in `FIX_REPORT.md` and emit `FIX_BLOCKED:human-decision:<short>`.
 
@@ -66,7 +66,7 @@ Write `${FIX_OUTPUT_PATH}` with this structure:
 - (B) <file:line>: <SCOPE_EXTEND reason> ; <what was added>
 
 ## Rejected as false positive
-- <file:line cited by reviewer:<role>>: <evidence that this is wrong — e.g. "file not in PR's three-dot diff", "cited test still exists at line N", "CLAUDE clause M actually requires this">
+- <file:line cited by reviewer:<role>>: <evidence that this is wrong — e.g. "file not in PR's three-dot diff", "cited test still exists at line N", "PROJECT_RULES clause M actually requires this">
 
 ## Blocked (cannot fix this round)
 - <reviewer:<role>'s demand>: <reason — conflict|human-decision|build-broken>
@@ -97,7 +97,7 @@ End your output with EXACTLY one of:
 - **You do NOT modify other cluster's PRs** (only this PR's HEAD branch).
 - **False-positive demands must have proof** in FIX_REPORT — don't dismiss without evidence.
 - **FIX_REPORT 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-r<N>.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
-- **A demand citing CLAUDE.md verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
+- **A demand citing `$PROJECT_RULES` verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
 
 ## Anti-patterns (forbidden — emit FIX_BLOCKED instead of doing these)
 

@@ -14,7 +14,7 @@ description: Unattended three-phase refactor loop (analyze → implement → ver
 | `$REPO_ROOT` | host 仓库根 | host.env 必填 |
 | `$INTEGRATION_BRANCH` | 集成分支 | `auto-refact-dev` |
 | `$REVIEW_BASE_BRANCH` | review 基线分支 | `dev` |
-| `$PROJECT_RULES` | 审计/review 读的规则文档 | `CLAUDE.md` |
+| `$PROJECT_RULES` | 审计/review 读的规则文档,也是 Phase 0 managed fixed-point 写入目标 | `CLAUDE.md` |
 | `$BUILD_CMD` | 构建命令 | 示例 `dotnet build` / `cargo build` / `npm run build` |
 | `$TEST_CMD` | 测试命令 | host 专属 |
 | `$CI_GUARDS` | CI 守卫脚本(可选) | host 专属 |
@@ -579,6 +579,15 @@ Controller turn 间 / session 间 / `/clear` 后,**后台 codex 继续跑不中�
 0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
    - ❌ 严禁用 `git rev-parse` / `gh repo view` 猜值后带空 BUILD_CMD/TEST_CMD 硬跑。
+0b. **ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)**:在 `host.env` 注入后立即运行:
+   ```bash
+   python3 skills/codex-refactor-loop/scripts/ensure_project_rules_fixed_points.py
+   ```
+   - 该 helper 只维护解析后的 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 内一个 `consensus-rnd:foundational-invariants` sentinel managed 区块;区块外 host 内容保持不变。
+   - helper 退出非 0 → bootstrap fail closed:不得初始化 state、不得建 labels、不得起 daemon、不得派 audit / solver / reviewer / implement actor。
+   - # Refactor (iter1/host-claude-md-fixed-points):
+     #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
+     #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 3 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。

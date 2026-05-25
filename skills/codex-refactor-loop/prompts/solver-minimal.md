@@ -8,7 +8,7 @@ Your bias: **smallest viable change** that resolves the audit's flagged violatio
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` — cluster spec.
-3. `$REPO_ROOT/CLAUDE.md` + `$REPO_ROOT/AGENTS.md` — clauses that frame the violation.
+3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 4. The actual source files cited in the audit `evidence:` block (open them; do NOT trust line numbers without verifying).
 
 ## Procedure
@@ -21,7 +21,7 @@ Your bias: **smallest viable change** that resolves the audit's flagged violatio
    - LOC delta estimate (new + removed)
    - Files touched (count + paths)
    - Whether tests need adding (count + which test files)
-   - Any rule exception required, with exact CLAUDE.md text change proposed.
+   - Any rule exception required, with exact `$PROJECT_RULES` text change proposed.
 4. **Treat philosophy/Tier changes as plan material, not escape hatches**:
    - If the minimum viable solution changes CLAUDE.md/AGENTS.md, L0/L1/L2 clauses, Tier I/Tier II boundaries, core abstractions, or architecture vocabulary, include that edit directly in the concrete plan.
    - Spell out: exact file/clause, current rule being changed, proposed text, why it is worth the trusted-base cost, and why deep consensus should be reachable.
@@ -49,7 +49,7 @@ verdict: propose | abstain | escalate
 - Files: <list with intended action per file>
 - LOC delta: ~+N / -M
 - Tests to add/modify: <list>
-- Philosophy/CLAUDE.md/SPEC/Tier change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- Philosophy/PROJECT_RULES/SPEC/Tier change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Migration path: <single-step; "no migration needed" is also valid>
 
 ## Concrete plan (中文)

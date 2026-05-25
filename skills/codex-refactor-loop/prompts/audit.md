@@ -4,8 +4,8 @@
 
 ## 必读
 
-1. `CLAUDE.md` 顶级架构约束；所有"违反"必须对应到一条强制条款（引原文）。
-2. `AGENTS.md` 协作规范（如有）。
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 顶级架构约束；所有"违反"必须对应到一条强制条款（引原文）。
+2. `$REPO_ROOT/AGENTS.md` 协作规范（如有,辅助规则）。
 3. `$REPO_ROOT 的架构/词汇文档(若有)` 权威参考。
 4. `docs/audit-scorecard/` 历史审计仅作起点参考，**不**作为唯一线索源。
 5. 当前 git 分支：`git branch --show-current`。
@@ -14,7 +14,7 @@
 
 ### Step 1 — Coverage manifest（必出）
 
-为每条 CLAUDE/AGENTS 强制条款分配一个 `rule_id`。对每个 `rule_id`：
+为每条 PROJECT_RULES/AGENTS 强制条款分配一个 `rule_id`。对每个 `rule_id`：
 
 - 至少执行 1 个 grep/analyzer 命令（**记录命令字符串 + 命中数**）
 - 至少**打开** 3 个非测试生产文件**通读**（不是只看前 50 行）；写明 file path + summary
@@ -46,7 +46,7 @@ rg -n "<stringly typed identity / routing / subscription patterns>" $SOURCE_GLOB
 写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}-candidates.ndjson`：每行一个 candidate。
 
 ```json
-{"rule_id": "<CLAUDE clause id>", "path": "<file>", "line": <int>, "evidence": "<one-line code snippet>", "verdict": "accept|reject", "reject_reason": "<if reject>", "prior_cluster_overlap": "<cluster-id|none>"}
+{"rule_id": "<PROJECT_RULES clause id>", "path": "<file>", "line": <int>, "evidence": "<one-line code snippet>", "verdict": "accept|reject", "reject_reason": "<if reject>", "prior_cluster_overlap": "<cluster-id|none>"}
 ```
 
 **`candidate_count >= 25`**（除非所有 6 个 analyzer 命令都 0 命中——这时也要写 0-count 证据）。
@@ -129,7 +129,7 @@ human_brief:
 
 `verdict: reject` 的 candidate 必须有：
 
-- CLAUDE clause 引用 + 该 clause 对该候选**不适用**的具体理由（不是泛泛 "covered by guard"）
+- PROJECT_RULES clause 引用 + 该 clause 对该候选**不适用**的具体理由（不是泛泛 "covered by guard"）
 - 如 reject reason 是 "covered by existing CI guard"：必须给 guard 文件路径 + 行号 + 证明候选路径在 guard scan include set + 临时 probe 描述确认 reintroduction 会 fail
 - 如 reject reason 是 "same family as prior cluster"：必须证明候选 anti-pattern 100% 等同已修过的，不是字面相似但语义不同
 
