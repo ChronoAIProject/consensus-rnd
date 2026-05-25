@@ -59,6 +59,9 @@ safe_worktree() {
 # Post-merge cleanup: merge PR + close linked issue + cleanup labels on both
 # Usage: merge_pr <pr-number> [linked-issue]
 merge_pr() {
+  # Refactor (iter3/skill-human-label-taxonomy):
+  #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+  #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
   local pr="$1" linked_issue="${2:-}"
   if [ -z "$pr" ]; then
     echo "merge_pr: missing pr number" >&2
@@ -76,6 +79,9 @@ merge_pr() {
     --remove-label "🔧 phase:fixing" \
     --remove-label "⏸️ phase:blocked" \
     --remove-label "auto-loop-stuck" \
+    --remove-label "👤 human:需-maintainer-决策" \
+    --remove-label "🆘 human:卡死" \
+    --remove-label "🆘 human:卡死-需-rework" \
     --add-label "🎉 phase:merged" 2>&1 >/dev/null
   # Close linked issue + cleanup its labels
   if [ -n "$linked_issue" ]; then
@@ -84,8 +90,10 @@ merge_pr() {
       --remove-label "🔍 phase:design-solving" \
       --remove-label "🛠️ phase:implementing" \
       --remove-label "🤖 human:auto-推进" \
+      --remove-label "👤 human:需-maintainer-决策" \
       --remove-label "⏸️ phase:blocked" \
       --remove-label "auto-loop-stuck" \
+      --remove-label "🆘 human:卡死" \
       --remove-label "🆘 human:卡死-需-rework" \
       --add-label "🎉 phase:merged" 2>&1 >/dev/null
   fi
@@ -143,6 +151,9 @@ render_template() {
 # Sweep all closed auto-loop issues/PRs and clean stale in-flight phase labels
 # Usage: sweep_stale_labels
 sweep_stale_labels() {
+  # Refactor (iter3/skill-human-label-taxonomy):
+  #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+  #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
   local n_fixed=0
   for kind in issue pr; do
     gh "$kind" list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 50 --json number,labels 2>/dev/null | \
@@ -152,7 +163,7 @@ try:
     d = json.load(sys.stdin)
 except Exception:
     sys.exit(0)
-stale = ['🚀 phase:pr-open', '👀 phase:reviewing', '🔧 phase:fixing', '⏸️ phase:blocked', 'auto-loop-stuck', '🆘 human:卡死-需-rework', '🔍 phase:design-solving', '🛠️ phase:implementing', '🤖 human:auto-推进']
+stale = ['🚀 phase:pr-open', '👀 phase:reviewing', '🔧 phase:fixing', '⏸️ phase:blocked', 'auto-loop-stuck', '👤 human:需-maintainer-决策', '🆘 human:卡死', '🆘 human:卡死-需-rework', '🔍 phase:design-solving', '🛠️ phase:implementing', '🤖 human:auto-推进']
 for x in d:
     bad = [l['name'] for l in x['labels'] if l['name'] in stale]
     if bad:

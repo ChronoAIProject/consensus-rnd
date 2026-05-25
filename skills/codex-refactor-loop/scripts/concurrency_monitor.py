@@ -183,10 +183,13 @@ def list_auto_loop_issues() -> list[dict]:
 
 def compute_expected(items: list[dict]) -> tuple[int, list[dict]]:
     """Return (total_expected, breakdown)."""
+    # Refactor (iter3/skill-human-label-taxonomy):
+    #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
+    #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
     breakdown = []
     total = 0
     for it in items:
-        if it["human"] in ("👤 human:需-maintainer-决策", "🆘 human:卡死", "🆘 human:卡死-需-rework"):
+        if it["human"] == "👤 human:需-maintainer-决策":
             # 等人介入,不期望 codex
             continue
         n = PHASE_EXPECTED.get(it["phase"], 0)
