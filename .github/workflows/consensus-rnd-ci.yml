@@ -1,0 +1,95 @@
+name: consensus-rnd-ci
+
+on:
+  pull_request:
+    branches:
+      - auto-refact-dev
+      - dev
+  push:
+    branches:
+      - auto-refact-dev
+      - dev
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: consensus-rnd-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract-tests:
+    name: contract-tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run contract tests
+        run: python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'
+
+  manifest-version-sync:
+    name: manifest-version-sync
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check manifest version sync
+        run: python3 skills/codex-refactor-loop/scripts/check_manifest_version_sync.py
+
+  lint-advisory:
+    name: lint-advisory
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install advisory lint tools
+        shell: bash
+        run: |
+          set +e
+          python3 -m pip install --user ruff
+          RUFF_INSTALL_STATUS=$?
+          npm install -g markdownlint-cli2
+          MARKDOWNLINT_INSTALL_STATUS=$?
+          {
+            echo "## lint-advisory installs"
+            echo "- ruff install exit: ${RUFF_INSTALL_STATUS}"
+            echo "- markdownlint-cli2 install exit: ${MARKDOWNLINT_INSTALL_STATUS}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+      - name: Run advisory linters
+        shell: bash
+        run: |
+          set +e
+          shellcheck skills/codex-refactor-loop/scripts/*.sh
+          SHELLCHECK_STATUS=$?
+          python3 -m ruff check --select E9,F63,F7,F82 skills/codex-refactor-loop/scripts/*.py
+          RUFF_STATUS=$?
+          markdownlint-cli2 "**/*.md" "!node_modules" "!.git" "!.refactor-loop"
+          MARKDOWNLINT_STATUS=$?
+          {
+            echo "## lint-advisory results"
+            echo "- shellcheck exit: ${SHELLCHECK_STATUS}"
+            echo "- ruff exit: ${RUFF_STATUS}"
+            echo "- markdownlint-cli2 exit: ${MARKDOWNLINT_STATUS}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
