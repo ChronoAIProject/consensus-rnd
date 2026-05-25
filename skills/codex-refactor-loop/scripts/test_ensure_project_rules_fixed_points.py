@@ -539,6 +539,9 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(marker, public_copy)
 
 
+# Refactor (iter3/skill-contract-test-suite):
+#   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
+#   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
 class SkillContractSourceRegressionTests(unittest.TestCase):
     """Issue #16 consensus skill contract source-regression suite.
 
@@ -561,6 +564,22 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=rel, needle=needle):
                 self.assertNotIn(needle, text)
+
+    def test_spawn_with_banner_cli_hard_fails_as_tombstone(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SKILL_ROOT / "scripts" / "spawn_with_banner.py")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            "FATAL: spawn_with_banner.py is deprecated; use post_banner.py + "
+            "harness-tracked spawn-codex.sh\n",
+        )
 
     def test_spawned_prompts_and_banner_builders_keep_final_independent_sentinel(self) -> None:
         prompt_paths = [p for p in sorted((SKILL_ROOT / "prompts").glob("*.md")) if p.name != "_github-post-rules.md"]
