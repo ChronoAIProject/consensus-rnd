@@ -60,7 +60,7 @@ def _resolve_field(document: Any, field: str, *, path: str) -> Any:
     return current
 
 
-# Refactor (iter3/skill-ci-harness): Old: 无机械 manifest-version-sync 检查  New: standalone check_manifest_version_sync.py + CI required check(#31 structural 共识)
+# Refactor (iter3/skill-ci-harness): Old pattern: no mechanical manifest-version-sync check. New principle: standalone checker plus required CI status enforces CLAUDE.md version sync.
 def load_manifest_records(repo_root: Path) -> list[VersionRecord]:
     version_bump_path = repo_root / ".version-bump.json"
     version_bump = _load_json(version_bump_path)
