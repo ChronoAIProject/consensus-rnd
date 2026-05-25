@@ -36,8 +36,12 @@
 按顺序运行（任意失败 → rework）：
 
 ```bash
-bash $REPO_ROOT/$CI_GUARDS
-bash $REPO_ROOT/$CI_GUARDS
+if [ -n "${CI_GUARDS:-}" ]; then
+  bash "$REPO_ROOT/$CI_GUARDS"
+  bash "$REPO_ROOT/$CI_GUARDS"
+else
+  echo "guards skipped: CI_GUARDS unset"
+fi
 # 任何 cluster 特定守卫，例如：
 ${CLUSTER_SPECIFIC_GUARDS}
 ```

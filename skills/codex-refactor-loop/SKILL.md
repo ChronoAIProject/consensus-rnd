@@ -880,8 +880,12 @@ For each `pass` cluster, serially:
 
 2. **Local CI on the cluster branch** (still in worktree):
    ```bash
-   bash $CI_GUARDS
-   bash $CI_GUARDS
+   if [ -n "${CI_GUARDS:-}" ]; then
+     bash "$CI_GUARDS"
+     bash "$CI_GUARDS"
+   else
+     echo "guards skipped: CI_GUARDS unset"
+   fi
    # plus any cluster-specific guards from audit.verification_hints
    ```
    On fail → `git reset --soft HEAD~1` (undo the commit), mark cluster `rework`, re-dispatch implement codex with the failure log.
@@ -1139,11 +1143,15 @@ else
 fi
 
 # Run local CI on the post-sync integration head
-bash $CI_GUARDS && bash $CI_GUARDS
-if [[ $? -ne 0 ]]; then
-  echo "SYNC_CI_FAIL: post-merge guards failed"
-  # PushNotification + halt (do not push a broken integration)
-  exit 1
+if [ -n "${CI_GUARDS:-}" ]; then
+  bash "$CI_GUARDS" && bash "$CI_GUARDS"
+  if [[ $? -ne 0 ]]; then
+    echo "SYNC_CI_FAIL: post-merge guards failed"
+    # PushNotification + halt (do not push a broken integration)
+    exit 1
+  fi
+else
+  echo "guards skipped: CI_GUARDS unset"
 fi
 
 git push origin "$INTEGRATION_BRANCH"

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -652,6 +653,199 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
         for marker in forbidden_markers:
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, public_copy)
+
+
+# Refactor (iter3/skill-contract-test-suite):
+#   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
+#   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
+class SkillContractSourceRegressionTests(unittest.TestCase):
+    """Issue #16 consensus skill contract source-regression suite.
+
+    Keep this contiguous in the sole direct test file until the split threshold:
+    second real test file, this class >250 LOC, whole file >750 LOC, or scanner
+    helpers needed by multiple independent classes/files.
+    """
+
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def rel_paths(self, *patterns: str) -> list[Path]:
+        return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
+
+    def assert_absent(self, needle: str, paths: list[Path], allowlist: tuple[str, ...] = ()) -> None:
+        for path in paths:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel in allowlist:
+                continue
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=rel, needle=needle):
+                self.assertNotIn(needle, text)
+
+    def test_spawn_with_banner_cli_hard_fails_as_tombstone(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SKILL_ROOT / "scripts" / "spawn_with_banner.py")],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(
+            result.stderr,
+            "FATAL: spawn_with_banner.py is deprecated; use post_banner.py + "
+            "harness-tracked spawn-codex.sh\n",
+        )
+
+    def test_spawned_prompts_and_banner_builders_keep_final_independent_sentinel(self) -> None:
+        prompt_paths = [p for p in sorted((SKILL_ROOT / "prompts").glob("*.md")) if p.name != "_github-post-rules.md"]
+        for path in prompt_paths:
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(prompt=path.name):
+                self.assertIn("末尾独立一行", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+
+        for rel in ("skills/codex-refactor-loop/scripts/post_banner.py", "skills/codex-refactor-loop/scripts/comment-monitor.sh"):
+            text = self.read_rel(rel)
+            with self.subTest(builder=rel):
+                self.assertRegex(text, r"\n⟦AI:AUTO-LOOP⟧\n")
+                self.assertIn("--body-file", text)
+
+    def test_github_repo_contract_uses_slug_not_bare_owner_repo_api_paths(self) -> None:
+        checked = self.rel_paths(
+            "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/host.env.example",
+            "skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/scripts/*.sh",
+            "skills/codex-refactor-loop/scripts/*.py",
+        )
+        checked = [path for path in checked if path.name != Path(__file__).name]
+
+        self.assert_absent("repos/$GH_OWNER/$GH_REPO", checked)
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        self.assertIn('export GH_REPO_SLUG="your-org/your-repo"', host_env)
+        self.assertNotIn("export GH_REPO=", host_env)
+        for rel in ("skills/codex-refactor-loop/scripts/controller_lib.sh", "skills/codex-refactor-loop/scripts/peek.sh", "skills/codex-refactor-loop/scripts/triage-monitor.sh"):
+            with self.subTest(script=rel):
+                self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', self.read_rel(rel))
+
+    def test_optional_ci_guards_are_conditioned_on_non_empty_value(self) -> None:
+        checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/scripts/*.sh")
+        for path in checked:
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            with self.subTest(path=rel):
+                self.assertNotRegex(text, r"bash\s+\$REPO_ROOT/\$CI_GUARDS")
+                self.assertNotRegex(text, r"bash\s+\$CI_GUARDS")
+                self.assertNotIn("$CI_GUARDS &&", text)
+
+        contract_text = "\n".join(
+            self.read_rel(rel)
+            for rel in ("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/verify.md", "skills/codex-refactor-loop/scripts/controller_lib.sh")
+        )
+        self.assertGreaterEqual(contract_text.count('[ -n "${CI_GUARDS:-}" ]'), 3)
+        self.assertIn("guards skipped: CI_GUARDS unset", contract_text)
+
+    def test_daemon_start_examples_source_host_env_before_exec(self) -> None:
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        host_env_text = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        daemon_names = ("concurrency_monitor.py", "codex-progress-reporter.sh", "comment-monitor.sh", "dev_sync_daemon.py", "triage-monitor.sh")
+
+        self.assertIn("bash -c 'source .refactor-loop/host.env && exec", skill_text)
+        self.assertIn("bash -c 'source host.env && exec ...'", host_env_text)
+        for daemon in daemon_names:
+            with self.subTest(daemon=daemon):
+                self.assertIn(daemon, skill_text)
+        self.assertIn("禁止** 裸 `nohup python3 <daemon> &`", skill_text)
+        self.assertIn("不能用 `env $(grep ... host.env)`", host_env_text)
+
+    def test_label_taxonomy_matches_bootstrap_and_script_usage(self) -> None:
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+        monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
+        expected_phase = ("🔍 phase:design-solving", "✅ phase:consensus-reached", "🛠️ phase:implementing", "🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "⚙️ phase:ci-running", "🎉 phase:merged", "⏸️ phase:blocked")
+        expected_human = ("🤖 human:auto-推进", "👤 human:需-maintainer-决策", "🆘 human:卡死-需-rework")
+
+        for label in expected_phase + expected_human:
+            with self.subTest(label=label):
+                self.assertIn(label, skill_text)
+        self.assertIn('gh label create "$l" --color "5319e7"', skill_text)
+        for label in expected_human:
+            with self.subTest(human_bootstrap=label):
+                self.assertIn(f'gh label create "{label}"', skill_text)
+
+        for label in ("🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "🛠️ phase:implementing"):
+            with self.subTest(controller_label=label):
+                self.assertIn(label, controller_lib)
+        for label in ("🔍 phase:design-solving", "👀 phase:reviewing", "🛠️ phase:implementing"):
+            with self.subTest(monitor_label=label):
+                self.assertIn(label, monitor_text)
+
+    def test_spawn_with_banner_is_hard_failing_tombstone_not_mainline_surface(self) -> None:
+        tombstone = self.read_rel("skills/codex-refactor-loop/scripts/spawn_with_banner.py")
+
+        self.assertIn("Deprecated detached-spawn tombstone", tombstone)
+        self.assertIn("return 2", tombstone)
+        self.assertNotIn("subprocess.Popen", tombstone)
+        self.assertNotIn("start_new_session", tombstone)
+        self.assertNotIn("SPAWN_CODEX", tombstone)
+
+        active_docs = "\n".join(self.read_rel(rel) for rel in ("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/scripts/post_banner.py"))
+        self.assertIn("post_banner.py", active_docs)
+        self.assertIn("spawn-codex.sh", active_docs)
+        self.assertIn("反模式", active_docs)
+
+    def test_phase9_language_policy_allowlist_is_narrow(self) -> None:
+        allowlist = {
+            "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/audit.md",
+            "skills/codex-refactor-loop/prompts/design-issue-body.md", "skills/codex-refactor-loop/prompts/design-issue-reply.md",
+            "skills/codex-refactor-loop/prompts/meta-judge.md", "skills/codex-refactor-loop/prompts/solver-delete.md",
+            "skills/codex-refactor-loop/prompts/solver-minimal.md", "skills/codex-refactor-loop/prompts/solver-structural.md",
+        }
+        checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
+        patterns = ("Bilingual rule", "双语强制", "## English", "Recommended framing (English)")
+
+        for path in checked:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            for pattern in patterns:
+                if pattern not in text:
+                    continue
+                with self.subTest(path=rel, pattern=pattern):
+                    self.assertIn(rel, allowlist)
+
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        self.assertIn("Source files are English-only; external user-facing artifacts are 中文 by default", skill_text)
+        self.assertIn("No mandatory parallel English section", skill_text)
+
+    def test_non_controller_prompts_keep_git_and_lifecycle_boundaries(self) -> None:
+        controller_owned = {"_github-post-rules.md", "remote-ci-fix.md", "triage-external-issue.md"}
+        forbidden = ("git commit", "git push", "git checkout", "gh pr create", "gh pr merge", "gh issue close")
+
+        for path in sorted((SKILL_ROOT / "prompts").glob("*.md")):
+            if path.name in controller_owned:
+                continue
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for token in forbidden:
+                for line in lines:
+                    if token not in line:
+                        continue
+                    with self.subTest(prompt=path.name, token=token, line=line):
+                        self.assertRegex(line, r"禁止|不可调|Do NOT|do not")
+
+    def test_disabled_test_escape_hatches_are_not_recommended(self) -> None:
+        checked = self.rel_paths("skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/SKILL.md")
+        recommendation_patterns = (
+            r"(建议|可以|允许|recommend|use).{0,24}`?\[Skip\]`?",
+            r"pytest\.mark\.skip",
+            r"#\[ignore\]",
+            r"(建议|可以|允许|recommend|use).{0,24}Category\",\"Manual",
+        )
+
+        for path in checked:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            for pattern in recommendation_patterns:
+                with self.subTest(path=rel, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, text))
 
 
 if __name__ == "__main__":

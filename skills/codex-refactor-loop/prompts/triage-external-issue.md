@@ -88,4 +88,4 @@
 
 ## AI 内容标识符
 
-所有 GitHub comment / artifact 末尾必须独立一行 `⟦AI:AUTO-LOOP⟧`。
+所有 GitHub comment / artifact 必须末尾独立一行 `⟦AI:AUTO-LOOP⟧`。

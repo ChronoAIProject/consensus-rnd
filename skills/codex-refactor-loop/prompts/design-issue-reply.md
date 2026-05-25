@@ -19,10 +19,10 @@ new comment body:
 
 判定流程（按顺序，任一通过即视为团队成员）：
 
-1. `gh api repos/$GH_OWNER/$GH_REPO/collaborators/${COMMENT_AUTHOR}` 返回 204 → 是 repo collaborator → 通过。
+1. `gh api repos/$GH_REPO_SLUG/collaborators/${COMMENT_AUTHOR}` 返回 204 → 是 repo collaborator → 通过。
 2. `gh api orgs/该项目AI/members/${COMMENT_AUTHOR}` 返回 204 → 是 org member → 通过。
 3. `COMMENT_AUTHOR` 出现在已知 maintainer 白名单（maintainer / maintainer / maintainer / maintainer / maintainer / maintainer）→ 通过。
-4. controller 自己 post 的评论（用 `gh api repos/$GH_OWNER/$GH_REPO/issues/${ISSUE_NUMBER}/comments` 看 body 是否以 `## 🤖` 等 controller marker 开头 / 包含 "Generated with Claude Code" / 与上一条 controller comment 内容相似）→ 跳过，不视为新需要回复的评论。
+4. controller 自己 post 的评论（用 `gh api repos/$GH_REPO_SLUG/issues/${ISSUE_NUMBER}/comments` 看 body 是否以 `## 🤖` 等 controller marker 开头 / 包含 "Generated with Claude Code" / 与上一条 controller comment 内容相似）→ 跳过，不视为新需要回复的评论。
 
 如果上述都不通过：
 - 在 `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-skipped-$(date +%s).md` 写一行说明"未通过团队成员校验：<author> not collaborator, not org member, not whitelisted"。
