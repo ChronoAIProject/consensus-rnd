@@ -340,6 +340,8 @@ done
 
 You are the **Controller**. You never edit production code yourself. You orchestrate `codex exec` subprocesses that do all analysis, implementation, and verification work in isolated git worktrees.
 
+**默认 worker = codex CLI(`codex exec`),不是 Claude `Agent` / `Task` subagent(强制)**。所有需要「思考」的工作——分析、诊断、设计、实现、验证、review、solve,乃至对本 skill 自身的 baseline / 验证测试——一律 delegate 给 `codex exec`(经 `spawn-codex.sh`)。❌ 严禁用 Claude `Agent` / `Task` subagent 替代 codex 做这些工作。理由:codex 进程是 harness-tracked、可跨 session 存活、log 落 `.refactor-loop/logs/` 可 sweep、完成发 task-notification、被 concurrency floor 计数——这套无人值守编排的**全部不变量都建立在「worker 是 codex 进程」之上**;Claude subagent 不落盘 marker、不被 floor 计数、不留可 sweep 的状态,会让监控面、恢复逻辑、并发兜底全部失效。`refactor-team` skill 才是 Agent-subagent based 的那套;**本 skill 的 worker 恒为 codex CLI**。
+
 ## Controller = pure orchestration(最高优先级)
 
 维护者指令:**把所有思考分析工作也都交给 codex,controller 纯控制**。本节优先于后文任何旧的 `controller validation` / `controller verify` / `controller triage` 字样;那些字样只能解释为"读 marker / 查路由表 / 维护 git 与 GitHub 拓扑",不能解释为 controller 亲自分析、诊断、设计、验证或裁决正确性。
@@ -387,7 +389,9 @@ This skill complements `refactor-team` (Agent-subagent based). Use this skill wh
 /loop <task description... 完全无人值守模式>
 ```
 
-First wakeup → bootstrap state, dispatch audit codex, schedule fallback wakeup, end turn.
+**首次唤醒(first wakeup)→ 必须按序跑完「Phase 0 — Bootstrap」节的「首次唤醒强制序列」全部步骤再 end turn**:host.env 自检 → state + integration 分支 → 建全套 labels → **起并挂载全部 5 个 daemon** → 派 audit codex → ScheduleWakeup。漏任一步 = bootstrap 失败。
+
+**默认走 GitHub 全流程,这不是「本地分析任务」。** 本 skill 的本体 = GitHub 状态面 + 5 daemon + codex 多角度共识闭环。❌ 严禁把首次唤醒降级成「只在本地读代码 / 出 markdown 报告 / 本地改文件 commit」而**不 bootstrap GitHub、不起 daemon、不派 audit**——那等于根本没跑这个 skill。若 host 现状(如无应用代码 / host.env 缺失)让 GitHub 全流程暂不可行,正确动作是停下来 PushNotification 请 maintainer 补 host.env / 确认范围,而**不是**擅自改跑成本地任务。
 
 Subsequent wakeups → **derive state from GitHub**(open PR / open issue / labels / CI / log markers),advance any cluster that's ready, schedule next wakeup。**禁止**把 `.refactor-loop/state.json` 当 source of truth(详见下节)。
 
@@ -556,6 +560,28 @@ Controller turn 间 / session 间 / `/clear` 后,**后台 codex 继续跑不中�
 ---
 
 ## Phase 0 — Bootstrap (first wakeup only)
+
+### 首次唤醒强制序列(MANDATORY — 按序跑完才能 end turn)
+
+> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 5 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
+
+0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
+   - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
+   - ❌ 严禁用 `git rev-parse` / `gh repo view` 猜值后带空 BUILD_CMD/TEST_CMD 硬跑。
+1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
+2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 3 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
+3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+4. **派 audit codex**(Phase 1,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+
+每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
+
+#### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
+- ❌ 只 bootstrap state + 派 audit,不起 5 daemon(baseline 默认失败模式)
+- ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
+- ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
+- ❌ host.env 缺失时猜值硬跑
+
+---
 
 If `.refactor-loop/state.json` does not exist:
 
