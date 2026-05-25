@@ -562,6 +562,8 @@ Phase 6 guardrails:
 4. Sync failures must be visible on GitHub.
 5. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
+Named exception: `IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, and merged-rollup adoption. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort.
+
 Phase 7 guardrails:
 
 1. Sweep design issues every wakeup.
