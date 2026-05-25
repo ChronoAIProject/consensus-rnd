@@ -1,6 +1,7 @@
-# 任务：实施 ${CLUSTER_ID}
+# 任务：实施 ${WORK_UNIT_ID}
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。
+当前 v1 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；审计段查找、既有 artifact 文件名、分支/worktree 名和 marker 仍使用该 alias。
 
 ## 必读上下文
 

@@ -269,5 +269,104 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("helper 退出非 0 → bootstrap fail closed", skill_text)
 
 
+class WorkUnitV1SourceRegressionTests(unittest.TestCase):
+    # Refactor (iter2/cluster-007-work-unit-contract-schema):
+    #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed
+    #   New principle: source-regression coverage keeps WorkUnitV1 v1 containers authoritative and blocks premature work_units_* migration surface
+    def render_work_unit_template(self, *, work_unit_id: str | None, cluster_id: str) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            template = Path(tmp) / "template.md"
+            output = Path(tmp) / "rendered.md"
+            template.write_text(
+                "primary={{work_unit_id}}\nlegacy={{cluster_id}}\nunresolved={{work_unit_id}}\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(REPO_ROOT),
+                    "CLUSTER_ID": cluster_id,
+                    "ITERATION": "2",
+                    "WORKTREE_PATH": "/tmp/worktree",
+                    "BRANCH": "refactor/test",
+                    "OLD_PATTERN": "old",
+                    "NEW_PRINCIPLE": "new",
+                    "SCOPE_PATHS": "skills/codex-refactor-loop",
+                    "VERIFICATION_HINTS": "render test",
+                }
+            )
+            if work_unit_id is None:
+                env.pop("WORK_UNIT_ID", None)
+            else:
+                env["WORK_UNIT_ID"] = work_unit_id
+
+            script = f'source "{SKILL_ROOT / "scripts" / "controller_lib.sh"}"; render_template "$TEMPLATE" "$OUTPUT"'
+            result = subprocess.run(
+                ["bash", "-lc", script],
+                env={**env, "TEMPLATE": str(template), "OUTPUT": str(output)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return output.read_text(encoding="utf-8")
+
+    def test_work_unit_v1_contract_markers_are_present(self) -> None:
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
+        verify_prompt = (SKILL_ROOT / "prompts" / "verify.md").read_text(encoding="utf-8")
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+        combined = "\n".join([reference_text, skill_text, implement_prompt, verify_prompt, controller_lib])
+
+        required_markers = (
+            "WorkUnitV1",
+            "work_unit_schema_version",
+            "work_unit_id == id == cluster_id == legacy_cluster_id",
+            "WORK_UNIT_ID=$CLUSTER_ID",
+            "must not fabricate `cluster_id` or",
+            "`legacy_cluster_id`",
+            "s/\\{\\{work_unit_id\\}\\}/($ENV{WORK_UNIT_ID} || $ENV{CLUSTER_ID})/ge",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+    def test_work_unit_v1_forbidden_migration_surface_is_absent(self) -> None:
+        checked_paths = [
+            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "prompts" / "implement.md",
+            SKILL_ROOT / "prompts" / "verify.md",
+            SKILL_ROOT / "prompts" / "meta-judge.md",
+        ]
+        forbidden_tokens = tuple(f"work_units_{name}" for name in ("planned", "active", "done", "failed")) + (
+            "WorkUnit" + "EnvelopeV1",
+            "WorkUnit" + "ProducerV1",
+            "work_unit_" + "producer.py",
+        )
+
+        for path in checked_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                with self.subTest(path=path.name, token=token):
+                    self.assertNotIn(token, text)
+
+    def test_render_template_prefers_work_unit_id_over_cluster_alias(self) -> None:
+        rendered = self.render_work_unit_template(work_unit_id="unit-123", cluster_id="cluster-007")
+
+        self.assertIn("primary=unit-123", rendered)
+        self.assertIn("legacy=cluster-007", rendered)
+        self.assertNotIn("{{work_unit_id}}", rendered)
+
+    def test_render_template_falls_back_to_cluster_id_when_work_unit_id_is_unset(self) -> None:
+        rendered = self.render_work_unit_template(work_unit_id=None, cluster_id="cluster-007")
+
+        self.assertIn("primary=cluster-007", rendered)
+        self.assertNotIn("{{work_unit_id}}", rendered)
+
+
 if __name__ == "__main__":
     unittest.main()
