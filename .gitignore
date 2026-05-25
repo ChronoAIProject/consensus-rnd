@@ -1,0 +1,10 @@
+# Python bytecode (skill scripts)
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Host runtime artifacts (created when a skill runs inside a host repo,
+# never part of the published skill source)
+.refactor-loop/
