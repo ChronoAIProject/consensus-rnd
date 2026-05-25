@@ -42,6 +42,11 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             return []
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
+    def write_ledger_key(self, key: str) -> None:
+        path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
+        with path.open("a", encoding="utf-8") as ledger:
+            ledger.write(json.dumps({"key": key}, sort_keys=True) + "\n")
+
     def pending_events(self) -> str:
         path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
@@ -161,12 +166,30 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.commands.clear()
         for round_no in (1, 2, 3):
             self.solver_triplet(issue=38, round_no=round_no, verdict="same")
+        self.write_ledger_key("38-1-judge")
+        self.write_ledger_key("38-2-judge")
         self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
         self.router.tick()
 
-        self.assertEqual(len(self.commands), 3)
-        self.assertTrue(any("phase9-issue38-r3-reflector.log" in " ".join(command) for command in self.commands))
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue38-r3-reflector.log" in " ".join(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        self.assertEqual(len(self.commands), 1)
         self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_stalled_rejects_changed_recent_verdict_text(self) -> None:
+        for round_no, verdict in ((1, "same"), (2, "changed"), (3, "same")):
+            self.solver_triplet(issue=39, round_no=round_no, verdict=verdict)
+        self.write_ledger_key("39-1-judge")
+        self.write_ledger_key("39-2-judge")
+        self.write_log("phase9-issue39-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+
+        self.router.tick()
+
+        self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
+        self.assertNotIn("39-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+        self.assertIn("META_JUDGE_DONE:escalate:stalled:no-change", self.pending_events())
 
     def test_phase9_router_lifecycle_markers_never_spawn(self) -> None:
         markers = (
