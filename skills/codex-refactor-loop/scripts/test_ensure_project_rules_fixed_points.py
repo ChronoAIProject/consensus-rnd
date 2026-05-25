@@ -21,6 +21,23 @@ from ensure_project_rules_fixed_points import (
 )
 
 SCRIPT_PATH = Path(__file__).with_name("ensure_project_rules_fixed_points.py")
+SKILL_ROOT = SCRIPT_PATH.parents[1]
+REPO_ROOT = SCRIPT_PATH.parents[3]
+
+PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
+    "audit.md",
+    "design-issue-reply.md",
+    "implement.md",
+    "remote-ci-fix.md",
+    "review-fix.md",
+    "reviewer-architect.md",
+    "solver-delete.md",
+    "solver-minimal.md",
+    "solver-structural.md",
+    "test-add.md",
+    "triage-external-issue.md",
+    "verify.md",
+)
 
 
 class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
@@ -224,6 +241,32 @@ class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
         self.assertTrue(text.endswith("\n\n## Host extension\n"))
         self.assertIn(CANONICAL_BODY, text)
         self.assertEqual(START_RE.search(text).group(1), CANONICAL_HASH)
+
+
+class ProjectRulesPromptContractTests(unittest.TestCase):
+    # Refactor (iter1/host-claude-md-fixed-points):
+    #   Old pattern: actor prompts could regress to hardcoded $REPO_ROOT/CLAUDE.md as the mandatory rules input while helper tests still passed
+    #   New principle: source-regression coverage keeps actor prompts wired to $REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}
+    def test_actor_prompts_keep_project_rules_as_mandatory_rules_input(self) -> None:
+        prompts_root = SKILL_ROOT / "prompts"
+
+        for prompt_name in PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT:
+            prompt = prompts_root / prompt_name
+            text = prompt.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_name):
+                self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", text)
+
+        for prompt in sorted(prompts_root.glob("*.md")):
+            text = prompt.read_text(encoding="utf-8")
+            with self.subTest(no_hardcoded_rules_input=prompt.name):
+                self.assertNotIn("$REPO_ROOT/CLAUDE.md", text)
+
+    def test_phase0_runtime_contract_names_resolved_project_rules_target(self) -> None:
+        skill_text = (REPO_ROOT / "skills" / "codex-refactor-loop" / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)", skill_text)
+        self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", skill_text)
+        self.assertIn("helper 退出非 0 → bootstrap fail closed", skill_text)
 
 
 if __name__ == "__main__":
