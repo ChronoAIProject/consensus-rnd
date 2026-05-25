@@ -71,7 +71,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         skill_lines = len(self.skill.splitlines())
 
         self.assertGreaterEqual(reference_lines, 2000)
-        self.assertLessEqual(reference_lines, 2505)
+        self.assertLessEqual(reference_lines, 2450)
         self.assertGreater(reference_lines, skill_lines * 2)
 
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:

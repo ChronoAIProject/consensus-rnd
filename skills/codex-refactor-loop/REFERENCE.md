@@ -867,55 +867,21 @@ Daemon 工作流:
 9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
 
 ### Phase 9 router daemon command body
-
-`phase9_router_daemon.py` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:
-
-```bash
-nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/phase9_router_daemon.py --daemon --repo-root "$REPO_ROOT"' \
-  >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 &
-disown
-```
-
-One-shot / monitor:
-
-```bash
-python3 <skill-root>/scripts/phase9_router_daemon.py --once --repo-root "$REPO_ROOT"
-python3 <skill-root>/scripts/phase9_router_daemon.py --once --dry-run --repo-root "$REPO_ROOT"
-tail -50 .refactor-loop/logs/phase9-router-daemon.log
-```
-
+`phase9_router_daemon.py` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/phase9_router_daemon.py --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+One-shot:`python3 <skill-root>/scripts/phase9_router_daemon.py --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/phase9_router_daemon.py --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
 - `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector.
-
-Everything else is fallback only: `META_JUDGE_DONE:consensus`, `IMPLEMENT_DONE`, `VERIFY_DONE`, `REVIEW_DONE`, `FIX_DONE`, `FIX_BLOCKED`, `TEST_ADD_DONE`, `META_RESOLVED`, and unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority.
-
-Ledger: append-only `.refactor-loop/phase9-router-ledger.jsonl`, one JSON line per dispatch: `{key, marker, log_path, dispatched_at}` where `key="<issue>-<round>-<role/judge>"`. Fallback event uses the same JSON fields and is appended to `.controller-pending-events.log` with a `phase9-router-fallback` prefix.
-
-Duplicate-dispatch recovery: if daemon crashes after spawn but before ledger, unfinished target log or a live `spawn-codex.sh --log <target>` is treated as in-flight and suppresses re-dispatch. If two daemons start, the lock file `.refactor-loop/phase9-router.lock` permits only one. If duplicate ledger rows ever appear, keep the first row and do not delete logs; controller fallback sweep can reconcile the completed marker.
-
-Staged expansion gates: r2 may add `META_JUDGE_DONE:consensus -> implement` only after r1 shows no duplicate dispatch and no missed Phase 9 continuation in one live round or equivalent replay. r3 may add Phase 8 reviewer/fix dispatch only after the route ledger proves triplet aggregation. Lifecycle/CI/banner/floor/merge_pr require later evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
-
+Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority. Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `spawn-codex.sh --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
-
-| 任务 | 谁做 |
-|---|---|
-| dev → auto-refact-dev sync(常规 + 冲突解决) | **daemon**(600s 自主) |
-| Phase 9 triplet/converge/valid-stalled continuation | **phase9_router_daemon.py** narrow allowlist; controller fallback sweep retained |
-| 处理 design issue / Phase 9 consensus/implement / Phase 8 fix loop | controller(wakeup) |
-| 派 reviewer / fix / implement codex | controller |
-| 监控 daemon liveness + restart | controller per-wakeup |
-| Sync 异常 escalation(DEV_SYNC_BLOCKED) | controller 读 daemon log + escalate |
-
+dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **phase9_router_daemon.py** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(改为只 verify daemon)
-
 ```bash
 # Phase 6 现在 controller 只 verify daemon 健康
 ps -ef | grep dev-sync-daemon.sh | grep -v grep | wc -l  # 必须 >=1
 tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
-
 若 daemon 死 → restart `nohup ... >> log 2>&1 & disown`。
 若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。
 

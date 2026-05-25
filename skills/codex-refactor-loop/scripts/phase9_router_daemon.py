@@ -386,12 +386,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = Path(args.repo_root)
     if not repo_root.is_absolute():
         raise SystemExit("--repo-root must be absolute")
-    router = Phase9Router(repo_root, dry_run=args.dry_run)
+    router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)
     with router.singleton():
         if args.once:
             router.tick()

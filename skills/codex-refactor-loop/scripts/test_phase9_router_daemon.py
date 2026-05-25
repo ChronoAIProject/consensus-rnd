@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from phase9_router_daemon import Phase9Router
+from phase9_router_daemon import Phase9Router, main
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -174,6 +174,35 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                     src,
                     f"phase9_router_daemon.py must not introduce forbidden boundary token: {forbidden}",
                 )
+
+    def test_main_once_dispatches_via_temp_repo_root(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+        commands: list[list[str]] = []
+
+        exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(commands), 1)
+        self.assertIn(str(self.repo.resolve()), commands[0])
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
+
+    def test_main_rejects_relative_repo_root(self) -> None:
+        commands: list[list[str]] = []
+
+        with self.assertRaisesRegex(SystemExit, "must be absolute"):
+            main(["--once", "--repo-root", "relative/path"], command_runner=commands.append)
+
+        self.assertEqual(commands, [])
+
+    def test_main_dry_run_records_no_dispatch(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+        commands: list[list[str]] = []
+
+        exit_code = main(["--once", "--repo-root", str(self.repo), "--dry-run"], command_runner=commands.append)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(commands, [])
+        self.assertEqual(self.ledger_entries(), [])
 
 
 if __name__ == "__main__":
