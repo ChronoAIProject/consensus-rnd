@@ -68,6 +68,7 @@ parse_kind() {
   fi
 }
 
+# Refactor (iter4/issue17-hygiene): Old pattern: binary in_flight/done handling treated failed codex exits as done and deleted the progress comment. New principle: tri-state in_flight/exit_ok/exit_failed keeps failed comments and state.finished=failed visible to maintainers.
 exit_status() {
   # 只看末 5 行 — wrapper 在结束时 append "EXIT=<code>\nDONE_AT=..." 作为最后两行
   # 不能 grep 全 log,因为 codex 中途可能 echo / cat 含 "EXIT=" 的内容造成误判

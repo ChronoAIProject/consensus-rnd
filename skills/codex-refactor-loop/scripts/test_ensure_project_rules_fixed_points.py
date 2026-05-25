@@ -95,6 +95,28 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 check=False,
             )
 
+    def run_progress_harness(
+        self,
+        command: str,
+        *,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        progress = SKILL_ROOT / "scripts" / "codex-progress-reporter.sh"
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        start = next(index for index, line in enumerate(lines) if line.startswith("log_msg()"))
+        end = lines.index("# 主 loop")
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "progress_harness.sh"
+            harness.write_text("\n".join(lines[start:end]) + "\n", encoding="utf-8")
+            script = f'source "{harness}"; {command}'
+            return subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
     def test_resolve_github_repo_slug_env_branches(self) -> None:
         cases = [
             ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, 0, "owner/repo\n", ""),
@@ -213,6 +235,91 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
 
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, expected[name])
+
+    def test_progress_reporter_exit_failed_keeps_comment_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_dir = root / ".refactor-loop"
+            log_dir = state_dir / "logs"
+            fakebin = root / "fakebin"
+            state_dir.mkdir()
+            log_dir.mkdir()
+            fakebin.mkdir()
+            (state_dir / "codex-progress-state.json").write_text("{}\n", encoding="utf-8")
+            log_path = log_dir / "fix-pr47-round2.log"
+            log_path.write_text(
+                "start\n"
+                "working\n"
+                "important failure context\n"
+                "EXIT=17\n",
+                encoding="utf-8",
+            )
+            calls_path = root / "gh-calls.log"
+            body_path = root / "created-body.md"
+            gh = fakebin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
+                "if [[ \"$1 $2\" == \"pr view\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2\" == \"pr comment\" ]]; then\n"
+                "  body_file=''\n"
+                "  while [[ $# -gt 0 ]]; do\n"
+                "    if [[ \"$1\" == \"--body-file\" ]]; then\n"
+                "      body_file=\"$2\"\n"
+                "      break\n"
+                "    fi\n"
+                "    shift\n"
+                "  done\n"
+                "  cp \"$body_file\" \"$GH_BODY_CAPTURE\"\n"
+                "  printf 'https://github.com/owner/repo/pull/47#issuecomment-24680\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"api -X DELETE\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"api -X PATCH\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "GH_BODY_CAPTURE": str(body_path),
+                    "GH_CALLS": str(calls_path),
+                    "PATH": f"{fakebin}{os.pathsep}{env.get('PATH', '')}",
+                    "REPO": "owner/repo",
+                    "REPO_ROOT": str(root),
+                    "STATE_DIR": str(state_dir),
+                    "STATE_FILE": str(state_dir / "codex-progress-state.json"),
+                    "LOG_DIR": str(log_dir),
+                    "PROMPTS_DIR": str(state_dir / "prompts"),
+                }
+            )
+
+            result = self.run_progress_harness(
+                f'post_or_update "fix-pr47-round2" "{log_path}"; post_or_update "fix-pr47-round2" "{log_path}"',
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = calls_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum("pr comment 47" in call for call in calls), 1, calls)
+            self.assertFalse(any("api -X DELETE" in call for call in calls), calls)
+            self.assertFalse(any("api -X PATCH" in call for call in calls), calls)
+
+            body = body_path.read_text(encoding="utf-8")
+            self.assertIn("失败", body)
+            self.assertIn("controller progress reporter", body)
+            self.assertIn("⟦AI:AUTO-LOOP⟧", body)
+
+            state = json.loads((state_dir / "codex-progress-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
+            self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
 
     def test_progress_reporter_hash_body_uses_md5_and_md5sum_fallbacks(self) -> None:
         body = "stable body\nwith unicode sentinel: ⟦AI:AUTO-LOOP⟧\n"

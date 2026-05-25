@@ -1,3 +1,4 @@
+# Refactor (iter4/issue17-hygiene): Old pattern: Python controllers independently read GH_OWNER/GH_REPO env. New principle: github_repo_slug() is the single source of truth, preferring GH_REPO_SLUG, falling back to owner+name, and otherwise failing by returning None.
 """Shared host repository configuration helpers."""
 
 from __future__ import annotations

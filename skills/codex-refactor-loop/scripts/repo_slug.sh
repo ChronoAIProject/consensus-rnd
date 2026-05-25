@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Refactor (iter4/issue17-hygiene): Old pattern: each controller script assembled GitHub slugs itself via GH_OWNER/GH_REPO or inline parsing. New principle: shared host-agnostic resolve_github_repo_slug+set_gh_repo_args, with fail-closed validation in one place.
 # Shared GitHub repository slug helpers for shell scripts.
 #
 # ⟦AI:AUTO-LOOP⟧
