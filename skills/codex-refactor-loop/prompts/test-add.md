@@ -56,7 +56,7 @@ ${UNCOVERED_LINES}
    $TEST_CMD
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
-7. 跑 `bash $REPO_ROOT/$CI_GUARDS` —— 必须通过（禁 `sleep/delay` 等）。
+7. 若 `$CI_GUARDS` 非空,跑 `bash "$REPO_ROOT/$CI_GUARDS"` —— 必须通过（禁 `sleep/delay` 等）；为空则记录 guards skipped。
 8. `git add -A && git status`。
 9. **不 commit**。
 10. 摘要写入 `$REPO_ROOT/.refactor-loop/runs/test-add-${CLUSTER_ID}.md`：

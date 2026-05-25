@@ -72,6 +72,8 @@
 
 ## GitHub post
 
+遵循 `prompts/_github-post-rules.md`。
+
 按 accept / reject 分别:
 - accept 评论头行 `## 🤖 Triage codex — accept: issue-${ISSUE_NUMBER}`
 - reject 评论头行 `## 🤖 Triage codex — reject: <reject-type>`
@@ -88,4 +90,4 @@
 
 ## AI 内容标识符
 
-所有 GitHub comment / artifact 末尾必须独立一行 `⟦AI:AUTO-LOOP⟧`。
+所有 GitHub comment / artifact 必须末尾独立一行 `⟦AI:AUTO-LOOP⟧`。

@@ -32,7 +32,7 @@ PR: `${PR_NUMBER}`，失败 check: `${CHECK_NAME}`，run url: `${RUN_URL}`。
 
 4. **本地验证**：
    - 重跑失败 test：必须 pass
-   - 跑 `bash $CI_GUARDS` + `bash $CI_GUARDS`：必须 pass
+   - 若 `$CI_GUARDS` 非空,跑 `bash "$CI_GUARDS"` + `bash "$CI_GUARDS"`：必须 pass；为空则记录 guards skipped
    - 如果失败是某个特定 guard 出来的，重跑那个 guard
 
 5. **暂存**：
