@@ -24,6 +24,47 @@
 |---|---|---|
 | `codex-refactor-loop` | 无人值守三阶段循环(audit → implement → verify),codex CLI 驱动,GitHub 为状态面 | 自 host 项目移植,verbatim;待泛化(见下) |
 
+## 仓库结构
+
+本库是一个**跨平台 Agent Skills 仓库**,同一份 `skills/` 被多个 coding agent 共享,各平台靠根目录的清单文件指向它:
+
+```
+.
+├── .claude-plugin/        # Claude Code:plugin.json + marketplace.json
+├── .codex-plugin/         # Codex:plugin.json
+├── .cursor-plugin/        # Cursor:plugin.json
+├── gemini-extension.json  # Gemini:扩展清单(配 GEMINI.md 上下文入口)
+├── package.json           # npm 风格元数据 / 版本锚点
+├── AGENTS.md → CLAUDE.md   # 跨 agent 约定(符号链接)
+├── CLAUDE.md              # 本仓库内工作的 agent 指南
+├── LICENSE                # MIT
+├── skills/<name>/         # 各 skill(SKILL.md 必备)
+└── .version-bump.json     # 各清单版本号同步映射
+```
+
+新增 / 修改 skill 的约定与版本同步规则见 [`CLAUDE.md`](./CLAUDE.md)。
+
+## 安装
+
+### Claude Code
+
+```bash
+/plugin marketplace add ChronoAIProject/consensus-rnd
+/plugin install consensus-rnd@consensus-rnd
+```
+
+### Codex / Cursor
+
+按各自插件机制指向本仓库;`.codex-plugin/plugin.json` 与 `.cursor-plugin/plugin.json` 已通过 `"skills": "./skills/"` 暴露 skills。
+
+### Gemini CLI
+
+作为扩展安装,`gemini-extension.json` 以 `GEMINI.md` 为上下文入口,列出可用 skills 并指引按需读取。
+
+### 直接拷贝(任意 agent)
+
+把 `skills/<name>/` 拷进 agent 的个人 skills 目录(如 Claude Code 的 `~/.claude/skills/`)即可。
+
 ## 泛化路线(待迭代)
 
 第一块是直接移植,仍带"重构"外壳与少量 host 主张。后续迭代方向:
@@ -33,3 +74,7 @@
 3. 重命名以脱离 "refactor" 语义。
 
 > 泛化引擎本身宜走引擎自己那套共识 gate —— 用这个引擎来通用化这个引擎。
+
+## License
+
+[MIT](./LICENSE) © ChronoAIProject

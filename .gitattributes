@@ -1,0 +1,12 @@
+# 跨平台脚本统一 LF 行尾(skill scripts 在 host 上跑)
+*.sh text eol=lf
+*.py text eol=lf
+
+# 常见文本文件
+*.md text eol=lf
+*.json text eol=lf
+
+# 二进制文件显式标记
+*.png binary
+*.jpg binary
+*.gif binary

@@ -1,0 +1,40 @@
+{
+  "name": "consensus-rnd",
+  "version": "0.1.0",
+  "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎",
+  "author": {
+    "name": "auric",
+    "email": "loning.ma@aelf.io",
+    "url": "https://github.com/ChronoAIProject"
+  },
+  "homepage": "https://github.com/ChronoAIProject/consensus-rnd",
+  "repository": "https://github.com/ChronoAIProject/consensus-rnd",
+  "license": "MIT",
+  "keywords": [
+    "skills",
+    "consensus",
+    "multi-agent",
+    "codex",
+    "orchestration",
+    "autonomous",
+    "refactor",
+    "workflow"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Consensus R&D",
+    "shortDescription": "偏置独立的多角度共识构建引擎",
+    "longDescription": "把任意持续向仓库提交状态的活动当作研发：多 solver 先验对立、互不可见，meta-judge 仲裁收敛，验证侧同构。当前内置 codex-refactor-loop 无人值守三阶段循环（audit → implement → verify）。",
+    "developerName": "auric",
+    "category": "Coding",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "对本仓库跑一轮无人值守共识重构循环。"
+    ],
+    "websiteURL": "https://github.com/ChronoAIProject/consensus-rnd"
+  }
+}

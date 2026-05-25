@@ -1,0 +1,20 @@
+{
+  "name": "consensus-rnd",
+  "description": "通用共识式研发 skills 库的开发市场",
+  "owner": {
+    "name": "auric",
+    "email": "loning.ma@aelf.io"
+  },
+  "plugins": [
+    {
+      "name": "consensus-rnd",
+      "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎",
+      "version": "0.1.0",
+      "source": "./",
+      "author": {
+        "name": "auric",
+        "email": "loning.ma@aelf.io"
+      }
+    }
+  ]
+}
