@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ensure_project_rules_fixed_points import (
     CANONICAL_BODY,
@@ -47,6 +49,211 @@ PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "triage-external-issue.md",
     "verify.md",
 )
+
+
+class ScriptHygieneBehaviorTests(unittest.TestCase):
+    def clean_github_env(self, updates: dict[str, str] | None = None) -> dict[str, str]:
+        env = os.environ.copy()
+        for key in ("GH_REPO_SLUG", "GH_REPO", "GH_OWNER", "GH_REPO_NAME"):
+            env.pop(key, None)
+        if updates:
+            env.update(updates)
+        return env
+
+    def run_repo_slug_function(self, command: str, env_updates: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        script = f'source "{SKILL_ROOT / "scripts" / "repo_slug.sh"}"; {command}'
+        return subprocess.run(
+            ["bash", "-c", script],
+            env=self.clean_github_env(env_updates),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def run_progress_function(
+        self,
+        function_name: str,
+        command: str,
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        progress = SKILL_ROOT / "scripts" / "codex-progress-reporter.sh"
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        start = lines.index(f"{function_name}() {{")
+        end = next(index for index in range(start + 1, len(lines)) if lines[index] == "}")
+        with tempfile.TemporaryDirectory() as tmp:
+            func_file = Path(tmp) / f"{function_name}.sh"
+            func_file.write_text("\n".join(lines[start : end + 1]) + "\n", encoding="utf-8")
+            script = f'source "{func_file}"; {command}'
+            return subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    def test_resolve_github_repo_slug_env_branches(self) -> None:
+        cases = [
+            ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, 0, "owner/repo\n", ""),
+            ("legacy_repo_slug", {"GH_REPO": "legacy/repo"}, 0, "legacy/repo\n", ""),
+            ("owner_and_name", {"GH_OWNER": "octo", "GH_REPO_NAME": "project"}, 0, "octo/project\n", ""),
+            ("missing_required", {}, 2, "", "FATAL: GH_REPO_SLUG is unset and gh repo view failed"),
+            ("invalid_bare_slug", {"GH_REPO_SLUG": "repo-only"}, 2, "", "FATAL: GH_REPO_SLUG must be OWNER/REPO"),
+        ]
+
+        for name, env_updates, expected_code, expected_stdout, expected_stderr in cases:
+            with self.subTest(case=name):
+                result = self.run_repo_slug_function("resolve_github_repo_slug 0 1", env_updates)
+
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                self.assertEqual(result.stdout, expected_stdout)
+                self.assertIn(expected_stderr, result.stderr)
+
+    def test_set_gh_repo_args_mutates_exports_and_populates_array(self) -> None:
+        command = (
+            "set_gh_repo_args 0 1 || exit $?; "
+            "printf 'slug=%s\\n' \"$GH_REPO_SLUG\"; "
+            "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+            "printf 'arg=%s\\n' \"${gh_repo_args[@]}\"; "
+            "bash -c 'printf \"child=%s\\n\" \"$GH_REPO_SLUG\"'"
+        )
+
+        result = self.run_repo_slug_function(command, {"GH_REPO_SLUG": "owner/repo"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["slug=owner/repo", "argc=2", "arg=--repo", "arg=owner/repo", "child=owner/repo"])
+
+    def test_set_gh_repo_args_empty_invalid_and_gh_view_fallback(self) -> None:
+        empty = self.run_repo_slug_function(
+            "set_gh_repo_args 0 0 || exit $?; "
+            "printf 'slug=<%s>\\n' \"$GH_REPO_SLUG\"; "
+            "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+            "bash -c 'printf \"child=<%s>\\n\" \"$GH_REPO_SLUG\"'",
+        )
+        self.assertEqual(empty.returncode, 0, empty.stderr)
+        self.assertEqual(empty.stdout.splitlines(), ["slug=<>", "argc=0", "child=<>"])
+
+        invalid = self.run_repo_slug_function("set_gh_repo_args 0 1", {"GH_REPO_SLUG": "repo-only"})
+        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(invalid.stdout, "")
+        self.assertIn("FATAL: GH_REPO_SLUG must be OWNER/REPO", invalid.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp)
+            gh = fakebin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2 $3\" == \"repo view --json\" ]]; then\n"
+                "  printf 'fallback/slug\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = self.clean_github_env()
+            env["PATH"] = f"{fakebin}{os.pathsep}{env.get('PATH', '')}"
+            fallback = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'source "{SKILL_ROOT / "scripts" / "repo_slug.sh"}"; '
+                    "set_gh_repo_args 1 1 || exit $?; "
+                    "printf 'slug=%s\\n' \"$GH_REPO_SLUG\"; "
+                    "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+                    "printf 'arg=%s\\n' \"${gh_repo_args[@]}\"",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertEqual(fallback.stdout.splitlines(), ["slug=fallback/slug", "argc=2", "arg=--repo", "arg=fallback/slug"])
+
+    def test_python_github_repo_slug_env_branches(self) -> None:
+        from repo_config import github_repo_slug
+
+        cases = [
+            ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, "owner/repo"),
+            ("legacy_repo_slug", {"GH_REPO": "legacy/repo"}, "legacy/repo"),
+            ("owner_and_name", {"GH_OWNER": "octo", "GH_REPO_NAME": "project"}, "octo/project"),
+            ("owner_and_bare_repo_fallback", {"GH_OWNER": "octo", "GH_REPO": "project"}, "octo/project"),
+            ("missing", {}, None),
+        ]
+
+        for name, env_updates, expected in cases:
+            with self.subTest(case=name):
+                with patch.dict(os.environ, env_updates, clear=True):
+                    self.assertEqual(github_repo_slug(), expected)
+
+    def test_progress_reporter_exit_status_reads_only_terminal_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixtures = {
+                "in_flight": "start\nEXIT=0\nstill\nrunning\nno\nterminal\nmarker\n",
+                "exit_ok": "start\nwork\nEXIT=0\nDONE_AT=now\n",
+                "exit_failed": "start\nwork\nEXIT=17\nDONE_AT=now\n",
+            }
+            expected = {
+                "in_flight": "in_flight\n",
+                "exit_ok": "exit_ok\n",
+                "exit_failed": "exit_failed\n",
+            }
+
+            for name, text in fixtures.items():
+                path = root / f"{name}.log"
+                path.write_text(text, encoding="utf-8")
+                with self.subTest(case=name):
+                    result = self.run_progress_function("exit_status", f'exit_status "{path}"')
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, expected[name])
+
+    def test_progress_reporter_hash_body_uses_md5_and_md5sum_fallbacks(self) -> None:
+        body = "stable body\nwith unicode sentinel: ⟦AI:AUTO-LOOP⟧\n"
+        expected = hashlib.md5(body.encode("utf-8")).hexdigest()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp) / "md5"
+            fakebin.mkdir()
+            md5 = fakebin / "md5"
+            md5.write_text(
+                f"#!/usr/bin/env bash\n{sys.executable} -c 'import hashlib, sys; print(hashlib.md5(sys.stdin.buffer.read()).hexdigest())'\n",
+                encoding="utf-8",
+            )
+            md5sum = fakebin / "md5sum"
+            md5sum.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+            md5.chmod(0o755)
+            md5sum.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fakebin}{os.pathsep}{env.get('PATH', '')}"
+
+            result = self.run_progress_function("hash_body", "hash_body", input_text=body, env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), expected)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp) / "md5sum"
+            fakebin.mkdir()
+            md5sum = fakebin / "md5sum"
+            md5sum.write_text(
+                f"#!/usr/bin/env bash\n{sys.executable} -c 'import hashlib, sys; print(hashlib.md5(sys.stdin.buffer.read()).hexdigest() + \"  -\")'\n",
+                encoding="utf-8",
+            )
+            md5sum.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fakebin}{os.pathsep}/usr/bin{os.pathsep}/bin"
+
+            result = self.run_progress_function("hash_body", "hash_body", input_text=body, env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), expected)
 
 
 class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
