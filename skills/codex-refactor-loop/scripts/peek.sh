@@ -113,6 +113,7 @@ fi
 # Refactor (iter3/skill-human-label-taxonomy):
 #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+# Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
 echo ""
 echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
 find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
@@ -130,8 +131,8 @@ find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while rea
     IMPLEMENT_BLOCKED:*)     hint="→ inspect blocker + meta-reflect" ;;
     FIX_DONE:*)              hint="→ commit/push + 3 reviewer r+1" ;;
     FIX_BLOCKED:*)           hint="→ meta-reflect" ;;
-    REVIEW_DONE:*:approve)   hint="→ wait other 2 reviewers,then merge if all approve / mixed: ≥2 approve + 0 reject = merge" ;;
-    REVIEW_DONE:*:comment)   hint="→ advisory; wait other reviewers" ;;
+    REVIEW_DONE:*:approve)   hint="→ latest complete reviewer round: reject=0 + approve>=1 => merge; all-comment => WAIT_EXPLICIT_APPROVAL" ;;
+    REVIEW_DONE:*:comment)   hint="→ advisory; wait reviewers; all-comment => WAIT_EXPLICIT_APPROVAL, not fix" ;;
     REVIEW_DONE:*:reject)    hint="→ wait other 2 reviewers,then fix r+1" ;;
     SOLVER_DONE:*)           hint="→ wait other 2 solvers,then meta-judge" ;;
     META_JUDGE_DONE:consensus:*) hint="→ implement codex (worktree + spawn)" ;;
@@ -174,6 +175,7 @@ zero_now=$(tail -1 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | gre
 [ -n "$zero_now" ] && echo "  当前: ${zero_now}"
 
 # 5. Mergeable PRs (per reviewer consensus + CI green)
+# Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
 echo ""
 echo "▍可合并 PR(controller 应立即 merge):"
 gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,title --jq '.[].number' 2>/dev/null | while read pr_num; do
@@ -202,9 +204,11 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,t
       reject)  reject=$((reject+1)) ;;
     esac
   done
-  # Merge rule: 0 reject AND >= 2 approve (mixed comment OK)
-  if [ "$reject" = "0" ] && [ "$approve" -ge 2 ]; then
-    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  # Merge rule: latest complete required round, 0 reject AND >= 1 approve (mixed comment OK)
+  if [ "$reject" = "0" ] && [ "$approve" -ge 1 ]; then
+    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: MERGE_READY approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  elif [ "$reject" = "0" ] && [ "$approve" = "0" ] && [ "$comment" -ge 1 ]; then
+    echo "  ⏸ PR #${pr_num} [${state}] r${max_round}: WAIT_EXPLICIT_APPROVAL approve=0 comment=${comment} reject=0 — do not merge"
   fi
 done
 

@@ -49,9 +49,13 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+
 - **approve**: code is readable, focused, no over/under-engineering smell, refactor self-docs are present and clear.
 - **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; host 项目的复杂度分析器 borderline.
 - **reject**: significant dead code, harmful single-implementer abstraction, missing/illegible self-doc on a major refactor, or scope creep into unrelated cleanup.
+- In-scope must-fix-before-merge findings must be `reject`.
+- Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with marker: `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
 
