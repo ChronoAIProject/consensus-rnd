@@ -1,5 +1,7 @@
 # ${PROBLEM_TITLE_EN} / ${PROBLEM_TITLE_ZH}
 
+<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+
 > **Bilingual / 双语**. English and 中文 sections are fully equivalent. Read either. Reply in either.
 
 ---
@@ -22,7 +24,7 @@ The code below is the actual offending pattern in the current codebase. Each lin
 
 下面是当前代码里的真实问题模式。标 `← problem` 的行就是触发违反的位置。
 
-```csharp
+```${HOST_CODE_FENCE_LANG}
 ${PROBLEM_EXAMPLE_CODE}
 ```
 
@@ -49,7 +51,7 @@ ${WHY_NEEDS_DESIGN_ZH}
 Please answer the following before adding the `auto-loop-resume` label. The implement codex will read your latest comment verbatim, so be specific.
 
 - [ ] **Pattern choice / 模式选择**: ${DESIGN_QUESTION_PATTERN_EN}
-- [ ] **Proto schema impact / Proto 影响**: If new typed fields are needed, sketch them (message names + field numbers). If no proto change, say so.
+- [ ] **Schema/protocol impact / Schema 影响**: Apply host policy `${HOST_PROTO_POLICY}` if non-empty. If new typed fields or protocol/schema changes are needed, sketch them using the host's schema conventions. If none, say so.
 - [ ] **Backward compatibility / 向后兼容**: How to handle existing persisted state (reserved field numbers, alias, migration, accepted reset)?
 - [ ] **Scope split / 拆分**: One cluster or split into N PRs? If split, sketch the cluster ids.
 - [ ] **Test surface / 测试面**: What behavior MUST be tested beyond `verification_hints` in the cluster spec below?
@@ -60,7 +62,7 @@ Please answer the following before adding the `auto-loop-resume` label. The impl
 加 `auto-loop-resume` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
 
 - [ ] **Pattern choice / 模式选择**：${DESIGN_QUESTION_PATTERN_ZH}
-- [ ] **Proto schema 影响**：如需新增 typed field，列出 message 名 + field number；无 proto 改动请明确说明。
+- [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
 - [ ] **向后兼容**：现有持久态如何处理？（reserved 字段号 / type alias / schema migration / 可接受的重置）
 - [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
 - [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？

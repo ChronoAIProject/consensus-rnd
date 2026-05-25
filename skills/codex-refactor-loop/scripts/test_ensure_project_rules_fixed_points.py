@@ -1560,6 +1560,91 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 with self.subTest(path=rel, pattern=pattern):
                     self.assertIsNone(re.search(pattern, text))
 
+    # Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识)
+    def test_host_language_policy_uses_exact_set_a_without_aliases(self) -> None:
+        canonical = {
+            "HOST_TEST_FILE_GLOBS",
+            "HOST_TEST_NAMING_RULE",
+            "HOST_COMMENT_RULE",
+            "HOST_CODE_FENCE_LANG",
+            "HOST_PROTO_POLICY",
+            "HOST_ARCHITECTURE_GREP_CHECKS",
+        }
+        rejected_aliases = {
+            "HOST_TEST_LAYOUT_GLOB",
+            "HOST_TEST_LAYOUT_GLOBS",
+            "HOST_TEST_FILE_NAMING",
+            "HOST_COMMENT_STYLE",
+            "HOST_COMMENT_POLICY",
+            "HOST_CODE_LANGUAGE",
+            "HOST_EXAMPLE_FENCE",
+            "HOST_TEST_DISABLE_POLICY",
+            "HOST_DEPENDENCY_MANIFEST_GLOBS",
+        }
+        checked = self.rel_paths(
+            "skills/codex-refactor-loop/SKILL.md",
+            "skills/codex-refactor-loop/host.env.example",
+            "skills/codex-refactor-loop/prompts/*.md",
+        )
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+
+        self.assertEqual(set(re.findall(r"^export (HOST_[A-Z0-9_]+)=\"\"", host_env, re.MULTILINE)), canonical)
+        for name in canonical:
+            with self.subTest(canonical=name):
+                self.assertIn(f"| `${name}` |", skill_text)
+
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in checked)
+        for alias in rejected_aliases:
+            with self.subTest(alias=alias):
+                self.assertNotIn(alias, combined)
+
+    def test_host_language_policy_replaces_old_prompt_defaults(self) -> None:
+        scoped_prompts = {
+            "test-add.md": ("HOST_TEST_FILE_GLOBS", "HOST_TEST_NAMING_RULE", "HOST_COMMENT_RULE", "HOST_CODE_FENCE_LANG"),
+            "design-issue-body.md": ("HOST_CODE_FENCE_LANG", "HOST_PROTO_POLICY"),
+            "implement.md": ("HOST_COMMENT_RULE", "HOST_PROTO_POLICY"),
+            "reviewer-architect.md": ("HOST_COMMENT_RULE", "HOST_ARCHITECTURE_GREP_CHECKS", "HOST_PROTO_POLICY"),
+            "reviewer-tests.md": ("HOST_TEST_FILE_GLOBS", "HOST_TEST_NAMING_RULE", "HOST_PROTO_POLICY"),
+            "verify.md": ("HOST_COMMENT_RULE", "HOST_PROTO_POLICY"),
+        }
+        forbidden_defaults = (
+            "test/**/*.cs",
+            "*Tests.cs",
+            "<TypeName>Tests.cs",
+            "```csharp",
+            "C#",
+            ".NET",
+            "Directory.Packages.props",
+            "NuGet",
+            "Protobuf",
+            "如改 proto，必须本地重生成",
+            "if the diff touches `.proto`",
+            "Pure DTO / record proto fields exempt",
+        )
+        host_comment = "Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识)"
+
+        for prompt_name, required_names in scoped_prompts.items():
+            text = (SKILL_ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")
+            scan_text = "\n".join(line for line in text.splitlines() if host_comment not in line)
+            with self.subTest(prompt=prompt_name, marker="refactor-comment"):
+                self.assertIn(host_comment, text)
+            for required in required_names:
+                with self.subTest(prompt=prompt_name, required=required):
+                    self.assertIn(required, text)
+            for forbidden in forbidden_defaults:
+                with self.subTest(prompt=prompt_name, forbidden=forbidden):
+                    self.assertNotIn(forbidden, scan_text)
+
+        prompt_text = "\n".join(
+            line
+            for name in scoped_prompts
+            for line in (SKILL_ROOT / "prompts" / name).read_text(encoding="utf-8").splitlines()
+            if host_comment not in line
+        )
+        self.assertIsNone(re.search(r"(?<!HOST_)\bproto\b", prompt_text))
+        self.assertIsNone(re.search(r"\.proto\b", prompt_text))
+
 
 if __name__ == "__main__":
     unittest.main()
