@@ -54,9 +54,13 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+
 - **approve**: test coverage and quality are adequate for the diff.
 - **comment**: missing nice-to-have tests, minor naming issues, or polling-allowlist addition lacks justification but is plausible.
 - **reject**: real coverage gap on net-new logic, or `[Skip]` added to bypass failure, or `sleep/delay` added without allowlist entry, or assertions weakened.
+- In-scope must-fix-before-merge findings must be `reject`.
+- Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
 

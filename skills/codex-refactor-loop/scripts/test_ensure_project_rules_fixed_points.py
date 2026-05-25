@@ -325,6 +325,101 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
 
+class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
+    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
+    def read_skill(self) -> str:
+        return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    def read_reference(self) -> str:
+        return (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+
+    def phase8_docs(self) -> str:
+        return "\n".join([self.read_skill(), self.read_reference()])
+
+    def test_phase8_docs_define_option_a_truth_table(self) -> None:
+        docs = self.phase8_docs()
+
+        required_markers = (
+            "`MERGE`",
+            "`MERGE_WITH_COMMENTS`",
+            "`WAIT_EXPLICIT_APPROVAL`",
+            "`FIX`",
+            "`WAIT_OR_REDISPATCH`",
+            "`reject=0`, `approve=R`, `comment=0`",
+            "`reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R`",
+            "`reject=0`, `approve=0`, `comment=R`",
+            "`reject>=1`",
+            "missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, docs)
+
+    def test_phase8_docs_do_not_use_unanimous_approve_as_merge_gate(self) -> None:
+        docs = self.phase8_docs()
+
+        forbidden_gate_terms = (
+            "unanimous approve",
+            "unanimous-approve consensus",
+            "All approve except 1 comment",
+            "2 approve + 1 comment",
+            "partial-comment",
+        )
+
+        for term in forbidden_gate_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, docs)
+
+    def test_peek_uses_option_a_threshold(self) -> None:
+        peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
+
+        self.assertIn('hint="→ latest complete reviewer round: reject=0 + approve>=1 => merge; all-comment => WAIT_EXPLICIT_APPROVAL"', peek)
+        self.assertIn('if [ "$reject" = "0" ] && [ "$approve" -ge 1 ]; then', peek)
+        self.assertNotIn('"$approve" -ge 2', peek)
+        self.assertNotIn("≥2 approve", peek)
+
+    def test_peek_all_comment_round_is_not_merge_ready(self) -> None:
+        peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
+
+        self.assertIn('elif [ "$reject" = "0" ] && [ "$approve" = "0" ] && [ "$comment" -ge 1 ]; then', peek)
+        self.assertIn("WAIT_EXPLICIT_APPROVAL", peek)
+        self.assertIn("do not merge", peek)
+
+    def test_review_fix_blocks_only_on_reject(self) -> None:
+        review_fix = (SKILL_ROOT / "prompts" / "review-fix.md").read_text(encoding="utf-8")
+
+        self.assertIn("blocking demands come only from `reject` reviewer evidence", review_fix)
+        self.assertIn("Comments are context: read them and surface them in the report, but do not treat them as mandatory fix demands", review_fix)
+        self.assertNotIn("For each `reject` AND each `comment`, extract", review_fix)
+        self.assertNotIn("unanimous approve", review_fix)
+
+    def test_reviewer_prompts_force_must_fix_to_reject(self) -> None:
+        prompt_names = ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md")
+
+        for prompt_name in prompt_names:
+            text = (SKILL_ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_name):
+                self.assertIn("verdict: approve | comment | reject", text)
+                self.assertIn("In-scope must-fix-before-merge findings must be `reject`", text)
+                self.assertIn("Out-of-scope, non-flippable, or advisory findings must be `comment`", text)
+
+    def test_no_shared_phase8_policy_module_added(self) -> None:
+        self.assertFalse((SKILL_ROOT / "scripts" / "phase8_review_policy.py").exists())
+
+    def test_controller_lib_stays_post_decision_lifecycle_primitive(self) -> None:
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+        reference = self.read_reference()
+
+        self.assertIn("merge_pr()", controller_lib)
+        self.assertIn("gh pr merge", controller_lib)
+        self.assertIn("post-decision lifecycle primitive", reference)
+        self.assertIn("already decided `MERGE` or `MERGE_WITH_COMMENTS`", reference)
+        for forbidden in ("REVIEW_DONE", "MERGE_WITH_COMMENTS", "WAIT_EXPLICIT_APPROVAL", "approve>=", "reject=0"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, controller_lib)
+
+
 class WorkUnitV1SourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-007-work-unit-contract-schema):
     #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed

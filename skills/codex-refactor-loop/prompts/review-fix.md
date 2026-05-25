@@ -1,8 +1,10 @@
 # Role: Fix codex — address all reject demands on PR
 
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+
 You are the fix-codex for PR **${PR_NUMBER}** (`${PR_TITLE}`). Round **${FIX_ROUND}** of max **${MAX_FIX_ROUNDS}**.
 
-Your job: read every reviewer's reject/comment evidence and apply concrete fixes so the next Phase 8 review round can reach unanimous approve.
+Your job: read every reviewer's output, treat only `reject` evidence as blocking, and apply concrete fixes so the next Phase 8 review round can reach `MERGE` or `MERGE_WITH_COMMENTS`.
 
 ## Inputs (read first, in order)
 
@@ -21,10 +23,12 @@ Your job: read every reviewer's reject/comment evidence and apply concrete fixes
 
 ### Step 1 — Build the demand list
 
-Open the 3 reviewer files. For each `reject` AND each `comment`, extract:
+Open the 3 reviewer files. For each `reject`, extract:
 - file:line citations
 - the exact "What would change your verdict" / suggestion text
 - which PROJECT_RULES/AGENTS clause is cited (if any)
+
+blocking demands come only from `reject` reviewer evidence. Comments are context: read them and surface them in the report, but do not treat them as mandatory fix demands.
 
 Categorize each demand into one of:
 

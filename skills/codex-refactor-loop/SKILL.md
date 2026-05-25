@@ -155,8 +155,10 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:escalate-human:<reason>` | Only then label `👤 human:需-maintainer-决策` and post reason banner. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Phase 8 reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Phase 9 depending on reason. |
-| Three `REVIEW_DONE` with all approve/comment non-blocking | Merge path. |
-| Any `REVIEW_DONE` reject | Dispatch fix codex for next round. |
+| Latest complete Phase 8 reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
+| Latest complete Phase 8 reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
+| Latest complete Phase 8 reviewer round resolves to `FIX` | Dispatch fix codex for next round using reject evidence as blocking input. |
+| Phase 8 gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or re-dispatch the missing/invalid reviewer; never merge. |
 | `FIX_DONE` | Dispatch reviewers again. |
 | `TEST_ADD_DONE` | Commit/push and resume CI watch. |
 
@@ -288,13 +290,17 @@ Hard label rules:
 
 Phase 8 keeps the consensus merge gate local enough for routing:
 
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+
 1. Dispatch three reviewers in parallel: architect, tests, quality.
 2. Each reviewer posts or emits a `REVIEW_DONE` verdict.
-3. Approval requires all three reviewers to avoid reject after the same PR head SHA.
-4. Any reject dispatches fix codex; fix completion dispatches reviewers again.
-5. After repeated fix failure, dispatch meta-layer reflector before any human label.
-6. Every Phase 8 action posts to the PR for traceability.
-7. Detailed reviewer prompts, retry rules, and anti-spiral safeguards are in [phase 8 details](REFERENCE.md#phase-8-details).
+3. Controller computes one fixed action vocabulary after the latest complete required round: `MERGE`, `MERGE_WITH_COMMENTS`, `WAIT_EXPLICIT_APPROVAL`, `FIX`, or `WAIT_OR_REDISPATCH`.
+4. Truth table: `reject=0`, `approve=R`, `comment=0` → `MERGE`; `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` → `MERGE_WITH_COMMENTS`; `reject=0`, `approve=0`, `comment=R` → `WAIT_EXPLICIT_APPROVAL`; `reject>=1` → `FIX`; missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR → `WAIT_OR_REDISPATCH`.
+5. `comment` is terminal advisory evidence: surface it, but do not count it as approval and do not dispatch fix for comments alone.
+6. `FIX` dispatches fix codex; fix completion dispatches reviewers again.
+7. After repeated fix failure, dispatch meta-layer reflector before any human label.
+8. Every Phase 8 action posts to the PR for traceability.
+9. Detailed reviewer prompts, retry rules, and anti-spiral safeguards are in [phase 8 details](REFERENCE.md#phase-8-details).
 
 ## Phase 9 — Multi-Solver Design Consensus
 

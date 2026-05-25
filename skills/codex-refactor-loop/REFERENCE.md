@@ -267,7 +267,7 @@ validate_prompt out.md                                    # check 0 unresolved {
 
 **强制**:
 - 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴
+- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Phase 8 reviewer policy.
 - worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
 - PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
 
@@ -1041,7 +1041,9 @@ Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),�
 
 ## Phase 8 — Multi-codex PR review with consensus merge
 
-Runs when a cluster PR's remote CI is green (Phase 5 settled with pass) and the PR is mergeable. Goal: 3 (or more) independent codex reviewers from **different angles** verify the PR; **unanimous approve → auto-merge to `integration_branch`**; any reject → human review required.
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+
+Runs when a cluster PR's remote CI is green (Phase 5 settled with pass) and the PR is mergeable. Goal: 3 (or more) independent codex reviewers from **different angles** verify the PR at the current head SHA; the controller then chooses exactly one action from `MERGE`, `MERGE_WITH_COMMENTS`, `WAIT_EXPLICIT_APPROVAL`, `FIX`, or `WAIT_OR_REDISPATCH`.
 
 ### Default reviewer roles
 
@@ -1073,18 +1075,19 @@ All reviewers in parallel background; one task-notification per reviewer when do
 
 Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marker.
 
-| Combined verdicts                       | Action |
+`comment` is terminal advisory evidence. It is not approval and is not a fix trigger; comments are surfaced to the PR and to fix codex as context only when a `FIX` round happens for rejects.
+
+| Preconditions | Latest complete required round | Controller action |
 |---|---|
-| **All approve**                         | Auto-merge: `gh pr merge ${PR} --merge --auto`. Post bilingual "auto-merged after consensus" comment. Cluster moves to `clusters_done`. |
-| **All approve except 1 comment**        | Same auto-merge. Surface comment's "Evidence" in merge comment. |
-| **2 approve + 1 comment**               | Same auto-merge with surfaced comment. |
-| **3+ comment, 0 reject**                | Surface all comments in PR review comment; **do not** merge; PushNotification: "PR #N: 3 comments, no rejects — human decision recommended." |
-| **Any reject**                          | **Enter fix-retry loop** (see next subsection). Do NOT escalate to human on first reject. |
-| **Reviewer crashes / no marker**        | Re-dispatch that reviewer once. Second crash → `reject:reviewer-stuck`, escalate. |
+| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post bilingual merge comment, then call `merge_pr <pr>`. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post bilingual merge comment, then call `merge_pr <pr>`. |
+| Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not merge, do not dispatch fix. |
+| Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
+| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; never merge. |
 
 ### Fix-retry loop (AI iterates until consensus)
 
-Policy: AI keeps iterating until unanimous-approve consensus, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR。
+Policy: AI keeps iterating until the fixed Phase 8 truth table resolves to `MERGE` or `MERGE_WITH_COMMENTS`, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR。
 
 Loop:
 
@@ -1179,7 +1182,7 @@ Required PR comments (controller posts via `gh pr comment <PR> --body-file <file
 | Reviewer round N complete | Bilingual table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
 | Fix codex round N complete (FIX_DONE) | Bilingual FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
 | Fix codex blocked (FIX_BLOCKED) | Bilingual: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
-| Consensus reached (unanimous approve) | Bilingual: round count, final reviewer outputs, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
+| Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | Bilingual: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
 | Escalation triggered | Add `needs-human-review` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |
 | Reviewer crash | Bilingual: which reviewer, log path, re-dispatch attempt. Second crash → escalate per above. |
 
@@ -1210,7 +1213,7 @@ Forbidden:
       "tests": {...},
       "quality": {...}
     },
-    "consensus": "auto-merge | block-human-review | partial-comment",
+    "consensus": "MERGE | MERGE_WITH_COMMENTS | WAIT_EXPLICIT_APPROVAL | FIX | WAIT_OR_REDISPATCH",
     "merged_at": "<ISO8601|null>",
     "auto_merge_commit": "<sha|null>"
   }
