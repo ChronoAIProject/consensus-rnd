@@ -12,7 +12,7 @@ daemon 跑在独立 worktree,main repo controller 工作不受 daemon 的 merge 
 - main repo working tree 不被 merge 状态污染
 
 启动:
-  nohup python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py \
+  nohup python3 <skill-root>/scripts/dev_sync_daemon.py \
     >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
   disown
 
@@ -49,12 +49,30 @@ def git_repo_root() -> Path:
     return Path(r.stdout.strip())
 
 
+def skill_root() -> Path:
+    # Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)
+    """Return this installed skill root, failing closed on invalid overrides."""
+    override = os.environ.get("CODEX_REFACTOR_LOOP_SKILL_ROOT")
+    root = Path(override).expanduser().resolve() if override else Path(__file__).resolve().parents[1]
+    required = (
+        root / "SKILL.md",
+        root / "scripts" / "spawn-codex.sh",
+        root / "prompts",
+    )
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        source = "CODEX_REFACTOR_LOOP_SKILL_ROOT" if override else "__file__"
+        raise RuntimeError(f"invalid codex-refactor-loop skill root from {source}: missing {', '.join(missing)}")
+    return root
+
+
 INTERVAL = int(os.environ.get("INTERVAL", "600"))
+SKILL_ROOT = skill_root()
 MAIN_REPO = git_repo_root()
 WORKTREE = Path(os.environ.get("WORKTREE", f"{MAIN_REPO}-wt-dev-sync"))
 INTEGRATION = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
 REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
-SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
+SPAWN_CODEX = SKILL_ROOT / "scripts" / "spawn-codex.sh"
 LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
 
 

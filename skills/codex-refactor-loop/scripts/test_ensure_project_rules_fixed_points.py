@@ -803,11 +803,16 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
             state_file = root / ".refactor-loop" / "triage-monitor-state.json"
             log_file = root / ".refactor-loop" / "logs" / "triage-issue-42.log"
             prompt_file = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts" / "triage-external-issue.md"
+            skill_root = root / ".claude" / "skills" / "codex-refactor-loop"
+            spawn_file = skill_root / "scripts" / "spawn-codex.sh"
             state_file.parent.mkdir(parents=True)
             log_file.parent.mkdir(parents=True)
             prompt_file.parent.mkdir(parents=True)
+            spawn_file.parent.mkdir(parents=True)
             state_file.write_text('{"42":"2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+            (skill_root / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
             prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
+            spawn_file.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
             triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
             triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
             triage_lib = root / "triage-monitor-functions.sh"
@@ -836,6 +841,7 @@ jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + "
             env.update(
                 {
                     "REPO_ROOT": str(root),
+                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(skill_root),
                     "STATE_FILE": str(state_file),
                     "LOG_FILE": str(log_file),
                     "TRIAGE_LIB": str(triage_lib),
@@ -878,6 +884,10 @@ jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + "
 
             (skill_prompts / "triage-external-issue.md").write_text(
                 "Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n",
+                encoding="utf-8",
+            )
+            (root / ".claude" / "skills" / "codex-refactor-loop" / "SKILL.md").write_text(
+                "---\nname: codex-refactor-loop\n---\n",
                 encoding="utf-8",
             )
             (logs / "triage-issue-14-attempt-1.log").write_text("SPAWN: old\nEXIT=0\n", encoding="utf-8")
@@ -962,6 +972,7 @@ esac
                 {
                     "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
                     "REPO_ROOT": str(root),
+                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(root / ".claude" / "skills" / "codex-refactor-loop"),
                     "GH_REPO_SLUG": "owner/repo",
                     "TRIAGE_MONITOR_ONCE": "1",
                     "TRIAGE_MONITOR_TEST_WAIT_SPAWN": "1",
@@ -1134,6 +1145,159 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             with self.subTest(path=rel, needle=needle):
                 self.assertNotIn(needle, text)
+
+    def test_dev_sync_daemon_self_locates_skill_root_inline(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/dev_sync_daemon.py")
+
+        self.assertIn("def skill_root() -> Path:", text)
+        self.assertIn("CODEX_REFACTOR_LOOP_SKILL_ROOT", text)
+        self.assertIn("Path(__file__).resolve().parents[1]", text)
+        self.assertIn('root / "SKILL.md"', text)
+        self.assertIn('root / "scripts" / "spawn-codex.sh"', text)
+        self.assertIn('root / "prompts"', text)
+        self.assertIn("invalid codex-refactor-loop skill root", text)
+        self.assertIn('SPAWN_CODEX = SKILL_ROOT / "scripts" / "spawn-codex.sh"', text)
+        self.assertNotIn('SPAWN_CODEX = MAIN_REPO / ".claude"', text)
+        self.assertNotIn(".claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py", text)
+        self.assertIn(
+            "# Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)",
+            text,
+        )
+
+    def test_triage_monitor_self_locates_before_state_mutation(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/triage-monitor.sh")
+
+        self.assertIn("resolve_skill_root()", text)
+        self.assertIn('CODEX_REFACTOR_LOOP_SKILL_ROOT', text)
+        self.assertIn('${BASH_SOURCE[0]}', text)
+        self.assertIn('resolved_skill_root="$(resolve_skill_root)"', text)
+        self.assertIn('TRIAGE_PROMPT_TEMPLATE="$resolved_skill_root/prompts/triage-external-issue.md"', text)
+        self.assertIn('SPAWN_CODEX="$resolved_skill_root/scripts/spawn-codex.sh"', text)
+        self.assertIn('"$TRIAGE_PROMPT_TEMPLATE"', text)
+        self.assertIn('nohup bash "$SPAWN_CODEX"', text)
+        self.assertIn(
+            "# Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)",
+            text,
+        )
+        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
+        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('[ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"'))
+        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('jq --arg n "$issue"'))
+        self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md', text)
+        self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh', text)
+
+    def test_invalid_specific_skill_root_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            invalid_skill = root / "invalid-skill"
+            fakebin = root / "bin"
+            repo.mkdir()
+            invalid_skill.mkdir()
+            fakebin.mkdir()
+            state_file = repo / ".refactor-loop" / "triage-monitor-state.json"
+            gh = fakebin / "gh"
+            gh.write_text("#!/usr/bin/env bash\nprintf '42 alice\\n'\n", encoding="utf-8")
+            gh.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
+                    "REPO_ROOT": str(repo),
+                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(invalid_skill),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "TRIAGE_MONITOR_ONCE": "1",
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                }
+            )
+            triage = subprocess.run(
+                ["bash", str(SKILL_ROOT / "scripts" / "triage-monitor.sh")],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(triage.returncode, 0)
+            self.assertIn("invalid codex-refactor-loop skill root", triage.stderr)
+            self.assertFalse(state_file.exists())
+
+            dev_sync = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import dev_sync_daemon",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertNotEqual(dev_sync.returncode, 0)
+            self.assertIn("invalid codex-refactor-loop skill root", dev_sync.stderr)
+            self.assertNotIn(".claude/skills/codex-refactor-loop", dev_sync.stderr + dev_sync.stdout)
+
+    def test_no_shared_locator_or_generic_env_contract(self) -> None:
+        self.assertFalse((SKILL_ROOT / "scripts" / "skill_root.py").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "skill-root.sh").exists())
+        self.assertNotIn("CODEX_REFACTOR_LOOP_SKILL_ROOT", self.read_rel("skills/codex-refactor-loop/host.env.example"))
+
+        runtime_texts = {
+            "dev_sync_daemon.py": self.read_rel("skills/codex-refactor-loop/scripts/dev_sync_daemon.py"),
+            "triage-monitor.sh": self.read_rel("skills/codex-refactor-loop/scripts/triage-monitor.sh"),
+        }
+        for name, text in runtime_texts.items():
+            with self.subTest(runtime=name):
+                self.assertNotIn("import skill_root", text)
+                self.assertNotIn("source skill-root.sh", text)
+                self.assertNotIn("${SKILL_ROOT", text)
+                self.assertNotIn("$SKILL_ROOT", text)
+                self.assertNotIn('os.environ.get("SKILL_ROOT"', text)
+
+    def test_active_skill_launch_dispatch_docs_are_skill_relative(self) -> None:
+        checked = [
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "scripts" / "dev_sync_daemon.py",
+            SKILL_ROOT / "scripts" / "triage-monitor.sh",
+        ]
+        for path in checked:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=rel):
+                self.assertNotIn(".claude/skills/codex-refactor-loop/scripts/", text)
+                self.assertNotIn(".claude/skills/codex-refactor-loop/prompts/", text)
+
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        self.assertIn("## Skill Root Contract", skill_text)
+        self.assertIn("`<skill-root>` means the installed `skills/codex-refactor-loop` directory", skill_text)
+        self.assertIn("Runtime scripts self-locate", skill_text)
+        self.assertIn("`CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional", skill_text)
+        self.assertIn("<skill-root>/scripts/peek.sh", skill_text)
+        self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
+
+    def test_active_prompt_post_rules_locators_are_skill_relative(self) -> None:
+        prompt_names = (
+            "reviewer-quality.md",
+            "solver-structural.md",
+            "design-issue-reply.md",
+            "solver-delete.md",
+            "solver-minimal.md",
+            "review-fix.md",
+            "reviewer-architect.md",
+            "reviewer-tests.md",
+            "meta-judge.md",
+            "_github-post-rules.md",
+        )
+        for name in prompt_names:
+            path = SKILL_ROOT / "prompts" / name
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(prompt=name):
+                self.assertNotIn(".claude/skills/codex-refactor-loop/prompts/_github-post-rules.md", text)
+                self.assertNotIn(".claude/skills/codex-refactor-loop/scripts/comment-monitor.sh", text)
+        for name in prompt_names[:-1]:
+            with self.subTest(prompt=name, expected="post-rules"):
+                self.assertIn("本 skill 的 `prompts/_github-post-rules.md`", (SKILL_ROOT / "prompts" / name).read_text(encoding="utf-8"))
+        self.assertIn("本 skill 的 `scripts/comment-monitor.sh`", self.read_rel("skills/codex-refactor-loop/prompts/_github-post-rules.md"))
 
     def test_spawn_with_banner_cli_hard_fails_as_tombstone(self) -> None:
         result = subprocess.run(

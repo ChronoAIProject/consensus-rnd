@@ -6,11 +6,36 @@
 # - 对每个未处理的 issue:
 #   - state 存 .refactor-loop/triage-monitor-state.json(claimed/spawned/failed/done)
 #   - materialize prompt and spawn triage codex
-# - 启动: nohup bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown
+# - 启动: nohup bash <skill-root>/scripts/triage-monitor.sh >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown
 #
 # ⟦AI:AUTO-LOOP⟧
 
 set -u
+
+resolve_skill_root() {
+  # Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)
+  local root
+  if [ -n "${CODEX_REFACTOR_LOOP_SKILL_ROOT:-}" ]; then
+    root="$CODEX_REFACTOR_LOOP_SKILL_ROOT"
+  else
+    root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+  fi
+  if ! root="$(cd "$root" 2>/dev/null && pwd -P)"; then
+    echo "FATAL: invalid codex-refactor-loop skill root: ${CODEX_REFACTOR_LOOP_SKILL_ROOT:-${BASH_SOURCE[0]}}" >&2
+    exit 2
+  fi
+  if [ ! -f "$root/SKILL.md" ] || [ ! -f "$root/prompts/triage-external-issue.md" ] || [ ! -f "$root/scripts/spawn-codex.sh" ]; then
+    echo "FATAL: invalid codex-refactor-loop skill root: missing SKILL.md, prompts/triage-external-issue.md, or scripts/spawn-codex.sh under $root" >&2
+    exit 2
+  fi
+  printf '%s\n' "$root"
+}
+
+if ! resolved_skill_root="$(resolve_skill_root)"; then
+  exit 2
+fi
+TRIAGE_PROMPT_TEMPLATE="$resolved_skill_root/prompts/triage-external-issue.md"
+SPAWN_CODEX="$resolved_skill_root/scripts/spawn-codex.sh"
 
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
@@ -195,15 +220,15 @@ while true; do
     set_state "$issue" "claimed" "$retries" "$((now + TRIAGE_RETRY_BACKOFF_SECONDS))" "$log_file"
     if ! ISSUE_NUMBER="$issue" COMMENT_AUTHOR="$author" \
       perl -pe 's/\Q${ISSUE_NUMBER}\E/$ENV{ISSUE_NUMBER}/g; s/Author: maintainer/Author: $ENV{COMMENT_AUTHOR}/g' \
-        "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" \
+        "$TRIAGE_PROMPT_TEMPLATE" \
         > "$prompt_file" 2>/dev/null; then
-      if ! cp "$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md" "$prompt_file" 2>/dev/null; then
+      if ! cp "$TRIAGE_PROMPT_TEMPLATE" "$prompt_file" 2>/dev/null; then
         mark_failed_retry "$issue" "$retries" "$log_file" "prompt-materialization"
         continue
       fi
     fi
 
-    ISSUE_NUMBER="$issue" nohup bash "$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh" \
+    ISSUE_NUMBER="$issue" nohup bash "$SPAWN_CODEX" \
       --cd "$REPO_ROOT" \
       --prompt "$prompt_file" \
       --log "$log_file" \
