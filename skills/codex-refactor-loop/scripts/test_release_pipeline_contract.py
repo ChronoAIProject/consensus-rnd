@@ -32,6 +32,12 @@ def load_bump_module():
     return module
 
 
+def copy_release_pipeline_repo() -> tempfile.TemporaryDirectory[str]:
+    tmp = tempfile.TemporaryDirectory()
+    shutil.copytree(REPO_ROOT, Path(tmp.name) / "repo", ignore=shutil.ignore_patterns(".git"))
+    return tmp
+
+
 class ReleasePipelineContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.bump = load_bump_module()
@@ -134,6 +140,39 @@ class ReleasePipelineContractTests(unittest.TestCase):
             marketplace = json.loads(read(repo / ".claude-plugin/marketplace.json"))
             self.assertEqual(marketplace["plugins"][0]["version"], "1.0.0")
 
+    def test_level_and_version_cli_rejection_does_not_mutate_mapped_manifests(self) -> None:
+        with copy_release_pipeline_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            before = self.snapshot_mapped_manifest_versions(repo)
+            result = subprocess.run(
+                ["python3", ".github/scripts/bump_version.py", "--level", "patch", "--version", "1.0.0"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("--level and --version are mutually exclusive", result.stderr)
+            self.assertEqual(self.snapshot_mapped_manifest_versions(repo), before)
+
+    def test_invalid_exact_version_cli_rejection_does_not_mutate_mapped_manifests(self) -> None:
+        for version in ("v1.0.0", "1.2"):
+            with self.subTest(version=version), copy_release_pipeline_repo() as tmp:
+                repo = Path(tmp) / "repo"
+                before = self.snapshot_mapped_manifest_versions(repo)
+                result = subprocess.run(
+                    ["python3", ".github/scripts/bump_version.py", "--version", version],
+                    cwd=repo,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(f"invalid semver: {version}", result.stderr)
+                self.assertEqual(self.snapshot_mapped_manifest_versions(repo), before)
+
     def test_workflow_contract(self) -> None:
         self.assertIn("name: release", self.workflow)
         self.assertIn("push:", self.workflow)
@@ -160,6 +199,14 @@ class ReleasePipelineContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.workflow)
+
+    def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
+        mapping = json.loads(read(repo / ".version-bump.json"))
+        snapshot = {}
+        for item in mapping["files"]:
+            data = json.loads(read(repo / item["path"]))
+            snapshot[(item["path"], item["field"])] = self.bump.resolve_field(data, item["field"])
+        return snapshot
 
 
 if __name__ == "__main__":
