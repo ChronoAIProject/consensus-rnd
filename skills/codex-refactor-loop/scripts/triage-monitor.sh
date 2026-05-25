@@ -143,6 +143,7 @@ while true; do
   # Query open issues with auto-loop-triage label
   issues=$(gh issue list "${gh_repo_args[@]}" --label "auto-loop-triage" --state open --json number,author --jq '.[] | "\(.number) \(.author.login)"' 2>/dev/null)
   if [ -z "$issues" ]; then
+    [ "${TRIAGE_MONITOR_ONCE:-0}" = "1" ] && exit 0
     sleep "$INTERVAL"
     continue
   fi
@@ -208,6 +209,9 @@ while true; do
       --log "$log_file" \
       --stall 5400 >> "$REPO_ROOT/.refactor-loop/logs/triage-monitor.log" 2>&1 &
     spawn_pid=$!
+    if [ "${TRIAGE_MONITOR_TEST_WAIT_SPAWN:-0}" = "1" ]; then
+      wait "$spawn_pid" 2>/dev/null || true
+    fi
     disown "$spawn_pid" 2>/dev/null || true
     if log_has_spawn_or_exit_marker "$log_file"; then
       set_state "$issue" "spawned" "$retries" 0 "$log_file"
@@ -217,5 +221,6 @@ while true; do
     fi
   done <<< "$issues"
 
+  [ "${TRIAGE_MONITOR_ONCE:-0}" = "1" ] && exit 0
   sleep "$INTERVAL"
 done

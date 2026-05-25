@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -862,6 +863,134 @@ jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + "
                     "failed=failed retries=1 next=true",
                 ],
             )
+
+    def test_triage_monitor_loop_dispatches_state_machine_branches_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fakebin = root / "bin"
+            skill_scripts = root / ".claude" / "skills" / "codex-refactor-loop" / "scripts"
+            skill_prompts = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts"
+            logs = root / ".refactor-loop" / "logs"
+            fakebin.mkdir()
+            skill_scripts.mkdir(parents=True)
+            skill_prompts.mkdir(parents=True)
+            logs.mkdir(parents=True)
+
+            (skill_prompts / "triage-external-issue.md").write_text(
+                "Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n",
+                encoding="utf-8",
+            )
+            (logs / "triage-issue-14-attempt-1.log").write_text("SPAWN: old\nEXIT=0\n", encoding="utf-8")
+            (logs / "triage-issue-15-attempt-1.log").write_text("SPAWN: old\n", encoding="utf-8")
+
+            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
+            state_file.write_text(
+                json.dumps(
+                    {
+                        "10": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 4102444800,
+                            "log": str(logs / "triage-issue-10-attempt-1.log"),
+                        },
+                        "11": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-11-attempt-1.log"),
+                        },
+                        "12": {
+                            "status": "failed",
+                            "retries": 1,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-12-attempt-1.log"),
+                        },
+                        "14": {
+                            "status": "spawned",
+                            "retries": 0,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-14-attempt-1.log"),
+                        },
+                        "15": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 4102444800,
+                            "log": str(logs / "triage-issue-15-attempt-1.log"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            gh = fakebin / "gh"
+            gh.write_text(
+                """#!/usr/bin/env bash
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  printf '10 alice\\n11 bob\\n12 carol\\n13 dave\\n14 erin\\n15 frank\\n'
+  exit 0
+fi
+exit 64
+""",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+
+            spawn = skill_scripts / "spawn-codex.sh"
+            spawn.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+log=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --log) log="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "$ISSUE_NUMBER" >> "$REPO_ROOT/.refactor-loop/spawn-invocations.txt"
+case "$ISSUE_NUMBER" in
+  12|13) printf 'SPAWN: fake issue %s\\n' "$ISSUE_NUMBER" > "$log" ;;
+  *) exit 65 ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            spawn.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
+                    "REPO_ROOT": str(root),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "TRIAGE_MONITOR_ONCE": "1",
+                    "TRIAGE_MONITOR_TEST_WAIT_SPAWN": "1",
+                    "TRIAGE_RETRY_BACKOFF_SECONDS": "1",
+                    "TRIAGE_MAX_RETRIES": "3",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(SKILL_ROOT / "scripts" / "triage-monitor.sh")],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["10"]["status"], "claimed")
+            self.assertEqual(state["10"]["next_attempt"], 4102444800)
+            self.assertEqual(state["11"]["status"], "failed")
+            self.assertEqual(state["11"]["retries"], 1)
+            self.assertEqual(state["12"]["status"], "spawned")
+            self.assertEqual(state["12"]["retries"], 1)
+            self.assertEqual(state["13"]["status"], "spawned")
+            self.assertEqual(state["14"]["status"], "done")
+            self.assertEqual(state["15"]["status"], "spawned")
+            self.assertEqual((root / ".refactor-loop" / "spawn-invocations.txt").read_text(encoding="utf-8").splitlines(), ["12", "13"])
+            self.assertIn("failed: triage issue #11 attempt 1/3: missing-spawn-marker", result.stdout)
+            self.assertIn("done: triage codex for issue #14", result.stdout)
 
     def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
