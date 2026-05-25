@@ -31,7 +31,7 @@ if [ -n "${GH_REPO_SLUG:-}" ] && ! [[ "$GH_REPO_SLUG" == */* ]]; then
   return 2 2>/dev/null || exit 2
 fi
 INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-${INTEGRATION:-auto-refact-dev}}"
-REVIEW_BASE_BRANCH="${REVIEW_BASE_BRANCH:-${REVIEW_BASE:-develop}}"
+REVIEW_BASE_BRANCH="${REVIEW_BASE_BRANCH:-${REVIEW_BASE:-dev}}"
 gh_repo_args=()
 if [ -n "${GH_REPO_SLUG:-}" ]; then
   gh_repo_args=(--repo "$GH_REPO_SLUG")
@@ -154,6 +154,10 @@ sweep_stale_labels() {
   # Refactor (iter3/skill-human-label-taxonomy):
   #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
   #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+  # Refactor (iter3/skill-hygiene-scripts):
+  #   Old: stale labels were interpolated into a shell-built gh edit string.
+  #   New: build a real argv array and append one --remove-label "$label" pair.
+  #   This preserves labels with spaces/quotes as single arguments and removes command injection risk.
   local n_fixed=0
   for kind in issue pr; do
     gh "$kind" list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 50 --json number,labels 2>/dev/null | \
@@ -170,21 +174,21 @@ for x in d:
         print(x['number'], ','.join(bad))
 " | while read num bad; do
         [ -z "$num" ] && continue
-        local args=""
+        local cmd=(gh "$kind" edit "$num" "${gh_repo_args[@]}")
         old_IFS="$IFS"; IFS=,
         for l in $bad; do
-          args="$args --remove-label \"$l\""
+          cmd+=(--remove-label "$l")
         done
         IFS="$old_IFS"
         # Add 🎉 phase:merged if it's MERGED
         if [ "$kind" = "pr" ]; then
           local state
           state=$(gh pr view "$num" "${gh_repo_args[@]}" --json state --jq '.state' 2>/dev/null)
-          [ "$state" = "MERGED" ] && args="$args --add-label '🎉 phase:merged'"
+          [ "$state" = "MERGED" ] && cmd+=(--add-label "🎉 phase:merged")
         else
-          args="$args --add-label '🎉 phase:merged'"
+          cmd+=(--add-label "🎉 phase:merged")
         fi
-        eval "gh $kind edit $num ${gh_repo_args[*]} $args" 2>&1 >/dev/null && n_fixed=$((n_fixed+1)) && echo "  cleaned $kind #$num: $bad"
+        "${cmd[@]}" 2>&1 >/dev/null && n_fixed=$((n_fixed+1)) && echo "  cleaned $kind #$num: $bad"
       done
   done
   echo "  total fixed: $n_fixed"

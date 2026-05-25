@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -701,6 +702,412 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, public_copy)
 
+
+class ScriptHygieneSourceRegressionTests(unittest.TestCase):
+    # Refactor (iter3/skill-hygiene-scripts):
+    #   Old: script hygiene bugs hid in git worktree metadata and shell eval quoting paths.
+    #   New principle: deterministic source/fixture tests cover worktree merge detection, argv label cleanup, and log reuse safety.
+    def run_git(self, repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    def test_spawn_codex_refuses_unfinished_existing_log_without_truncating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            log = root / "codex.log"
+            prompt.write_text("say hello\n", encoding="utf-8")
+            original_log = "SPAWN: old run\npartial output without terminal marker\n"
+            log.write_text(original_log, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(SKILL_ROOT / "scripts" / "spawn-codex.sh"),
+                    "--cd",
+                    str(root),
+                    "--prompt",
+                    str(prompt),
+                    "--log",
+                    str(log),
+                    "--stall",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("refusing to reuse unfinished log without EXIT=", result.stderr)
+            self.assertEqual(log.read_text(encoding="utf-8"), original_log)
+            self.assertNotIn("--overwrite-finished-log", (SKILL_ROOT / "scripts" / "spawn-codex.sh").read_text(encoding="utf-8"))
+
+    def test_dev_sync_resolver_in_flight_is_scoped_to_this_repo_and_skips_shell_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            worktree = root / "repo-wt-dev-sync"
+            sibling = root / "sibling"
+            repo.mkdir()
+            worktree.mkdir()
+            sibling.mkdir()
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(repo),
+                    "WORKTREE": str(worktree),
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                    "REPO": str(repo),
+                    "WORKTREE": str(worktree),
+                    "SIBLING": str(sibling),
+                }
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    """
+import os
+import types
+import dev_sync_daemon
+
+def check(line):
+    dev_sync_daemon.run = lambda cmd: types.SimpleNamespace(stdout=line + "\\n")
+    return dev_sync_daemon.codex_resolve_in_flight()
+
+repo = os.environ["REPO"]
+wt = os.environ["WORKTREE"]
+sibling = os.environ["SIBLING"]
+print(check(f"bash {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd {wt} --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
+print(check(f"bash {sibling}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {sibling}/.refactor-loop/logs/dev-sync-codex-1.log"))
+print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
+""",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["True", "False", "False"])
+
+    def test_triage_monitor_state_helpers_recover_legacy_entries_and_advance_by_log_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
+            log_file = root / ".refactor-loop" / "logs" / "triage-issue-42.log"
+            prompt_file = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts" / "triage-external-issue.md"
+            state_file.parent.mkdir(parents=True)
+            log_file.parent.mkdir(parents=True)
+            prompt_file.parent.mkdir(parents=True)
+            state_file.write_text('{"42":"2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+            prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
+            triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
+            triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
+            triage_lib = root / "triage-monitor-functions.sh"
+            triage_lib.write_text(triage_prefix, encoding="utf-8")
+            scenario = root / "scenario.sh"
+            scenario.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "$TRIAGE_LIB"
+printf 'legacy=%s retries=%s\\n' "$(state_status 42)" "$(state_retries 42)"
+set_state 42 claimed 0 0 "$LOG_FILE"
+printf 'claimed=%s log=%s\\n' "$(state_status 42)" "$(state_log_file 42)"
+printf 'partial_spawn=%s partial_exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+printf 'SPAWN: prompt=x log=y cd=z stall=1s\\n' > "$LOG_FILE"
+printf 'spawn=%s exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+printf 'noise\\nEXIT=0\\nDONE_AT=now\\n' >> "$LOG_FILE"
+printf 'done=%s\\n' "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+TRIAGE_RETRY_BACKOFF_SECONDS=7
+mark_failed_retry 42 0 "$LOG_FILE" missing-spawn-marker >/dev/null
+jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + " next=" + ((.["42"].next_attempt > 0)|tostring)' "$STATE_FILE"
+""",
+                encoding="utf-8",
+            )
+            scenario.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(root),
+                    "STATE_FILE": str(state_file),
+                    "LOG_FILE": str(log_file),
+                    "TRIAGE_LIB": str(triage_lib),
+                    "TRIAGE_MAX_RETRIES": "3",
+                    "TRIAGE_RETRY_BACKOFF_SECONDS": "300",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(scenario)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    "legacy=failed retries=0",
+                    f"claimed=claimed log={log_file}",
+                    "partial_spawn=no partial_exit=no",
+                    "spawn=yes exit=no",
+                    "done=yes",
+                    "failed=failed retries=1 next=true",
+                ],
+            )
+
+    def test_triage_monitor_loop_dispatches_state_machine_branches_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fakebin = root / "bin"
+            skill_scripts = root / ".claude" / "skills" / "codex-refactor-loop" / "scripts"
+            skill_prompts = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts"
+            logs = root / ".refactor-loop" / "logs"
+            fakebin.mkdir()
+            skill_scripts.mkdir(parents=True)
+            skill_prompts.mkdir(parents=True)
+            logs.mkdir(parents=True)
+
+            (skill_prompts / "triage-external-issue.md").write_text(
+                "Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n",
+                encoding="utf-8",
+            )
+            (logs / "triage-issue-14-attempt-1.log").write_text("SPAWN: old\nEXIT=0\n", encoding="utf-8")
+            (logs / "triage-issue-15-attempt-1.log").write_text("SPAWN: old\n", encoding="utf-8")
+
+            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
+            state_file.write_text(
+                json.dumps(
+                    {
+                        "10": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 4102444800,
+                            "log": str(logs / "triage-issue-10-attempt-1.log"),
+                        },
+                        "11": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-11-attempt-1.log"),
+                        },
+                        "12": {
+                            "status": "failed",
+                            "retries": 1,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-12-attempt-1.log"),
+                        },
+                        "14": {
+                            "status": "spawned",
+                            "retries": 0,
+                            "next_attempt": 0,
+                            "log": str(logs / "triage-issue-14-attempt-1.log"),
+                        },
+                        "15": {
+                            "status": "claimed",
+                            "retries": 0,
+                            "next_attempt": 4102444800,
+                            "log": str(logs / "triage-issue-15-attempt-1.log"),
+                        },
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            gh = fakebin / "gh"
+            gh.write_text(
+                """#!/usr/bin/env bash
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  printf '10 alice\\n11 bob\\n12 carol\\n13 dave\\n14 erin\\n15 frank\\n'
+  exit 0
+fi
+exit 64
+""",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+
+            spawn = skill_scripts / "spawn-codex.sh"
+            spawn.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+log=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --log) log="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+printf '%s\\n' "$ISSUE_NUMBER" >> "$REPO_ROOT/.refactor-loop/spawn-invocations.txt"
+case "$ISSUE_NUMBER" in
+  12|13) printf 'SPAWN: fake issue %s\\n' "$ISSUE_NUMBER" > "$log" ;;
+  *) exit 65 ;;
+esac
+""",
+                encoding="utf-8",
+            )
+            spawn.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
+                    "REPO_ROOT": str(root),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "TRIAGE_MONITOR_ONCE": "1",
+                    "TRIAGE_MONITOR_TEST_WAIT_SPAWN": "1",
+                    "TRIAGE_RETRY_BACKOFF_SECONDS": "1",
+                    "TRIAGE_MAX_RETRIES": "3",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(SKILL_ROOT / "scripts" / "triage-monitor.sh")],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+            self.assertEqual(state["10"]["status"], "claimed")
+            self.assertEqual(state["10"]["next_attempt"], 4102444800)
+            self.assertEqual(state["11"]["status"], "failed")
+            self.assertEqual(state["11"]["retries"], 1)
+            self.assertEqual(state["12"]["status"], "spawned")
+            self.assertEqual(state["12"]["retries"], 1)
+            self.assertEqual(state["13"]["status"], "spawned")
+            self.assertEqual(state["14"]["status"], "done")
+            self.assertEqual(state["15"]["status"], "spawned")
+            self.assertEqual((root / ".refactor-loop" / "spawn-invocations.txt").read_text(encoding="utf-8").splitlines(), ["12", "13"])
+            self.assertIn("failed: triage issue #11 attempt 1/3: missing-spawn-marker", result.stdout)
+            self.assertIn("done: triage codex for issue #14", result.stdout)
+
+    def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            wt = root / "repo-wt-dev-sync"
+            repo.mkdir()
+            self.run_git(repo, "init")
+            self.run_git(repo, "config", "user.email", "test@example.invalid")
+            self.run_git(repo, "config", "user.name", "Test User")
+            self.run_git(repo, "checkout", "-b", "dev")
+            (repo / "conflict.txt").write_text("base\n", encoding="utf-8")
+            self.run_git(repo, "add", "conflict.txt")
+            self.run_git(repo, "commit", "-m", "base")
+            self.run_git(repo, "branch", "auto-refact-dev")
+            (repo / "conflict.txt").write_text("dev\n", encoding="utf-8")
+            self.run_git(repo, "commit", "-am", "dev change")
+            self.run_git(repo, "worktree", "add", "--detach", str(wt), "auto-refact-dev")
+            (wt / "conflict.txt").write_text("integration\n", encoding="utf-8")
+            self.run_git(wt, "commit", "-am", "integration change")
+            merge = self.run_git(wt, "merge", "dev", check=False)
+
+            self.assertNotEqual(merge.returncode, 0)
+            self.assertTrue((wt / ".git").is_file())
+            self.assertFalse((wt / ".git" / "MERGE_HEAD").exists())
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(repo),
+                    "WORKTREE": str(wt),
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                    "WT": str(wt),
+                }
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; from pathlib import Path; import dev_sync_daemon; "
+                    "print(dev_sync_daemon.merge_in_progress(Path(os.environ['WT'])))",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "True")
+
+    def test_sweep_stale_labels_passes_quoted_space_label_as_single_argv(self) -> None:
+        label = 'quote "space" label'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fakebin = root / "bin"
+            fakebin.mkdir()
+            argv_log = root / "gh-argv.jsonl"
+            controller_copy = root / "controller_lib.sh"
+            controller_text = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+            controller_text = controller_text.replace(
+                "import json, sys",
+                "import json, os, sys",
+            ).replace(
+                "stale = ['🚀 phase:pr-open',",
+                "stale = [os.environ['TEST_STALE_LABEL'], '🚀 phase:pr-open',",
+            )
+            controller_copy.write_text(controller_text, encoding="utf-8")
+            gh = fakebin / "gh"
+            gh.write_text(
+                """#!/usr/bin/env bash
+python3 - "$@" <<'PY'
+import json, os, sys
+with open(os.environ["GH_ARGV_LOG"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\\n")
+PY
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  python3 - <<'PY'
+import json
+print(json.dumps([{"number": 42, "labels": [{"name": 'quote "space" label'}]}]))
+PY
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  printf '[]\\n'
+  exit 0
+fi
+exit 0
+""",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
+                    "REPO_ROOT": str(root),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "GH_ARGV_LOG": str(argv_log),
+                    "TEST_STALE_LABEL": label,
+                }
+            )
+            result = subprocess.run(
+                ["bash", "-c", f'source "{controller_copy}"; sweep_stale_labels'],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [__import__("json").loads(line) for line in argv_log.read_text(encoding="utf-8").splitlines()]
+            edit_call = next(call for call in calls if call[:3] == ["issue", "edit", "42"])
+            remove_index = edit_call.index("--remove-label")
+            self.assertEqual(edit_call[remove_index + 1], label)
+            self.assertEqual(edit_call.count(label), 1)
+            self.assertNotIn("eval", (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8"))
 
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
