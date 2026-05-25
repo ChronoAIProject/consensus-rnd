@@ -43,6 +43,14 @@ Audit compatibility:
   markers, artifact names, branch names, and audit section lookups may continue to use
   `CLUSTER_ID` during v1 compatibility.
 
+Stable v1 operational tokens:
+
+- Current markers, GitHub labels, issue title prefixes, branch prefixes, artifact paths, prompt
+  markers, log markers, and audit section lookups are stable v1 operational names.
+- `cluster-009-marker-label-compat-migration` does not rename, dual-write, or add aliases for
+  these names. Keep existing `refactor`, `cluster`, `auto-loop`, and `*_DONE` spellings as the
+  v1 public routing surface while `WORK_UNIT_ID=$CLUSTER_ID` is the compatibility bridge.
+
 ## Producers in v1
 
 `WorkUnitV1` separates the queue item contract from the source that produced the item. The v1

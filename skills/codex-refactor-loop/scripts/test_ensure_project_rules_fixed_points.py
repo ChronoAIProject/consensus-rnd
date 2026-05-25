@@ -432,6 +432,48 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, audit_prompt)
 
+    def test_v1_operational_tokens_are_stable_and_not_renamed(self) -> None:
+        # Refactor (iter2/cluster-009-marker-label-compat-migration):
+        #   Old pattern: marker/label 命名与 refactor 外壳耦合,无显式稳定契约
+        #   New principle: minimal docs+test 固化 marker/label 为稳定 v1 operational tokens(保持现状,不重命名);不引入 OperationalNamePolicyV1(#5 structural 共识)
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        combined = "\n".join([reference_text, skill_text])
+
+        required_markers = (
+            "Stable v1 operational tokens",
+            "stable v1 operational names",
+            "[refactor-design]",
+            "refactor-design-needed",
+            "auto-loop",
+            "phase9-auto-solve",
+            "auto-loop-resume",
+            "refactor/iterN-<cluster-id>",
+            ".refactor-loop/.../<cluster-id>",
+            "IMPLEMENT_DONE:${CLUSTER_ID}",
+            "VERIFY_DONE:${CLUSTER_ID}",
+            "SOLVER_DONE",
+            "META_JUDGE_DONE",
+            "does not rename, dual-write, or add aliases",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+        forbidden_tokens = (
+            "work-unit-design-needed",
+            "[work-unit-design]",
+            "WORK_UNIT_DONE",
+            "IMPLEMENT_DONE:${WORK_UNIT_ID}",
+            "VERIFY_DONE:${WORK_UNIT_ID}",
+            "work-unit/iter",
+        )
+
+        for token in forbidden_tokens:
+            with self.subTest(token=token):
+                self.assertNotIn(token, combined)
+
 
 class NamingPolicySourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-010-rename-alias-strategy):
