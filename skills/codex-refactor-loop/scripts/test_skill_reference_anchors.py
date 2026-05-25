@@ -78,6 +78,31 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
+    def test_reference_documents_daemon_event_monitor_command(self) -> None:
+        self.assertIn(
+            "tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \\",
+            self.reference,
+        )
+        self.assertIn("grep --line-buffered -v '^==> ' \\", self.reference)
+        self.assertIn("grep --line-buffered .", self.reference)
+        self.assertIn("forwards every non-empty line", self.reference)
+        self.assertIn("filtering only `tail -F` file headers", self.reference)
+
+    def test_reference_rejects_unconditional_daemon_not_wake_source(self) -> None:
+        self.assertIn(
+            "daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge",
+            self.reference,
+        )
+        self.assertNotIn(
+            "不产生 harness task-notification,不是 wake 源",
+            self.reference,
+        )
+
+    def test_no_checked_in_daemon_event_monitor_helper(self) -> None:
+        scripts_dir = SKILL_ROOT / "scripts"
+        self.assertFalse((scripts_dir / "daemon_event_monitor.sh").exists())
+        self.assertFalse((scripts_dir / "daemon-event-monitor-bridge.sh").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

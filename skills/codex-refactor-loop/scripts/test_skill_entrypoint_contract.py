@@ -85,6 +85,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "integration branch",
             "ensure labels",
             "ensure all 5 daemons",
+            "arm persistent daemon-event Monitor",
             "dispatch producer",
             "confirm a wake source",
         )
@@ -95,6 +96,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertNotEqual(index, -1)
                 self.assertGreater(index, cursor)
             cursor = index
+
+    def test_wake_source_contract_names_three_lanes(self) -> None:
+        self.assertIn("active daemon-event Monitor bridge", self.skill)
+        self.assertIn("in-flight codex task-notification", self.skill)
+        self.assertIn("confirmed ScheduleWakeup", self.skill)
+        self.assertIn("daemon alone is not a wake source", self.skill)
 
     def test_heavy_reference_material_is_not_in_entrypoint(self) -> None:
         heavy_markers = (
