@@ -36,4 +36,4 @@
 
 ## 当前状态
 
-- `skills/codex-refactor-loop/` 为 host 项目移植,**verbatim**,仍带"重构"外壳与少量 host 主张。泛化路线见 `README.md` 的「泛化路线」。脱壳 / 重命名前不要改它的正文逻辑。
+- `skills/codex-refactor-loop/` 为 host 项目移植,**verbatim**,仍带"重构"外壳与少量 host 主张。泛化路线见 `README.md` 的「泛化路线」。脱壳 / 重命名前不要改它的正文逻辑；例外：经 Phase 9 deep consensus 明确授权的 host-agnostic bootstrap / policy 注入修正可先落地，但不得引入具体 host 事实，且必须配套行为测试。

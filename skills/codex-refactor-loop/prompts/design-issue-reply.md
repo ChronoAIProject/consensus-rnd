@@ -36,7 +36,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 ## 必读
 
-1. `$REPO_ROOT/CLAUDE.md` 全部条款（特别 cluster 引用的 rule_ids）。
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部条款（特别 cluster 引用的 rule_ids）。
 2. issue body（含 cluster YAML / evidence / fix boundary / human_brief）—— 用 `gh issue view ${ISSUE_NUMBER}` 拉。
 3. cluster 在 `.refactor-loop/runs/audit-iter-${ITERATION}.md` 的原文。
 4. 评论中引用的具体文件 + 行号（**必须打开通读**，不只看 line refs）。

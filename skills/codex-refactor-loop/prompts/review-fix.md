@@ -15,7 +15,7 @@ Your job: read every reviewer's reject/comment evidence and apply concrete fixes
    - `${REVIEW_TESTS_PATH}`
    - `${REVIEW_QUALITY_PATH}`
 4. Cluster source: audit `${AUDIT_PATH}` and implement summary `${IMPLEMENT_SUMMARY_PATH}`.
-5. `$REPO_ROOT/CLAUDE.md` — every fix must comply with these clauses.
+5. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — every fix must comply with these clauses.
 
 ## Procedure
 
@@ -24,7 +24,7 @@ Your job: read every reviewer's reject/comment evidence and apply concrete fixes
 Open the 3 reviewer files. For each `reject` AND each `comment`, extract:
 - file:line citations
 - the exact "What would change your verdict" / suggestion text
-- which CLAUDE/AGENTS clause is cited (if any)
+- which PROJECT_RULES/AGENTS clause is cited (if any)
 
 Categorize each demand into one of:
 

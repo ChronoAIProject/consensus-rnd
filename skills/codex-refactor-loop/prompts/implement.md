@@ -4,7 +4,7 @@
 
 ## 必读上下文
 
-1. 主仓库 `$REPO_ROOT/CLAUDE.md` 全部强制条款。
+1. 主仓库 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款。
 2. 完整审计：`$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 中 "${CLUSTER_ID}" 一节。
 3. `$REPO_ROOT 的架构/词汇文档(若有)` 下相关权威文档。
 

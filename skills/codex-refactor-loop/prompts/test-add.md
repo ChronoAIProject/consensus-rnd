@@ -4,7 +4,7 @@ worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}`。
 
 ## 必读
 
-1. `$REPO_ROOT/CLAUDE.md` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款（含 "Codex CLI 调用规范"、"测试与质量门禁"）。
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-N.md` 中 `${CLUSTER_ID}` 一节
 3. `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`
 4. **未覆盖行报告**：以下文件:行号 是 codecov 标记为 patch miss/partial 的位置：

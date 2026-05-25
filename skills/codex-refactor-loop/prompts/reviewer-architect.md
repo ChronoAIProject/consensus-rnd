@@ -6,8 +6,8 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 
 ## Inputs (read in order)
 
-1. `$REPO_ROOT/CLAUDE.md` — full text. The PR must not regress any clause.
-2. `$REPO_ROOT/AGENTS.md` — supporting rules.
+1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — full text. The PR must not regress any clause.
+2. `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 3. PR diff: `cd $REPO_ROOT && git diff origin/${BASE_BRANCH}...origin/${HEAD_BRANCH} -- $SOURCE_GLOBS '$REPO_ROOT 的架构/词汇文档(若有)'` **(three dots — symmetric-from-merge-base; two dots would mis-flag dev's new commits as PR deletions)**
 4. Cluster source (audit + implement summary): `${AUDIT_PATH}` and `${IMPLEMENT_SUMMARY_PATH}` if they exist (skip if not — some PRs are out-of-loop).
 
@@ -59,14 +59,14 @@ verdict: approve | comment | reject
 Verdict semantics:
 - **approve**: no architectural concerns; merge OK from architect angle.
 - **comment**: minor observations or improvements; not blocking but worth surfacing in the PR comment.
-- **reject**: real CLAUDE/AGENTS clause violation introduced or worsened; merge would degrade architecture compliance.
+- **reject**: real PROJECT_RULES/AGENTS clause violation introduced or worsened; merge would degrade architecture compliance.
 
 End with marker line: `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`
 
 ## Hard rules
 
 - Read **the actual diff and the actual referenced files**. Don't trust the implement summary alone.
-- Cite a CLAUDE/AGENTS clause **verbatim** for every reject. "Architectural smell" without a clause = comment, not reject.
+- Cite a PROJECT_RULES/AGENTS clause **verbatim** for every reject. "Architectural smell" without a clause = comment, not reject.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays).
 - Don't edit any file outside `${REVIEW_OUTPUT_PATH}`.
 - No bilingual requirement here (this is an internal artifact consumed by controller).

@@ -8,7 +8,7 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
 2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` — cluster spec.
-3. `$REPO_ROOT/CLAUDE.md` + `$REPO_ROOT/AGENTS.md` — clauses that frame the violation.
+3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 4. `$REPO_ROOT/$REPO_ROOT 的架构/词汇文档(若有)` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).
 5. The actual source files cited in the audit `evidence:` block (open them; verify line numbers).
 
