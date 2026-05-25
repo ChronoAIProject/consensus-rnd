@@ -433,5 +433,34 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(marker, audit_prompt)
 
 
+class NamingPolicySourceRegressionTests(unittest.TestCase):
+    # Refactor (iter2/cluster-010-rename-alias-strategy):
+    #   Old pattern: public copy could drift back toward a mandatory rename or grow a duplicate alias identity
+    #   New principle: Consensus R&D is the product identity while codex-refactor-loop remains the only installed skill entrypoint
+    def test_consensus_identity_keeps_stable_skill_entrypoint_without_alias_surface(self) -> None:
+        skill_files = sorted(path.relative_to(REPO_ROOT).as_posix() for path in (REPO_ROOT / "skills").glob("*/SKILL.md"))
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        public_copy = "\n".join([readme_text, skill_text, reference_text])
+
+        self.assertEqual(skill_files, ["skills/codex-refactor-loop/SKILL.md"])
+        self.assertIn("name: codex-refactor-loop", skill_text)
+        self.assertIn("Consensus R&D", public_copy)
+        self.assertIn("stable installed skill entrypoint", reference_text)
+        self.assertIn("不新增重复 alias skill", readme_text)
+
+        forbidden_markers = (
+            "SkillIdentityV1",
+            "name: consensus-rnd-loop",
+            "name: codex-consensus-loop",
+            "aliases:",
+            "alias:",
+        )
+        for marker in forbidden_markers:
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, public_copy)
+
+
 if __name__ == "__main__":
     unittest.main()

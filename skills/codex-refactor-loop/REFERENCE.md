@@ -9,6 +9,11 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
 historical but authoritative for state schema v1; do not add migrated queue containers, envelope
 wrappers, a normalizer helper, or a state-v2 migration for this contract.
 
+Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
+remains the stable installed skill entrypoint. In v1, `refactor` is a valid development/work-unit
+metaphor and compatibility intake, not a requirement to rename the skill, add an alias, or create a
+new identity contract.
+
 Required identity/provenance fields:
 
 - `work_unit_id`: canonical work-unit identity.
