@@ -657,7 +657,7 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
 class ScriptHygieneSourceRegressionTests(unittest.TestCase):
     # Refactor (iter3/skill-hygiene-scripts):
     #   Old: script hygiene bugs hid in git worktree metadata and shell eval quoting paths.
-    #   New principle: deterministic source/fixture tests cover worktree merge detection and argv label cleanup.
+    #   New principle: deterministic source/fixture tests cover worktree merge detection, argv label cleanup, and log reuse safety.
     def run_git(self, repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", "-C", str(repo), *args],
@@ -665,6 +665,155 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
             text=True,
             check=check,
         )
+
+    def test_spawn_codex_refuses_unfinished_existing_log_without_truncating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "prompt.md"
+            log = root / "codex.log"
+            prompt.write_text("say hello\n", encoding="utf-8")
+            original_log = "SPAWN: old run\npartial output without terminal marker\n"
+            log.write_text(original_log, encoding="utf-8")
+
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(SKILL_ROOT / "scripts" / "spawn-codex.sh"),
+                    "--cd",
+                    str(root),
+                    "--prompt",
+                    str(prompt),
+                    "--log",
+                    str(log),
+                    "--stall",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 3)
+            self.assertIn("refusing to reuse unfinished log without EXIT=", result.stderr)
+            self.assertEqual(log.read_text(encoding="utf-8"), original_log)
+            self.assertNotIn("--overwrite-finished-log", (SKILL_ROOT / "scripts" / "spawn-codex.sh").read_text(encoding="utf-8"))
+
+    def test_dev_sync_resolver_in_flight_is_scoped_to_this_repo_and_skips_shell_wrappers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            worktree = root / "repo-wt-dev-sync"
+            sibling = root / "sibling"
+            repo.mkdir()
+            worktree.mkdir()
+            sibling.mkdir()
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(repo),
+                    "WORKTREE": str(worktree),
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                    "REPO": str(repo),
+                    "WORKTREE": str(worktree),
+                    "SIBLING": str(sibling),
+                }
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    """
+import os
+import types
+import dev_sync_daemon
+
+def check(line):
+    dev_sync_daemon.run = lambda cmd: types.SimpleNamespace(stdout=line + "\\n")
+    return dev_sync_daemon.codex_resolve_in_flight()
+
+repo = os.environ["REPO"]
+wt = os.environ["WORKTREE"]
+sibling = os.environ["SIBLING"]
+print(check(f"bash {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd {wt} --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
+print(check(f"bash {sibling}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {sibling}/.refactor-loop/logs/dev-sync-codex-1.log"))
+print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
+""",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), ["True", "False", "False"])
+
+    def test_triage_monitor_state_helpers_recover_legacy_entries_and_advance_by_log_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
+            log_file = root / ".refactor-loop" / "logs" / "triage-issue-42.log"
+            prompt_file = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts" / "triage-external-issue.md"
+            state_file.parent.mkdir(parents=True)
+            log_file.parent.mkdir(parents=True)
+            prompt_file.parent.mkdir(parents=True)
+            state_file.write_text('{"42":"2026-01-01T00:00:00Z"}\n', encoding="utf-8")
+            prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
+            triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
+            triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
+            triage_lib = root / "triage-monitor-functions.sh"
+            triage_lib.write_text(triage_prefix, encoding="utf-8")
+            scenario = root / "scenario.sh"
+            scenario.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+source "$TRIAGE_LIB"
+printf 'legacy=%s retries=%s\\n' "$(state_status 42)" "$(state_retries 42)"
+set_state 42 claimed 0 0 "$LOG_FILE"
+printf 'claimed=%s log=%s\\n' "$(state_status 42)" "$(state_log_file 42)"
+printf 'partial_spawn=%s partial_exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+printf 'SPAWN: prompt=x log=y cd=z stall=1s\\n' > "$LOG_FILE"
+printf 'spawn=%s exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+printf 'noise\\nEXIT=0\\nDONE_AT=now\\n' >> "$LOG_FILE"
+printf 'done=%s\\n' "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
+TRIAGE_RETRY_BACKOFF_SECONDS=7
+mark_failed_retry 42 0 "$LOG_FILE" missing-spawn-marker >/dev/null
+jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + " next=" + ((.["42"].next_attempt > 0)|tostring)' "$STATE_FILE"
+""",
+                encoding="utf-8",
+            )
+            scenario.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(root),
+                    "STATE_FILE": str(state_file),
+                    "LOG_FILE": str(log_file),
+                    "TRIAGE_LIB": str(triage_lib),
+                    "TRIAGE_MAX_RETRIES": "3",
+                    "TRIAGE_RETRY_BACKOFF_SECONDS": "300",
+                }
+            )
+            result = subprocess.run(
+                ["bash", str(scenario)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [
+                    "legacy=failed retries=0",
+                    f"claimed=claimed log={log_file}",
+                    "partial_spawn=no partial_exit=no",
+                    "spawn=yes exit=no",
+                    "done=yes",
+                    "failed=failed retries=1 next=true",
+                ],
+            )
 
     def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

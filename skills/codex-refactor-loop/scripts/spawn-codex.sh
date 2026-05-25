@@ -31,7 +31,6 @@ LOG=""
 STALL=""
 MODEL=""
 ADD_DIRS=()
-OVERWRITE_FINISHED_LOG=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -43,7 +42,6 @@ while [[ $# -gt 0 ]]; do
     --stall)       STALL="$2"; shift 2;;
     --model)       MODEL="$2"; shift 2;;
     --add-dir)     ADD_DIRS+=("$2"); shift 2;;
-    --overwrite-finished-log) OVERWRITE_FINISHED_LOG=1; shift;;
     *)             echo "unknown flag: $1" >&2; exit 2;;
   esac
 done
@@ -81,15 +79,11 @@ fi
 mkdir -p "$(dirname "$LOG")"
 # Refactor (iter3/skill-hygiene-scripts):
 #   Old: the wrapper truncated --log before checking reuse or in-flight state.
-#   New: existing logs must be finished and require explicit overwrite intent.
+#   New principle: unfinished existing logs are refused before truncation.
 #   This preserves SPAWN/EXIT marker evidence for controller recovery.
 if [[ -e "$LOG" ]]; then
   if ! tail -5 "$LOG" 2>/dev/null | grep -q '^EXIT='; then
     echo "refusing to reuse unfinished log without EXIT=: $LOG" >&2
-    exit 3
-  fi
-  if (( OVERWRITE_FINISHED_LOG != 1 )); then
-    echo "refusing to overwrite finished log without --overwrite-finished-log: $LOG" >&2
     exit 3
   fi
 fi
