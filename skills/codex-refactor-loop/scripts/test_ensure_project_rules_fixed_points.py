@@ -276,6 +276,53 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", skill_text)
         self.assertIn("helper 退出非 0 → bootstrap fail closed", skill_text)
 
+    # Refactor (iter3/skill-github-post-contract):
+    #   Old: 宽泛 all-prompts direct-post 主张
+    #   New: 两组明确 roster + 可枚举行为测试(#13 structural 共识)
+    def test_github_post_contract_matches_prompt_roster(self) -> None:
+        prompts_root = SKILL_ROOT / "prompts"
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        direct_post_prompts = {
+            "solver-minimal.md",
+            "solver-structural.md",
+            "solver-delete.md",
+            "meta-judge.md",
+            "reviewer-architect.md",
+            "reviewer-quality.md",
+            "reviewer-tests.md",
+            "review-fix.md",
+            "design-issue-reply.md",
+            "triage-external-issue.md",
+        }
+        marker_only_prompts = {
+            "audit.md",
+            "design-issue-body.md",
+            "implement.md",
+            "verify.md",
+            "remote-ci-fix.md",
+            "test-add.md",
+        }
+        prompt_inventory = {path.name for path in prompts_root.glob("*.md")} - {"_github-post-rules.md"}
+
+        self.assertEqual(prompt_inventory, direct_post_prompts | marker_only_prompts)
+        self.assertFalse(direct_post_prompts & marker_only_prompts)
+        self.assertIn("Direct-post prompts", skill_text)
+        self.assertIn("Marker/artifact-only prompts", skill_text)
+        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+
+        for prompt_name in sorted(direct_post_prompts):
+            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_name, contract="direct-post"):
+                self.assertIn("## GitHub post", text)
+                self.assertIn("_github-post-rules.md", text)
+
+        for prompt_name in sorted(marker_only_prompts):
+            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_name, contract="marker-only"):
+                self.assertNotIn("## GitHub post", text)
+                self.assertIn("AI 内容标识符", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+
 
 class WorkUnitV1SourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-007-work-unit-contract-schema):
@@ -762,7 +809,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
         monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
         expected_phase = ("🔍 phase:design-solving", "✅ phase:consensus-reached", "🛠️ phase:implementing", "🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "⚙️ phase:ci-running", "🎉 phase:merged", "⏸️ phase:blocked")
-        expected_human = ("🤖 human:auto-推进", "👤 human:需-maintainer-决策", "🆘 human:卡死-需-rework")
+        expected_human = tuple(sorted(CANONICAL_HUMAN_LABELS))
 
         for label in expected_phase + expected_human:
             with self.subTest(label=label):
