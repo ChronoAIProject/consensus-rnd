@@ -325,6 +325,95 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
 
+class ContributingDocSourceRegressionTests(unittest.TestCase):
+    def read_contributing(self) -> str:
+        return (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+    def test_contributing_doc_exists_with_stable_anchors(self) -> None:
+        contributing = REPO_ROOT / "CONTRIBUTING.md"
+        self.assertTrue(contributing.exists())
+        text = contributing.read_text(encoding="utf-8")
+        anchors = (
+            "#development-flow",
+            "#issues",
+            "#commits",
+            "#pull-requests",
+            "#skill-changes",
+            "#style-and-format",
+            "#ai-generated-content",
+            "#policy-boundaries",
+        )
+
+        for anchor in anchors:
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, text)
+
+    def test_contributing_doc_links_authoritative_owners(self) -> None:
+        text = self.read_contributing()
+        required_literals = (
+            "CLAUDE.md",
+            "README.md",
+            "skills/codex-refactor-loop/SKILL.md",
+            "#26",
+            "#31",
+            "#32",
+            "#20",
+            "#17",
+            ".version-bump.json",
+            "superpowers:writing-skills",
+        )
+
+        for literal in required_literals:
+            with self.subTest(literal=literal):
+                self.assertIn(literal, text)
+
+    def test_contributing_doc_carries_machine_grep_literals(self) -> None:
+        text = self.read_contributing()
+        required_literals = (
+            "feat(skill):",
+            "fix(skill):",
+            "refactor(skill):",
+            "docs(skill):",
+            "chore:",
+            "⟦AI:AUTO-LOOP⟧",
+            "auto-loop-triage",
+            "refactor-design-needed",
+            "phase9-auto-solve",
+            "frontmatter",
+            "Use when",
+            "REFERENCE.md",
+            "scripts/",
+            "prompts/",
+        )
+
+        for literal in required_literals:
+            with self.subTest(literal=literal):
+                self.assertIn(literal, text)
+
+    def test_contributing_doc_does_not_redefine_other_policy(self) -> None:
+        text = self.read_contributing()
+        forbidden_literals = (
+            "2 approve",
+            "unanimous approve",
+            "consensus-rnd-ci",
+            "contract-tests",
+            "manifest-version-sync",
+            "lint-advisory",
+            "workflow_dispatch",
+            "git tag",
+            "gh release create",
+            "npm publish",
+            "C#",
+            ".NET",
+            "proto",
+            "branch protection command",
+        )
+
+        for literal in forbidden_literals:
+            with self.subTest(literal=literal):
+                self.assertNotIn(literal, text)
+
+
 class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
     # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
     def read_skill(self) -> str:
