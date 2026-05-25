@@ -3,6 +3,10 @@ name: codex-refactor-loop
 description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
 
+> Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
+> New principle: SKILL.md 仅留 controller 契约 + phase index + 硬不变量.
+> Heavy content moves to REFERENCE.md via anchor links, following #12 structural consensus.
+
 # Codex Refactor Loop — Controller Contract
 
 This SKILL.md is the controller entrypoint. It must be enough to run the loop safely on first load: hard invariants, phase routing, and the phase index stay local. Heavy schemas, full templates, command bodies, and recovery runbooks live in lazy reference anchors.
