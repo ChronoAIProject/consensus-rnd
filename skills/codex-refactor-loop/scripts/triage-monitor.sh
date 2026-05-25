@@ -13,7 +13,7 @@
 set -u
 
 resolve_skill_root() {
-  # Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)
+  # Refactor (iter3/skill-skill-root-contract): Old pattern: .claude/skills hardcoded lookup. New principle: self-locate from this script path, with optional validated CODEX_REFACTOR_LOOP_SKILL_ROOT override.
   local root
   if [ -n "${CODEX_REFACTOR_LOOP_SKILL_ROOT:-}" ]; then
     root="$CODEX_REFACTOR_LOOP_SKILL_ROOT"

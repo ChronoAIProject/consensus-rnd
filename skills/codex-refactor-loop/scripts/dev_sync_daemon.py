@@ -12,7 +12,7 @@ daemon 跑在独立 worktree,main repo controller 工作不受 daemon 的 merge 
 - main repo working tree 不被 merge 状态污染
 
 启动:
-  nohup python3 <skill-root>/scripts/dev_sync_daemon.py \
+  nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/dev_sync_daemon.py' \
     >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
   disown
 
@@ -50,7 +50,7 @@ def git_repo_root() -> Path:
 
 
 def skill_root() -> Path:
-    # Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)
+    # Refactor (iter3/skill-skill-root-contract): Old pattern: .claude/skills hardcoded lookup. New principle: self-locate from this script path, with optional validated CODEX_REFACTOR_LOOP_SKILL_ROOT override.
     """Return this installed skill root, failing closed on invalid overrides."""
     override = os.environ.get("CODEX_REFACTOR_LOOP_SKILL_ROOT")
     root = Path(override).expanduser().resolve() if override else Path(__file__).resolve().parents[1]

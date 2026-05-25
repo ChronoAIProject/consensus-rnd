@@ -1,6 +1,6 @@
 # codex-refactor-loop — Reference
 
-Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks for [SKILL.md](SKILL.md). The entrypoint keeps the controller contract and phase index; this file carries the material that should be loaded lazily by anchor.
+Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks for [SKILL.md](SKILL.md). The entrypoint keeps the controller contract and phase index; this file carries the material that should be loaded lazily by anchor. Keep full command bodies, long path examples, schemas, and recovery matrices here; keep only short invariants and anchor links in `SKILL.md`.
 
 <a id="controller-contract-details"></a>
 ## Controller contract details

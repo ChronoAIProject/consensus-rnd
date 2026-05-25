@@ -1160,9 +1160,53 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertNotIn('SPAWN_CODEX = MAIN_REPO / ".claude"', text)
         self.assertNotIn(".claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py", text)
         self.assertIn(
-            "# Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)",
+            "# Refactor (iter3/skill-skill-root-contract): Old pattern: .claude/skills hardcoded lookup. New principle: self-locate from this script path, with optional validated CODEX_REFACTOR_LOOP_SKILL_ROOT override.",
             text,
         )
+
+    def test_dev_sync_daemon_uses_valid_specific_skill_root_override(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            override = root / "override-skill"
+            (override / "scripts").mkdir(parents=True)
+            (override / "prompts").mkdir()
+            repo.mkdir()
+            (override / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
+            spawn = override / "scripts" / "spawn-codex.sh"
+            spawn.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            spawn.chmod(0o755)
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(repo),
+                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(override),
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                }
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import dev_sync_daemon; "
+                        "print(dev_sync_daemon.SKILL_ROOT); "
+                        "print(dev_sync_daemon.SPAWN_CODEX)"
+                    ),
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                result.stdout.splitlines(),
+                [str(override.resolve()), str((override / "scripts" / "spawn-codex.sh").resolve())],
+            )
+            self.assertEqual(result.stderr, "")
 
     def test_triage_monitor_self_locates_before_state_mutation(self) -> None:
         text = self.read_rel("skills/codex-refactor-loop/scripts/triage-monitor.sh")
@@ -1176,7 +1220,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn('"$TRIAGE_PROMPT_TEMPLATE"', text)
         self.assertIn('nohup bash "$SPAWN_CODEX"', text)
         self.assertIn(
-            "# Refactor (iter3/skill-skill-root-contract): Old: .claude/skills 硬编码  New: inline self-location + env 可选 override(#19 structural 共识)",
+            "# Refactor (iter3/skill-skill-root-contract): Old pattern: .claude/skills hardcoded lookup. New principle: self-locate from this script path, with optional validated CODEX_REFACTOR_LOOP_SKILL_ROOT override.",
             text,
         )
         self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
