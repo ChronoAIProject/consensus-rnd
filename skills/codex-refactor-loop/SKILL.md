@@ -712,6 +712,11 @@ the WorkUnitV1 fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `pro
   `META_JUDGE_DONE`.
 - Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
   a named operational-policy abstraction for v1 compatibility.
+- Skill self-modification has an additional process gate: if a cluster edits this skill's
+  `SKILL.md`, `REFERENCE.md`, prompts, or scripts, dispatch or record an independent pre-edit
+  baseline artifact before implementation that shows the missing behavior/failure mode. Phase 9
+  consensus authorizes the plan, but does not satisfy the AGENTS/superpowers skill-writing
+  baseline by itself.
 - Phase 7 `manual-issue` intake may write WorkUnitV1 items into `clusters_planned` only after the
   accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
   `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
