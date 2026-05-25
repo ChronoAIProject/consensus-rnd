@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -183,6 +184,34 @@ class ManifestVersionSyncTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MANIFEST_VERSION_SYNC_OK:", result.stdout)
         self.assertEqual(result.stderr, "")
+
+    def test_cli_mismatched_manifest_fixture_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for relative_path, _field in EXPECTED_VERSION_RECORDS:
+                source = REPO_ROOT / relative_path
+                target = repo / relative_path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+            shutil.copyfile(REPO_ROOT / ".version-bump.json", repo / ".version-bump.json")
+
+            gemini_path = repo / "gemini-extension.json"
+            gemini_manifest = json.loads(gemini_path.read_text(encoding="utf-8"))
+            gemini_manifest["version"] = "999.999.999"
+            gemini_path.write_text(json.dumps(gemini_manifest, indent=2) + "\n", encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "--repo-root", str(repo)],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("MANIFEST_VERSION_SYNC_ERROR", result.stderr)
+        self.assertIn("gemini-extension.json:version=999.999.999", result.stderr)
+        self.assertNotIn("MANIFEST_VERSION_SYNC_OK", result.stdout)
 
 
 if __name__ == "__main__":
