@@ -14,7 +14,7 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 
 ## Procedure
 
-1. **Restate the violation** in CLAUDE-clause-precise terms. Which clause is it, exactly? Quote it.
+1. **Restate the violation** in PROJECT_RULES-clause-precise terms. Which clause is it, exactly? Quote it.
 2. **Map the clean structural solution**:
    - Which existing repo primitives apply (`IAsyncEnumerable`, `Channel`, actor inbox, projection pipeline, event envelope, etc.)?
    - What new abstraction is required, IF any (named precisely)?
@@ -44,8 +44,8 @@ cluster: ${CLUSTER_ID}
 verdict: propose | abstain | escalate
 ---
 
-## CLAUDE clause violated (quoted verbatim)
-> <exact CLAUDE.md text>
+## PROJECT_RULES clause violated (quoted verbatim)
+> <exact PROJECT_RULES text>
 
 ## Recommended framing (English)
 <one paragraph: what new structure, where, why it eliminates the violation by construction (not by exception)>
@@ -59,7 +59,7 @@ verdict: propose | abstain | escalate
 - LOC delta: ~+N / -M
 - Tests to add: <list with what behavior each asserts>
 - proto changes (if any): <field name + number + .proto file>
-- Philosophy/CLAUDE.md/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- Philosophy/PROJECT_RULES/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Runtime cost: <latency estimate, allocation estimate>
 
 ## Risks

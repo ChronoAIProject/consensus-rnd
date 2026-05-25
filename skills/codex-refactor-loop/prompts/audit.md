@@ -129,7 +129,7 @@ human_brief:
 
 `verdict: reject` 的 candidate 必须有：
 
-- CLAUDE clause 引用 + 该 clause 对该候选**不适用**的具体理由（不是泛泛 "covered by guard"）
+- PROJECT_RULES clause 引用 + 该 clause 对该候选**不适用**的具体理由（不是泛泛 "covered by guard"）
 - 如 reject reason 是 "covered by existing CI guard"：必须给 guard 文件路径 + 行号 + 证明候选路径在 guard scan include set + 临时 probe 描述确认 reintroduction 会 fail
 - 如 reject reason 是 "same family as prior cluster"：必须证明候选 anti-pattern 100% 等同已修过的，不是字面相似但语义不同
 

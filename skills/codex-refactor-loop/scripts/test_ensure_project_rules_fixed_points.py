@@ -3,6 +3,9 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -16,6 +19,8 @@ from ensure_project_rules_fixed_points import (
     START_RE,
     sha256_text,
 )
+
+SCRIPT_PATH = Path(__file__).with_name("ensure_project_rules_fixed_points.py")
 
 
 class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
@@ -32,6 +37,61 @@ class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
 
     def ensure(self, project_rules: str = "CLAUDE.md") -> str:
         return ProjectRulesFixedPointEnsurer(str(self.repo), project_rules).ensure()
+
+    def run_cli(self, env_updates: dict[str, str] | None = None, *, clear_rules_env: bool = True) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        if clear_rules_env:
+            env.pop("REPO_ROOT", None)
+            env.pop("PROJECT_RULES", None)
+        if env_updates:
+            env.update(env_updates)
+        return subprocess.run(
+            [sys.executable, str(SCRIPT_PATH)],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_cli_default_project_rules_writes_and_reports_status(self) -> None:
+        self.rules.write_text("# Host rules\nExisting text.\n", encoding="utf-8")
+
+        first = self.run_cli({"REPO_ROOT": str(self.repo)})
+
+        self.assertEqual(first.returncode, 0)
+        self.assertEqual(first.stdout, "PROJECT_RULES_FIXED_POINT:updated\n")
+        self.assertEqual(first.stderr, "")
+        self.assertIn(CANONICAL_BODY, self.rules.read_text(encoding="utf-8"))
+
+        second = self.run_cli({"REPO_ROOT": str(self.repo)})
+
+        self.assertEqual(second.returncode, 0)
+        self.assertEqual(second.stdout, "PROJECT_RULES_FIXED_POINT:already-current\n")
+        self.assertEqual(second.stderr, "")
+
+    def test_cli_explicit_project_rules_targets_nested_file(self) -> None:
+        nested_rules = self.repo / "docs" / "RULES.md"
+        nested_rules.parent.mkdir()
+        nested_rules.write_text("# Nested host rules\n", encoding="utf-8")
+
+        result = self.run_cli({"REPO_ROOT": str(self.repo), "PROJECT_RULES": "docs/RULES.md"})
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "PROJECT_RULES_FIXED_POINT:updated\n")
+        self.assertEqual(result.stderr, "")
+        self.assertIn(CANONICAL_BODY, nested_rules.read_text(encoding="utf-8"))
+        self.assertFalse(self.rules.exists())
+
+    def test_cli_missing_repo_root_fails_closed_without_modifying_files(self) -> None:
+        original = "# Host rules\n"
+        self.rules.write_text(original, encoding="utf-8")
+
+        result = self.run_cli()
+
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("PROJECT_RULES_FIXED_POINT_ERROR: REPO_ROOT is required", result.stderr)
+        self.assertEqual(self.rules.read_text(encoding="utf-8"), original)
 
     def test_first_append_adds_one_managed_block(self) -> None:
         self.rules.write_text("# Host rules\nExisting text.\n", encoding="utf-8")
