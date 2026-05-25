@@ -87,6 +87,53 @@ class ReleasePipelineContractTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(), "1.0.0")
             self.assertEqual(json.loads(read(pkg))["version"], "1.0.0")
 
+    def test_manifest_sync_write_covers_all_mapped_platform_manifests(self) -> None:
+        paths = [
+            ".version-bump.json",
+            "package.json",
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+            ".codex-plugin/plugin.json",
+            ".cursor-plugin/plugin.json",
+            "gemini-extension.json",
+            ".github/scripts/bump_version.py",
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            for relative in paths:
+                source = REPO_ROOT / relative
+                target = repo / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, target)
+
+            result = subprocess.run(
+                ["python3", ".github/scripts/bump_version.py", "--version", "1.0.0"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+            result = subprocess.run(
+                ["python3", ".github/scripts/bump_version.py", "--read-version"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "1.0.0")
+
+            mapping = json.loads(read(repo / ".version-bump.json"))
+            for item in mapping["files"]:
+                with self.subTest(path=item["path"], field=item["field"]):
+                    data = json.loads(read(repo / item["path"]))
+                    self.assertEqual(self.bump.resolve_field(data, item["field"]), "1.0.0")
+
+            marketplace = json.loads(read(repo / ".claude-plugin/marketplace.json"))
+            self.assertEqual(marketplace["plugins"][0]["version"], "1.0.0")
+
     def test_workflow_contract(self) -> None:
         self.assertIn("name: release", self.workflow)
         self.assertIn("push:", self.workflow)
