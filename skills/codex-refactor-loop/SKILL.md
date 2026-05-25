@@ -633,7 +633,8 @@ Write initial `state.json`:
 `clusters_failed` are the authoritative v1 queue containers, but each item is a WorkUnitV1 record
 as specified in [REFERENCE.md](REFERENCE.md). If an existing state file lacks
 `work_unit_schema_version`, read it as v1 legacy state: derive `work_unit_id` from each item's
-`id`, treat audit clusters as `kind=producer=audit`, and continue without migration.
+`id`, treat audit clusters as `kind="audit-cluster"` and `producer="audit"`, and continue without
+migration.
 
 **Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
 

@@ -124,10 +124,11 @@ open_pr_with_label() {
 
 # Substitute {{handlebars}} placeholders in a template using current env vars
 # Usage: render_template <template-file> <output-file>
-# Reads $CLUSTER_ID, $ITERATION, $WORKTREE_PATH, $BRANCH, $OLD_PATTERN, $NEW_PRINCIPLE, $SCOPE_PATHS, $VERIFICATION_HINTS, and $VAR in template.
+# Reads $WORK_UNIT_ID, $CLUSTER_ID, $ITERATION, $WORKTREE_PATH, $BRANCH, $OLD_PATTERN, $NEW_PRINCIPLE, $SCOPE_PATHS, $VERIFICATION_HINTS, and $VAR in template.
 render_template() {
   local in="$1" out="$2"
   perl -pe '
+    s/\{\{work_unit_id\}\}/($ENV{WORK_UNIT_ID} || $ENV{CLUSTER_ID})/ge;
     s/\{\{cluster_id\}\}/$ENV{CLUSTER_ID}/g;
     s/\{\{iteration\}\}/$ENV{ITERATION}/g;
     s/\{\{worktree_path\}\}/$ENV{WORKTREE_PATH}/g;

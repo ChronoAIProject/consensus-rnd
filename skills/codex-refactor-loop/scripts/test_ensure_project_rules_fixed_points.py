@@ -269,5 +269,52 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("helper 退出非 0 → bootstrap fail closed", skill_text)
 
 
+class WorkUnitV1SourceRegressionTests(unittest.TestCase):
+    # Refactor (iter2/cluster-007-work-unit-contract-schema):
+    #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed
+    #   New principle: source-regression coverage keeps WorkUnitV1 v1 containers authoritative and blocks premature work_units_* migration surface
+    def test_work_unit_v1_contract_markers_are_present(self) -> None:
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
+        verify_prompt = (SKILL_ROOT / "prompts" / "verify.md").read_text(encoding="utf-8")
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+        combined = "\n".join([reference_text, skill_text, implement_prompt, verify_prompt, controller_lib])
+
+        required_markers = (
+            "WorkUnitV1",
+            "work_unit_schema_version",
+            "work_unit_id == id == cluster_id == legacy_cluster_id",
+            "WORK_UNIT_ID=$CLUSTER_ID",
+            "must not fabricate `cluster_id` or",
+            "`legacy_cluster_id`",
+            "s/\\{\\{work_unit_id\\}\\}/($ENV{WORK_UNIT_ID} || $ENV{CLUSTER_ID})/ge",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+    def test_work_unit_v1_forbidden_migration_surface_is_absent(self) -> None:
+        checked_paths = [
+            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "prompts" / "implement.md",
+            SKILL_ROOT / "prompts" / "verify.md",
+            SKILL_ROOT / "prompts" / "meta-judge.md",
+        ]
+        forbidden_tokens = tuple(f"work_units_{name}" for name in ("planned", "active", "done", "failed")) + (
+            "WorkUnit" + "EnvelopeV1",
+            "WorkUnit" + "ProducerV1",
+            "work_unit_" + "producer.py",
+        )
+
+        for path in checked_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                with self.subTest(path=path.name, token=token):
+                    self.assertNotIn(token, text)
+
+
 if __name__ == "__main__":
     unittest.main()

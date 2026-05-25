@@ -32,8 +32,8 @@ Audit compatibility:
 - For non-audit units, `work_unit_id` is not required to start with `cluster-`; omit
   `legacy_cluster_id` and do not fabricate `cluster_id`.
 - Old state without `work_unit_schema_version` is read as v1 legacy state. Derive
-  `work_unit_id` from each queue item's `id`, treat `kind=producer=audit`, and use the audit
-  section as `source_ref` when known.
+  `work_unit_id` from each queue item's `id`, treat items as `kind="audit-cluster"` and
+  `producer="audit"`, and use the audit section as `source_ref` when known.
 - Prompt dispatch for current audit-backed units exports `WORK_UNIT_ID=$CLUSTER_ID`. Existing
   markers, artifact names, branch names, and audit section lookups may continue to use
   `CLUSTER_ID` during v1 compatibility.
