@@ -1,9 +1,9 @@
 ---
 name: codex-refactor-loop
-description: Unattended three-phase refactor loop (analyze → implement → verify) driven by codex CLI in isolated git worktrees. Use when user wants fully autonomous parallel refactoring against CLAUDE.md violations, with /loop dynamic wakeups and per-cluster worktree merges.
+description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
 
-# Codex Refactor Loop — Unattended Three-Phase Mode
+# Codex Refactor Loop — Consensus R&D Work-Unit Mode
 
 ## Host 配置(通用化注入点)
 
