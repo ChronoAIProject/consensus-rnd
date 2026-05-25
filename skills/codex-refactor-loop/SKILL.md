@@ -1533,8 +1533,14 @@ The controller's only inline composition allowed for GitHub:
 
 EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation rationale、design issue body、cross-post 通知、PR description 包括 rollup PR)由**正在跑的那个 codex 自己 post**,**不需要专门的 writer-codex 中介**:
 
-- solver / meta-judge / fix / reviewer / clarifier / investigator / analyst / implement codex 各自跑完内部 artifact 后,自己 `gh issue comment` 或 `gh pr comment` post 中文 user-facing 摘要
-- 所有 prompts 末尾都有 `## GitHub post (强制)` 块引用 `prompts/_github-post-rules.md` 共享规则
+<!--
+# Refactor (iter3/skill-github-post-contract):
+#   Old: 宽泛 all-prompts direct-post 主张
+#   New: 两组明确 roster + 可枚举行为测试(#13 structural 共识)
+-->
+
+- Direct-post prompts: `solver-minimal.md`, `solver-structural.md`, `solver-delete.md`, `meta-judge.md`, `reviewer-architect.md`, `reviewer-quality.md`, `reviewer-tests.md`, `review-fix.md`, `design-issue-reply.md`, `triage-external-issue.md`. Only these prompts must contain a `## GitHub post` section referencing `prompts/_github-post-rules.md`.
+- Marker/artifact-only prompts: `audit.md`, `design-issue-body.md`, `implement.md`, `verify.md`, `remote-ci-fix.md`, `test-add.md`. They keep the AI sentinel plus their marker/body contract, are surfaced by controller / PR / CI status, and must not claim direct posting.
 - body 必须 `## 🤖 <headline>` 开头(comment-monitor.sh 据此识别 controller-post 跳 react)
 - 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`

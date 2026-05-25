@@ -72,6 +72,8 @@
 
 ## GitHub post
 
+遵循 `prompts/_github-post-rules.md`。
+
 按 accept / reject 分别:
 - accept 评论头行 `## 🤖 Triage codex — accept: issue-${ISSUE_NUMBER}`
 - reject 评论头行 `## 🤖 Triage codex — reject: <reject-type>`
