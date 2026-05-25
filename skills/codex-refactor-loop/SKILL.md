@@ -50,6 +50,21 @@ These variables are injected by the host project. The skill must not hardcode pr
 | `$GH_REPO_SLUG` | GitHub `OWNER/REPO` slug | required for `gh --repo` |
 | `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional |
 
+### Host language policy
+
+These optional fields carry host language, test-layout, comment, schema, and architecture-review policy into prompt text. Their default is empty. Empty means the prompt must infer from existing repository evidence plus `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$TEST_CMD`, `$BUILD_CMD`, and the actual diff; it must not invent C#, .NET, protobuf, or any other host-specific default.
+
+| Variable | Prompt meaning | Empty behavior |
+|---|---|---|
+| `$HOST_TEST_FILE_GLOBS` | writable test file glob or location hints for test-writing/review prompts | infer from existing tests; fail closed if unsafe |
+| `$HOST_TEST_NAMING_RULE` | host test file and test method naming rule | mirror existing tests; do not assume a suffix or extension |
+| `$HOST_COMMENT_RULE` | refactor/self-documentation comment syntax and applicability | match surrounding file style or mark not applicable |
+| `$HOST_CODE_FENCE_LANG` | language tag for illustrative code fences in generated prompt text | omit the language tag |
+| `$HOST_PROTO_POLICY` | schema/protocol review and regeneration policy when applicable | treat schema checks as diff/project-rule driven only |
+| `$HOST_ARCHITECTURE_GREP_CHECKS` | host-specific architecture anti-pattern grep hints for reviewers | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only |
+
+Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
+
 Host config rules:
 
 1. `host.env` is the only runtime fact injection point.

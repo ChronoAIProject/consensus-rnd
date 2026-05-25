@@ -1,5 +1,7 @@
 # 任务：验证 ${WORK_UNIT_ID} 的实施改动
 
+<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。
 当前 v1 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；既有实施摘要、artifact 文件名和 marker 仍使用该 alias。
 
@@ -16,7 +18,7 @@
 
 ### 1. 改动与设计原则一致
 
-- 检查每个被重构的关键类/方法是否带有 `// Refactor (...):` 注释，包含 Old pattern + New principle。缺失任何一处 → 标记缺陷。
+- 检查每个被重构的关键类/方法是否按 `${HOST_COMMENT_RULE}` 或目标文件现有注释风格带有 Refactor self-documentation，包含 Old pattern + New principle。缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。
 - 检查改动是否真正消除了 `old_pattern` 描述的违反（用 `rg` 抽样确认 anti-pattern 不再出现在 scope_paths 内）。
 
 ### 2. 作用域诚实
@@ -28,7 +30,7 @@
 
 - `verification_hints` 指定的所有测试命令必须能跑且通过。
 - 测试代码不得包含 `sleep/delay` 作为断言节奏。
-- 不得出现 `[Skip]` / `[Trait("Category","Manual")]` 之类的禁用标记，除非实施摘要明确说明且有 CLAUDE.md 依据。
+- 不得出现 `$PROJECT_RULES` / `$CI_GUARDS` 定义的禁用测试逃逸标记，除非实施摘要明确说明且有规则依据。
 - 关键路径测试覆盖率不得下降。
 
 ### 4. CI 守卫
@@ -50,7 +52,7 @@ ${CLUSTER_SPECIFIC_GUARDS}
 
 ### 5. 没有新增依赖
 
-- `git diff -- '*$BUILD_CMD 目标/工程文件' 'Directory.Packages.props' '*.proto'` 若有新增依赖、新增 NuGet 包、新增 proto 文件，必须在实施摘要中有合理说明；否则缺陷。
+- 根据 `$PROJECT_RULES`、`$BUILD_CMD`、实际 diff 文件和 `${HOST_PROTO_POLICY}` 检查新增依赖、build manifest、schema/protocol 文件。若有新增依赖或 schema/protocol 变更，必须在实施摘要中有合理说明；否则缺陷。
 
 ### 6. 外部仓库零改动
 
