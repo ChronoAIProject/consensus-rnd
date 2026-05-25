@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""Behavior tests for the narrow Phase 9 router daemon."""
+
+from __future__ import annotations
+
+import json
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from phase9_router_daemon import Phase9Router, main
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "phase9_router_daemon.py"
+
+
+class Phase9RouterDaemonTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.commands: list[list[str]] = []
+        self.router = Phase9Router(self.repo, command_runner=self.commands.append)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
+        path = self.repo / ".refactor-loop" / "logs" / name
+        tail = ["EXIT=0"] if exit_zero else ["EXIT=1"]
+        path.write_text("\n".join([*lines, *tail, ""]), encoding="utf-8")
+        return path
+
+    def ledger_entries(self) -> list[dict]:
+        path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def write_ledger_key(self, key: str) -> None:
+        path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
+        with path.open("a", encoding="utf-8") as ledger:
+            ledger.write(json.dumps({"key": key}, sort_keys=True) + "\n")
+
+    def pending_events(self) -> str:
+        path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue{issue}-r{round_no}-{role}.log",
+                f"SOLVER_DONE:{role}:{verdict}:summary",
+            )
+
+    def test_phase9_router_clean_exit_gating_requires_tail_exit_zero(self) -> None:
+        self.write_log("phase9-issue37-r4-minimal.log", "SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue37-r4-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue37-r4-delete.log", "SOLVER_DONE:delete:ok:x", exit_zero=False)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_unknown_marker_fallback_appends_event_only(self) -> None:
+        self.write_log("phase9-issue37-r4-judge.log", "SOMETHING_DONE:surprise:payload")
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertIn("SOMETHING_DONE:surprise:payload", self.pending_events())
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_idempotency_spawns_once_per_dedupe_key(self) -> None:
+        self.solver_triplet()
+
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
+
+    def test_phase9_router_singleton_lock_conflict_fail_closed_before_dispatch(self) -> None:
+        self.solver_triplet()
+
+        with mock.patch("phase9_router_daemon.fcntl.flock", side_effect=BlockingIOError):
+            with self.assertRaises(SystemExit):
+                with self.router.singleton():
+                    self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_in_flight_suppresses_duplicate_dispatch_before_ledger(self) -> None:
+        with self.subTest("existing target log"):
+            self.solver_triplet(issue=37, round_no=4)
+            self.router._log_path("37", 4, "judge").write_text("reserved by existing worker\n", encoding="utf-8")
+
+            self.router.tick()
+
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.ledger_entries(), [])
+
+        with self.subTest("ps command line"):
+            self.tmp.cleanup()
+            self.setUp()
+            self.solver_triplet(issue=38, round_no=5)
+            target_log = self.router._log_path("38", 5, "judge")
+            ps_output = f"/bin/sh /tmp/spawn-codex.sh --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+
+            with mock.patch("phase9_router_daemon.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+                self.router.tick()
+
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_placeholder_exclusion_ignores_prompt_echo(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue37-r4-{role}.log",
+                f"prompt template says SOLVER_DONE:<{role}>:<verdict>:<summary>",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        command = self.commands[0]
+        self.assertIn(str(self.repo.resolve()), command)
+        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
+        self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
+
+    def test_phase9_router_converge_dispatches_next_round_solvers(self) -> None:
+        self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue37-r5-minimal.log", logs)
+        self.assertIn("phase9-issue37-r5-structural.log", logs)
+        self.assertIn("phase9-issue37-r5-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["37-5-delete", "37-5-minimal", "37-5-structural"],
+        )
+
+    def test_phase9_router_stalled_requires_valid_predicate(self) -> None:
+        self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.router.tick()
+        self.assertEqual(self.commands, [])
+
+        self.commands.clear()
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=38, round_no=round_no, verdict="same")
+        self.write_ledger_key("38-1-judge")
+        self.write_ledger_key("38-2-judge")
+        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue38-r3-reflector.log" in " ".join(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_stalled_rejects_changed_recent_verdict_text(self) -> None:
+        for round_no, verdict in ((1, "same"), (2, "changed"), (3, "same")):
+            self.solver_triplet(issue=39, round_no=round_no, verdict=verdict)
+        self.write_ledger_key("39-1-judge")
+        self.write_ledger_key("39-2-judge")
+        self.write_log("phase9-issue39-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+
+        self.router.tick()
+
+        self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
+        self.assertNotIn("39-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+        self.assertIn("META_JUDGE_DONE:escalate:stalled:no-change", self.pending_events())
+
+    def test_phase9_router_lifecycle_markers_never_spawn(self) -> None:
+        markers = (
+            "META_JUDGE_DONE:consensus:structural:summary",
+            "IMPLEMENT_DONE:cluster:ok",
+            "VERIFY_DONE:cluster:ok",
+            "REVIEW_DONE:pr:quality:approve",
+            "FIX_DONE:pr:ok",
+            "FIX_BLOCKED:pr:reason",
+            "TEST_ADD_DONE:pr:ok",
+            "META_RESOLVED:retry-fix:reason",
+        )
+        for index, marker in enumerate(markers, start=1):
+            self.write_log(f"phase9-issue{index}-r1-judge.log", marker)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        events = self.pending_events()
+        for marker in markers:
+            self.assertIn(marker, events)
+
+    def test_phase9_router_source_does_not_introduce_forbidden_abstractions(self) -> None:
+        """#37 consensus exception allows only private ledger plus fallback event."""
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        for forbidden in (
+            "WorkUnitV2",
+            "ControllerOrchestrator",
+            "ControllerEvent",
+            "ControllerCommand",
+            "gh pr create",
+            "gh pr merge",
+            "git commit",
+            "git push",
+            "merge_pr(",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(
+                    forbidden,
+                    src,
+                    f"phase9_router_daemon.py must not introduce forbidden boundary token: {forbidden}",
+                )
+
+    def test_main_once_dispatches_via_temp_repo_root(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+        commands: list[list[str]] = []
+
+        exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(len(commands), 1)
+        self.assertIn(str(self.repo.resolve()), commands[0])
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
+
+    def test_main_rejects_relative_repo_root(self) -> None:
+        commands: list[list[str]] = []
+
+        with self.assertRaisesRegex(SystemExit, "must be absolute"):
+            main(["--once", "--repo-root", "relative/path"], command_runner=commands.append)
+
+        self.assertEqual(commands, [])
+
+    def test_main_dry_run_records_no_dispatch(self) -> None:
+        self.solver_triplet(issue=37, round_no=4)
+        commands: list[list[str]] = []
+
+        exit_code = main(["--once", "--repo-root", str(self.repo), "--dry-run"], command_runner=commands.append)
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+
+if __name__ == "__main__":
+    unittest.main()

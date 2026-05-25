@@ -16,7 +16,7 @@
 - **meta-judge 仲裁**:把分歧收敛成 `consensus` / `converge` / `stalled` 三个出口,不达成一致就继续收敛,直到真停滞才升 reflector 调和。
 - **任何 concrete plan 都必须过这道闸**:哪怕方向已明确,也不允许单个 agent 直接落地 —— 用多角度验证把"明显方向"证成"明显方案"。
 - **验证侧同构**:产物再经多 reviewer(架构 / 质量 / 测试)共识 gate 才允许合并。
-- **controller 纯编排**:所有思考、分析、诊断、验证都 delegate 给 agent;controller 只读 marker、走路由、管 git 与状态面。
+- **controller 纯编排**:所有思考、分析、诊断、验证都 delegate 给 agent;确定性脚本可按 allowlist 读 marker 并派发下一 actor;LLM controller 保留语义 fallback、未知状态、git 与状态面。
 
 ## skills
 

@@ -84,7 +84,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "initialize state",
             "integration branch",
             "ensure labels",
-            "ensure all 5 daemons",
+            "ensure all 6 daemons",
             "arm persistent daemon-event Monitor",
             "dispatch producer",
             "confirm a wake source",
@@ -124,6 +124,14 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertNotIn("@REFERENCE.md", self.skill)
         self.assertNotRegex(self.skill, r"\]\(/Users/[^)]+REFERENCE\.md")
         self.assertRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+
+    def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
+        self.assertIn("phase9_router_daemon.py", self.skill)
+        self.assertIn("narrow Phase 9 allowlist", self.skill)
+        self.assertIn("SOLVER_DONE", self.skill)
+        self.assertIn("META_JUDGE_DONE:converge", self.skill)
+        self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
+        self.assertIn("do not introduce WorkUnitV2, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
 
 if __name__ == "__main__":

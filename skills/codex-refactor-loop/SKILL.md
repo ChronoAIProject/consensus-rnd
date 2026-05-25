@@ -19,7 +19,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](REFERENCE.md#host-runtime-details) | `host.env.example`, `controller_lib.sh` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](REFERENCE.md#status-and-escalation-templates) | `post_banner.py`, GitHub labels |
-| Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving. | [controller contract details](REFERENCE.md#controller-contract-details) | `spawn-codex.sh`, prompt files |
+| Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Phase 9 allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `phase9_router_daemon.py` handle only its allowlisted deterministic routes. | [controller contract details](REFERENCE.md#controller-contract-details) | `spawn-codex.sh`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](REFERENCE.md#sentinel-and-comment-filters) | prompts, `comment-monitor.sh` |
 <!-- Refactor (iter3/skill-monitor-wake-source): Old pattern: 2-lane wake source(harness task-notification + ScheduleWakeup). New principle: 3-lane wake source adds daemon-event Monitor lane(daemon writes event file -> mounted persistent Monitor bridge -> controller wakes immediately; daemon alone is not a wake source). -->
 | Wake source | Each turn must end with a confirmed future wake source. | Confirm one of three lanes before ending: active daemon-event Monitor bridge, in-flight codex task-notification, or confirmed ScheduleWakeup. | [wake source rules](REFERENCE.md#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup |
@@ -83,7 +83,7 @@ Detailed path examples and host installation variants stay in `REFERENCE.md`; `S
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
@@ -125,7 +125,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
-8. ensure all 5 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `triage-monitor.sh`.
+8. ensure all 6 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, `triage-monitor.sh`, and `phase9_router_daemon.py`.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
@@ -135,7 +135,7 @@ Phase 0 anti-patterns stay local because they are safety gates:
 
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
-- Do not start fewer than the five required daemons.
+- Do not start fewer than the six required daemons.
 - Do not initialize a state-v2, alternate queue, wrapper envelope, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 
@@ -146,10 +146,10 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | Finished marker | Same-wakeup controller action |
 |---|---|
 | `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
-| `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge. |
+| `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `phase9_router_daemon.py`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap. |
-| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector; do not label human directly. |
+| `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap; this route may be executed directly by `phase9_router_daemon.py`. |
+| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; do not label human directly; this route may be executed directly by `phase9_router_daemon.py`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 with new framing. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
@@ -219,6 +219,7 @@ Controller duties:
 - Spawn codex workers.
 - Own git topology: commit, merge, push, PR create/merge/close.
 - Maintain wake source and concurrency floor.
+- Named exception: `phase9_router_daemon.py` owns only the narrow Phase 9 allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge`, valid `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
 
 Controller non-duties:
 
@@ -226,7 +227,7 @@ Controller non-duties:
 - Do not run reviewer, solver, implementer, or verifier reasoning inline when a codex role exists.
 - Do not fabricate consensus without Phase 9.
 - Do not hide status in local files only.
-- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split.
+- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Phase 9-authorized phase9_router_daemon.py private ledger plus existing-format pending-event append for narrow deterministic Phase 9 dispatch; do not introduce WorkUnitV2, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
 
 ## Concurrency Floor
 
@@ -416,6 +417,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [scripts/comment-monitor.sh](scripts/comment-monitor.sh) — maintainer comment monitor.
 - [scripts/dev_sync_daemon.py](scripts/dev_sync_daemon.py) — integration sync daemon.
 - [scripts/triage-monitor.sh](scripts/triage-monitor.sh) — external issue triage daemon.
+- [scripts/phase9_router_daemon.py](scripts/phase9_router_daemon.py) — narrow Phase 9 direct-dispatch daemon.
 - [REFERENCE.md](REFERENCE.md) — heavy runbooks, templates, schemas, and recovery details.
 
 ## Controller Wakeup Checklist
