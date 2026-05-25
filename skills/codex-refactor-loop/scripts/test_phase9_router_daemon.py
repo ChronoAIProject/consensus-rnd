@@ -14,6 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from phase9_router_daemon import Phase9Router
 
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "phase9_router_daemon.py"
+
+
 class Phase9RouterDaemonTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -149,6 +153,27 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         events = self.pending_events()
         for marker in markers:
             self.assertIn(marker, events)
+
+    def test_phase9_router_source_does_not_introduce_forbidden_abstractions(self) -> None:
+        """#37 consensus exception allows only private ledger plus fallback event."""
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        for forbidden in (
+            "WorkUnitV2",
+            "ControllerOrchestrator",
+            "ControllerEvent",
+            "ControllerCommand",
+            "gh pr create",
+            "gh pr merge",
+            "git commit",
+            "git push",
+            "merge_pr(",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(
+                    forbidden,
+                    src,
+                    f"phase9_router_daemon.py must not introduce forbidden boundary token: {forbidden}",
+                )
 
 
 if __name__ == "__main__":
