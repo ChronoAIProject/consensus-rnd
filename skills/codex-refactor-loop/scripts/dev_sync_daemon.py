@@ -53,7 +53,7 @@ INTERVAL = int(os.environ.get("INTERVAL", "600"))
 MAIN_REPO = git_repo_root()
 WORKTREE = Path(os.environ.get("WORKTREE", f"{MAIN_REPO}-wt-dev-sync"))
 INTEGRATION = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
-REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "develop"
+REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
 SPAWN_CODEX = MAIN_REPO / ".claude" / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh"
 LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
 
@@ -111,8 +111,24 @@ def reset_to_remote(cwd: Path) -> bool:
 
 
 def codex_resolve_in_flight() -> bool:
-    r = run(["pgrep", "-f", r"\.refactor-loop/(logs|prompts)/dev-sync-codex-"])
-    return r.returncode == 0
+    """Return whether this repo already has a dev-sync resolver supervisor."""
+    # Refactor (iter3/skill-hygiene-scripts):
+    #   Old: relative pgrep matched any host containing .refactor-loop/dev-sync-codex.
+    #   New: inspect process commands and require this repo/worktree absolute scope.
+    #   This mirrors count_in_flight_codex() so sibling host repos cannot suppress dispatch.
+    repo = str(MAIN_REPO)
+    worktree = str(WORKTREE)
+    for line in run(["ps", "-eo", "command="]).stdout.splitlines():
+        if "spawn-codex.sh" not in line:
+            continue
+        if "dev-sync-codex-" not in line:
+            continue
+        if repo not in line and worktree not in line:
+            continue
+        if " -c " in line:
+            continue
+        return True
+    return False
 
 
 def dispatch_codex_resolve() -> None:
@@ -178,7 +194,16 @@ def working_tree_dirty(cwd: Path) -> bool:
 
 
 def merge_in_progress(cwd: Path) -> bool:
-    return (cwd / ".git" / "MERGE_HEAD").exists() or (cwd / ".git" / "MERGE_MSG").exists()
+    """Detect an in-progress merge in normal checkouts and linked worktrees."""
+    # Refactor (iter3/skill-hygiene-scripts):
+    #   Old: checked cwd/.git/MERGE_HEAD, but linked worktrees store .git as a pointer file.
+    #   New: ask git for the checkout-specific git-path for MERGE_HEAD/MERGE_MSG.
+    #   This keeps conflicted syncs dispatching the resolver instead of looking merely dirty.
+    for name in ("MERGE_HEAD", "MERGE_MSG"):
+        r = run(["git", "-C", str(cwd), "rev-parse", "--git-path", name])
+        if r.returncode == 0 and Path(r.stdout.strip()).exists():
+            return True
+    return False
 
 
 def tick() -> None:

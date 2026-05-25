@@ -654,5 +654,135 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(marker, public_copy)
 
 
+class ScriptHygieneSourceRegressionTests(unittest.TestCase):
+    # Refactor (iter3/skill-hygiene-scripts):
+    #   Old: script hygiene bugs hid in git worktree metadata and shell eval quoting paths.
+    #   New principle: deterministic source/fixture tests cover worktree merge detection and argv label cleanup.
+    def run_git(self, repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", "-C", str(repo), *args],
+            capture_output=True,
+            text=True,
+            check=check,
+        )
+
+    def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            wt = root / "repo-wt-dev-sync"
+            repo.mkdir()
+            self.run_git(repo, "init")
+            self.run_git(repo, "config", "user.email", "test@example.invalid")
+            self.run_git(repo, "config", "user.name", "Test User")
+            self.run_git(repo, "checkout", "-b", "dev")
+            (repo / "conflict.txt").write_text("base\n", encoding="utf-8")
+            self.run_git(repo, "add", "conflict.txt")
+            self.run_git(repo, "commit", "-m", "base")
+            self.run_git(repo, "branch", "auto-refact-dev")
+            (repo / "conflict.txt").write_text("dev\n", encoding="utf-8")
+            self.run_git(repo, "commit", "-am", "dev change")
+            self.run_git(repo, "worktree", "add", "--detach", str(wt), "auto-refact-dev")
+            (wt / "conflict.txt").write_text("integration\n", encoding="utf-8")
+            self.run_git(wt, "commit", "-am", "integration change")
+            merge = self.run_git(wt, "merge", "dev", check=False)
+
+            self.assertNotEqual(merge.returncode, 0)
+            self.assertTrue((wt / ".git").is_file())
+            self.assertFalse((wt / ".git" / "MERGE_HEAD").exists())
+
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(repo),
+                    "WORKTREE": str(wt),
+                    "PYTHONPATH": str(SKILL_ROOT / "scripts"),
+                    "WT": str(wt),
+                }
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-c",
+                    "import os; from pathlib import Path; import dev_sync_daemon; "
+                    "print(dev_sync_daemon.merge_in_progress(Path(os.environ['WT'])))",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.strip(), "True")
+
+    def test_sweep_stale_labels_passes_quoted_space_label_as_single_argv(self) -> None:
+        label = 'quote "space" label'
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fakebin = root / "bin"
+            fakebin.mkdir()
+            argv_log = root / "gh-argv.jsonl"
+            controller_copy = root / "controller_lib.sh"
+            controller_text = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+            controller_text = controller_text.replace(
+                "import json, sys",
+                "import json, os, sys",
+            ).replace(
+                "stale = ['🚀 phase:pr-open',",
+                "stale = [os.environ['TEST_STALE_LABEL'], '🚀 phase:pr-open',",
+            )
+            controller_copy.write_text(controller_text, encoding="utf-8")
+            gh = fakebin / "gh"
+            gh.write_text(
+                """#!/usr/bin/env bash
+python3 - "$@" <<'PY'
+import json, os, sys
+with open(os.environ["GH_ARGV_LOG"], "a", encoding="utf-8") as f:
+    f.write(json.dumps(sys.argv[1:], ensure_ascii=False) + "\\n")
+PY
+if [[ "$1" == "issue" && "$2" == "list" ]]; then
+  python3 - <<'PY'
+import json
+print(json.dumps([{"number": 42, "labels": [{"name": 'quote "space" label'}]}]))
+PY
+  exit 0
+fi
+if [[ "$1" == "pr" && "$2" == "list" ]]; then
+  printf '[]\\n'
+  exit 0
+fi
+exit 0
+""",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
+                    "REPO_ROOT": str(root),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "GH_ARGV_LOG": str(argv_log),
+                    "TEST_STALE_LABEL": label,
+                }
+            )
+            result = subprocess.run(
+                ["bash", "-c", f'source "{controller_copy}"; sweep_stale_labels'],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [__import__("json").loads(line) for line in argv_log.read_text(encoding="utf-8").splitlines()]
+            edit_call = next(call for call in calls if call[:3] == ["issue", "edit", "42"])
+            remove_index = edit_call.index("--remove-label")
+            self.assertEqual(edit_call[remove_index + 1], label)
+            self.assertEqual(edit_call.count(label), 1)
+            self.assertNotIn("eval", (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()
