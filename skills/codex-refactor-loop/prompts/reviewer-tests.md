@@ -66,7 +66,7 @@ End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本仓库 `.claude/skills/codex-refactor-loop/prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
 
 - body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
 - 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`

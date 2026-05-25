@@ -59,11 +59,17 @@ Host config rules:
 5. Detailed daemon start examples live in [daemon command bodies](REFERENCE.md#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
 6. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 
+## Skill Root Contract
+
+`<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/spawn-codex.sh`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
+
+Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton.
 
-1. Run `bash .claude/skills/codex-refactor-loop/scripts/peek.sh | tail -80` first.
+1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
 3. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 4. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
@@ -222,7 +228,7 @@ More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-det
 Mainline spawn contract:
 
 1. Use one harness background task per codex. Do not batch multiple codexes inside one detached shell.
-2. Invoke `.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd <absolute-dir> --prompt <prompt> --log <log> --stall <seconds>`.
+2. Invoke `<skill-root>/scripts/spawn-codex.sh --cd <absolute-dir> --prompt <prompt> --log <log> --stall <seconds>`.
 3. `--cd` must be absolute so process counting can scope to `$REPO_ROOT`.
 4. Prompt files live under `.refactor-loop/prompts/`; logs live under `.refactor-loop/logs/`.
 5. Completion detection primary path is harness task notification; fallback is log tail `EXIT=0` sweep.

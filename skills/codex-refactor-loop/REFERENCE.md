@@ -1,6 +1,6 @@
 # codex-refactor-loop — Reference
 
-Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks for [SKILL.md](SKILL.md). The entrypoint keeps the controller contract and phase index; this file carries the material that should be loaded lazily by anchor.
+Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks for [SKILL.md](SKILL.md). The entrypoint keeps the controller contract and phase index; this file carries the material that should be loaded lazily by anchor. Keep full command bodies, long path examples, schemas, and recovery matrices here; keep only short invariants and anchor links in `SKILL.md`.
 
 <a id="controller-contract-details"></a>
 ## Controller contract details
@@ -17,7 +17,7 @@ dogfood 运行中固化的操作经验。host 注入的配置集中放 `$REPO_RO
 **禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD="cargo build --workspace"` 含空格 → `env` 把 `build` 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
 
 ```bash
-nohup bash -c 'source .refactor-loop/host.env && exec python3 .claude/skills/codex-refactor-loop/scripts/<daemon>.py' \
+nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/<daemon>.py' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
 
@@ -142,7 +142,7 @@ gh issue view <N> --json comments --jq '
 - **Controller 自己 post banner** 使用 `maintainer` 或 host 配置的安全称谓,不写裸人名。
 - **@-mention whitelist** 来自 `$MAINTAINER_WHITELIST`,并且必须经 git blame / host 配置验证。
 
-### Wakeup 第一动作:`bash .claude/skills/codex-refactor-loop/scripts/peek.sh`(强制)
+### Wakeup 第一动作:`bash <skill-root>/scripts/peek.sh`(强制)
 
 减少人工 grep / parse 错误。一眼看全:
 - 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
@@ -165,7 +165,7 @@ gh issue view <N> --json comments --jq '
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `spawn-codex.sh` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
-**Controller wakeup 第一动作**:`bash .claude/skills/codex-refactor-loop/scripts/peek.sh`。如果活跃 codex == 0:
+**Controller wakeup 第一动作**:`bash <skill-root>/scripts/peek.sh`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
 2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
 3. 如果所有 active issue/PR 都真在等 maintainer(全是 `👤 human:需-maintainer-决策` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
@@ -216,13 +216,13 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
-任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash .claude/skills/codex-refactor-loop/scripts/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
+任何 controller turn 派 codex / merge PR / post banner / close issue 之后,**turn 结束前必须 `bash <skill-root>/scripts/peek.sh | tail -80` 一次扫 maintainer 评论 + 0-codex 漏洞**。
 
 理由:`task-notification` 触发的 turn 容易陷入"处理 marker → spawn 下一步 → end turn"线性思维,会跳过 peek 而错过 maintainer 与此 task 并行的新评论。曾出现 controller 派出下一步 judge 期间漏读新的架构反馈,直到 maintainer 报错才发现;peek 是防漏读的强制尾部检查。
 
 例外:turn 唯一动作是 ScheduleWakeup(纯休眠)可省 peek。
 
-### Concurrency monitor:`.claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py`(强制)
+### Concurrency monitor:`<skill-root>/scripts/concurrency_monitor.py`(强制)
 
 **60s** 周期 daemon,只监控 no-gap sentinel:
 - expected = active issue/PR 数(per phase 表)
@@ -237,7 +237,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 启动:
 ```bash
-nohup bash -c 'source .refactor-loop/host.env && exec python3 .claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py' \
+nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/concurrency_monitor.py' \
   >> .refactor-loop/logs/concurrency-monitor.log 2>&1 &
 disown
 ```
@@ -250,12 +250,12 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
-### Controller helper 库:`.claude/skills/codex-refactor-loop/scripts/controller_lib.sh`(强制)
+### Controller helper 库:`<skill-root>/scripts/controller_lib.sh`(强制)
 
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
 
 ```bash
-source .claude/skills/codex-refactor-loop/scripts/controller_lib.sh
+source <skill-root>/scripts/controller_lib.sh
 
 safe_worktree iterN cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
 open_pr_with_label "iterN cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
@@ -308,7 +308,7 @@ rollup PR:
 
 1. **先 post banner**(blocking Bash,几秒):
    ```bash
-   python3 .claude/skills/codex-refactor-loop/scripts/post_banner.py \
+   python3 <skill-root>/scripts/post_banner.py \
      --banner-target <issue-or-pr> --banner-kind <issue|pr> \
      --banner-role <role> --banner-detail "..." \
      --log <log-path> --cd <worktree> --stall <s>
@@ -316,7 +316,7 @@ rollup PR:
 
 2. **再 spawn codex**(Bash `run_in_background: true`):
    ```bash
-   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+   <skill-root>/scripts/spawn-codex.sh \
      --cd <worktree> --add-dir $REPO_ROOT \
      --prompt <prompt-file> --log <log-file> --stall 5400
    ```
@@ -458,7 +458,7 @@ triage and must already be reshaped before Phase 9.
 3. Dispatch:
 
    ```bash
-   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+   <skill-root>/scripts/spawn-codex.sh \
      --cd "$REPO_ROOT" \
      --prompt .refactor-loop/prompts/audit-iter-N.md \
      --log .refactor-loop/logs/audit-iter-N.log \
@@ -516,7 +516,7 @@ For every cluster with `requires_design: true`:
    gh issue create \
      --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
      --label "refactor-design-needed,auto-loop" \
-     --body "$(envsubst < .claude/skills/codex-refactor-loop/prompts/design-issue-body.md)"
+     --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
    ```
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (proto schema? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record in state.json:
@@ -610,7 +610,7 @@ For each cluster whose implement finished `ok`:
 2. Dispatch in the same worktree (verify reads `git diff HEAD`, runs full test/guard suite, gates merge):
 
    ```bash
-   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+   <skill-root>/scripts/spawn-codex.sh \
      --cd <worktree> \
      --prompt .refactor-loop/prompts/verify-<cluster-id>.md \
      --log .refactor-loop/logs/verify-<cluster-id>.log \
@@ -846,10 +846,10 @@ Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and
 
 ### Phase 6 现在由独立 daemon 自主完成
 
-**`.claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
+**`<skill-root>/scripts/dev_sync_daemon.py`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
 
 ```bash
-nohup bash -c 'source .refactor-loop/host.env && exec python3 .claude/skills/codex-refactor-loop/scripts/dev_sync_daemon.py' \
+nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/dev_sync_daemon.py' \
   >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
 disown
 ```
@@ -1001,13 +1001,13 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 
 **Daemon 自包含**:
 
-`.claude/skills/codex-refactor-loop/scripts/triage-monitor.sh` 60s 周期:
+`<skill-root>/scripts/triage-monitor.sh` 60s 周期:
 - 扫 `gh issue list --label "auto-loop-triage" --state open`
 - 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
 - triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
 - daemon 不依赖 controller 中转,无中间 event log
 - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
-- 启动:`nohup bash -c 'source .refactor-loop/host.env && exec bash .claude/skills/codex-refactor-loop/scripts/triage-monitor.sh' >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
+- 启动:`nohup bash -c 'source .refactor-loop/host.env && exec bash <skill-root>/scripts/triage-monitor.sh' >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
 - Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
 - Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
 - Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
@@ -1057,9 +1057,9 @@ For each cluster PR with `CI green AND mergeable AND not yet auto-reviewed`:
 
 ```bash
 for role in architect tests quality; do
-  envsubst < .claude/skills/codex-refactor-loop/prompts/reviewer-${role}.md \
+  envsubst < <skill-root>/prompts/reviewer-${role}.md \
     > .refactor-loop/prompts/review-pr${PR_NUMBER}-${role}.md
-  .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  <skill-root>/scripts/spawn-codex.sh \
     --cd "$REPO_ROOT" \
     --prompt .refactor-loop/prompts/review-pr${PR_NUMBER}-${role}.md \
     --log .refactor-loop/logs/review-pr${PR_NUMBER}-${role}.log \
@@ -1091,7 +1091,7 @@ Loop:
 1. **Round entry** — `state.pr_reviews[PR].fix_round += 1`. If `fix_round > max_fix_rounds`, escalate (see below).
 2. **Dispatch fix codex** in PR's own worktree:
    ```bash
-   .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+   <skill-root>/scripts/spawn-codex.sh \
      --cd "$PR_WORKTREE" --add-dir "$REPO_ROOT" \
      --prompt .refactor-loop/prompts/fixes/fix-pr${PR}-round-${N}.md \
      --log .refactor-loop/logs/fix-pr${PR}-round-${N}.log \
@@ -1266,9 +1266,9 @@ For each cluster needing Phase 9:
 
 ```bash
 for role in minimal structural delete; do
-  envsubst < .claude/skills/codex-refactor-loop/prompts/solver-${role}.md \
+  envsubst < <skill-root>/prompts/solver-${role}.md \
     > .refactor-loop/prompts/phase9/solve-issue${ISSUE_NUMBER}-r${ROUND}-${role}.md
-  .claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+  <skill-root>/scripts/spawn-codex.sh \
     --cd "$REPO_ROOT" \
     --prompt .refactor-loop/prompts/phase9/solve-issue${ISSUE_NUMBER}-r${ROUND}-${role}.md \
     --log .refactor-loop/logs/phase9-issue${ISSUE_NUMBER}-r${ROUND}-${role}.log \
@@ -1279,9 +1279,9 @@ done
 All 3 solvers in parallel; each emits `SOLVER_DONE:<role>:<verdict>:<summary>`. When all 3 done, dispatch meta-judge:
 
 ```bash
-envsubst < .claude/skills/codex-refactor-loop/prompts/meta-judge.md \
+envsubst < <skill-root>/prompts/meta-judge.md \
   > .refactor-loop/prompts/phase9/judge-issue${ISSUE_NUMBER}-r${ROUND}.md
-.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+<skill-root>/scripts/spawn-codex.sh \
   --cd "$REPO_ROOT" \
   --prompt .refactor-loop/prompts/phase9/judge-issue${ISSUE_NUMBER}-r${ROUND}.md \
   --log .refactor-loop/logs/phase9-issue${ISSUE_NUMBER}-r${ROUND}-judge.log \
@@ -1618,7 +1618,7 @@ Concretely, this means:
 1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
 2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
 3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
-4. **.claude/skills/codex-refactor-loop/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
+4. **<skill-root>/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
 5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
 6. **CI guard completeness codex** — 检查 `$CI_GUARDS` 是否覆盖所有 CLAUDE 条款
 
@@ -1904,7 +1904,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 - `META_RESOLVED:escalate-human`: meta-layer 也无法解,真的需要 maintainer 决策(reason 必须说明 rework / deadlock / ci-stuck 等原因)
 
 ```bash
-.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh \
+<skill-root>/scripts/spawn-codex.sh \
   --cd $REPO_ROOT \
   --prompt .refactor-loop/prompts/meta-reflect-pr<N>.md \
   --log .refactor-loop/logs/meta-reflect-pr<N>.log \
@@ -2035,7 +2035,7 @@ PR 同理(`gh pr edit` instead of `gh issue edit`)。
 
 ```python
 Bash(
-  command=".claude/skills/codex-refactor-loop/scripts/spawn-codex.sh "
+  command="<skill-root>/scripts/spawn-codex.sh "
           "--cd <dir> --prompt <prompt-file> --log <log-file> --stall 5400",
   run_in_background=True,    # 必须 true → 进 Claude Code shells panel
   description="cluster-XXX implement"

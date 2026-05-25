@@ -33,7 +33,7 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 
 ## 硬约束
 
-- **第一行 `## 🤖 ` 开头**:`.claude/skills/codex-refactor-loop/scripts/comment-monitor.sh` 据此识别 controller-post 跳过 👀 react。漏 🤖 → monitor 会把你的 post 当成 maintainer 评论 react 自己 → 误循环。
+- **第一行 `## 🤖 ` 开头**:本 skill 的 `scripts/comment-monitor.sh` 据此识别 controller-post 跳过 👀 react。漏 🤖 → monitor 会把你的 post 当成 maintainer 评论 react 自己 → 误循环。
 - **中文 only**:per [SKILL.md 工作语言规则],不要平行 EN section。Code identifier / file path / proto 字段名保留原英文。CLAUDE/AGENTS 条款引用 verbatim 不翻译。
 - **TL;DR ≤ 6 行**(3 bullet + 可选 cc 行)。
 - **raw artifact 必折叠**:不要让 TL;DR 之后立刻出现 raw YAML / verbatim spec dump。先用人话讲,raw 都进 `<details>`。
