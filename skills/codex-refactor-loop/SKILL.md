@@ -21,7 +21,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](REFERENCE.md#status-and-escalation-templates) | `post_banner.py`, GitHub labels |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving. | [controller contract details](REFERENCE.md#controller-contract-details) | `spawn-codex.sh`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](REFERENCE.md#sentinel-and-comment-filters) | prompts, `comment-monitor.sh` |
-| Wake source | Each turn must end with a confirmed future wake source. | Prefer harness background task notification; otherwise confirm ScheduleWakeup registered before ending. | [wake source rules](REFERENCE.md#wake-source-rules) | harness Bash background tasks |
+| Wake source | Each turn must end with a confirmed future wake source. | Confirm one of three lanes before ending: active daemon-event Monitor bridge, in-flight codex task-notification, or confirmed ScheduleWakeup. | [wake source rules](REFERENCE.md#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup |
 | First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | WorkUnitV1 is stable v1; do not rename, migrate, or wrap it. | Read and write existing v1 containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [WorkUnitV1](REFERENCE.md#workunitv1-contract), [state schema](REFERENCE.md#state-schema) | `.refactor-loop/state.json` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](REFERENCE.md#phase-routing-details) | logs, prompts |
@@ -82,7 +82,7 @@ Detailed path examples and host installation variants stay in `REFERENCE.md`; `S
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source.
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
@@ -93,7 +93,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 7. Post GitHub banner and sync labels for each state transition.
 8. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
 9. Spawn the next codexes with harness background tasks if actionable work exists.
-10. Confirm a wake source: an in-flight background task notification or a successfully registered ScheduleWakeup.
+10. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
 11. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
 
 ## Phase Index
@@ -125,9 +125,10 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
 8. ensure all 5 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `triage-monitor.sh`.
-9. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
-10. Post a GitHub status card for Phase 0 completion or blocked state.
-11. confirm a wake source before ending: background task notification in flight or ScheduleWakeup returned scheduled.
+9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
+10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
+11. Post a GitHub status card for Phase 0 completion or blocked state.
+12. confirm a wake source before ending: daemon-event Monitor bridge active, background task notification in flight, or ScheduleWakeup returned scheduled.
 
 Phase 0 anti-patterns stay local because they are safety gates:
 
@@ -434,7 +435,7 @@ Use this checklist literally on each wakeup:
 12. Enforce floor before sleep.
 13. Spawn next codexes with harness tracking.
 14. Commit/push only when controller-owned lifecycle requires it.
-15. Confirm wake source.
+15. Confirm wake source, including maintaining the daemon-event Monitor bridge.
 16. Peek again after visible actions.
 17. End only when GitHub reflects the current state.
 
@@ -675,7 +676,8 @@ Controller-owned operations:
 9. Post status, consensus, progress, and escalation banners.
 10. Add/remove phase and human labels.
 11. Maintain daemon singleton health.
-12. Schedule or confirm the next wake source.
+12. Maintain the daemon-event Monitor bridge.
+13. Schedule or confirm the next wake source.
 
 Worker-owned operations:
 

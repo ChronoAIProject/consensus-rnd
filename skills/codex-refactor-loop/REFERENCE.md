@@ -29,22 +29,23 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 
 controller 主链路**优先禁止**用 `( … ) & disown` / `nohup … &` / Bash 内 `spawn-codex.sh ... &` 派 **codex**(即使为省 tool 调用想批量)。detached 进程丢的是 harness 即时 `<task-notification>`,**不是检测能力**:controller 每次 wakeup 的 `EXIT=0` / marker log sweep 仍能扫到 detached codex 的完成,只是延到下次 ScheduleWakeup,变慢。
 
-**真正致命**的是 `detached + 无已注册的 ScheduleWakeup / task-notification`。单独 detached 只是慢;detached 后又没有任何 wake 源,loop 才会过夜停摆。
+**真正致命**的是 `detached + 无 active daemon-event Monitor bridge / 已注册的 ScheduleWakeup / task-notification`。单独 detached 只是慢;detached 后又没有任何 wake 源,loop 才会过夜停摆。
 
 **铁律**:
 - controller 主链路 codex **优先**用 **一个 `Bash run_in_background:true`** 跑一个 `spawn-codex.sh`(N 个 codex 就 N 个调用),拿即时 task-notification。
 - 若 codex 意外被 detached,**不要 panic-kill 后重派**。这会浪费已跑工作;sweep 会在下次 wakeup 接住。正确动作是确认 log 路径可扫,并在本 turn 结束前确认已有 wake 源。
-- 每个 turn 结束**必须**有已确认的下次唤醒源:在飞 task-notification 或 ScheduleWakeup 返回 `scheduled`。这是比"禁 detached"更本质的不变量。
+- 每个 turn 结束**必须**有已确认的下次唤醒源:active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup 返回 `scheduled`。这是比"禁 detached"更本质的不变量。
 - daemon 自主动作可以 detached,但必须同时满足:prompt 落 `.refactor-loop/prompts/`,log 落 `.refactor-loop/logs/`,状态写 GitHub 或 pending event 可恢复,daemon 单例,并受 `peek.sh` / liveness 检查。
+- daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge.
 
 **反面(❌ 严禁)**:
 - ❌ detached codex 后发现没有 ScheduleWakeup,却 end turn。
-- ❌ 误以为 `concurrency_monitor.py` / progress reporter / comment monitor 会唤醒 controller。daemon **只写 alert 文件 / GitHub 评论 / pending event**,不产生 harness task-notification,不是 wake 源。
+- ❌ 误以为 `concurrency_monitor.py` / progress reporter / comment monitor 单独会唤醒 controller。daemon **只写 alert 文件 / GitHub 评论 / pending event**;只有 mounted Monitor bridge 把 daemon event file 转成 controller wakeup 时,daemon events 才是 wake 源。
 - ❌ detached codex 已在跑,controller 为了"恢复追踪"直接 kill 并重派同任务。应让现有任务跑完,靠下次 wakeup sweep 接住。
 
 ### ScheduleWakeup 必须确认注册(强制)
 
-ScheduleWakeup 是 detached/notification 丢失时**唯一兜底**。每次调用后**确认返回 `scheduled`**;若 malformed(如 `<invoke>` 漏 `antml:` 前缀)或未注册 → **立即重试**,绝不带着"以为排了但没排"的假设 end turn。turn 结束前心里要有一个**已确认的下次唤醒源**(task-notification 在飞 或 ScheduleWakeup 已注册),否则 loop 就死了。
+ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**兜底**,不是 daemon-event immediate lane。每次调用后**确认返回 `scheduled`**;若 malformed(如 `<invoke>` 漏 `antml:` 前缀)或未注册 → **立即重试**,绝不带着"以为排了但没排"的假设 end turn。turn 结束前心里要有一个**已确认的下次唤醒源**(daemon-event Monitor bridge active, task-notification 在飞, 或 ScheduleWakeup 已注册),否则 loop 就死了。
 
 ### 并发 floor 的 `ps codex` 在多系统 host 上会过计(强制修正)
 
@@ -1337,30 +1338,31 @@ gh issue edit <N> \
 
 ### Daemon → controller event channel + 自适应 wakeup(强制, 关于 daemon detect → controller 25 min gap 问题)
 
-**问题**:`comment-monitor.sh` 30s 周期 detect maintainer 评论 ✓ + eyes react ✓ + daemon banner ✓,但 controller wakeup 默认 1500s(25 min),maintainer 评论到 controller 派 fresh round 最长 25 min gap — maintainer 看 daemon banner 后等 controller。
+**问题**:`comment-monitor.sh` 30s 周期 detect maintainer 评论 ✓ + eyes react ✓ + daemon banner ✓,但若没有 mounted Monitor bridge,controller wakeup 默认可能只靠 1500s(25 min) ScheduleWakeup,maintainer 评论到 controller 派 fresh round 最长 25 min gap — maintainer 看 daemon banner 后等 controller。
+**修法**:daemon writes durable event file → persistent Monitor wakes controller immediately → existing per-wakeup offset sweep processes events idempotently. ScheduleWakeup remains a fallback lane, not the immediate daemon-event lane.
 
-**修法**:daemon 写 trigger file → controller per-wakeup 检测 → 缩短下次 wakeup。
-
-#### Daemon 侧(comment-monitor.sh)
+Mount a persistent Monitor or equivalent harness bridge that forwards every non-empty line from both durable daemon event files, filtering only `tail -F` file headers:
+```bash
+tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \
+  | grep --line-buffered -v '^==> ' \
+  | grep --line-buffered .
+```
 
 新 maintainer 评论 detect 后,**额外 append** 一行到 `.refactor-loop/.controller-pending-events.log`:
 ```
 <ISO8601> new-team-comment <issue_number> <author> <comment_id>
 ```
-
 (daemon 仍正常 react eyes + post daemon banner + write comment-monitor.log。新增的 pending-events 文件只用于 controller 自适应 wakeup。)
 
 #### Controller 侧 — per-wakeup step 1.6:check pending events
 
 每次 wakeup 在 sync(step 0)+ GitHub state derive(step 1)之后:
-
 ```bash
 PENDING=".refactor-loop/.controller-pending-events.log"
 LAST_PROCESSED=".refactor-loop/.controller-last-processed-event-offset"
 prev_offset=$(cat "$LAST_PROCESSED" 2>/dev/null || echo 0)
 cur_offset=$(wc -l < "$PENDING" 2>/dev/null || echo 0)
 new_events=$(( cur_offset - prev_offset ))
-
 if (( new_events > 0 )); then
   # 有 daemon detect 但未 controller-process 的 events
   sed -n "$((prev_offset+1)),$((cur_offset))p" "$PENDING" | while read -r line; do
@@ -1368,12 +1370,12 @@ if (( new_events > 0 )); then
     process_maintainer_reply "$line"
   done
   echo "$cur_offset" > "$LAST_PROCESSED"
-  # 关键:下次 wakeup **缩短**到 600s — maintainer 决策响应更快
+  # ScheduleWakeup fallback can be shorter after daemon events, but the
+  # immediate lane is the persistent Monitor bridge above.
   NEXT_WAKEUP_SECONDS=600
 else
   NEXT_WAKEUP_SECONDS=1500  # 默认
 fi
-
 ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 ```
 
@@ -1381,14 +1383,15 @@ ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 
 | 触发 | 下次 wakeup 周期 |
 |---|---|
-| pending events file 有新 entry | **600s**(10 min,maintainer 决策响应快) |
+| daemon-event Monitor bridge active | immediate wakeup on non-empty daemon event file append |
+| pending events file 有新 entry | **600s** ScheduleWakeup fallback |
 | in-flight codex(busy 状态) | 1500s(默认,等 task-notification) |
 | 完全 idle 无 pending | 1800s(30 min idle heartbeat) |
 
 #### 防回(❌ 禁止)
 
 - ❌ daemon 写 events log 但 controller 不读 → maintainer 评论 → 25 min gap
-- ❌ controller 处理完 events 但不缩 wakeup → 下次再来评论 → 又 25 min gap
+- ❌ controller 处理完 events 但没有维护 persistent Monitor bridge 或 fallback wakeup → 下次再来评论 → 又 25 min gap
 - ❌ controller 不更新 LAST_PROCESSED offset → 每 wakeup 重复处理同 events
 
 ### Stuck label 4h 超时自动新一轮 meta-reflect(强制)
@@ -1687,8 +1690,9 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 ### Wakeup cadence
 
-- Primary: harness task notifications (auto on codex exit).
-- Fallback: 1200–1800s ScheduleWakeup (matches /loop dynamic mode guidance).
+- Immediate daemon lane: daemon-event Monitor bridge over `.controller-pending-events.log` and `.concurrency-alert.log`.
+- Worker completion lane: codex task-notification (auto on codex exit).
+- Fallback lane: 1200–1800s ScheduleWakeup (matches /loop dynamic mode guidance).
 
 ---
 
