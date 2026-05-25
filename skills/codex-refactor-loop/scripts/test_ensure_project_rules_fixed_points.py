@@ -553,6 +553,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
 
     def test_skill_assigns_floor_to_controller_step_1_5_only(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
 
         self.assertIn("concurrency_monitor.py` 只做 no-gap sentinel", skill_text)
         self.assertIn("controller 每次 wakeup 的 step 1.5", skill_text)
@@ -561,7 +562,8 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("low 规则:`actual < expected/2`", skill_text)
         self.assertNotIn("codex-floor-deficit", skill_text)
         self.assertNotIn("ACTIVE <= 2", skill_text)
-        self.assertEqual(skill_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
+        self.assertIn("[concurrency floor details](REFERENCE.md#concurrency-floor-details)", skill_text)
+        self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
 
 class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
@@ -572,13 +574,13 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
         return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
     def label_group_2(self) -> str:
-        text = self.skill_text()
+        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         start = text.index("### Label 组 2 — Human")
         end = text.index("### Bootstrap", start)
         return text[start:end]
 
     def bootstrap_block(self) -> str:
-        text = self.skill_text()
+        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         start = text.index("# 创建所有 human label")
         end = text.index("### 转移时刻代码模板", start)
         return text[start:end]
@@ -603,16 +605,14 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
     def test_human_escalation_routes_use_reason_surface(self) -> None:
         skill = self.skill_text()
+        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         route_start = skill.index("Policy:the loop continues")
-        route_end = skill.index("### When to trigger Phase 9", route_start)
+        route_end = skill.index("## Hard rules", route_start)
         route_table = skill[route_start:route_end]
-        meta_start = skill.index("## Meta-layer escalation")
-        meta_end = skill.index("## CI 监控即时推进", meta_start)
-        meta_layer = skill[meta_start:meta_end]
-        ci_start = skill.index("### CI red 处理流水")
-        ci_end = skill.index("## Codex 进展实时上报", ci_start)
-        ci_flow = skill[ci_start:ci_end]
-        combined = "\n".join([route_table, meta_layer, ci_flow])
+        meta_start = reference.index("## Meta-layer escalation")
+        meta_end = reference.index("<a id=\"label-bootstrap-loops\"></a>", meta_start)
+        meta_layer = reference[meta_start:meta_end]
+        combined = "\n".join([route_table, meta_layer])
 
         self.assertIn("META_RESOLVED:escalate-human", combined)
         self.assertIn(NON_AUTO_HUMAN_LABEL, combined)
@@ -793,19 +793,23 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
 
     def test_daemon_start_examples_source_host_env_before_exec(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
         host_env_text = self.read_rel("skills/codex-refactor-loop/host.env.example")
         daemon_names = ("concurrency_monitor.py", "codex-progress-reporter.sh", "comment-monitor.sh", "dev_sync_daemon.py", "triage-monitor.sh")
 
         self.assertIn("bash -c 'source .refactor-loop/host.env && exec", skill_text)
+        self.assertIn("[daemon command bodies](REFERENCE.md#daemon-command-bodies)", skill_text)
         self.assertIn("bash -c 'source host.env && exec ...'", host_env_text)
         for daemon in daemon_names:
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, skill_text)
-        self.assertIn("禁止** 裸 `nohup python3 <daemon> &`", skill_text)
+                self.assertIn(daemon, reference_text)
+        self.assertIn("禁止** 裸 `nohup python3 <daemon> &`", reference_text)
         self.assertIn("不能用 `env $(grep ... host.env)`", host_env_text)
 
     def test_label_taxonomy_matches_bootstrap_and_script_usage(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
         controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
         monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
         expected_phase = ("🔍 phase:design-solving", "✅ phase:consensus-reached", "🛠️ phase:implementing", "🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "⚙️ phase:ci-running", "🎉 phase:merged", "⏸️ phase:blocked")
@@ -814,10 +818,12 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         for label in expected_phase + expected_human:
             with self.subTest(label=label):
                 self.assertIn(label, skill_text)
-        self.assertIn('gh label create "$l" --color "5319e7"', skill_text)
+                self.assertIn(label, reference_text)
+        self.assertIn("[label bootstrap loops](REFERENCE.md#label-bootstrap-loops)", skill_text)
+        self.assertIn('gh label create "$l" --color "5319e7"', reference_text)
         for label in expected_human:
             with self.subTest(human_bootstrap=label):
-                self.assertIn(f'gh label create "{label}"', skill_text)
+                self.assertIn(f'gh label create "{label}"', reference_text)
 
         for label in ("🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "🛠️ phase:implementing"):
             with self.subTest(controller_label=label):
@@ -835,7 +841,11 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("start_new_session", tombstone)
         self.assertNotIn("SPAWN_CODEX", tombstone)
 
-        active_docs = "\n".join(self.read_rel(rel) for rel in ("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/scripts/post_banner.py"))
+        active_docs = "\n".join(self.read_rel(rel) for rel in (
+            "skills/codex-refactor-loop/SKILL.md",
+            "skills/codex-refactor-loop/REFERENCE.md",
+            "skills/codex-refactor-loop/scripts/post_banner.py",
+        ))
         self.assertIn("post_banner.py", active_docs)
         self.assertIn("spawn-codex.sh", active_docs)
         self.assertIn("反模式", active_docs)
