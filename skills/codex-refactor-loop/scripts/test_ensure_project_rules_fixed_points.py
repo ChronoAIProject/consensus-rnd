@@ -1120,31 +1120,11 @@ exit 0
             self.assertEqual(edit_call.count(label), 1)
             self.assertNotIn("eval", (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8"))
 
-# Refactor (iter3/skill-contract-test-suite):
-#   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
-#   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
-class SkillContractSourceRegressionTests(unittest.TestCase):
-    """Issue #16 consensus skill contract source-regression suite.
-
-    Keep this contiguous in the sole direct test file until the split threshold:
-    second real test file, this class >250 LOC, whole file >750 LOC, or scanner
-    helpers needed by multiple independent classes/files.
-    """
+class SkillRootContractSourceRegressionTests(unittest.TestCase):
+    """Source and behavior regressions for the host-agnostic skill root contract."""
 
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
-
-    def rel_paths(self, *patterns: str) -> list[Path]:
-        return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
-
-    def assert_absent(self, needle: str, paths: list[Path], allowlist: tuple[str, ...] = ()) -> None:
-        for path in paths:
-            rel = path.relative_to(REPO_ROOT).as_posix()
-            if rel in allowlist:
-                continue
-            text = path.read_text(encoding="utf-8")
-            with self.subTest(path=rel, needle=needle):
-                self.assertNotIn(needle, text)
 
     def test_dev_sync_daemon_self_locates_skill_root_inline(self) -> None:
         text = self.read_rel("skills/codex-refactor-loop/scripts/dev_sync_daemon.py")
@@ -1217,6 +1197,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn('resolved_skill_root="$(resolve_skill_root)"', text)
         self.assertIn('TRIAGE_PROMPT_TEMPLATE="$resolved_skill_root/prompts/triage-external-issue.md"', text)
         self.assertIn('SPAWN_CODEX="$resolved_skill_root/scripts/spawn-codex.sh"', text)
+        self.assertIn("CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT", text)
         self.assertIn('"$TRIAGE_PROMPT_TEMPLATE"', text)
         self.assertIn('nohup bash "$SPAWN_CODEX"', text)
         self.assertIn(
@@ -1224,10 +1205,43 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             text,
         )
         self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
+        self.assertLess(text.index("CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT"), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
         self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('[ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"'))
         self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('jq --arg n "$issue"'))
         self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md', text)
         self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh', text)
+
+    def test_triage_monitor_default_self_location_uses_bash_source_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            installed = Path(tmp) / "skills" / "codex-refactor-loop"
+            scripts = installed / "scripts"
+            prompts = installed / "prompts"
+            scripts.mkdir(parents=True)
+            prompts.mkdir()
+            (installed / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
+            triage = scripts / "triage-monitor.sh"
+            triage.write_text((SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8"), encoding="utf-8")
+            triage.chmod(0o755)
+            spawn = scripts / "spawn-codex.sh"
+            spawn.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+            spawn.chmod(0o755)
+            (prompts / "triage-external-issue.md").write_text("Issue ${ISSUE_NUMBER}\n", encoding="utf-8")
+
+            env = os.environ.copy()
+            env.pop("CODEX_REFACTOR_LOOP_SKILL_ROOT", None)
+            env["CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT"] = "1"
+            result = subprocess.run(
+                ["bash", str(triage)],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout, f"{installed.resolve()}\n")
+            self.assertEqual(result.stderr, "")
+            self.assertFalse((installed / ".refactor-loop").exists())
 
     def test_invalid_specific_skill_root_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1318,6 +1332,33 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("`CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional", skill_text)
         self.assertIn("<skill-root>/scripts/peek.sh", skill_text)
         self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
+
+
+# Refactor (iter3/skill-contract-test-suite):
+#   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
+#   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
+class SkillContractSourceRegressionTests(unittest.TestCase):
+    """Issue #16 consensus skill contract source-regression suite.
+
+    Keep this contiguous in the sole direct test file until the split threshold:
+    second real test file, this class >250 LOC, whole file >750 LOC, or scanner
+    helpers needed by multiple independent classes/files.
+    """
+
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def rel_paths(self, *patterns: str) -> list[Path]:
+        return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
+
+    def assert_absent(self, needle: str, paths: list[Path], allowlist: tuple[str, ...] = ()) -> None:
+        for path in paths:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel in allowlist:
+                continue
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=rel, needle=needle):
+                self.assertNotIn(needle, text)
 
     def test_active_prompt_post_rules_locators_are_skill_relative(self) -> None:
         prompt_names = (

@@ -63,6 +63,8 @@ Host config rules:
 
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/spawn-codex.sh`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
 
+Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton.

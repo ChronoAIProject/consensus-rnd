@@ -36,6 +36,11 @@ if ! resolved_skill_root="$(resolve_skill_root)"; then
 fi
 TRIAGE_PROMPT_TEMPLATE="$resolved_skill_root/prompts/triage-external-issue.md"
 SPAWN_CODEX="$resolved_skill_root/scripts/spawn-codex.sh"
+if [ -n "${CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT:-}" ]; then
+  # Refactor (iter3/skill-skill-root-contract): Old: triage-monitor default self-location was only observable after repo-state setup. New: deterministic print hook exposes the resolved skill root before mutation for contract tests.
+  printf '%s\n' "$resolved_skill_root"
+  exit 0
+fi
 
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
