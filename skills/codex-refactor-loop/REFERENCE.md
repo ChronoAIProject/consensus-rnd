@@ -2,11 +2,48 @@
 
 Detailed specifications, edge cases, and recovery playbook. The main workflow is in [SKILL.md](SKILL.md).
 
+## WorkUnitV1 contract
+
+`WorkUnitV1` is the v1 queue item contract stored inside the existing `clusters_planned`,
+`clusters_active`, `clusters_done`, and `clusters_failed` containers. The container names are
+historical but authoritative for state schema v1; do not add migrated queue containers, envelope
+wrappers, a normalizer helper, or a state-v2 migration for this contract.
+
+Required identity/provenance fields:
+
+- `work_unit_id`: canonical work-unit identity.
+- `kind`: work-unit type, for example `audit-cluster`; future producers may use non-audit kinds.
+- `producer`: source producer, for example `audit`; future producers must not pretend to be audit.
+- `source_ref`: stable pointer to the source material, for example `audit-iter-N.md#cluster-001`.
+
+Required audit-work fields when present in planned units:
+
+- `scope_paths`
+- `old_pattern`
+- `new_principle`
+- `verification_hints`
+- `dependencies`
+- `risk`
+- `leverage`
+
+Audit compatibility:
+
+- For current audit-backed units, `work_unit_id == id == cluster_id == legacy_cluster_id`.
+- For non-audit units, `work_unit_id` is not required to start with `cluster-`; omit
+  `legacy_cluster_id` and do not fabricate `cluster_id`.
+- Old state without `work_unit_schema_version` is read as v1 legacy state. Derive
+  `work_unit_id` from each queue item's `id`, treat `kind=producer=audit`, and use the audit
+  section as `source_ref` when known.
+- Prompt dispatch for current audit-backed units exports `WORK_UNIT_ID=$CLUSTER_ID`. Existing
+  markers, artifact names, branch names, and audit section lookups may continue to use
+  `CLUSTER_ID` during v1 compatibility.
+
 ## State schema (`.refactor-loop/state.json`)
 
 ```json
 {
   "schema_version": 1,
+  "work_unit_schema_version": 1,
   "loop_started_at": "<ISO8601>",
   "trunk_branch": "<branch the loop integrates into; same as integration_branch>",
   "integration_branch": "<branch all clusters land on>",
@@ -22,12 +59,33 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
     "total_clusters": <int>
   },
   "clusters_planned": [
-    {"id": "cluster-001", "batch": "A", "risk": "low|medium|high", "leverage": "low|medium|high",
-     "dependencies": ["cluster-XXX"]}
+    {
+      "work_unit_id": "cluster-001",
+      "id": "cluster-001",
+      "cluster_id": "cluster-001",
+      "legacy_cluster_id": "cluster-001",
+      "kind": "audit-cluster",
+      "producer": "audit",
+      "source_ref": "audit-iter-1.md#cluster-001",
+      "batch": "A",
+      "scope_paths": ["<path>"],
+      "old_pattern": "<problem>",
+      "new_principle": "<target principle>",
+      "verification_hints": "<checks>",
+      "risk": "low|medium|high",
+      "leverage": "low|medium|high",
+      "dependencies": ["cluster-XXX"]
+    }
   ],
   "clusters_active": [
     {
+      "work_unit_id": "cluster-001",
       "id": "cluster-001",
+      "cluster_id": "cluster-001",
+      "legacy_cluster_id": "cluster-001",
+      "kind": "audit-cluster",
+      "producer": "audit",
+      "source_ref": "audit-iter-1.md#cluster-001",
       "phase": "implement | verify",
       "worktree": "<relative path>",
       "branch": "<refactor/iterN-cluster-id>",
@@ -38,11 +96,32 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
     }
   ],
   "clusters_done": [
-    {"id": "cluster-001", "merged_at": "<ISO8601>", "commit": "<sha>",
-     "pr_number": <int|null>, "merged_into": "<integration_branch | upstream-cluster-branch>"}
+    {
+      "work_unit_id": "cluster-001",
+      "id": "cluster-001",
+      "cluster_id": "cluster-001",
+      "legacy_cluster_id": "cluster-001",
+      "kind": "audit-cluster",
+      "producer": "audit",
+      "source_ref": "audit-iter-1.md#cluster-001",
+      "merged_at": "<ISO8601>",
+      "commit": "<sha>",
+      "pr_number": <int|null>,
+      "merged_into": "<integration_branch | upstream-cluster-branch>"
+    }
   ],
   "clusters_failed": [
-    {"id": "cluster-001", "phase": "implement|verify|merge|remote-ci|stack-rebase", "reason": "<short>"}
+    {
+      "work_unit_id": "cluster-001",
+      "id": "cluster-001",
+      "cluster_id": "cluster-001",
+      "legacy_cluster_id": "cluster-001",
+      "kind": "audit-cluster",
+      "producer": "audit",
+      "source_ref": "audit-iter-1.md#cluster-001",
+      "phase": "implement|verify|merge|remote-ci|stack-rebase",
+      "reason": "<short>"
+    }
   ],
   "rollup_pr": {
     "pr_number": <int|null>,
@@ -57,6 +136,7 @@ Detailed specifications, edge cases, and recovery playbook. The main workflow is
   },
   "design_pending": [
     {
+      "work_unit_id": "cluster-NNN",
       "cluster_id": "cluster-NNN",
       "issue_number": <int>,
       "opened_at": "<ISO8601>",

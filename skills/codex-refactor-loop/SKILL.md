@@ -614,6 +614,7 @@ Write initial `state.json`:
 ```json
 {
   "schema_version": 1,
+  "work_unit_schema_version": 1,
   "trunk_branch": "auto-refact-dev",
   "integration_branch": "auto-refact-dev",
   "review_base_branch": "dev",
@@ -627,6 +628,12 @@ Write initial `state.json`:
   "clusters_failed": []
 }
 ```
+
+`work_unit_schema_version: 1` means `clusters_planned`, `clusters_active`, `clusters_done`, and
+`clusters_failed` are the authoritative v1 queue containers, but each item is a WorkUnitV1 record
+as specified in [REFERENCE.md](REFERENCE.md). If an existing state file lacks
+`work_unit_schema_version`, read it as v1 legacy state: derive `work_unit_id` from each item's
+`id`, treat audit clusters as `kind=producer=audit`, and continue without migration.
 
 **Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
 
@@ -682,7 +689,17 @@ When task notification fires → **controller validation** before accepting the 
 
 Anti-anchoring: **do not** include phrases like "prefer 0", "loop saturated", "healthy signal" in the audit prompt body. These bias codex toward terminating instead of digging. Use the mechanical thresholds in `prompts/audit.md` as the only stop criteria.
 
-After validation: read `audit-iter-N.md`, populate `clusters_planned`, split into batches (max `max_parallel_clusters` per batch) by **file/project disjointness**:
+After validation: read `audit-iter-N.md`, normalize each accepted audit cluster into a WorkUnitV1
+record, populate `clusters_planned`, split into batches (max `max_parallel_clusters` per batch) by
+**file/project disjointness**:
+
+- Current audit-backed units set `work_unit_id == id == cluster_id == legacy_cluster_id`,
+  `kind="audit-cluster"`, `producer="audit"`, and `source_ref="audit-iter-N.md#<cluster-id>"`.
+- Preserve existing cluster fields for audit section lookup, markers, artifact filenames, branch
+  names, and GitHub issue routing during v1 compatibility.
+- Future non-audit producers may write WorkUnitV1 items into `clusters_planned` with
+  `kind != audit-cluster` and `producer != audit`; they must not fabricate `cluster_id` or
+  `legacy_cluster_id`.
 
 - Two clusters that touch the same `$BUILD_CMD 目标/工程文件` or share a file path go in different batches.
 - Two clusters that touch the same proto file → different batches.
@@ -702,11 +719,13 @@ For every cluster with `requires_design: true`:
 2. Record in state.json:
    ```json
    "design_pending": [
-     {"cluster_id": "cluster-NNN", "issue_number": 234,
+     {"work_unit_id": "cluster-NNN", "cluster_id": "cluster-NNN", "issue_number": 234,
       "opened_at": "<ISO8601>", "last_checked": "<ISO8601>",
       "last_comment_count": 0, "status": "awaiting_design"}
    ]
    ```
+   `design_pending.work_unit_id` is canonical. `design_pending.cluster_id` remains a legacy alias
+   for current audit-backed issues and existing controller routing.
 3. Skip the cluster in Phase 2 (do NOT batch it).
 4. PushNotification: "iter<N> opened design issue #<issue> for cluster-<id>. Auto-loop paused on this cluster pending human design decision."
 
@@ -758,11 +777,15 @@ For each cluster in the current batch:
      .refactor-loop/worktrees/<cluster-id> HEAD
    ```
 
-2. Materialize prompt: copy `prompts/implement.md`, replace placeholders (`{{cluster_id}}`, `{{worktree_path}}`, `{{branch}}`, `{{old_pattern}}`, `{{new_principle}}`, `{{scope_paths}}`, `{{verification_hints}}`). Save to `.refactor-loop/prompts/implement-<cluster-id>.md`.
+2. Materialize prompt: copy `prompts/implement.md`, replace placeholders (`{{work_unit_id}}`,
+   `{{cluster_id}}`, `{{worktree_path}}`, `{{branch}}`, `{{old_pattern}}`, `{{new_principle}}`,
+   `{{scope_paths}}`, `{{verification_hints}}`). For current audit-backed units, export
+   `WORK_UNIT_ID=$CLUSTER_ID` before `envsubst` / placeholder replacement. Save to
+   `.refactor-loop/prompts/implement-<cluster-id>.md`.
 
 3. Dispatch via `spawn-codex.sh --cd <worktree>` with `--stall 5400` (5400s no-output stall window).
 
-4. Update `clusters_active` with `bg_task` id.
+4. Update `clusters_active` with the WorkUnitV1 identity/provenance fields plus `bg_task` id.
 
 After all parallel dispatches, schedule wakeup 1800s safety net. **End turn.**
 
@@ -778,7 +801,9 @@ Do **not** advance the whole batch in lockstep; verify each cluster independentl
 
 For each cluster whose implement finished `ok`:
 
-1. Materialize `prompts/verify.md` → `.refactor-loop/prompts/verify-<cluster-id>.md`.
+1. Materialize `prompts/verify.md` → `.refactor-loop/prompts/verify-<cluster-id>.md`. For current
+   audit-backed units, export `WORK_UNIT_ID=$CLUSTER_ID`; `WORK_UNIT_ID` is the canonical prompt
+   identity, while `CLUSTER_ID` remains the v1 compatibility alias for markers and artifacts.
 2. Dispatch in the same worktree (verify reads `git diff HEAD`, runs full test/guard suite, gates merge):
 
    ```bash
@@ -1554,7 +1579,14 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ## Phase 9 — Multi-solver design consensus (sole authorization gate)
 
-Runs when a `state.design_pending[i]` cluster needs a concrete implementation decision. Goal: 3 independent solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3 unanimous + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient authorization gate for every change, including Tier I, Tier II, `CLAUDE.md`, `SPEC.md`, conformance, and core abstractions. There is no post-consensus maintainer approval, physical GPG ratification, reinstall ratification, or philosophy escalation gate.
+Runs when a `state.design_pending[i]` WorkUnitV1 item needs a concrete implementation decision.
+Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Phase 9 can frame the decision as
+work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
+solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
+unanimous + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient
+authorization gate for every change, including Tier I, Tier II, `CLAUDE.md`, `SPEC.md`,
+conformance, and core abstractions. There is no post-consensus maintainer approval, physical GPG
+ratification, reinstall ratification, or philosophy escalation gate.
 
 Policy: **3/3 unanimous required** — anything less goes through convergence until consensus or true stall.
 
