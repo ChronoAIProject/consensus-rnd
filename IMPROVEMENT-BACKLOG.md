@@ -22,6 +22,9 @@
 | F5 | P2 | 悬空引用 | SKILL.md:1428, 2417 | 称 `github-post-writer.md` 保留为 `*.deprecated`,但 prompts/ 下无 `.deprecated` 文件;2417 又把它列进 bilingual 适用 prompt 列表 | 要么真放一个 `.deprecated` 占位,要么把这两处引用删掉;卫生类 | ⬜ 待办 |
 | F6 | P2 | host 主张残留 | SKILL.md:23, 66, 2386 | `fkst` 三处具体 host 示例 | 脱壳时改中性示例(`your-repo` / 通用描述) | ⬜ 待办 |
 | F7 | P3 | 泛化路线(README 已列) | 全 skill | 引擎脊柱与 audit(work-unit 种子来源)耦合;「工作语言规则」是写死的 host policy;名字带 refactor 语义 | 走引擎自身共识 gate;需维护者放行 + 可能需 host 引导 | ⬜ 待办 |
+| F8 | P1 | 契约不一致(dogfood 实跑暴露) | comment-monitor.sh:40 vs host.env.example | comment-monitor `fails-closed`:`MAINTAINER_WHITELIST` 为空即 FATAL 退出。但 host.env.example 标其为「可选」。5 daemon 必须全起 → 它事实上必填,标注矛盾 | host.env.example 改标「事实必填」(已修);SKILL.md 的 host.env 默认值表也应同步 | ✅ iter-2 修文档(example);SKILL 表待办 |
+| F9 | P0 | 首次唤醒 forcing function 缺失 | SKILL.md Quick start / Phase 0 | baseline 证明:入口段不列「起 5 daemon / 建 labels」为强制首步 → controller 启动 0/5 daemon、不建 labels(我本人即复现) | Quick start + Phase 0 首次唤醒强制序列 + worker=codex 规则 | ✅ iter-2 已修(commit 0ad3309) |
+| F10 | P1 | 默认 worker 漂移 | SKILL.md Controller 段 | 未显式禁止用 Claude Agent/Task subagent 替代 codex → 无人值守不变量(log sweep/floor/task-notification)失效 | Controller 段加「worker 恒为 codex CLI,❌ 禁 subagent 替代」 | ✅ iter-2 已修(commit 0ad3309) |
 
 ## 观察(非缺陷)
 
@@ -42,3 +45,11 @@
 - **动作**:新增 `skills/codex-refactor-loop/host.env.example`(修 F1);建本 backlog。
 - 本地 commit 为 checkpoint,**未 push**(对外动作,留待维护者放行)。
 - 下一轮候选:应用 F3/F4/F5 + F2 的坏链接(卫生类,按判定线可自主修)。
+
+### iter-2 — 2026-05-25(维护者纠偏:默认走 github / 起 daemon / 用 codex)
+- 维护者三连指令指出 iter-1 过度保守(本地 only、未 push、未起 daemon、用 Claude subagent 跑 baseline)。承认并纠正。
+- **TDD(writing-skills)**:派 baseline 子流程证明全新 controller 读当前 SKILL.md 会启动 0/5 daemon、不建 labels(= F9/F10)。
+- **改 skill(GREEN,commit 0ad3309)**:① Quick start 默认 github 全流程、❌ 禁降级本地任务;② Phase 0「首次唤醒强制序列」(host.env→state→labels→5 daemon→audit);③ Controller 段 worker 恒为 codex CLI、❌ 禁 Claude subagent 替代。
+- **实跑 github 全流程(dogfood)**:建 host.env;推 integration 分支 `auto-refact-dev`;建 19 个 label;挂载全部 5 daemon(验存活);派 iter-1 audit codex(task `bx74zkq02`,harness 跟踪)。
+- **实跑暴露**:F8(comment-monitor fails-closed 必填 MAINTAINER_WHITELIST,host.env.example 误标可选,已修);label 创建时 `${3:+--desc "$3"}` 词分裂 bug(我的 ops 失误,非 skill bug,已重建 7 个操作类 label);跨 host pgrep 过计实锤(机器另有 loop 跑,`actual=8` codex)。
+- audit codex 完成会发 task-notification;controller 醒来按 Phase 1 验收(小仓库阈值已 prepend 说明)。
