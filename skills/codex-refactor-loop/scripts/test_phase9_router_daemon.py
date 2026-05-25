@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -79,6 +80,40 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertEqual(len(self.commands), 1)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
+
+    def test_phase9_router_singleton_lock_conflict_fail_closed_before_dispatch(self) -> None:
+        self.solver_triplet()
+
+        with mock.patch("phase9_router_daemon.fcntl.flock", side_effect=BlockingIOError):
+            with self.assertRaises(SystemExit):
+                with self.router.singleton():
+                    self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_in_flight_suppresses_duplicate_dispatch_before_ledger(self) -> None:
+        with self.subTest("existing target log"):
+            self.solver_triplet(issue=37, round_no=4)
+            self.router._log_path("37", 4, "judge").write_text("reserved by existing worker\n", encoding="utf-8")
+
+            self.router.tick()
+
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.ledger_entries(), [])
+
+        with self.subTest("ps command line"):
+            self.tmp.cleanup()
+            self.setUp()
+            self.solver_triplet(issue=38, round_no=5)
+            target_log = self.router._log_path("38", 5, "judge")
+            ps_output = f"/bin/sh /tmp/spawn-codex.sh --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+
+            with mock.patch("phase9_router_daemon.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+                self.router.tick()
+
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.ledger_entries(), [])
 
     def test_phase9_router_placeholder_exclusion_ignores_prompt_echo(self) -> None:
         for role in ("minimal", "structural", "delete"):
