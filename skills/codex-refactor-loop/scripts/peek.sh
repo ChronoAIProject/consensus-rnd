@@ -31,7 +31,12 @@ gh_repo_args=()
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {
-  ps -eo command= | awk '/spawn-codex[.]sh/ && /[.]refactor-loop\/(logs|prompts)\// { print }'
+  # Scope to THIS repo by absolute REPO_ROOT, not the relative `.refactor-loop/`
+  # substring (which two loops on one machine share -> cross-host over-count).
+  # Requires callers to pass an absolute --cd so REPO_ROOT is in the cmdline.
+  # Exclude ` -c ` lines: each codex yields a real `bash spawn-codex.sh` supervisor
+  # AND a shell `-c` wrapper that echoes the command; count only the supervisor.
+  ps -eo command= | awk -v repo="$REPO_ROOT" 'repo != "" && /spawn-codex[.]sh/ && index($0, repo) && index($0, " -c ")==0 { print }'
 }
 
 MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"

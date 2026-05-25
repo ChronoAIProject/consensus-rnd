@@ -121,13 +121,37 @@ def save_state(s: dict) -> None:
 
 
 def count_in_flight_codex() -> int:
-    r = run(["ps", "-eo", "command="])
+    """Count THIS repo's in-flight loop codex only — scoped by absolute REPO_ROOT.
+
+    Cross-host over-count bug: two codex-refactor-loop loops on one machine share
+    the relative `.refactor-loop/` substring, so a relative-only filter counts the
+    OTHER host's codex too (observed actual=8 when this repo had 1) -> floor looks
+    permanently "full" and this repo can starve below its minimum. Scope by the
+    absolute REPO_ROOT: spawn-codex.sh always carries it (caller passes an absolute
+    --cd; sibling worktree paths `<repo>-wt-...` are REPO_ROOT-prefixed too), so a
+    foreign loop at a different path is correctly excluded.
+
+    Contract: callers MUST pass an absolute --cd (and absolute --log/--add-dir) so
+    REPO_ROOT appears in the process cmdline. A relative --cd breaks this scope.
+
+    De-dup: each spawned codex shows up as TWO `spawn-codex.sh`-bearing processes —
+    the real supervisor (`bash <path>/spawn-codex.sh --cd ...`) AND a shell `-c`
+    wrapper that echoes the whole command (the Claude Code harness's background-task
+    wrapper, or any `bash -c "...spawn-codex.sh..."`). Counting both double-counts,
+    so `CODEX_FLOOR=2` would be "satisfied" by a single real codex. Exclude any
+    cmdline containing ` -c ` so only the real supervisor is counted (1 per codex);
+    spawn-codex.sh itself never takes ` -c ` flags.
+    """
+    repo = str(REPO_ROOT)
     n = 0
-    for line in r.stdout.splitlines():
+    for line in run(["ps", "-eo", "command="]).stdout.splitlines():
         if "spawn-codex.sh" not in line:
             continue
-        if ".refactor-loop/logs/" in line or ".refactor-loop/prompts/" in line:
-            n += 1
+        if repo not in line:
+            continue  # another host's loop on the same machine — not ours
+        if " -c " in line:
+            continue  # shell -c wrapper / harness command-echo, not the real supervisor
+        n += 1
     return n
 
 

@@ -63,7 +63,18 @@ ScheduleWakeup 是 detached/notification 丢失时**唯一兜底**。每次调�
 
 ### 并发 floor 的 `ps codex` 在多系统 host 上会过计(强制修正)
 
-`concurrency_monitor` 与 floor 判定如果用全局 `ps codex exec | wc -l`,当 **host 仓库自身另有 codex-spawning 系统**(如 fkst supervisor 跑自己的 evolve/review 部门并 spawn codex)时,会把两套都算进去 → floor 永远"满"、永不补,而本 loop 实际可能 0 codex。**修正**:floor 只数**本 loop 的 codex**:命令行含 `spawn-codex.sh` 且含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。不数 host 其它系统的 codex。低于 5 个**本 loop** codex 才补。
+`concurrency_monitor` 与 floor 判定如果用全局 `ps codex exec | wc -l`,当 **host 仓库自身另有 codex-spawning 系统**(如 fkst supervisor 跑自己的 evolve/review 部门并 spawn codex)时,会把两套都算进去 → floor 永远"满"、永不补,而本 loop 实际可能 0 codex。
+
+**更隐蔽的同机多 loop 过计(dogfood 实测)**:即使只数「含 `spawn-codex.sh`」的 codex,如果再用**相对子串** `.refactor-loop/logs/` / `.refactor-loop/prompts/` 做 scope,**同一台机器跑两个不同仓库的本 skill 时会互相过计**——两个 loop 的相对路径子串完全相同。实测另一 host 的 loop 在跑时,本仓库 `concurrency_monitor` 报 `actual=8` 而本仓库实际只有 1 个 codex,floor 被骗成"满",本仓库 codex 永远补不上去、可能长期单线程。
+
+**修正(强制)**:floor 只数**本仓库(本 loop)的 codex** —— 命令行含 `spawn-codex.sh` **且含本仓库绝对路径 `$REPO_ROOT`**。
+- spawn 时 caller **必须传绝对 `--cd`**(audit 用 `--cd $REPO_ROOT`;implement/verify 用绝对 worktree 路径),使 `$REPO_ROOT` 进入进程 cmdline;sibling worktree `<repo>-wt-*` 以 `$REPO_ROOT` 为前缀,亦匹配。
+- ❌ **不要**只用相对子串 `.refactor-loop/logs/` 做 scope(同机多 loop 互相过计)。
+- **去重(强制)**:每个 codex 会派生**两个**含 `spawn-codex.sh` 的进程 —— 真 supervisor(`bash <path>/spawn-codex.sh --cd ...`)+ 一个 shell `-c` wrapper(harness 后台任务回显整条命令)。两个都数 = 每个真 codex 被算成 2,`CODEX_FLOOR=2` 会被**单个**真 codex 满足 → 永远凑不到真正 2 并行。**排除含 ` -c ` 的行**,只数真 supervisor(spawn-codex.sh 自身不带 ` -c ` flag)。
+- 不数 host 其它系统 / 其它仓库的 codex。
+- 低于 `$CODEX_FLOOR` 个**本仓库** codex 才补(`CODEX_FLOOR` 由 host.env 注入,默认 5,**硬下限 2** —— 详见下「Concurrency floor」节)。
+
+`concurrency_monitor.py` 的 `count_in_flight_codex()` 与 `peek.sh` 的 `list_loop_codex()` 均已按 `$REPO_ROOT` 绝对路径 scope。
 
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
 
@@ -1874,16 +1885,18 @@ Concretely, this means:
 - iterN implement / verify / Phase 8 review runs in parallel with iterN rollup PR being reviewed.
 - If iterN rollup PR gets rejected by human, iterN work stays on auto-refact-dev (which now contains iterN + iterN deltas); we re-do iterN rework on top and ship combined.
 
-### Concurrency floor = 5 codex(强制)
+### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 
-**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的 5+。
+**问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的并行度。
 
-**规则**:**活跃 codex < 5 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 5,不要为了"并行更猛"一次性齐发十几个。
+**floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-| 活跃 codex 数 | 动作 |
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。
+
+| 活跃本仓库 codex 数 | 动作 |
 |---|---|
-| `>= 5` | 不抢资源,保持现状 |
-| `< 5` | 立即派 `5 - 当前数` 个新 codex 填满 floor;优先级如下 |
+| `>= $CODEX_FLOOR` | 不抢资源,保持现状 |
+| `< $CODEX_FLOOR`(floor 至少为 2) | 立即派 `$CODEX_FLOOR - 当前数` 个新 codex 填满 floor;优先级如下 |
 
 **填 floor 优先级**(从高到低):
 
@@ -1895,10 +1908,10 @@ Concretely, this means:
 6. **CI guard completeness codex** — 检查 `$CI_GUARDS` 是否覆盖所有 CLAUDE 条款
 
 **反面禁止**:
-- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 5 才允许 ScheduleWakeup
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ 所有 5 slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+- ❌ 所有 floor slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
 - ❌ 一次性派 `>= 15` 个 codex 凑吞吐。大 burst 会压 API,更容易触发 transient stream-disconnect,并让 prompt 回显误判与追踪问题一起放大。
 
 ### Transient stream-disconnect 处理(强制)
@@ -1918,9 +1931,12 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 **判定脚本**(controller wakeup step 1.5):
 
 ```bash
-ACTIVE=$(ps -eo command= | awk '/spawn-codex[.]sh/ && /[.]refactor-loop\/(logs|prompts)\// { n++ } END { print n+0 }')
-NEEDED=$(( 5 - ACTIVE ))
-[ "$NEEDED" -le 0 ] && return  # floor 已满
+source .refactor-loop/host.env                              # 取 REPO_ROOT / CODEX_FLOOR
+FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2
+# 只数本仓库 codex:含 spawn-codex.sh 且含本仓库绝对路径 $REPO_ROOT(scope,防同机多 loop 过计)
+ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
+NEEDED=$(( FLOOR - ACTIVE ))
+[ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
 # 按优先级派 NEEDED 个 codex,优先 audit,其次 retrospective / self-audit
 # (具体派什么由 controller 根据 priority 表决定)
@@ -1929,7 +1945,9 @@ NEEDED=$(( 5 - ACTIVE ))
 **判定脚本**(controller wakeup step 1.5):
 
 ```bash
-ACTIVE=$(ps -eo command= | awk '/spawn-codex[.]sh/ && /[.]refactor-loop\/(logs|prompts)\// { n++ } END { print n+0 }')
+source .refactor-loop/host.env   # 取 REPO_ROOT(本仓库 scope)
+# 只数本仓库 codex(绝对路径 scope,防同机多 loop 过计)
+ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
 LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
 NEXT_ITER=$((LAST_ITER + 1))
 NEXT_LOG=".refactor-loop/logs/audit-iter-${NEXT_ITER}.log"
