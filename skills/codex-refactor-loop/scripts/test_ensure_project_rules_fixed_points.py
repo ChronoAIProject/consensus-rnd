@@ -93,6 +93,14 @@ class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "must not contain|escapes"):
             ProjectRulesFixedPointEnsurer(str(self.repo), "../CLAUDE.md")
 
+    def test_absolute_path_outside_repo_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as outside_tmp:
+            outside_rules = Path(outside_tmp) / "CLAUDE.md"
+            outside_rules.write_text("# Outside host rules\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(Exception, "escapes REPO_ROOT"):
+                ProjectRulesFixedPointEnsurer(str(self.repo), str(outside_rules))
+
     def test_duplicate_marker_is_refused_without_changes(self) -> None:
         block = ProjectRulesFixedPointEnsurer(str(self.repo))._managed_block()
         original = "# Host rules\n\n" + block + "\n\n" + block
@@ -118,6 +126,22 @@ class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
         self.rules.write_text(original, encoding="utf-8")
 
         with self.assertRaisesRegex(Exception, "hash mismatch"):
+            self.ensure()
+
+        self.assertEqual(self.rules.read_text(encoding="utf-8"), original)
+
+    def test_hash_valid_unknown_block_version_fails_closed(self) -> None:
+        unknown_body = "## 共识研发不动点（由 consensus-rnd 管理）\n\n- FI-999 未知版本。\n"
+        unknown_hash = sha256_text(unknown_body)
+        unknown_block = (
+            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={unknown_hash} -->\n"
+            f"{unknown_body}"
+            f"{END_MARKER}"
+        )
+        original = "# Host rules\n\n" + unknown_block
+        self.rules.write_text(original, encoding="utf-8")
+
+        with self.assertRaisesRegex(Exception, "unknown managed block version"):
             self.ensure()
 
         self.assertEqual(self.rules.read_text(encoding="utf-8"), original)

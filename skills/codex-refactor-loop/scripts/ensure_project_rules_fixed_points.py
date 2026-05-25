@@ -54,8 +54,7 @@ class ProjectRulesFixedPointEnsurer:
     #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
     def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
-        self.project_rules = project_rules if project_rules else "CLAUDE.md"
-        self.target = self._resolve_target(self.project_rules)
+        self.target = self._resolve_target(project_rules if project_rules else "CLAUDE.md")
 
     @classmethod
     def from_env(cls) -> "ProjectRulesFixedPointEnsurer":
@@ -130,11 +129,10 @@ class ProjectRulesFixedPointEnsurer:
 
         return text[: start.start()] + self._managed_block() + text[end_index + len(END_MARKER):]
 
-    def _managed_block(self, body: str = CANONICAL_BODY) -> str:
-        body_hash = sha256_text(body)
+    def _managed_block(self) -> str:
         return (
-            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={body_hash} -->\n"
-            f"{body}"
+            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={CANONICAL_HASH} -->\n"
+            f"{CANONICAL_BODY}"
             f"{END_MARKER}"
         )
 
