@@ -400,7 +400,7 @@ This skill complements `refactor-team` (Agent-subagent based). Use this skill wh
 /loop <task description... 完全无人值守模式>
 ```
 
-**首次唤醒(first wakeup)→ 必须按序跑完「Phase 0 — Bootstrap」节的「首次唤醒强制序列」全部步骤再 end turn**:host.env 自检 → state + integration 分支 → 建全套 labels → **起并挂载全部 5 个 daemon** → 派 audit codex → ScheduleWakeup。漏任一步 = bootstrap 失败。
+**首次唤醒(first wakeup)→ 必须按序跑完「Phase 0 — Bootstrap」节的「首次唤醒强制序列」全部步骤再 end turn**:host.env 自检 → state + integration 分支 → 建全套 labels → **起并挂载全部 5 个 daemon** → 派默认 v1 work-unit producer(默认 audit) → ScheduleWakeup。漏任一步 = bootstrap 失败。
 
 **默认走 GitHub 全流程,这不是「本地分析任务」。** 本 skill 的本体 = GitHub 状态面 + 5 daemon + codex 多角度共识闭环。❌ 严禁把首次唤醒降级成「只在本地读代码 / 出 markdown 报告 / 本地改文件 commit」而**不 bootstrap GitHub、不起 daemon、不派 audit**——那等于根本没跑这个 skill。若 host 现状(如无应用代码 / host.env 缺失)让 GitHub 全流程暂不可行,正确动作是停下来 PushNotification 请 maintainer 补 host.env / 确认范围,而**不是**擅自改跑成本地任务。
 
@@ -591,12 +591,12 @@ Controller turn 间 / session 间 / `/clear` 后,**后台 codex 继续跑不中�
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 3 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派 audit codex**(Phase 1,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只 bootstrap state + 派 audit,不起 5 daemon(baseline 默认失败模式)
+- ❌ 只 bootstrap state + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -659,7 +659,12 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 
 ---
 
-## Phase 1 — Audit (one codex + controller validation)
+## Phase 1 — Work-unit production (audit default)
+
+The default v1 work-unit producer is `audit`. Producer normalization is documented in
+[REFERENCE.md](REFERENCE.md): v1 accepts only `producer: audit` and `producer: manual-issue`.
+`audit` is the raw artifact producer for this phase; `manual-issue` enters through Phase 7
+triage and must already be reshaped before Phase 9.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
 2. Replace `{{iteration}}` placeholder.
@@ -690,17 +695,20 @@ When task notification fires → **controller validation** before accepting the 
 
 Anti-anchoring: **do not** include phrases like "prefer 0", "loop saturated", "healthy signal" in the audit prompt body. These bias codex toward terminating instead of digging. Use the mechanical thresholds in `prompts/audit.md` as the only stop criteria.
 
-After validation: read `audit-iter-N.md`, normalize each accepted audit cluster into a WorkUnitV1
-record, populate `clusters_planned`, split into batches (max `max_parallel_clusters` per batch) by
+After validation: read `audit-iter-N.md`; the controller projects each accepted audit cluster into
+the WorkUnitV1 fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `producer`,
+`source_ref`, and v1 audit compatibility aliases), populate `clusters_planned`, split into batches
+(max `max_parallel_clusters` per batch) by
 **file/project disjointness**:
 
 - Current audit-backed units set `work_unit_id == id == cluster_id == legacy_cluster_id`,
   `kind="audit-cluster"`, `producer="audit"`, and `source_ref="audit-iter-N.md#<cluster-id>"`.
 - Preserve existing cluster fields for audit section lookup, markers, artifact filenames, branch
   names, and GitHub issue routing during v1 compatibility.
-- Future non-audit producers may write WorkUnitV1 items into `clusters_planned` with
-  `kind != audit-cluster` and `producer != audit`; they must not fabricate `cluster_id` or
-  `legacy_cluster_id`.
+- Phase 7 `manual-issue` intake may write WorkUnitV1 items into `clusters_planned` only after the
+  accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
+  `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
+  and `verification_hints`. It must not fabricate `cluster_id` or `legacy_cluster_id`.
 
 - Two clusters that touch the same `$BUILD_CMD 目标/工程文件` or share a file path go in different batches.
 - Two clusters that touch the same proto file → different batches.
@@ -1168,9 +1176,16 @@ Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-sol
 
 **前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
 
-#### Path B — Triage codex(推荐,更安全)
+#### Path B — Triage codex / `manual-issue` producer(推荐,更安全)
 
 maintainer 只加 1 label:`auto-loop-triage`
+
+This path is the v1 `manual-issue` producer. The triage codex accepts only concrete repository
+work units suitable for consensus, reshapes the issue into a WorkUnitV1-backed design issue, and
+then label-routes it to Phase 9. Accepted manual issues must contain `work_unit_id: issue-<N>`,
+`kind: manual-work-unit`, `producer: manual-issue`, `source_ref: gh-issue-<N>`, `scope_paths`,
+problem/invariant text, and `verification_hints`; they must not include fabricated `cluster_id` or
+`legacy_cluster_id`.
 
 **Daemon 自包含**:
 
@@ -1189,9 +1204,9 @@ maintainer 只加 1 label:`auto-loop-triage`
 
 Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
 1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
-   - 是否属于本 refactor loop 范畴(违反 CLAUDE/AGENTS 条款)?
-   - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
-   - 若否 → 评论"非 refactor loop 范畴(原因 XXX),退出 auto-loop";移除 `auto-loop-triage` label;不再处理
+   - 是否是 concrete repository work unit suitable for consensus?
+   - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成含 `manual-issue` WorkUnitV1 字段的 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
+   - 若否 → 评论"不适合作为 manual-issue work unit(原因 XXX),退出 auto-loop";移除 `auto-loop-triage` label;不再处理
 2. Triage codex 完成后 issue 进 Phase 9 标准链路
 
 **triage codex 输出 marker**:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
@@ -1199,14 +1214,14 @@ Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),�
 **优势 vs Path A**:
 - maintainer 只加 1 label(易记)
 - body reshaping 由 codex 自动做(maintainer 不用学 design-issue body 模板)
-- 非 refactor 范畴会被自动拒绝(防 controller 把任意 issue 当 cluster 跑)
+- 不适合 consensus 的 issue 会被自动拒绝(防 controller 把任意 issue 当 work unit 跑)
 - triage codex 调研代码补 evidence,solver 后续准
 
 ### 反面(❌ 禁止)
 
 - ❌ controller 无 sweep `auto-loop-triage` label → 外部 issue 加 label 也无人接
 - ❌ Path B triage codex 直接派 solver 而不 reshape body → solver 找不到 evidence
-- ❌ triage codex 接受 non-refactor issue(产品需求 / bug 报告 / feature request)→ Phase 9 完全错位
+- ❌ triage codex 接受产品需求 / runtime bug report / duplicate / unclear / >50 files issue → Phase 9 完全错位
 - ❌ 加 `auto-loop` label 但忘加 `phase9-auto-solve` → controller 当普通 design issue 等 maintainer,不自动派 solver
 
 

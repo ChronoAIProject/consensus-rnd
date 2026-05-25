@@ -338,6 +338,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         checked_paths = [
             SKILL_ROOT / "REFERENCE.md",
             SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "prompts" / "triage-external-issue.md",
             SKILL_ROOT / "prompts" / "implement.md",
             SKILL_ROOT / "prompts" / "verify.md",
             SKILL_ROOT / "prompts" / "meta-judge.md",
@@ -346,6 +347,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             "WorkUnit" + "EnvelopeV1",
             "WorkUnit" + "ProducerV1",
             "work_unit_" + "producer.py",
+            "producer " + "registry",
         )
 
         for path in checked_paths:
@@ -366,6 +368,69 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
 
         self.assertIn("primary=cluster-007", rendered)
         self.assertNotIn("{{work_unit_id}}", rendered)
+
+    def test_v1_producer_contract_markers_are_present(self) -> None:
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+        combined = "\n".join([reference_text, skill_text, triage_prompt])
+
+        required_markers = (
+            "Producers in v1",
+            "- `audit`",
+            "- `manual-issue`",
+            "kind: audit-cluster",
+            "kind: manual-work-unit",
+            "producer: audit",
+            "producer: manual-issue",
+            "source_ref: .refactor-loop/runs/audit-iter-N.md#<cluster-id>",
+            "source_ref: gh-issue-<N>",
+            "source_ref: gh-issue-${ISSUE_NUMBER}",
+            "Work-unit production (audit default)",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+    def test_manual_issue_reshape_requires_work_unit_v1_fields_without_audit_aliases(self) -> None:
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+
+        required_markers = (
+            "work_unit_id: issue-${ISSUE_NUMBER}",
+            "kind: manual-work-unit",
+            "producer: manual-issue",
+            "source_ref: gh-issue-${ISSUE_NUMBER}",
+            "scope_paths",
+            "problem / invariant text",
+            "verification_hints",
+            "\u4e0d\u5199 `cluster_id` \u6216 `legacy_cluster_id`",
+        )
+
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, triage_prompt)
+
+    def test_triage_prompt_drops_old_refactor_only_and_docs_tooling_gates(self) -> None:
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+
+        forbidden_markers = (
+            "\u5c5e\u4e8e\u672c refactor loop \u8303\u7574(\u8fdd\u53cd PROJECT_RULES/AGENTS \u6761\u6b3e)",
+            "\u4e0d\u662f docs-only \u6216 tooling-only",
+            "docs-only \u2014 \u4ec5\u6587\u6863\u95ee\u9898",
+            "tooling-only \u2014 CLI / build / IDE \u95ee\u9898",
+        )
+
+        for marker in forbidden_markers:
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, triage_prompt)
+
+    def test_audit_prompt_remains_raw_artifact_contract(self) -> None:
+        audit_prompt = (SKILL_ROOT / "prompts" / "audit.md").read_text(encoding="utf-8")
+
+        for marker in ("producer: audit", "WorkUnitV1", "manual-issue"):
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, audit_prompt)
 
 
 if __name__ == "__main__":

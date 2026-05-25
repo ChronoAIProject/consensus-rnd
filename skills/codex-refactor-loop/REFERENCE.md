@@ -38,6 +38,53 @@ Audit compatibility:
   markers, artifact names, branch names, and audit section lookups may continue to use
   `CLUSTER_ID` during v1 compatibility.
 
+## Producers in v1
+
+`WorkUnitV1` separates the queue item contract from the source that produced the item. The v1
+controller recognizes exactly these producer values:
+
+- `audit`
+- `manual-issue`
+
+This is a documented normalization boundary, not a new producer framework. Do not add new
+producer abstractions, registry helpers, envelope wrappers, or migrated work-unit state containers
+for v1.
+
+### `audit` producer
+
+`audit` remains the default producer. It reads the raw artifact contract from
+`prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
+The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
+`WorkUnitV1` before adding it to `clusters_planned`:
+
+- `work_unit_id: <cluster-id>`
+- `id: <cluster-id>`
+- `cluster_id: <cluster-id>`
+- `kind: audit-cluster`
+- `producer: audit`
+- `source_ref: .refactor-loop/runs/audit-iter-N.md#<cluster-id>`
+- `legacy_cluster_id: <cluster-id>` optional but recommended during v1 compatibility
+
+Audit-backed units may keep using `<cluster-id>` for branch names, worktree paths, artifact
+filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` remains the v1 alias.
+
+### `manual-issue` producer
+
+`manual-issue` is the Phase 7 `auto-loop-triage` intake path for maintainer-selected GitHub
+issues. Accepted issues must be reshaped into a `WorkUnitV1`-backed design issue before Phase 9
+solver dispatch:
+
+- `work_unit_id: issue-<N>`
+- `kind: manual-work-unit`
+- `producer: manual-issue`
+- `source_ref: gh-issue-<N>`
+- `scope_paths`
+- problem / invariant text
+- `verification_hints`
+
+Manual issues must not fabricate `cluster_id` or `legacy_cluster_id`; those fields are audit
+compatibility aliases only.
+
 ## State schema (`.refactor-loop/state.json`)
 
 ```json
