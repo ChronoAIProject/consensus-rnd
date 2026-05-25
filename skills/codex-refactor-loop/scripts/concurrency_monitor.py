@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-concurrency_monitor.py — 监控 codex 并发数,不足则告警 + 主动介入修复
+concurrency_monitor.py — 监控 active work 是否出现 0 codex gap
 
 。
 
 设计:
-- 周期 300s tick
+- 周期 60s tick
 - 从 GitHub 推算 期望并发数(每个 active phase issue/PR contribute 1)
   - 🔍 design-solving       → 1 solver-round OR 1 judge OR 1 reflector
   - 🔧 fixing               → 1 fix codex
@@ -14,13 +14,13 @@ concurrency_monitor.py — 监控 codex 并发数,不足则告警 + 主动介入
   - ⚙️ ci-running           → 0(等 CI,无需 codex)
   - 🚀 pr-open(待派 reviewer) → 0~3
 - Compare with loop-owned spawn-codex wrapper processes.
-- 不足(实际 < 期望 * 0.5)且持续 2 个 tick → 告警
+- 只监控 no-gap:P0 `expected > 0 and actual == 0` 立即告警
 
 主动介入修复:
 1. 写告警到 `.refactor-loop/.concurrency-alert.log`(append + timestamp + 详情)
 2. 写到 `.refactor-loop/.controller-pending-events.log`(controller 下次 wakeup 处理)
 3. log 详细 expected breakdown(哪些 issue/PR 缺 codex)
-4. 不自动 spawn codex(business logic 在 controller,不在 daemon)
+4. 不读取 floor 配置,不判断 floor deficit,不自动 spawn codex
 
 启动:
   nohup python3 .claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py \\
@@ -73,7 +73,6 @@ def github_repo_slug() -> str | None:
 
 
 INTERVAL = int(os.environ.get("INTERVAL", "60"))  # 
-MIN_PARALLEL = int(os.environ.get("MIN_PARALLEL", "1"))  # 任何 active task 都至少要 1 codex
 REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
@@ -93,7 +92,7 @@ PHASE_EXPECTED = {
     "⏸️ phase:blocked": 0,
 }
 
-# consecutive low-tick counter persisted in state file
+# consecutive no-gap counter persisted in state file
 STATE_FILE = REPO_ROOT / ".refactor-loop" / ".concurrency-monitor-state.json"
 
 
@@ -138,7 +137,7 @@ def count_in_flight_codex() -> int:
     the real supervisor (`bash <path>/spawn-codex.sh --cd ...`) AND a shell `-c`
     wrapper that echoes the whole command (the Claude Code harness's background-task
     wrapper, or any `bash -c "...spawn-codex.sh..."`). Counting both double-counts,
-    so `CODEX_FLOOR=2` would be "satisfied" by a single real codex. Exclude any
+    so a floor of 2 would be "satisfied" by a single real codex. Exclude any
     cmdline containing ` -c ` so only the real supervisor is counted (1 per codex);
     spawn-codex.sh itself never takes ` -c ` flags.
     """
@@ -209,15 +208,17 @@ def write_alert(msg: str, detail: dict) -> None:
 
 
 def tick() -> None:
+    # Refactor (iter3/skill-concurrency-floor-enforcement):
+    #   Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
+    #   New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
     state = load_state()
-    low_streak = int(state.get("low_streak", 0))
     zero_streak = int(state.get("zero_streak", 0))
 
     items = list_auto_loop_issues()
     expected, breakdown = compute_expected(items)
     actual = count_in_flight_codex()
 
-    log(f"actual={actual} expected={expected} low_streak={low_streak} zero_streak={zero_streak}")
+    log(f"actual={actual} expected={expected} zero_streak={zero_streak}")
 
     # P0 no-gap rule: any active task with zero loop-owned codex alerts immediately.
     if expected > 0 and actual == 0:
@@ -238,32 +239,6 @@ def tick() -> None:
     else:
         state["zero_streak"] = 0
 
-    # 阈值:实际 < ceil(expected/2) 算 low
-    threshold = max(1, (expected + 1) // 2) if expected > 0 else 0
-    if expected == 0:
-        # 无 active task,don't alert
-        state["low_streak"] = 0
-        save_state(state)
-        return
-
-    if actual < threshold:
-        low_streak += 1
-        state["low_streak"] = low_streak
-        # >= 2 consecutive low tick → alert(避免 reporter 临时未识别 codex 误报)
-        if low_streak >= 2:
-            detail = {
-                "actual": actual,
-                "expected": expected,
-                "threshold": threshold,
-                "breakdown": breakdown,
-                "low_streak": low_streak,
-            }
-            write_alert(f"codex-concurrency-low actual={actual} expected={expected}", detail)
-            log(f"ALERT: actual={actual} < threshold={threshold} (streak={low_streak}); see {ALERT_LOG}")
-    else:
-        if low_streak > 0:
-            log(f"recovered: actual={actual} >= threshold={threshold}")
-        state["low_streak"] = 0
     save_state(state)
 
 

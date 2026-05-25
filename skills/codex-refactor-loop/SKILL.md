@@ -225,18 +225,16 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 ### Concurrency monitor:`.claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py`(强制)
 
-**60s** 周期 daemon,监控 actual vs expected codex 并发数:
+**60s** 周期 daemon,只监控 no-gap sentinel:
 - expected = active issue/PR 数(per phase 表)
 - actual = `spawn-codex.sh` 且命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`
 - **P0 规则**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
-- low 规则:`actual < expected/2` 持续 2 tick → 告警
 - 写 `.refactor-loop/.concurrency-alert.log` + `.controller-pending-events.log`(controller 下次 wakeup 必读)
-- 不自动 spawn codex(business logic 在 controller)— controller 下次 wakeup 必派
+- 不读取 `CODEX_FLOOR`,不判断 refill 候选,不写非零 floor-deficit 事件,不自动 spawn codex。floor 补给只属于 controller wakeup step 1.5。
 
 **Controller 每 wakeup 必读** `tail -20 .refactor-loop/.concurrency-alert.log`:
 - 看到 `P0 no-gap-violation: ...zero_streak=N` → 至少 N×60s 没 codex,**必须**先派 codex 才允许 ScheduleWakeup
 - zero_streak >= 5(>= 5 分钟 0 codex)= 严重失保 — 同时把 PushNotification 给 user "controller 失保 N min"
-- 看到 `recovered` 行 → 已自愈,正常推进
 
 启动:
 ```bash
@@ -1951,11 +1949,16 @@ Concretely, this means:
 
 ### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 
+<!-- Refactor (iter3/skill-concurrency-floor-enforcement):
+  Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
+  New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
+-->
+
 **问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的并行度。
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。**唯一执行位置**:controller 每次 wakeup 的 step 1.5,并且必须在任何 `ScheduleWakeup` 之前执行;`concurrency_monitor.py` 只做 no-gap sentinel,不承担 floor 观察/补给职责。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -2004,23 +2007,6 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 # 按优先级派 NEEDED 个 codex,优先 audit,其次 retrospective / self-audit
 # (具体派什么由 controller 根据 priority 表决定)
-```
-
-**判定脚本**(controller wakeup step 1.5):
-
-```bash
-source .refactor-loop/host.env   # 取 REPO_ROOT(本仓库 scope)
-# 只数本仓库 codex(绝对路径 scope,防同机多 loop 过计)
-ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
-LAST_ITER=$(ls .refactor-loop/runs/audit-iter-*.md 2>/dev/null | grep -oE 'iter-[0-9]+' | sort -V | tail -1 | grep -oE '[0-9]+')
-NEXT_ITER=$((LAST_ITER + 1))
-NEXT_LOG=".refactor-loop/logs/audit-iter-${NEXT_ITER}.log"
-
-if (( ACTIVE <= 2 )) && [ -f ".refactor-loop/runs/audit-iter-${LAST_ITER}.md" ] && [ ! -f "$NEXT_LOG" ]; then
-  # 派 iter N+1 audit,即使 iter N 的 cluster PR 还没全 merge
-  ITERATION=${NEXT_ITER} envsubst < .claude/skills/codex-refactor-loop/prompts/audit.md > .refactor-loop/prompts/audit-iter-${NEXT_ITER}.md
-  spawn-audit-codex
-fi
 ```
 
 **反面禁止**:
