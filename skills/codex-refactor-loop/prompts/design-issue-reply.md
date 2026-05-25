@@ -1,4 +1,4 @@
-# 任务：对 design issue 的新评论做实质性技术回复（双语）
+# 任务：对 design issue 的新评论做实质性技术回复（中文）
 
 issue: ${ISSUE_URL}
 cluster: ${CLUSTER_ID}
@@ -40,7 +40,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 2. issue body（含 cluster YAML / evidence / fix boundary / human_brief）—— 用 `gh issue view ${ISSUE_NUMBER}` 拉。
 3. cluster 在 `.refactor-loop/runs/audit-iter-${ITERATION}.md` 的原文。
 4. 评论中引用的具体文件 + 行号（**必须打开通读**，不只看 line refs）。
-5. SKILL.md 中的 "Bilingual rule (双语规则)" —— 你的回复必须 EN + ZH 完整等价。
+5. SKILL.md 中的工作语言规则 —— 你的 GitHub 回复默认用中文；可原样引用英文代码、错误、路径和条款。
 
 ## 流程
 
@@ -57,11 +57,10 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
    - **量化**：能用数字的不用形容词（"延迟 0.02%–0.4% 节流窗口" 优于 "可以忽略不计"）
    - **下一步动作明确**：结尾必须有 "我需要你回答：…" 或 "下次见到 `auto-loop-resume` label 我就 ..."。reviewer 不应在你回复后还要猜下一步
 
-3. **双语强制**（per SKILL.md "Bilingual rule"）：
-   - `## English` 段 + `## 中文` 段，各自完整独立
-   - **禁止** "见英文部分" / "as above in 中文"
-   - code blocks 不重复，放在 language-neutral section 或英中各放一份完整 + 标注
-   - 段落数、深度、列举项数 EN 和 ZH 必须等价
+3. **语言要求**（per SKILL.md 工作语言规则）：
+   - GitHub-facing 回复用中文；不要生成平行英文 section。
+   - code blocks、file path、错误消息、CLAUDE/AGENTS 条款引用可保留原文。
+   - 中文正文必须完整可行动，不要写"见英文部分"或只给 TL;DR。
 
 4. **不做的事**：
    - 禁止改任何代码（你是 analyst，不是 implementer）
@@ -80,7 +79,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 - 不要敷衍。reviewer 投了时间评论；你也必须投匹配的时间分析
 - 不要用"我们会..."的市场话术。每句话必须能被证据支撑
 - 不要在回复里塞 "auto-loop 机制说明"（issue body 已经有了；重复占空间）
-- 双语等价：写完后自测一遍 EN 和 ZH 的段落数、列举项数、信息密度是否对得上；不对就重写
+- 语言完整性：写完后自测中文正文是否包含证据、取舍和下一步；缺任一项就重写。
 
 开始执行。
 

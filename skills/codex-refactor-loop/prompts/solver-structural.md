@@ -47,11 +47,8 @@ verdict: propose | abstain | escalate
 ## PROJECT_RULES clause violated (quoted verbatim)
 > <exact PROJECT_RULES text>
 
-## Recommended framing (English)
-<one paragraph: what new structure, where, why it eliminates the violation by construction (not by exception)>
-
-## Recommended framing (中文)
-<same content, independently complete per SKILL.md Bilingual rule>
+## Recommended framing
+<one paragraph 中文: what new structure, where, why it eliminates the violation by construction (not by exception)>
 
 ## Concrete plan
 - New abstractions (if any): <Name + interface + which Layer + which Project>
@@ -92,7 +89,7 @@ End with EXACTLY ONE marker line:
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
 - Philosophy is evolvable: if the best structural answer changes CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary, produce that as a concrete plan instead of escalating.
 - Escalate only for physical ratification/reinstall or total inability to produce a plan.
-- Bilingual EN+ZH per SKILL.md.
+- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
 - No filler. Numbers > adjectives.
 
 ## GitHub post(强制)

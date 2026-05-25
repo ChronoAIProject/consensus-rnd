@@ -691,27 +691,16 @@ For each `pass` cluster, serially:
 
     Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Phase 6 sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
 
-6b. **Open PR** (**body MUST be bilingual per SKILL.md "Bilingual rule"**):
+6b. **Open PR** (**body follows current language policy: 中文 by default; no mandatory parallel English section**):
 
     Structure the body as:
 
     ```markdown
-    ## Summary / 摘要 (bilingual; see SKILL.md Bilingual rule)
-
-    ### English
-
-    iter<N> <cluster-id> (<severity>, <rule_ids>).
-
-    - **Old**: <old_pattern, full sentence from human_brief.problem_statement_en if present else cluster.old_pattern>
-    - **New**: <new_pattern, full sentence>
-
-    Violated: <CLAUDE.md / AGENTS.md clause one-liner>.
-
-    ### 中文
+    ## Summary / 摘要
 
     iter<N> <cluster-id>（<严重度>，<rule_ids>）。
 
-    - **Old**：<old_pattern 完整中文一句，来自 human_brief.problem_statement_zh；老 cluster 缺 zh 时由 controller 把英文 old_pattern 翻成中文>
+    - **Old**：<old_pattern 完整中文一句，来自 human_brief.problem_statement；老 cluster 只有英文时由 controller 翻成中文>
     - **New**：<new_pattern 完整中文一句>
 
     违反：<对应 CLAUDE.md/AGENTS.md 条款中文摘录>。
@@ -739,7 +728,7 @@ For each `pass` cluster, serially:
       --body-file <generated_body_file>
     ```
 
-    Controller must run the equivalence test (SKILL.md Bilingual rule §"Equivalence test") on the generated body before `gh pr create`. If 中文 section is missing or visibly shorter than English, regenerate or fall back to a one-paragraph machine-translation as last resort (and PushNotification flagging the legacy fallback so operator can fix).
+    Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
 
 7b. **立刻给 PR 加 `auto-loop` label**:`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Phase 4b 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
 
@@ -1020,8 +1009,8 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 | Preconditions | Latest complete required round | Controller action |
 |---|---|
-| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post bilingual merge comment, then call `merge_pr <pr>`. |
-| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post bilingual merge comment, then call `merge_pr <pr>`. |
+| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>`. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>`. |
 | Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not merge, do not dispatch fix. |
 | Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
 | Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; never merge. |
@@ -1061,7 +1050,7 @@ Escalate to human ONLY when the meta-layer cannot make progress:
 
 Escalation action:
 - Add `needs-human-review` label on PR.
-- Post bilingual PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
+- Post 中文 PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
 - `PushNotification`: "PR #N stuck at round N — human decision needed: <one-line reason>".
 - State: `pr_reviews[PR].consensus = "stuck-human-review"`.
 
@@ -1097,7 +1086,7 @@ EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`
 - controller 只读 log 末尾 marker,**不读 body**
 
-历史曾用过的 `prompts/github-post-writer.md` 专职 writer-codex 已 deprecated(文件保留为 `*.deprecated` 仅作历史参考)。
+Historical tombstone: the old `prompts/github-post-writer.md` dedicated writer-codex flow is intentionally absent; do not recreate or route active policy through it.
 
 Rationale: 减少一跳 + 减少 controller 上下文负担 + 写 post 的 codex 本身就是最了解 artifact 的人,质量比 "翻译者" 更高。controller 边界仍是 git topology(commit/push/checkout)+ PR/issue 创建/merge/close lifecycle 决策,这些 codex 不动(per `_github-post-rules.md` "你不能调的" 列表)。
 
@@ -1120,12 +1109,12 @@ Required PR comments (controller posts via `gh pr comment <PR> --body-file <file
 
 | Phase 8 event | PR comment content |
 |---|---|
-| Reviewer round N complete | Bilingual table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
-| Fix codex round N complete (FIX_DONE) | Bilingual FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
-| Fix codex blocked (FIX_BLOCKED) | Bilingual: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
-| Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | Bilingual: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
+| Reviewer round N complete | 中文 table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
+| Fix codex round N complete (FIX_DONE) | 中文 FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
+| Fix codex blocked (FIX_BLOCKED) | 中文: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
+| Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | 中文: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
 | Escalation triggered | Add `needs-human-review` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |
-| Reviewer crash | Bilingual: which reviewer, log path, re-dispatch attempt. Second crash → escalate per above. |
+| Reviewer crash | 中文: which reviewer, log path, re-dispatch attempt. Second crash → escalate per above. |
 
 Required GitHub labels (controller applies/removes):
 - `phase8-reviewing`: a reviewer round is in flight
@@ -1138,7 +1127,7 @@ Local-only files (logs, raw codex output, internal state) stay in `.refactor-loo
 
 Forbidden:
 - Posting the same content twice in the same round.
-- Posting reviewer/fix output without the bilingual sections.
+- Posting reviewer/fix output with deprecated mandatory bilingual sections.
 - Auto-merging without first posting the "consensus reached" comment.
 - Escalating without first posting the escalation rationale comment.
 
@@ -1459,14 +1448,14 @@ If the above makes the current framing underspecified, route `converge` with the
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Phase 8)
 
-Every Phase 9 action posts a bilingual comment to the issue. **The issue must be a complete audit trail** — solver outputs are bilingual by construction (per `prompts/solver-*.md`); the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
+Every Phase 9 action posts a 中文 comment to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
 
 | Phase 9 event | Issue comment content |
 |---|---|
-| Round N solvers dispatched | Bilingual: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
-| Maintainer reply detected mid-Phase-9 | Bilingual: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
-| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output (already bilingual). One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output (bilingual). |
+| Round N solvers dispatched | 中文: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
+| Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
+| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
 | Meta-judge → escalate:stalled | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
@@ -1882,7 +1871,7 @@ CI sweep contract: every controller wakeup checks open auto-loop PR checks, imme
 
 ## Codex 进展实时上报 — 强制
 
-`codex-progress-reporter.sh` is one of the six required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment when the codex finishes, and uses only log-tail `^EXIT=` for finished detection.
+`codex-progress-reporter.sh` is one of the six required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment only when the codex exits cleanly, and uses only log-tail `^EXIT=0` for successful completion detection. Nonzero `EXIT=<n>` is a failed terminal state that remains visible instead of being silently cleaned up.
 
 <a id="label-bootstrap-loops"></a>
 ## Label bootstrap loops
@@ -2062,7 +2051,7 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 ### 历史 bilingual 规则的位置
 
-本节之前的"Bilingual rule (双语规则)"硬要求双语 + equivalence test 已废止。`prompts/audit.md`、`prompts/solver-*.md`、`prompts/meta-judge.md`、`prompts/review-fix.md`、`prompts/design-issue-reply.md`、`prompts/github-post-writer.md` 等所有 codex prompt 在引用本 skill 时,把"bilingual EN+ZH" 一律读作"中文(允许英文引用)"。Prompt 文件后续会随用随改;过渡期 prompt 里旧的 bilingual 措辞按本节理解,不强制双语生成。
+本节之前的"Bilingual rule (双语规则)"硬要求双语 + equivalence test 已废止。所有 codex prompt 在引用本 skill 时,把历史 "bilingual EN+ZH" 一律读作"中文(允许英文引用)"。Active prompt 文件不得重新要求平行 `## English` / `## 中文` 双段；历史迁移记录只保留在本节。
 
 ### 例外
 

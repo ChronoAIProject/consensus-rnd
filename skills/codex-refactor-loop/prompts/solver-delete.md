@@ -58,11 +58,8 @@ verdict: propose | abstain | escalate
 ## Classification
 <one of a/b/c/d/e/f from procedure step 2>
 
-## Recommended action (English)
-<one paragraph: delete what, redirect callers to where, or defer to which future iteration with what tracking>
-
-## Recommended action (中文)
-<independently complete per SKILL.md Bilingual rule>
+## Recommended action
+<one paragraph 中文: delete what, redirect callers to where, or defer to which future iteration with what tracking>
 
 ## Concrete plan (if propose)
 - Files to delete: <list>
@@ -107,7 +104,7 @@ End with EXACTLY ONE marker line:
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is part of the best deletion/collapse plan.
 - Escalate only for physical ratification/reinstall or total inability to classify; never escalate just because deletion changes an existing philosophy boundary.
-- Bilingual EN+ZH per SKILL.md.
+- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
 - Numbers > adjectives.
 
 ## GitHub post(强制)

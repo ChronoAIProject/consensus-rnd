@@ -43,17 +43,14 @@ verdict: propose | abstain | escalate
 ---
 
 ## Recommended framing
-<one-paragraph EN; what changes, why this is the minimal viable boundary>
+<one-paragraph 中文; what changes, why this is the minimal viable boundary>
 
-## Concrete plan (English)
+## Concrete plan
 - Files: <list with intended action per file>
 - LOC delta: ~+N / -M
 - Tests to add/modify: <list>
 - Philosophy/PROJECT_RULES/SPEC/Tier change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Migration path: <single-step; "no migration needed" is also valid>
-
-## Concrete plan (中文)
-<same content as English, independently complete per SKILL.md Bilingual rule>
 
 ## Risks
 - <bullet list of what this framing trades off>
@@ -85,7 +82,7 @@ End with EXACTLY ONE marker line:
 - "Minimal" means smallest code change; it does NOT mean "ignore architectural correctness". If the minimum is still wrong, abstain.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is the minimum viable fix and is written as a concrete plan.
 - Escalate only for physical ratification/reinstall or total inability to produce a plan, not for crossing an existing philosophy boundary.
-- Bilingual EN+ZH per SKILL.md.
+- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
 - No filler / no marketing language. Numbers > adjectives.
 
 ## GitHub post(强制)

@@ -90,11 +90,8 @@ solver_verdicts:
 decision: consensus | converge | escalate
 ---
 
-## Decision (English)
-<one paragraph stating the decision + the reasoning>
-
-## Decision (中文)
-<independently complete per SKILL.md Bilingual rule>
+## Decision
+<one paragraph 中文 stating the decision + the reasoning>
 
 ## If consensus
 - Chosen framing: <minimal | structural | delete | hybrid-A+B>
@@ -132,7 +129,7 @@ End with EXACTLY ONE marker:
 - Be willing to converge on philosophy. Fundamental philosophy gaps are not human escalation by themselves; ask the solvers for exact clause/Tier/SPEC changes until consensus or true stall.
 - Treat deep consensus as sufficient authorization. Never require post-consensus human approval, physical GPG ratification, or Tier I reinstall ratification.
 - Do not invent a 4th hybrid framing not present in any solver — that means you're solving, not judging. If no solver covers the right framing → converge with "no solver covers correct framing; propose exact framing" unless the stall trigger already applies.
-- Bilingual EN+ZH per SKILL.md.
+- 中文 by default per SKILL.md; do not add a mandatory parallel English section.
 - Numbers > adjectives.
 
 ## GitHub post(强制)

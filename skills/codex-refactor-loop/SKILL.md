@@ -468,8 +468,8 @@ The local state file is a recovery aid, not the maintainer-facing state surface.
 Authoritative surfaces:
 
 1. GitHub comments and labels tell humans what is happening.
-2. `.refactor-loop/state.json` tells the controller what can be resumed.
-3. `.refactor-loop/logs/*` tells the controller which actors have exited.
+2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`.
+3. `.refactor-loop/state.json` is a resumability index and debug ledger, not a phase decision source of truth.
 4. `.refactor-loop/prompts/*` tells future maintainers what was dispatched.
 5. Branches, worktrees, and PRs tell git topology.
 

@@ -25,17 +25,10 @@ if [ -z "${REPO_ROOT:-}" ]; then
   return 2 2>/dev/null || exit 2
 fi
 
-GH_REPO_SLUG="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${GH_REPO_SLUG:-}" ] && ! [[ "$GH_REPO_SLUG" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$GH_REPO_SLUG'" >&2
-  return 2 2>/dev/null || exit 2
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+set_gh_repo_args 0 0 || return 2 2>/dev/null || exit 2
 INTEGRATION_BRANCH="${INTEGRATION_BRANCH:-${INTEGRATION:-auto-refact-dev}}"
 REVIEW_BASE_BRANCH="${REVIEW_BASE_BRANCH:-${REVIEW_BASE:-dev}}"
-gh_repo_args=()
-if [ -n "${GH_REPO_SLUG:-}" ]; then
-  gh_repo_args=(--repo "$GH_REPO_SLUG")
-fi
 
 # Fixes "git worktree add already exists" — detect-or-create
 # Usage: safe_worktree <iter> <cluster-id> <base-ref>
@@ -85,7 +78,9 @@ merge_pr() {
     --add-label "🎉 phase:merged" 2>&1 >/dev/null
   # Close linked issue + cleanup its labels
   if [ -n "$linked_issue" ]; then
-    gh issue close "$linked_issue" "${gh_repo_args[@]}" --reason "completed" --comment "✅ Auto-merged via PR #${pr}。⟦AI:AUTO-LOOP⟧" 2>&1 | tail -1
+    local close_comment
+    close_comment=$(printf '✅ Auto-merged via PR #%s。\n\n⟦AI:AUTO-LOOP⟧' "$pr")
+    gh issue close "$linked_issue" "${gh_repo_args[@]}" --reason "completed" --comment "$close_comment" 2>&1 | tail -1
     gh issue edit "$linked_issue" "${gh_repo_args[@]}" \
       --remove-label "🔍 phase:design-solving" \
       --remove-label "🛠️ phase:implementing" \

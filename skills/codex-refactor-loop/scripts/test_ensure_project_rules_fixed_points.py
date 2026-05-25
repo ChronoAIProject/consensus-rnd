@@ -997,6 +997,7 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
             (skill_root / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
             prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
             spawn_file.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            (root / "repo_slug.sh").write_text((SKILL_ROOT / "scripts" / "repo_slug.sh").read_text(encoding="utf-8"), encoding="utf-8")
             triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
             triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
             triage_lib = root / "triage-monitor-functions.sh"
@@ -1245,6 +1246,7 @@ esac
             fakebin.mkdir()
             argv_log = root / "gh-argv.jsonl"
             controller_copy = root / "controller_lib.sh"
+            (root / "repo_slug.sh").write_text((SKILL_ROOT / "scripts" / "repo_slug.sh").read_text(encoding="utf-8"), encoding="utf-8")
             controller_text = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
             controller_text = controller_text.replace(
                 "import json, sys",
@@ -1598,6 +1600,17 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 self.assertRegex(text, r"\n⟦AI:AUTO-LOOP⟧\n")
                 self.assertIn("--body-file", text)
 
+        progress = self.read_rel("skills/codex-refactor-loop/scripts/codex-progress-reporter.sh")
+        self.assertRegex(progress, r"\n⟦AI:AUTO-LOOP⟧\n")
+        self.assertIn("controller progress reporter", progress)
+
+    def test_controller_generated_close_comment_uses_final_independent_sentinel(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+
+        self.assertIn("--comment \"$close_comment\"", text)
+        self.assertIn("printf '✅ Auto-merged via PR #%s。\\n\\n⟦AI:AUTO-LOOP⟧'", text)
+        self.assertNotIn("Auto-merged via PR #${pr}。⟦AI:AUTO-LOOP⟧", text)
+
     def test_github_repo_contract_uses_slug_not_bare_owner_repo_api_paths(self) -> None:
         checked = self.rel_paths(
             "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/host.env.example",
@@ -1610,9 +1623,44 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
         self.assertIn('export GH_REPO_SLUG="your-org/your-repo"', host_env)
         self.assertNotIn("export GH_REPO=", host_env)
+        shell_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_slug.sh")
+        self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', shell_helper)
         for rel in ("skills/codex-refactor-loop/scripts/controller_lib.sh", "skills/codex-refactor-loop/scripts/peek.sh", "skills/codex-refactor-loop/scripts/triage-monitor.sh"):
             with self.subTest(script=rel):
-                self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', self.read_rel(rel))
+                self.assertIn("repo_slug.sh", self.read_rel(rel))
+
+    def test_repo_slug_resolution_is_shared_across_shell_and_python_scripts(self) -> None:
+        shell_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_slug.sh")
+        python_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_config.py")
+
+        self.assertIn("resolve_github_repo_slug()", shell_helper)
+        self.assertIn("set_gh_repo_args()", shell_helper)
+        self.assertIn("def github_repo_slug()", python_helper)
+        self.assertIn("GH_REPO_SLUG", python_helper)
+        self.assertIn("GH_OWNER", python_helper)
+        self.assertIn("GH_REPO_NAME", python_helper)
+
+        for rel in (
+            "skills/codex-refactor-loop/scripts/comment-monitor.sh",
+            "skills/codex-refactor-loop/scripts/codex-progress-reporter.sh",
+            "skills/codex-refactor-loop/scripts/controller_lib.sh",
+            "skills/codex-refactor-loop/scripts/peek.sh",
+            "skills/codex-refactor-loop/scripts/triage-monitor.sh",
+        ):
+            text = self.read_rel(rel)
+            with self.subTest(shell=rel):
+                self.assertIn("repo_slug.sh", text)
+                self.assertNotIn('${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}', text)
+
+        for rel in (
+            "skills/codex-refactor-loop/scripts/concurrency_monitor.py",
+            "skills/codex-refactor-loop/scripts/post_banner.py",
+        ):
+            text = self.read_rel(rel)
+            with self.subTest(python=rel):
+                self.assertIn("from repo_config import github_repo_slug", text)
+                self.assertNotIn('os.environ.get("GH_OWNER")', text)
+                self.assertNotIn('os.environ.get("GH_REPO_NAME")', text)
 
     def test_optional_ci_guards_are_conditioned_on_non_empty_value(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/scripts/*.sh")
@@ -1691,27 +1739,48 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("反模式", active_docs)
 
     def test_phase9_language_policy_allowlist_is_narrow(self) -> None:
-        allowlist = {
-            "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/audit.md",
-            "skills/codex-refactor-loop/prompts/design-issue-body.md", "skills/codex-refactor-loop/prompts/design-issue-reply.md",
-            "skills/codex-refactor-loop/prompts/meta-judge.md", "skills/codex-refactor-loop/prompts/solver-delete.md",
-            "skills/codex-refactor-loop/prompts/solver-minimal.md", "skills/codex-refactor-loop/prompts/solver-structural.md",
-        }
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
-        patterns = ("Bilingual rule", "双语强制", "## English", "Recommended framing (English)")
+        forbidden_patterns = ("Bilingual rule", "双语强制", "Bilingual EN+ZH", "## English", "Recommended framing (English)")
 
         for path in checked:
             rel = path.relative_to(REPO_ROOT).as_posix()
             text = path.read_text(encoding="utf-8")
-            for pattern in patterns:
-                if pattern not in text:
-                    continue
+            for pattern in forbidden_patterns:
                 with self.subTest(path=rel, pattern=pattern):
-                    self.assertIn(rel, allowlist)
+                    self.assertNotIn(pattern, text)
 
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         self.assertIn("Source files are English-only; external user-facing artifacts are 中文 by default", skill_text)
         self.assertIn("No mandatory parallel English section", skill_text)
+
+    def test_no_active_github_post_writer_reference_remains(self) -> None:
+        checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
+        self.assert_absent("github-post-writer", checked)
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        self.assertIn("Historical tombstone", reference)
+        self.assertIn("intentionally absent", reference)
+
+    def test_state_json_is_not_documented_as_phase_source_of_truth(self) -> None:
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+
+        self.assertIn(".refactor-loop/state.json` is a resumability index and debug ledger", skill_text)
+        self.assertNotIn(".refactor-loop/state.json` tells the controller what can be resumed", skill_text)
+        self.assertLess(skill_text.index(".refactor-loop/logs/*` tells the controller"), skill_text.index(".refactor-loop/state.json` is a resumability index"))
+
+    def test_progress_reporter_clean_exit_hash_and_sentinel_contract(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/codex-progress-reporter.sh")
+
+        self.assertIn('echo "exit_ok"', text)
+        self.assertIn('echo "exit_failed"', text)
+        self.assertIn('echo "in_flight"', text)
+        self.assertIn('[ "$(exit_status "$1")" = "exit_ok" ]', text)
+        self.assertNotIn('grep -q "^EXIT="', text)
+        self.assertIn("hash_body()", text)
+        self.assertIn("command -v md5", text)
+        self.assertIn("command -v md5sum", text)
+        self.assertIn("hashlib.md5", text)
+        self.assertNotIn('cur_md5=$(echo "$body" | md5)', text)
+        self.assertIn("codex 已非零退出;保留此 comment", text)
 
     def test_non_controller_prompts_keep_git_and_lifecycle_boundaries(self) -> None:
         controller_owned = {"_github-post-rules.md", "remote-ci-fix.md", "triage-external-issue.md"}
