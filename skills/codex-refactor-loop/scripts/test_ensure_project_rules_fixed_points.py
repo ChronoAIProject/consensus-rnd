@@ -474,6 +474,41 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
 
+
+class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
+    # Refactor (iter3/skill-concurrency-floor-enforcement):
+    #   Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
+    #   New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
+    def test_concurrency_monitor_is_no_gap_only(self) -> None:
+        monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
+
+        self.assertIn("no-gap-violation", monitor_text)
+        self.assertIn("expected > 0 and actual == 0", monitor_text)
+        for forbidden in (
+            "MIN_PARALLEL",
+            "codex-floor-deficit",
+            "floor-deficit",
+            "codex-concurrency-low",
+            "low_streak",
+            "actual < threshold",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, monitor_text)
+        self.assertNotIn('os.environ.get("CODEX_FLOOR"', monitor_text)
+
+    def test_skill_assigns_floor_to_controller_step_1_5_only(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("concurrency_monitor.py` 只做 no-gap sentinel", skill_text)
+        self.assertIn("controller 每次 wakeup 的 step 1.5", skill_text)
+        self.assertIn("必须在任何 `ScheduleWakeup` 之前执行", skill_text)
+        self.assertIn("FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))", skill_text)
+        self.assertNotIn("low 规则:`actual < expected/2`", skill_text)
+        self.assertNotIn("codex-floor-deficit", skill_text)
+        self.assertNotIn("ACTIVE <= 2", skill_text)
+        self.assertEqual(skill_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
+
+
 class NamingPolicySourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-010-rename-alias-strategy):
     #   Old pattern: public copy could drift back toward a mandatory rename or grow a duplicate alias identity
