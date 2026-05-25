@@ -843,7 +843,7 @@ For each `bucket: fail` check:
 <a id="daemon-command-bodies"></a>
 ## Daemon command bodies
 
-Runs **first** on every controller wakeup, before Phase 7 design-issue sweep and before any new Phase 2 cluster work. Goal: keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
+Phase 6 is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
 
 ### Phase 6 现在由独立 daemon 自主完成
 
@@ -855,16 +855,16 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 disown
 ```
 
-Daemon 工作流:
-1. cd `$REPO_ROOT`,确认 HEAD = `auto-refact-dev`(不是则 skip)
-2. Working tree dirty → skip(controller 在工作)
-3. 但若 `.git/MERGE_HEAD` 存在 + 无 in-flight codex → **dispatch codex resolve**(防止上次 codex 死)
-4. `git fetch origin` + `git rev-list --count HEAD..origin/dev`
-5. behind=0 → idle skip
-6. behind>0 → 尝试 `git merge --ff-only`,成功则 push;失败则 `git merge --no-ff`(merge commit)
-7. **冲突** → 写 `prompts/dev-sync-conflict-<ts>.md` + spawn-codex resolve(5400s no-output stall window)
-8. codex 在同一 worktree resolve 文件 + `git add` + `git merge --continue`(不 push,daemon 后续 push)
-9. codex 完成 marker:`DEV_SYNC_RESOLVED:<files>` 或 `DEV_SYNC_BLOCKED:<reason>`
+Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:
+1. `FETCH`: fetch origin in the daemon worktree.
+2. `CHECK_MERGE`: if a merge is in progress, observe or dispatch exactly one resolver codex. Resolver codexes resolve files and run `git merge --continue`; they never push, reset, or abort.
+3. `CHECK_DIRTY`: dirty non-merge worktrees skip without reset.
+4. `PRESERVE_LOCAL_AHEAD`: before any reset, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, push `HEAD:$INTEGRATION_BRANCH` and return. This preserves resolver continuation commits.
+5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, reset/replay onto `origin/$REVIEW_BASE_BRANCH`, then push only with exact `--force-with-lease=refs/heads/$INTEGRATION_BRANCH:<expected_remote_sha>`.
+6. `RESET_TO_REMOTE`: reset to `origin/$INTEGRATION_BRANCH` only after local-ahead preservation and rollup adoption checks.
+7. `FORWARD_SYNC`: merge `origin/$REVIEW_BASE_BRANCH` into integration using ff-only first, then no-ff merge; push with ordinary `git push origin HEAD:$INTEGRATION_BRANCH`.
+
+Ambiguous rollup metadata, failed local-ahead push, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
 ### Phase 9 router daemon command body
 `phase9_router_daemon.py` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/phase9_router_daemon.py --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
@@ -876,7 +876,7 @@ Allowlist(唯一 direct spawn authority):
 Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority. Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `spawn-codex.sh --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
 dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **phase9_router_daemon.py** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
-### Controller 每 wakeup 责任(改为只 verify daemon)
+### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Phase 6 现在 controller 只 verify daemon 健康
 ps -ef | grep dev-sync-daemon.sh | grep -v grep | wc -l  # 必须 >=1
@@ -892,77 +892,19 @@ tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FA
 - ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
 - ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
 
-### Sync procedure
+### Manual recovery
 
-```bash
-cd "$REPO_ROOT" && git fetch origin
-git checkout "$INTEGRATION_BRANCH"
-git pull --ff-only origin "$INTEGRATION_BRANCH" 2>/dev/null || true
+If a maintainer must repair the daemon worktree manually, stop the singleton `dev_sync_daemon.py` first, verify there is no resolver codex in flight, then repair the dedicated worktree. Restart the daemon only after the branch topology is clean and `git status` is clean.
 
-# Compute divergence
-ahead=$(git rev-list --count "origin/$REVIEW_BASE_BRANCH..HEAD")
-behind=$(git rev-list --count "HEAD..origin/$REVIEW_BASE_BRANCH")
+### Post-rollup adoption invariant
 
-if (( behind == 0 )); then
-  echo "integration is up-to-date with $REVIEW_BASE_BRANCH; no sync needed"
-  exit 0
-fi
-
-# Try fast-forward first, then no-ff merge
-if git merge --ff-only "origin/$REVIEW_BASE_BRANCH" 2>/dev/null; then
-  echo "fast-forwarded integration with $REVIEW_BASE_BRANCH (+$behind commits)"
-else
-  if git merge --no-ff -m "Sync integration with $REVIEW_BASE_BRANCH" "origin/$REVIEW_BASE_BRANCH"; then
-    echo "merge-committed $behind commits from $REVIEW_BASE_BRANCH into integration"
-  else
-    git merge --abort
-    echo "SYNC_CONFLICT: $behind commits in $REVIEW_BASE_BRANCH conflict with integration"
-    # PushNotification: "integration branch sync conflicted with dev; manual rebase needed"
-    exit 1
-  fi
-fi
-
-# Run local CI on the post-sync integration head
-if [ -n "${CI_GUARDS:-}" ]; then
-  bash "$CI_GUARDS" && bash "$CI_GUARDS"
-  if [[ $? -ne 0 ]]; then
-    echo "SYNC_CI_FAIL: post-merge guards failed"
-    # PushNotification + halt (do not push a broken integration)
-    exit 1
-  fi
-else
-  echo "guards skipped: CI_GUARDS unset"
-fi
-
-git push origin "$INTEGRATION_BRANCH"
-```
-
-### Sync cadence
-
-- Every controller wakeup (cheap when `behind == 0`).
-- On conflict or post-merge CI fail → halt + PushNotification; do not push. Resume sync only after operator clears the issue.
-- After successful sync, **rebase all open cluster PRs** onto the new integration head (force-with-lease per PR branch). This keeps stacked PR semantics correct: each cluster PR's diff stays scoped to its own changes, not the dev merge.
+After a rollup PR has merged into `review_base_branch`, `IntegrationSyncDaemonV1` must make `integration_branch` contain that merged review-base head before new forward sync work. Any post-rollup integration commits are replayed only after the proven old rollup head; if the old head or expected remote SHA cannot be proven, the daemon writes a pending event and does not force-push.
 
 ### Why this matters
 
 - Without auto-sync, the integration branch drifts from dev and the eventual rollup PR becomes one giant conflict resolution.
 - Cluster PR diffs viewed by reviewers should be just the cluster's changes; if integration is stale, the PR shows a noisy diff that mixes cluster work with "what dev added since" which is reviewer-hostile.
 - Sync conflicts are rare but real (e.g., a dev PR refactored the same area). Surfacing them as halts is better than silently posting a busted integration.
-
-### State tracking
-
-In `state.json`:
-
-```json
-"integration_sync": {
-  "last_sync_at": "<ISO8601>",
-  "last_sync_added_commits": <int>,
-  "last_sync_result": "ff | merge | up_to_date | conflict | ci_fail",
-  "consecutive_failures": <int>
-}
-```
-
-`consecutive_failures >= 3` → escalate to PushNotification with "integration sync stuck — manual review needed" and pause auto-sync until operator clears.
 
 ---
 
@@ -2314,12 +2256,6 @@ compatibility aliases only.
     "pr_number": <int|null>,
     "base": "<review_base_branch>",
     "head": "<integration_branch>"
-  },
-  "integration_sync": {
-    "last_sync_at": "<ISO8601>",
-    "last_sync_added_commits": <int>,
-    "last_sync_result": "ff | merge | up_to_date | conflict | ci_fail",
-    "consecutive_failures": <int>
   },
   "design_pending": [
     {
