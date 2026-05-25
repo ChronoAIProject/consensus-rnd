@@ -705,6 +705,13 @@ the WorkUnitV1 fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `pro
   `kind="audit-cluster"`, `producer="audit"`, and `source_ref="audit-iter-N.md#<cluster-id>"`.
 - Preserve existing cluster fields for audit section lookup, markers, artifact filenames, branch
   names, and GitHub issue routing during v1 compatibility.
+- Stable v1 operational tokens are public routing tokens, not names to migrate in this contract:
+  `[refactor-design]`, `refactor-design-needed`, `auto-loop`, `phase9-auto-solve`,
+  `auto-loop-resume`, `refactor/iterN-<cluster-id>`, `.refactor-loop/.../<cluster-id>`,
+  `IMPLEMENT_DONE:${CLUSTER_ID}`, `VERIFY_DONE:${CLUSTER_ID}`, `SOLVER_DONE`, and
+  `META_JUDGE_DONE`.
+- Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
+  a named operational-policy abstraction for v1 compatibility.
 - Phase 7 `manual-issue` intake may write WorkUnitV1 items into `clusters_planned` only after the
   accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
   `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
