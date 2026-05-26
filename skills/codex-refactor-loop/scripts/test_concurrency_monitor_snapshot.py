@@ -114,6 +114,61 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.assertEqual(data["open_pr_count"], 1)
         self.assertEqual(data["open_issue_count"], 2)
 
+    def test_snapshot_includes_last_p0_at_field(self) -> None:
+        with mock.patch.object(self.monitor, "run", side_effect=self.fake_gh):
+            self.monitor.tick()
+
+        data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
+        self.assertIn("last_p0_at", data)
+        self.assertRegex(data["last_p0_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_non_p0_tick_snapshot_path(self) -> None:
+        state_path = self.repo / ".refactor-loop" / ".concurrency-monitor-state.json"
+        state_path.write_text(
+            json.dumps({"zero_streak": 2, "last_p0_at": "2026-05-26T01:02:03Z"}),
+            encoding="utf-8",
+        )
+
+        def fake_non_p0(cmd: list[str]) -> SimpleNamespace:
+            if cmd[:3] == ["gh", "issue", "list"]:
+                return SimpleNamespace(returncode=0, stdout=json.dumps([]))
+            if cmd[:3] == ["gh", "pr", "list"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 59,
+                                "labels": [
+                                    {"name": "auto-loop"},
+                                    {"name": "👀 phase:reviewing"},
+                                    {"name": "🤖 human:codex"},
+                                ],
+                            }
+                        ]
+                    ),
+                )
+            if cmd[:2] == ["ps", "-eo"]:
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=f"bash {self.monitor.REPO_ROOT}/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd {self.monitor.REPO_ROOT}\n",
+                )
+            return SimpleNamespace(returncode=1, stdout="")
+
+        with mock.patch.object(self.monitor, "run", side_effect=fake_non_p0):
+            self.monitor.tick()
+
+        data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        self.assertEqual(data["actual"], 1)
+        self.assertEqual(data["expected"], 1)
+        self.assertEqual(data["p0_streak"], 0)
+        self.assertEqual(data["last_p0_at"], "2026-05-26T01:02:03Z")
+        self.assertEqual(data["open_pr_count"], 1)
+        self.assertEqual(data["open_issue_count"], 0)
+        self.assertEqual(state["zero_streak"], 0)
+        self.assertEqual(state["last_p0_at"], "2026-05-26T01:02:03Z")
+
     def test_snapshot_write_is_atomic(self) -> None:
         stop = threading.Event()
         errors: list[str] = []

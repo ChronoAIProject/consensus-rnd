@@ -89,10 +89,19 @@ JSON
   assert_contains "$(REPO_ROOT="$TMP_DIR" bash "$STATUSLINE")" "[STUCK 15m]" "test_freeze_minutes_over_10_shows_stuck"
 }
 
+test_p0_streak_over_2_shows_highlight() {
+  setup_repo
+  write_snapshot <<'JSON'
+{"actual":7,"expected":5,"floor":4,"p0_streak":3,"open_pr_count":5,"open_issue_count":4,"freeze_minutes":0}
+JSON
+  assert_contains "$(REPO_ROOT="$TMP_DIR" bash "$STATUSLINE")" "P0×3" "test_p0_streak_over_2_shows_highlight"
+}
+
 test_statusline_runs_under_200ms
 test_no_snapshot_returns_placeholder
 test_healthy_state_shows_actual_floor
 test_below_floor_shows_warning_icon
 test_freeze_minutes_over_10_shows_stuck
+test_p0_streak_over_2_shows_highlight
 
 echo "statusline tests ok"
