@@ -31,12 +31,23 @@ gh_repo_args=()
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {
-  # Refactor (iter4/spawn-codex-pid-registry):
+  # Refactor (iter4/issue52-r1):
   #   Old pattern: ps -eo command | grep spawn-codex.sh, then REPO_ROOT/cmdline filtering.
-  #   New principle: list $REPO_ROOT/.refactor-loop/spawned/*.pid — self-maintained per-repo registry.
+  #   New principle: read $REPO_ROOT/.refactor-loop/spawned/*.pid and count only live PID + repo-local log entries.
   local spawned_dir="$REPO_ROOT/.refactor-loop/spawned"
   [ -d "$spawned_dir" ] || return 0
-  find "$spawned_dir" -maxdepth 1 -name "*.pid" -type f 2>/dev/null | sort
+  find "$spawned_dir" -maxdepth 1 -name "*.pid" -type f 2>/dev/null | sort |
+    while IFS= read -r reg; do
+      pid=$(sed -n 's/^pid=//p' "$reg" | head -1)
+      repo_root=$(sed -n 's/^repo_root=//p' "$reg" | head -1)
+      log_path=$(sed -n 's/^log=//p' "$reg" | head -1)
+      [ -n "$pid" ] || continue
+      kill -0 "$pid" 2>/dev/null || continue
+      [ "$repo_root" = "$REPO_ROOT" ] || continue
+      case "$log_path" in
+        "$REPO_ROOT"/*) printf '%s\n' "$reg" ;;
+      esac
+    done
 }
 
 MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"

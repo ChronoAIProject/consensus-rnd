@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -114,7 +115,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             target_log = self.router._log_path("38", 5, "judge")
             spawned = self.repo / ".refactor-loop" / "spawned"
             spawned.mkdir(parents=True)
-            spawned.joinpath(f"{target_log.stem}.pid").write_text("pid=123\n", encoding="utf-8")
+            spawned.joinpath(f"{target_log.stem}.pid").write_text(
+                f"pid={os.getpid()}\n"
+                f"repo_root={self.repo}\n"
+                f"log={target_log}\n",
+                encoding="utf-8",
+            )
 
             self.router.tick()
 

@@ -269,11 +269,67 @@ class Phase9Router:
     def _in_flight(self, log_path: Path) -> bool:
         if log_path.exists():
             return True
-        # Refactor (iter4/spawn-codex-pid-registry):
+        # Refactor (iter4/issue52-r1):
         #   Old pattern: ps -eo command | grep spawn-codex.sh --log <target>.
-        #   New principle: spawned/<task-id>.pid is the per-repo source of truth for in-flight targets.
+        #   New principle: spawned/<task-id>.pid is valid only when PID is alive and log/repo match this repository.
         reg_file = self.repo_root / ".refactor-loop" / "spawned" / f"{log_path.stem}.pid"
-        return reg_file.exists()
+        return self._registry_entry_alive(reg_file, log_path)
+
+    def _registry_entry_alive(self, reg_file: Path, expected_log: Path) -> bool:
+        try:
+            entry = self._read_pid_registry(reg_file)
+        except OSError:
+            return False
+
+        repo_text = entry.get("repo_root")
+        if repo_text:
+            try:
+                if Path(repo_text).expanduser().resolve() != self.repo_root:
+                    return False
+            except OSError:
+                return False
+
+        log_text = entry.get("log")
+        if not log_text:
+            return False
+        try:
+            actual_log = Path(log_text).expanduser()
+            if not actual_log.is_absolute():
+                actual_log = (self.repo_root / actual_log).resolve()
+            else:
+                actual_log = actual_log.resolve()
+            actual_log.relative_to(self.repo_root)
+        except (OSError, ValueError):
+            return False
+        if actual_log != expected_log.resolve():
+            return False
+
+        return self._pid_alive(entry.get("pid"))
+
+    def _read_pid_registry(self, reg_file: Path) -> dict[str, str]:
+        entry: dict[str, str] = {}
+        for line in reg_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            key, sep, value = line.partition("=")
+            if sep:
+                entry[key.strip()] = value.strip()
+        return entry
+
+    def _pid_alive(self, pid_text: str | None) -> bool:
+        if not pid_text:
+            return False
+        try:
+            pid = int(pid_text)
+        except ValueError:
+            return False
+        if pid <= 0:
+            return False
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     def _read_ledger(self) -> set[str]:
         keys: set[str] = set()

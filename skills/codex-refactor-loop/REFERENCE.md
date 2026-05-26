@@ -37,6 +37,22 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 - **daemon 健康**:`.refactor-loop/heartbeats/<daemon>.ts` heartbeat-mtime 距 now <90s 为 alive。示例:`hb=".refactor-loop/heartbeats/${daemon}.ts"; [ -f "$hb" ] && [ $(($(date +%s) - $(cat "$hb"))) -lt 90 ] && alive=yes || alive=no`。不要 `ps grep daemon-name`(同主机另一仓库的 daemon 会假阳)。
 - 这是 #49 anti-stop Layer 0+,源回归测试 `RepoLocalDetectionTests` 守护此 invariant。
 
+### Spawned PID registry schema(per #52)
+
+`spawn-codex.sh` owns the spawned PID registry contract. It writes exactly one file per wrapper invocation at `$REPO_ROOT/.refactor-loop/spawned/<log-stem>.pid` after the child `codex` process starts, and removes only that file from its EXIT/INT/TERM cleanup trap.
+
+Schema:
+
+```text
+pid=<child-codex-pid>
+repo_root=<absolute-REPO_ROOT>
+log=<absolute-log-path-under-REPO_ROOT>
+cmdline=spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>
+started=<utc-iso8601>
+```
+
+Readers must treat registry files as hints, not authority: count or suppress dispatch only when `pid` is alive, `repo_root` resolves to the current `$REPO_ROOT`, and `log` resolves under the current `$REPO_ROOT`. Stale files, malformed files, dead PIDs, and logs outside the repo count as not in-flight. Readers must not inspect codex internals, mutate GitHub labels, spawn, kill, commit, push, or merge from this registry path.
+
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
 controller 主链路**优先禁止**用 `( … ) & disown` / `nohup … &` / Bash 内 `spawn-codex.sh ... &` 派 **codex**(即使为省 tool 调用想批量)。detached 进程丢的是 harness 即时 `<task-notification>`,**不是检测能力**:controller 每次 wakeup 的 `EXIT=0` / marker log sweep 仍能扫到 detached codex 的完成,只是延到下次 ScheduleWakeup,变慢。

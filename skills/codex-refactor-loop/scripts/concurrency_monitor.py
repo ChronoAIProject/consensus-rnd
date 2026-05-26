@@ -129,14 +129,72 @@ def save_state(s: dict) -> None:
     STATE_FILE.write_text(json.dumps(s, indent=2))
 
 
+def _read_pid_registry(path: Path) -> dict[str, str]:
+    entry: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            entry[key.strip()] = value.strip()
+    return entry
+
+
+def _pid_alive(pid_text: str | None) -> bool:
+    if not pid_text:
+        return False
+    try:
+        pid = int(pid_text)
+    except ValueError:
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _is_repo_log(log_text: str | None) -> bool:
+    if not log_text:
+        return False
+    try:
+        log_path = Path(log_text).expanduser()
+        if not log_path.is_absolute():
+            log_path = (REPO_ROOT / log_path).resolve()
+        else:
+            log_path = log_path.resolve()
+        repo_root = REPO_ROOT.resolve()
+        log_path.relative_to(repo_root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _registry_entry_alive(path: Path) -> bool:
+    try:
+        entry = _read_pid_registry(path)
+    except OSError:
+        return False
+    repo_text = entry.get("repo_root")
+    if repo_text:
+        try:
+            if Path(repo_text).expanduser().resolve() != REPO_ROOT.resolve():
+                return False
+        except OSError:
+            return False
+    return _pid_alive(entry.get("pid")) and _is_repo_log(entry.get("log"))
+
+
 def count_in_flight_codex() -> int:
     """Count THIS repo's in-flight loop codex from the local spawn registry."""
-    # Refactor (iter4/spawn-codex-pid-registry):
-    #   Old pattern: process-table command parsing for spawn-codex.sh with REPO_ROOT scoping.
-    #   New principle: ls $REPO_ROOT/.refactor-loop/spawned/*.pid — self-maintained per-repo registry.
+    # Refactor (iter4/issue52-r1):
+    #   Old pattern: monitor 用 ps grep | grep REPO_ROOT 计 in-flight codex(false-positive 跨 host project)
+    #   New principle: spawn-codex.sh 自维护 PID registry,monitor / router 读 .refactor-loop/spawned/*.pid 校验,本仓库脚本闭环
     if not SPAWNED_DIR.exists():
         return 0
-    return len(list(SPAWNED_DIR.glob("*.pid")))
+    return sum(1 for path in SPAWNED_DIR.glob("*.pid") if _registry_entry_alive(path))
 
 
 def list_auto_loop_issues() -> list[dict]:

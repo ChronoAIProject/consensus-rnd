@@ -103,23 +103,31 @@ BANNER="SPAWN: prompt=$PROMPT log=$LOG cd=$CD stall=${STALL}s${MODEL:+ model=$MO
 echo "$BANNER" >&2
 echo "$BANNER" >> "$LOG"
 
-# Refactor (iter4/spawn-codex-pid-registry):
-#   Old pattern: 依赖外部 ps -eo command | grep spawn-codex.sh + abs path prefix-match REPO_ROOT 数本仓库 codex(跨仓库假阳/假阴).
-#   New principle: spawn-codex.sh 自己 mkdir + 写 .refactor-loop/spawned/<task-id>.pid,trap EXIT 清理,concurrency 直接 ls 计数。
+# Refactor (iter4/issue52-r1):
+#   Old pattern: monitor 用 ps grep | grep REPO_ROOT 计 in-flight codex(false-positive 跨 host project)
+#   New principle: spawn-codex.sh 自维护 PID registry,monitor / router 读 .refactor-loop/spawned/*.pid 校验,本仓库脚本闭环
 SPAWNED_DIR="${REPO_ROOT}/.refactor-loop/spawned"
 mkdir -p "$SPAWNED_DIR"
 TASK_ID="$(basename "$LOG" .log)"
 REG_FILE="$SPAWNED_DIR/${TASK_ID}.pid"
-{
-  echo "pid=$$"
-  echo "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL"
-  echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} > "$REG_FILE"
+ABS_LOG="$(cd "$(dirname "$LOG")" && pwd -P)/$(basename "$LOG")"
+ABS_REPO_ROOT="$(cd "$REPO_ROOT" && pwd -P)"
 
 cleanup_spawned() {
   rm -f "$REG_FILE"
 }
 trap cleanup_spawned EXIT INT TERM
+
+write_spawned_registry() {
+  local child_pid="$1"
+  {
+    echo "pid=$child_pid"
+    echo "repo_root=$ABS_REPO_ROOT"
+    echo "log=$ABS_LOG"
+    echo "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL"
+    echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$REG_FILE"
+}
 
 # Standard args:
 # - --dangerously-bypass-approvals-and-sandbox: required for unattended mode (caller-supplied authorization).
@@ -165,6 +173,7 @@ else
   exit 127
 fi
 CHILD=$!
+write_spawned_registry "$CHILD"
 LAST_SIZE=$(log_size)
 LAST_OUTPUT_AT=$(date +%s)
 STALLED=0
@@ -176,7 +185,15 @@ cleanup_child() {
   fi
   cleanup_spawned
 }
-trap cleanup_child INT TERM HUP EXIT
+terminate_child() {
+  local status="$1"
+  cleanup_child
+  exit "$status"
+}
+trap cleanup_child EXIT
+trap 'terminate_child 130' INT
+trap 'terminate_child 143' TERM
+trap 'terminate_child 129' HUP
 
 while kill -0 "$CHILD" 2>/dev/null; do
   sleep 1

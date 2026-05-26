@@ -1529,51 +1529,6 @@ class RepoLocalDetectionTests(unittest.TestCase):
     def rel_paths(self, *patterns: str) -> list[Path]:
         return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
 
-    # Refactor (iter4/spawn-codex-pid-registry):
-    #   Old pattern: spawn detection lived outside spawn-codex.sh in process-table grep callers.
-    #   New principle: spawn-codex.sh owns .refactor-loop/spawned/<task-id>.pid lifecycle via trap cleanup.
-    def test_spawn_codex_writes_local_pid_registry(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            repo = root / "repo"
-            repo.mkdir()
-            log = repo / ".refactor-loop" / "logs" / "fix-pr44-round-2.log"
-            script = root / "registry-smoke.sh"
-            script.write_text(
-                """#!/usr/bin/env bash
-set -euo pipefail
-REPO_ROOT="$1"
-CD="$REPO_ROOT"
-PROMPT="$REPO_ROOT/.refactor-loop/prompts/fix.md"
-LOG="$REPO_ROOT/.refactor-loop/logs/fix-pr44-round-2.log"
-STALL=30
-mkdir -p "$(dirname "$PROMPT")" "$(dirname "$LOG")"
-touch "$PROMPT" "$LOG"
-SPAWNED_DIR="${REPO_ROOT}/.refactor-loop/spawned"
-mkdir -p "$SPAWNED_DIR"
-TASK_ID="$(basename "$LOG" .log)"
-REG_FILE="$SPAWNED_DIR/${TASK_ID}.pid"
-{
-  echo "pid=$$"
-  echo "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL"
-  echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-} > "$REG_FILE"
-cleanup_spawned() {
-  rm -f "$REG_FILE"
-}
-trap cleanup_spawned EXIT INT TERM
-test -f "$REG_FILE"
-grep -q "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL" "$REG_FILE"
-""",
-                encoding="utf-8",
-            )
-            script.chmod(0o755)
-
-            result = subprocess.run([str(script), str(repo)], capture_output=True, text=True, check=False)
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertFalse((repo / ".refactor-loop" / "spawned" / "fix-pr44-round-2.pid").exists())
-
     def test_concurrency_monitor_counts_spawned_dir_not_ps(self) -> None:
         monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
 
@@ -1581,6 +1536,9 @@ grep -q "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $ST
         self.assertNotIn("pgrep spawn-codex.sh", monitor_text)
         self.assertIn('SPAWNED_DIR = REPO_ROOT / ".refactor-loop" / "spawned"', monitor_text)
         self.assertIn('SPAWNED_DIR.glob("*.pid")', monitor_text)
+        self.assertIn("def _registry_entry_alive", monitor_text)
+        self.assertIn("os.kill(pid, 0)", monitor_text)
+        self.assertIn("log_path.relative_to(repo_root)", monitor_text)
 
     def test_no_active_script_uses_ps_grep_for_daemon_name(self) -> None:
         checked = self.rel_paths(
@@ -1606,6 +1564,10 @@ grep -q "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $ST
 
         self.assertIn(".refactor-loop/spawned/", reference_text)
         self.assertIn("task-id.pid", reference_text)
+        self.assertIn("### Spawned PID registry schema(per #52)", reference_text)
+        self.assertIn("pid=<child-codex-pid>", reference_text)
+        self.assertIn("repo_root=<absolute-REPO_ROOT>", reference_text)
+        self.assertIn("log=<absolute-log-path-under-REPO_ROOT>", reference_text)
         self.assertIn(".refactor-loop/heartbeats/<daemon>.ts", reference_text)
         self.assertIn("mtime", reference_text)
 
@@ -1617,6 +1579,45 @@ grep -q "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $ST
 
         self.assertTrue("heartbeat-mtime" in docs or "90s" in docs)
         self.assertIn("**不**用 ps grep", docs)
+
+
+class SpawnCodexPidRegistryContractTests(unittest.TestCase):
+    """Paragraph-anchored source regressions for PR #52 spawn PID registry."""
+
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def test_skill_named_exception_documents_spawn_codex_pid_registry(self) -> None:
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        title = "## Named runtime exception — spawn-codex PID self-registry(per #52)"
+        self.assertIn(title, skill_text)
+        section = skill_text[skill_text.index(title): skill_text.index("## Concurrency Floor", skill_text.index(title))]
+        for token in ("Narrow allowlist", "Host-agnostic", "No lifecycle authority", "Behavior tests", "Source-regression"):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
+    def test_reference_documents_spawned_pid_registry_schema(self) -> None:
+        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        title = "### Spawned PID registry schema(per #52)"
+        self.assertIn(title, reference_text)
+        section = reference_text[reference_text.index(title): reference_text.index("### Controller 主链路 wake 源不变量", reference_text.index(title))]
+        for token in (
+            "$REPO_ROOT/.refactor-loop/spawned/<log-stem>.pid",
+            "pid=<child-codex-pid>",
+            "repo_root=<absolute-REPO_ROOT>",
+            "log=<absolute-log-path-under-REPO_ROOT>",
+            "pid` is alive",
+            "log` resolves under the current `$REPO_ROOT`",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
+    def test_maintainer_directive_artifact_exists_with_quotes(self) -> None:
+        directive = REPO_ROOT.parent.parent / ".refactor-loop" / "runs" / "maintainer-directives" / "2026-05-26-spawn-codex-pid-registry.md"
+        self.assertTrue(directive.exists(), directive)
+        text = directive.read_text(encoding="utf-8")
+        self.assertIn("改一下skills, 是检测方法的问题,用错了脚本", text)
+        self.assertIn("改由数codex, 变成数本仓库的脚本", text)
 
 
 # Refactor (iter3/skill-contract-test-suite):

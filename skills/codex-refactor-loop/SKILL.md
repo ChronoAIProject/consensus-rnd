@@ -229,6 +229,18 @@ Controller non-duties:
 - Do not hide status in local files only.
 - Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Phase 9-authorized phase9_router_daemon.py private ledger plus existing-format pending-event append for narrow deterministic Phase 9 dispatch; do not introduce WorkUnitV2, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
 
+## Named runtime exception — spawn-codex PID self-registry(per #52)
+
+`skills/codex-refactor-loop/scripts/spawn-codex.sh` 加 PID self-registry(`.refactor-loop/spawned/<log-stem>.pid`),供 `concurrency_monitor.py` + `phase9_router_daemon.py` 准确计数本仓库 in-flight codex(替代 cross-repo false-positive 的 `ps grep`):
+
+- **Narrow allowlist**:wrapper 写 child codex PID 文件,trap cleanup 删;reader 校验 PID 活 + log path 含 REPO_ROOT;不读取 codex 进程内部状态、不开关 issue/PR/label。
+- **Host-agnostic**:registry 目录路径相对 `$REPO_ROOT`,无 host fact 注入。
+- **No lifecycle authority**:helper 只 maintain PID file lifecycle;不 spawn 不 kill 不 commit 不 push 不 merge。
+- **Behavior tests**:`test_spawn_codex_pid_registry.sh` 真 PATH→fake codex,断 wrapper 启动期间 pid file 存在 + 退出后清除 + early failure 路径清除。
+- **Source-regression**:test_ensure_project_rules_fixed_points.py 断 SKILL 含本段 + REFERENCE 含 schema。
+
+授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-spawn-codex-pid-registry.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
+
 ## Concurrency Floor
 
 The floor is local because it prevents loop stalls.
