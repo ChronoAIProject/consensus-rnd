@@ -137,21 +137,56 @@ Named exception: this autonomous release gate is host-agnostic and has no lifecy
 
 授权来源:`.refactor-loop/runs/phase9-issue51-r3-judge.md`(Phase 9 r3 3/3 unanimous consensus on C framing)。
 
+## Anti-stop restart helper cron/launchd install(per #49)
+
+`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 5 个既有 daemon 的 singleton+heartbeat wrapper,若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。
+
+Host project cron install one-liner(每 5 min):
+
+```bash
+*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1
+```
+
+launchd host template:
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/bin/bash</string>
+  <string>-lc</string>
+  <string>cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1</string>
+</array>
+<key>StartInterval</key><integer>300</integer>
+```
+
+## Named runtime exception — anti-stop restart helper(per #49)
+
+`skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
+
+- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `triage-monitor`;不 spawn codex / commit / push / merge / label。
+- **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
+- **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn。
+- **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens。
+
+授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-3. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
-4. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
-5. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
-6. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
-7. Post GitHub banner and sync labels for each state transition.
-8. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
-9. Spawn the next codexes with harness background tasks if actionable work exists.
-10. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
-11. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
+3. Before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn, read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+4. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
+5. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
+6. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
+7. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
+8. Post GitHub banner and sync labels for each state transition.
+9. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
+10. Spawn the next codexes with harness background tasks if actionable work exists.
+11. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
+12. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
 
 ## Phase Index
 
@@ -502,6 +537,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [scripts/post_banner.py](scripts/post_banner.py) — GitHub banner posting helper.
 - [scripts/ensure_project_rules_fixed_points.py](scripts/ensure_project_rules_fixed_points.py) — Phase 0 fixed-point helper.
 - [scripts/concurrency_monitor.py](scripts/concurrency_monitor.py) — no-gap sentinel daemon.
+- [scripts/restart-daemons.sh](scripts/restart-daemons.sh) — cron/launchd anti-stop helper for existing daemon wrappers.
 - [scripts/codex-progress-reporter.sh](scripts/codex-progress-reporter.sh) — progress comment daemon.
 - [scripts/comment-monitor.sh](scripts/comment-monitor.sh) — maintainer comment monitor.
 - [scripts/dev_sync_daemon.py](scripts/dev_sync_daemon.py) — integration sync daemon.
