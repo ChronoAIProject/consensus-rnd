@@ -295,5 +295,119 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.assertNotIn(" -c ", line)
 
 
+class StatuslineDaemonHealthTests(unittest.TestCase):
+    """Producer side of the statusline daemon-health extension.
+
+    Daemon heartbeat staleness is collected by concurrency_monitor and surfaced
+    in the snapshot, so the consumer (statusline.sh) does not need to enumerate
+    daemons itself. Discovery is dynamic via heartbeat file presence.
+    """
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.old_env = os.environ.copy()
+        os.environ["REPO_ROOT"] = str(self.repo)
+        os.environ["CODEX_FLOOR"] = "2"
+        sys.path.insert(0, str(SCRIPT_DIR))
+        import concurrency_monitor
+
+        self.monitor = importlib.reload(concurrency_monitor)
+        self.heartbeats = self.repo / ".refactor-loop" / "heartbeats"
+        self.heartbeats.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.old_env)
+        try:
+            sys.path.remove(str(SCRIPT_DIR))
+        except ValueError:
+            pass
+        self.tmp.cleanup()
+
+    def _write_heartbeat(self, name: str, age_seconds: int, now: float) -> None:
+        (self.heartbeats / f"{name}.ts").write_text(str(int(now - age_seconds)))
+
+    def test_read_daemon_heartbeats_fresh_is_not_stale(self) -> None:
+        now = 1_000_000.0
+        self._write_heartbeat("concurrency_monitor", 10, now)
+        result = self.monitor.read_daemon_heartbeats(now=now)
+        self.assertEqual(result["concurrency_monitor"]["age_seconds"], 10)
+        self.assertFalse(result["concurrency_monitor"]["stale"])
+
+    def test_read_daemon_heartbeats_old_is_stale(self) -> None:
+        now = 1_000_000.0
+        self._write_heartbeat("dev_sync_daemon", 200, now)
+        result = self.monitor.read_daemon_heartbeats(now=now)
+        self.assertTrue(result["dev_sync_daemon"]["stale"])
+        self.assertEqual(result["dev_sync_daemon"]["age_seconds"], 200)
+
+    def test_read_daemon_heartbeats_malformed_is_stale(self) -> None:
+        (self.heartbeats / "comment-monitor.ts").write_text("not-a-number\n")
+        result = self.monitor.read_daemon_heartbeats(now=1_000_000.0)
+        self.assertTrue(result["comment-monitor"]["stale"])
+        self.assertIsNone(result["comment-monitor"]["age_seconds"])
+
+    def test_read_daemon_heartbeats_missing_dir_returns_empty(self) -> None:
+        # Wipe heartbeats dir; ensure no crash and empty result.
+        import shutil
+
+        shutil.rmtree(self.heartbeats)
+        self.assertEqual(self.monitor.read_daemon_heartbeats(now=1_000_000.0), {})
+
+    def test_read_daemon_heartbeats_discovers_dynamically(self) -> None:
+        # New daemon name not in any hard-coded list should appear automatically.
+        now = 1_000_000.0
+        self._write_heartbeat("future_daemon", 5, now)
+        result = self.monitor.read_daemon_heartbeats(now=now)
+        self.assertIn("future_daemon", result)
+
+    def test_snapshot_includes_daemons_map_and_counts(self) -> None:
+        from datetime import datetime, timezone
+
+        now_dt = datetime(2026, 5, 26, 19, 0, 0, tzinfo=timezone.utc)
+        now_ts = now_dt.timestamp()
+        self._write_heartbeat("concurrency_monitor", 5, now_ts)
+        self._write_heartbeat("comment-monitor", 5, now_ts)
+        self._write_heartbeat("dev_sync_daemon", 300, now_ts)  # stale
+        self.monitor.write_statusline_snapshot(
+            actual=7,
+            expected=5,
+            p0_streak=0,
+            last_p0_at=None,
+            open_pr_count=2,
+            open_issue_count=4,
+            now=now_dt,
+        )
+        snap_path = self.repo / ".refactor-loop" / "state" / "statusline-snapshot.json"
+        payload = json.loads(snap_path.read_text())
+        self.assertEqual(payload["daemons_total"], 3)
+        self.assertEqual(payload["daemons_healthy"], 2)
+        self.assertIn("daemons", payload)
+        self.assertTrue(payload["daemons"]["dev_sync_daemon"]["stale"])
+        self.assertFalse(payload["daemons"]["concurrency_monitor"]["stale"])
+
+    def test_snapshot_with_no_heartbeats_writes_empty_daemons(self) -> None:
+        from datetime import datetime, timezone
+
+        # Ensure no heartbeats present.
+        for hb in self.heartbeats.glob("*.ts"):
+            hb.unlink()
+        self.monitor.write_statusline_snapshot(
+            actual=3,
+            expected=3,
+            p0_streak=0,
+            last_p0_at=None,
+            open_pr_count=0,
+            open_issue_count=0,
+            now=datetime(2026, 5, 26, 19, 0, 0, tzinfo=timezone.utc),
+        )
+        snap_path = self.repo / ".refactor-loop" / "state" / "statusline-snapshot.json"
+        payload = json.loads(snap_path.read_text())
+        self.assertEqual(payload["daemons"], {})
+        self.assertEqual(payload["daemons_total"], 0)
+        self.assertEqual(payload["daemons_healthy"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

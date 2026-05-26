@@ -68,6 +68,8 @@ GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
 STATUSLINE_SNAPSHOT = REPO_ROOT / ".refactor-loop" / "state" / "statusline-snapshot.json"
+HEARTBEATS_DIR = REPO_ROOT / ".refactor-loop" / "heartbeats"
+HEARTBEAT_STALE_SECONDS = 90
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 DISPATCH_QUEUE = REPO_ROOT / ".refactor-loop" / "dispatch-queue"
 DISPATCH_DISPATCHED = REPO_ROOT / ".refactor-loop" / "dispatch-dispatched"
@@ -163,6 +165,32 @@ def freeze_minutes(now: float | None = None) -> int:
     return max(0, int((now - marker_at) / 60))
 
 
+def read_daemon_heartbeats(now: float | None = None) -> dict[str, dict]:
+    """Discover heartbeat files and report age/stale per daemon.
+
+    Each `.ts` file under HEARTBEATS_DIR is treated as one daemon. The file name
+    minus `.ts` is the daemon key. A missing/malformed/empty file is reported
+    as `stale=True` with `age_seconds=None`. Discovery is dynamic so adding a
+    new daemon that writes a heartbeat is automatically surfaced; no caller
+    list to keep in sync.
+    """
+    if now is None:
+        now = time.time()
+    result: dict[str, dict] = {}
+    if not HEARTBEATS_DIR.exists():
+        return result
+    for hb in sorted(HEARTBEATS_DIR.glob("*.ts")):
+        name = hb.stem
+        try:
+            raw = hb.read_text(encoding="utf-8").strip()
+            ts = int(raw)
+            age = max(0, int(now - ts))
+            result[name] = {"age_seconds": age, "stale": age >= HEARTBEAT_STALE_SECONDS}
+        except (OSError, ValueError):
+            result[name] = {"age_seconds": None, "stale": True}
+    return result
+
+
 def write_statusline_snapshot(
     *,
     actual: int,
@@ -171,11 +199,15 @@ def write_statusline_snapshot(
     last_p0_at: str | None,
     open_pr_count: int,
     open_issue_count: int,
+    daemons: dict[str, dict] | None = None,
     now: datetime | None = None,
 ) -> None:
     """Write the Claude Code statusline snapshot atomically."""
     if now is None:
         now = datetime.now(timezone.utc)
+    if daemons is None:
+        daemons = read_daemon_heartbeats(now=now.timestamp())
+    healthy = sum(1 for d in daemons.values() if not d["stale"])
     payload = {
         "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "actual": actual,
@@ -186,6 +218,9 @@ def write_statusline_snapshot(
         "freeze_minutes": freeze_minutes(now.timestamp()),
         "open_pr_count": open_pr_count,
         "open_issue_count": open_issue_count,
+        "daemons": daemons,
+        "daemons_healthy": healthy,
+        "daemons_total": len(daemons),
     }
     STATUSLINE_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATUSLINE_SNAPSHOT.with_name(f".{STATUSLINE_SNAPSHOT.name}.tmp.{os.getpid()}")
