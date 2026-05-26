@@ -111,11 +111,11 @@ Named exception: this autonomous release gate is host-agnostic and has no lifecy
 
 ## Claude Code statusline(per #51 consensus)
 
-`skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、P0 streak、freeze 指示)。
+`skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
 
-**Producer**:`concurrency_monitor.py` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。
+**Producer**:`concurrency_monitor.py` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。Snapshot 包含 `daemons` map(扫 `.refactor-loop/heartbeats/*.ts` 动态发现,每条记 `age_seconds` + `stale`,stale 阈值 90s)+ 汇总 `daemons_healthy` / `daemons_total`。
 
-**Consumer**:`statusline.sh` 读 snapshot,bash + jq < 200ms。
+**Consumer**:`statusline.sh` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`。
 
 **Install**(host project,**手动一行,无 installer script**):
 
@@ -129,10 +129,10 @@ Named exception: this autonomous release gate is host-agnostic and has no lifecy
 **Uninstall**:删 `statusLine` 字段即可。
 
 **Named runtime exception(per #51 consensus)**:
-- **Narrow allowlist**:concurrency_monitor 加一行 snapshot write;不增其他 producer 职责;不引入新 daemon。
-- **Host-agnostic**:snapshot schema 不含 host fact;statusline.sh 不假设 host repo 结构(只依赖 $REPO_ROOT)。
+- **Narrow allowlist**:concurrency_monitor 写 snapshot + 顺手 stat `heartbeats/*.ts` 汇总 daemon 健康;不引入新 daemon、不持 lifecycle authority、不读 prompt body。
+- **Host-agnostic**:snapshot schema 不含 host fact;daemon 发现按 heartbeat 文件 glob,无 hard-coded daemon 列表;statusline.sh 不假设 host repo 结构(只依赖 $REPO_ROOT)。
 - **No lifecycle authority**:statusline 只 read,不写 GitHub / git / file lifecycle。
-- **Behavior tests**:`test_statusline.sh` < 200ms + 各 state icon + freeze 指示。
+- **Behavior tests**:`test_statusline.sh` < 200ms + 各 state icon + freeze 指示 + daemon health 显示;`test_concurrency_monitor.py::SnapshotDaemonHealthFieldTests` 覆盖 fresh / stale / malformed / missing-dir / 动态发现 / snapshot 字段。
 - **Source-regression**:本段 + Named exception 子段 + install one-liner。
 
 授权来源:`.refactor-loop/runs/phase9-issue51-r3-judge.md`(Phase 9 r3 3/3 unanimous consensus on C framing)。

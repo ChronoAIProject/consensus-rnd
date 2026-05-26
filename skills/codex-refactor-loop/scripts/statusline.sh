@@ -28,10 +28,16 @@ p0=$(jq -r '.p0_streak' "$SNAPSHOT")
 prs=$(jq -r '.open_pr_count' "$SNAPSHOT")
 issues=$(jq -r '.open_issue_count' "$SNAPSHOT")
 freeze=$(jq -r '.freeze_minutes' "$SNAPSHOT")
+d_healthy=$(jq -r '.daemons_healthy // 0' "$SNAPSHOT")
+d_total=$(jq -r '.daemons_total // 0' "$SNAPSHOT")
 
 icon="⚙"
 color=""
 if [ "$actual" -lt "$floor" ]; then
+  icon="⚠"
+  color="\033[31m"
+fi
+if [ "$d_total" -gt 0 ] && [ "$d_healthy" -lt "$d_total" ]; then
   icon="⚠"
   color="\033[31m"
 fi
@@ -49,5 +55,9 @@ p0_seg=""
 if [ "$p0" -gt 2 ]; then
   p0_seg=" P0×${p0}"
 fi
+d_seg=""
+if [ "$d_total" -gt 0 ]; then
+  d_seg=" d:${d_healthy}/${d_total}"
+fi
 
-printf "${color}${icon} ${actual}/${floor} PR:${prs} issue:${issues}${p0_seg}${freeze_seg}${reset}\n"
+printf "${color}${icon} ${actual}/${floor} PR:${prs} issue:${issues}${d_seg}${p0_seg}${freeze_seg}${reset}\n"
