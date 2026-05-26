@@ -1963,6 +1963,10 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
         self.assertIn("host-agnostic", text)
         self.assertIn("no lifecycle authority", text)
 
+    def test_skill_documents_fail_closed_release_gate(self) -> None:
+        text = self.read_skill()
+        self.assertIn("fail-closed", text)
+
 
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.

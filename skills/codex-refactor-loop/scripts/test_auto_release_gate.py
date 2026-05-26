@@ -91,24 +91,34 @@ def write_opt_in(
     )
 
 
-def write_gh_stub(bin_dir: Path) -> None:
+def write_gh_stub(
+    bin_dir: Path,
+    *,
+    run_conclusions: dict[str, str] | None = None,
+    labeled_items: dict[str, list[dict[str, int]]] | None = None,
+) -> None:
+    run_conclusions = run_conclusions or {}
+    labeled_items = labeled_items or {}
     gh = bin_dir / "gh"
     gh.write_text(
-        """#!/usr/bin/env python3
+        f"""#!/usr/bin/env python3
 import json
 import sys
 from datetime import datetime, timezone
 
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 args = sys.argv[1:]
+run_conclusions = {json.dumps(run_conclusions, ensure_ascii=False)}
+labeled_items = {json.dumps(labeled_items, ensure_ascii=False)}
 if args[:3] == ["run", "list", "--branch"]:
     print(json.dumps([
-        {"databaseId": 1, "createdAt": now, "conclusion": "success", "status": "completed", "name": "contract-tests"},
-        {"databaseId": 2, "createdAt": now, "conclusion": "success", "status": "completed", "name": "manifest-version-sync"},
+        {{"databaseId": 1, "createdAt": now, "conclusion": run_conclusions.get("contract-tests", "success"), "status": "completed", "name": "contract-tests"}},
+        {{"databaseId": 2, "createdAt": now, "conclusion": run_conclusions.get("manifest-version-sync", "success"), "status": "completed", "name": "manifest-version-sync"}},
     ]))
     raise SystemExit(0)
 if len(args) >= 2 and args[1] == "list":
-    print("[]")
+    label = args[args.index("--label") + 1] if "--label" in args else ""
+    print(json.dumps(labeled_items.get(label, [])))
     raise SystemExit(0)
 print("[]")
 """,
@@ -155,7 +165,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py"))],
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -218,6 +228,112 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertIn("min_interval", decision["blocked_reasons"])
             self.assertEqual(decision["from_version"], decision["to_version"])
 
+    def test_fail_closed_when_required_check_red(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir, run_conclusions={"contract-tests": "failure"})
+            env = {
+                **os.environ,
+                "REPO_ROOT": str(repo),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            }
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("required_checks_recent_green", result.stdout)
+            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            score = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(score.returncode, 0, score.stderr)
+            summary = json.loads(score.stdout[score.stdout.index("{"):])
+            self.assertFalse(summary["stability"]["ready"])
+            self.assertIn("ci_red", summary["stability"]["signals"]["required_checks_recent_green"]["reason"])
+
+    def test_fail_closed_when_blocked_or_human_label_present(self) -> None:
+        cases = (
+            ("⏸️ phase:blocked", "no_open_blocked_pr"),
+            ("👤 human:需-maintainer-决策", "no_human_decision_label"),
+        )
+        for label, signal_name in cases:
+            with self.subTest(label=label):
+                with copy_repo_fixture() as tmp:
+                    repo = Path(tmp) / "repo"
+                    write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+                    write_live_state(repo)
+                    bin_dir = repo / "bin"
+                    bin_dir.mkdir()
+                    write_gh_stub(bin_dir, labeled_items={label: [{"number": 58}]})
+                    env = {
+                        **os.environ,
+                        "REPO_ROOT": str(repo),
+                        "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                    }
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                        cwd=repo,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(signal_name, result.stdout)
+                    self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+                    score = subprocess.run(
+                        [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only", "--min-recent-merges", "0"],
+                        cwd=repo,
+                        env=env,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    self.assertEqual(score.returncode, 0, score.stderr)
+                    summary = json.loads(score.stdout[score.stdout.index("{"):])
+                    self.assertFalse(summary["stability"]["ready"])
+                    signal = summary["stability"]["signals"][signal_name]
+                    self.assertIn("label_present", json.dumps(signal, ensure_ascii=False))
+                    self.assertIn(label, json.dumps(signal, ensure_ascii=False))
+
+    def test_fail_closed_when_daemon_heartbeat_stale(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            stale = (NOW - timedelta(seconds=91)).isoformat().replace("+00:00", "Z")
+            state = repo / ".refactor-loop/state"
+            write_json(state / "daemon-heartbeats.json", {name: stale for name in (
+                "concurrency_monitor.py",
+                "codex-progress-reporter.sh",
+                "comment-monitor.sh",
+                "dev_sync_daemon.py",
+                "triage-monitor.sh",
+                "phase9_router_daemon.py",
+            )})
+            write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
+            write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
+            write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 0})
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+            score = gate.compute_stability(min_recent_merges=0)
+
+            self.assertFalse(score.ready)
+            self.assertIn("heartbeat_stale", score.signals["fresh_heartbeats"]["reason"])
+
     def test_dry_run_writes_decision_no_bump(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -226,7 +342,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             before = (repo / "package.json").read_text(encoding="utf-8")
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py"))],
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -262,6 +378,22 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
 
+    def test_signal_failure_reason_includes_signal_name(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_green_signals(repo)
+            data = read_json(repo / ".refactor-loop/state/auto-release-signals.json")
+            assert isinstance(data, dict)
+            data["signals"]["p0_alert_streak_ok"] = {"passed": False, "reason": "p0_alert_streak_ok"}
+            write_json(repo / ".refactor-loop/state/auto-release-signals.json", data)
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+            decision = gate.decide_release(gate.compute_stability(), min_interval_hours=2)
+
+            self.assertFalse(decision["ready"])
+            self.assertLess(decision["stability_score"], 100)
+            self.assertIn("p0_alert_streak_ok", decision["signals"])
+            self.assertEqual(decision["signals"]["p0_alert_streak_ok"]["reason"], "p0_alert_streak_ok")
+
     def test_live_stability_collector_path_without_fixtures(self) -> None:
         """Without signal monkey-patching, exercise the live collector path end-to-end."""
         with copy_repo_fixture() as tmp:
@@ -282,7 +414,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py"))],
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,

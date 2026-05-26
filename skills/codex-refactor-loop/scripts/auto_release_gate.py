@@ -38,6 +38,7 @@ DAEMON_NAMES = (
     "triage-monitor.sh",
     "phase9_router_daemon.py",
 )
+HEARTBEAT_FRESH_SECONDS = 90
 
 
 @dataclass(frozen=True)
@@ -257,6 +258,7 @@ class AutoReleaseGate:
         branches = (review_base, integration)
         print(f"check branches: {review_base}, {integration}")
         evidence: dict[str, Any] = {}
+        red_checks: list[dict[str, str]] = []
         for branch in branches:
             result = self.runner(
                 [
@@ -280,16 +282,26 @@ class AutoReleaseGate:
                 return {"passed": False, "reason": f"invalid gh JSON for {branch}", "source": "gh"}
             branch_evidence: dict[str, bool] = {}
             for check in required:
-                branch_evidence[check] = any(
-                    run.get("name") == check
+                recent_runs = [
+                    run for run in runs
+                    if run.get("name") == check
                     and run.get("status") == "completed"
-                    and run.get("conclusion") == "success"
                     and (parse_time(run.get("createdAt")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
-                    for run in runs
+                ]
+                for run in recent_runs:
+                    conclusion = str(run.get("conclusion") or "")
+                    if conclusion and conclusion != "success":
+                        red_checks.append({"branch": branch, "name": check, "conclusion": conclusion})
+                branch_evidence[check] = any(
+                    run.get("conclusion") == "success"
+                    for run in recent_runs
                 )
             evidence[branch] = branch_evidence
+        if red_checks:
+            return {"passed": False, "reason": "ci_red", "red_checks": red_checks, "branches": evidence, "source": "gh"}
         passed = all(all(checks.values()) for checks in evidence.values())
-        return {"passed": passed, "branches": evidence, "source": "gh"}
+        reason = None if passed else "missing_required_checks_recent_green"
+        return {"passed": passed, "reason": reason, "branches": evidence, "source": "gh"}
 
     def no_label_on_open_prs(self, label: str) -> dict[str, Any]:
         return self.no_label("pr", label)
@@ -315,7 +327,9 @@ class AutoReleaseGate:
             items = json.loads(result.stdout)
         except json.JSONDecodeError:
             return {"passed": False, "reason": f"invalid gh JSON for {kind}", "source": "gh"}
-        return {"passed": len(items) == 0, "count": len(items), "label": label, "source": "gh"}
+        passed = len(items) == 0
+        reason = None if passed else f"label_present:{label}"
+        return {"passed": passed, "reason": reason, "count": len(items), "label": label, "source": "gh"}
 
     def no_phase8_reject_churn(self) -> dict[str, Any]:
         state = load_json(self.state_dir / "phase8-review-state.json", {})
@@ -347,8 +361,10 @@ class AutoReleaseGate:
         fresh: dict[str, bool] = {}
         for name in DAEMON_NAMES:
             heartbeat = parse_time(raw.get(name)) if isinstance(raw, dict) else None
-            fresh[name] = bool(heartbeat and now - heartbeat <= timedelta(minutes=5))
-        return {"passed": sum(1 for ok in fresh.values() if ok) >= 5, "heartbeats": fresh, "source": "state"}
+            fresh[name] = bool(heartbeat and now - heartbeat <= timedelta(seconds=HEARTBEAT_FRESH_SECONDS))
+        passed = sum(1 for ok in fresh.values() if ok) >= 5
+        reason = None if passed else "heartbeat_stale"
+        return {"passed": passed, "reason": reason, "heartbeats": fresh, "source": "state"}
 
     def no_unresolved_human_escalation(self) -> dict[str, Any]:
         raw = load_json(self.state_dir / "meta-resolutions.json", {})
@@ -567,8 +583,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         decision = gate.decide_release(stability, args.min_interval_hours)
-        write_json(gate.decision_path, decision)
         print_summary(decision)
+        if not decision.get("ready"):
+            return 0
+        write_json(gate.decision_path, decision)
         if args.apply:
             gate.apply_release(decision)
             print(f"auto-release applied: {decision['to_version']}")
