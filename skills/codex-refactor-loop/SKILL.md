@@ -154,7 +154,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 with new framing. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
-| `META_RESOLVED:escalate-human:<reason>` | Only then label `👤 human:需-maintainer-决策` and post reason banner. |
+| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` and post reason banner if not skipped by maintainer-directive. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Phase 8 reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Phase 9 depending on reason. |
 | Latest complete Phase 8 reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
@@ -292,6 +292,23 @@ Human labels:
 | `🤖 human:auto-推进` | Fully automatic; no maintainer action needed. |
 | `👤 human:需-maintainer-决策` | Meta-layer exhausted or explicit maintainer decision needed. |
 
+## `👤 human:需-maintainer-决策` 严格语义(强制)
+
+# Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+
+**Apply only when** maintainer must physically perform an action:
+- product/strategy decision that cannot be derived from code/repo
+- explicit governance approval(Tier I/II,non-codable)
+- manual merge a script cannot execute(rare)
+
+**DO NOT apply when**:
+- architect/quality reviewer 因 "needs Phase 9 artifact" reject → 开真 Phase 9(reflector option A)
+- reviewer 与 maintainer prior session directive 冲突 → 把 directive 编码为 `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` artifact + 更新 reviewer prompts 含 "maintainer-directive precedence" 段
+- controller uncertain → reflector,不 label
+- reflector 自己 emit `META_RESOLVED:escalate-human` 但 controller 复审发现 maintainer 已授权 → 撤 label,以 maintainer-directive artifact 替代
+
+**禁止**:把 `👤` label 作 architect/quality reject 的绕路工具。
+
 Hard label rules:
 
 1. Label transition and banner post happen together.
@@ -409,6 +426,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [prompts/verify.md](prompts/verify.md) — verify worker prompt.
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — remote CI fix prompt.
 - [prompts/test-add.md](prompts/test-add.md) — codecov/test-add prompt.
+- [prompts/meta-reflector-stalled.md](prompts/meta-reflector-stalled.md) — meta-reflector self-check prompt for stalled routes.
 - [prompts/design-issue-body.md](prompts/design-issue-body.md) — design issue body template.
 - [prompts/design-issue-reply.md](prompts/design-issue-reply.md) — maintainer-comment analyst prompt.
 - [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Phase 8 architecture reviewer.
