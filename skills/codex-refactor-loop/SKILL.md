@@ -81,7 +81,7 @@ Host config rules:
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
-## Autonomous release gate(per #56 consensus)
+## Named runtime exception — autonomous release gate(per #56)
 
 The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: autonomous release decision after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
 

@@ -2062,7 +2062,7 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
     def autonomous_release_gate_section(self) -> str:
         text = self.read_skill()
         match = re.search(
-            r"## Autonomous release gate\(per #56 consensus\)(.*?)\n## Wakeup Skeleton",
+            r"## Named runtime exception — autonomous release gate\(per #56\)(.*?)\n## Wakeup Skeleton",
             text,
             flags=re.S,
         )
@@ -2071,7 +2071,7 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
         return match.group(1)
 
     def test_skill_documents_autonomous_release_gate_title(self) -> None:
-        self.assertIn("## Autonomous release gate(per #56 consensus)", self.read_skill())
+        self.assertIn("## Named runtime exception — autonomous release gate(per #56)", self.read_skill())
 
     def test_skill_documents_opt_in_gate_literal(self) -> None:
         text = self.read_skill()
