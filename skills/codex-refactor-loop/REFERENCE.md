@@ -16,7 +16,7 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 
 | Signal key | Pass condition |
 |---|---|
-| `required_checks_recent_green` | `contract-tests` and `manifest-version-sync` completed successfully on both `dev` and `auto-refact-dev` within two hours. |
+| `required_checks_recent_green` | `contract-tests` and `manifest-version-sync` completed successfully on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours. |
 | `no_open_blocked_pr` | No open PR has `⏸️ phase:blocked`. |
 | `no_human_decision_label` | No open issue or PR has `👤 human:需-maintainer-决策`. |
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
