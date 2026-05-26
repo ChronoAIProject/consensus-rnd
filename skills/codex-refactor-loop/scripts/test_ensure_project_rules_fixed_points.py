@@ -2012,44 +2012,6 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
 
 
-class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
-    """#54 r2 consensus 守护 paragraph-scoped 不被任何 future PR 偷扩。"""
-
-    @staticmethod
-    def _paragraph_containing(needle: str) -> str:
-        text = (REPO_ROOT / "CLAUDE.md").read_text()
-        paragraphs = re.split(r"\n\s*\n", text)
-        return next(p for p in paragraphs if needle in p)
-
-    def test_maintainer_directive_equivalence_paragraph_has_scope(self):
-        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
-        for term in ("audit-derived", "requires_design=false", "机械型 hygiene 批次",
-                     "maintainer-directive artifact", "Phase 9 deep consensus 等价证明"):
-            self.assertIn(term, p)
-
-    def test_maintainer_directive_equivalence_paragraph_pins_constraints(self):
-        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
-        for term in ("host-agnostic", "源回归测试", "Refactor (iterN/cluster):",
-                     "Old pattern:", "New principle:", "FIX_REPORT", "fixed", "already addressed", "blocked"):
-            self.assertIn(term, p)
-
-    def test_maintainer_directive_equivalence_paragraph_pins_negative_boundaries(self):
-        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
-        for term in ("merge gate", "CI/release policy", "语言 policy",
-                     "lifecycle authority", "Tier I/II", "`CLAUDE.md` 修宪"):
-            self.assertIn(term, p)
-
-    def test_no_standalone_audit_derived_authority_paragraph(self):
-        """断不存在另一独立 paragraph 含 audit-derived 但**不**含 maintainer-directive 路径,
-        且含授权/等价证明等 term — 防 future PR 偷开 standalone audit-derived 自授权。"""
-        text = (REPO_ROOT / "CLAUDE.md").read_text()
-        paragraphs = re.split(r"\n\s*\n", text)
-        for p in paragraphs:
-            if ("audit-derived" in p or "requires_design=false" in p) and ".refactor-loop/runs/maintainer-directives/" not in p:
-                for forbidden in ("授权", "等价证明", "pre-authorized", "无需逐项 Phase 9"):
-                    self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
-
-
 class AutonomousReleaseGateContractTests(unittest.TestCase):
     """#56 r2 consensus autonomous release gate contract."""
 
@@ -2115,65 +2077,7 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, source)
 
-
-class ScopedNamedSurfaceAuthorizationParagraphTests(unittest.TestCase):
-    """#60 r1 consensus 守护 Phase 9 named runtime surface 授权不被偷扩。"""
-
-    @staticmethod
-    def _paragraph_containing(needle: str) -> str:
-        text = (REPO_ROOT / "CLAUDE.md").read_text()
-        paragraphs = re.split(r"\n\s*\n", text)
-        return next(p for p in paragraphs if needle in p)
-
-    def test_scoped_named_surface_paragraph_has_required_keywords(self):
-        p = self._paragraph_containing("named runtime surface")
-        for term in ("deep consensus", "named runtime surface", "host-agnostic",
-                     "narrow allowlist", "no lifecycle authority", "behavior tests",
-                     "source-regression"):
-            self.assertIn(term, p)
-
-    def test_scoped_named_surface_paragraph_has_negative_boundaries(self):
-        p = self._paragraph_containing("named runtime surface")
-        for term in ("不放宽", "merge gate", "CI/release policy", "语言 policy",
-                     "Tier I/II", "CLAUDE.md 修宪", "独立 PR 自我放行权"):
-            self.assertIn(term, p)
-
-    def test_scoped_named_surface_paragraph_has_lifecycle_authority_carveout(self):
-        p = self._paragraph_containing("named runtime surface")
-        for term in ("release/lifecycle surface 仅产出 durable decision/candidate artifact",
-                     "controller 或 release pipeline", "host opt-in + 有效 artifact"):
-            self.assertIn(term, p)
-
-    def test_no_generic_phase9_authorization_paragraph_exists(self):
-        text = (REPO_ROOT / "CLAUDE.md").read_text()
-        paragraphs = re.split(r"\n\s*\n", text)
-        for p in paragraphs:
-            lowered = p.lower()
-            if ".refactor-loop/runs/maintainer-directives/" in p:
-                continue
-            if "phase 9" in lowered and "授权" in p:
-                with self.subTest(paragraph=p[:80]):
-                    self.assertIn("host-agnostic", p)
-                    self.assertIn("no lifecycle authority", p)
-                    self.assertIn("narrow allowlist", p)
-
-    def test_no_maintainer_directive_used_as_pr_release_or_observability_authorization(self):
-        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
-        forbidden_terms = (
-            "release/lifecycle surface",
-            "release decision-artifact",
-            "release-readiness",
-            "observability surface",
-            "observability per #51",
-            "release decision-artifact per #56",
-            "PR #58",
-            "PR #59",
-        )
-        for term in forbidden_terms:
-            with self.subTest(term=term):
-                self.assertNotIn(term, p)
-
-
+# Refactor (hygiene/634a608-followup): 删 stranded paragraph tests,对应 CLAUDE.md philosophy-only rewrite,段落已不存在
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
