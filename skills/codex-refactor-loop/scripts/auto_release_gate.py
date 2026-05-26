@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # Refactor (iter4/issue56-r2-consensus):
 #   Old pattern: 手动 release pipeline(#32/PR#40 落地),需 maintainer 主动跑
-#   New principle: 自治判稳 + 自决 semver + 自动 bump/push,$RELEASE_AUTO_ENABLE 为一次性 opt-in gate;
+#   New principle: 自治判稳 + 自决 semver + durable decision/candidate artifacts,
+#     $RELEASE_AUTO_ENABLE 为一次性 opt-in gate; lifecycle bump/commit/push 仍由既有 controller/release pipeline 执行;
 #     拒绝 per-release 强制 emoji ratification(per #56 r2 META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate)
 """One-shot autonomous release stability gate."""
 
@@ -130,10 +131,7 @@ def repo_root_from_env() -> Path:
     env_root = os.environ.get("REPO_ROOT")
     if env_root:
         return Path(env_root).expanduser().resolve()
-    result = subprocess.run(["git", "rev-parse", "--show-toplevel"], capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError("REPO_ROOT is unset and git rev-parse --show-toplevel failed")
-    return Path(result.stdout.strip()).resolve()
+    raise RuntimeError("REPO_ROOT is unset; auto_release_gate.py does not infer it with git")
 
 
 class AutoReleaseGate:
@@ -157,8 +155,20 @@ class AutoReleaseGate:
         return self.state_dir / "release-decision.json"
 
     @property
+    def candidate_path(self) -> Path:
+        return self.state_dir / "release-candidate.json"
+
+    @property
     def signal_path(self) -> Path:
         return self.state_dir / "auto-release-signals.json"
+
+    @property
+    def release_commits_path(self) -> Path:
+        return self.state_dir / "release-commits.json"
+
+    @property
+    def recent_merges_path(self) -> Path:
+        return self.state_dir / "recent-pr-merges.json"
 
     def current_version(self) -> str:
         targets = self.load_manifest_targets()
@@ -186,15 +196,6 @@ class AutoReleaseGate:
             parse_semver(version)
             targets.append({"path": path, "relative": relative, "field": field, "data": data, "version": version})
         return targets
-
-    def write_version(self, version: str) -> list[Path]:
-        parse_semver(version)
-        touched: list[Path] = []
-        for target in self.load_manifest_targets():
-            set_field(target["data"], target["field"], version)
-            write_json(target["path"], target["data"])
-            touched.append(target["path"])
-        return touched
 
     def compute_stability(self, min_recent_merges: int = 1) -> StabilityResult:
         raw = load_json(self.signal_path, {})
@@ -349,11 +350,19 @@ class AutoReleaseGate:
         return {"passed": streak <= 3 and recent_lines <= 3, "zero_streak": streak, "recent_p0_alerts": recent_lines, "source": "state"}
 
     def recent_pr_merges_min(self, since: datetime, minimum: int) -> dict[str, Any]:
-        result = self.runner(["git", "log", "--merges", f"--since={isoformat(since)}", "--format=%H"], self.repo_root)
-        if result.returncode != 0:
-            return {"passed": False, "reason": "git log --merges failed", "source": "git"}
-        count = len([line for line in result.stdout.splitlines() if line.strip()])
-        return {"passed": count >= minimum, "count": count, "minimum": minimum, "source": "git"}
+        raw = load_json(self.recent_merges_path, {})
+        count = raw.get("count") if isinstance(raw, dict) else None
+        if count is None and minimum <= 0:
+            count = 0
+        if not isinstance(count, int):
+            return {
+                "passed": False,
+                "reason": "missing_recent_pr_merges_artifact",
+                "minimum": minimum,
+                "since": isoformat(since),
+                "source": "state",
+            }
+        return {"passed": count >= minimum, "count": count, "minimum": minimum, "since": isoformat(since), "source": "state"}
 
     def fresh_heartbeats(self) -> dict[str, Any]:
         raw = load_json(self.state_dir / "daemon-heartbeats.json", {})
@@ -371,44 +380,26 @@ class AutoReleaseGate:
         unresolved = raw.get("unresolved_escalate_human", []) if isinstance(raw, dict) else []
         return {"passed": len(unresolved) == 0, "count": len(unresolved), "source": "state"}
 
-    def latest_release_ref(self) -> str | None:
-        result = self.runner(["git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*", "--sort=-v:refname"], self.repo_root)
-        if result.returncode != 0:
-            return None
-        for line in result.stdout.splitlines():
-            if SEMVER_RE.match(line.removeprefix("v")):
-                return line.strip()
-        return None
-
     def latest_release_time(self) -> datetime | None:
-        times: list[datetime] = []
-        latest_ref = self.latest_release_ref()
-        if latest_ref:
-            result = self.runner(["git", "log", "-1", "--format=%cI", latest_ref], self.repo_root)
-            parsed = parse_time(result.stdout.strip()) if result.returncode == 0 else None
-            if parsed:
-                times.append(parsed)
-        decision = load_json(self.decision_path, {})
-        parsed = parse_time(decision.get("applied_at")) if isinstance(decision, dict) else None
-        if parsed:
-            times.append(parsed)
-        return max(times) if times else None
+        history = load_json(self.state_dir / "release-history.json", {})
+        parsed_history = parse_time(history.get("latest_release_at")) if isinstance(history, dict) else None
+        return parsed_history
 
     def commits_since_latest_release(self) -> list[CommitInfo]:
-        latest_ref = self.latest_release_ref()
-        revision = f"{latest_ref}..HEAD" if latest_ref else "HEAD"
-        result = self.runner(["git", "log", revision, "--format=%H%x00%s%x00%b%x1e"], self.repo_root)
-        if result.returncode != 0:
-            raise RuntimeError("git log failed while reading release commits")
+        raw = load_json(self.release_commits_path, {})
+        raw_commits = raw.get("commits") if isinstance(raw, dict) else None
+        if not isinstance(raw_commits, list):
+            return []
         commits: list[CommitInfo] = []
-        for record in result.stdout.split("\x1e"):
-            record = record.strip("\n")
-            if not record:
+        for item in raw_commits:
+            if not isinstance(item, dict):
                 continue
-            parts = record.split("\x00", 2)
-            if len(parts) != 3:
+            sha = item.get("sha")
+            subject = item.get("subject")
+            body = item.get("body", "")
+            if not isinstance(sha, str) or not isinstance(subject, str) or not isinstance(body, str):
                 continue
-            commits.append(CommitInfo(sha=parts[0], subject=parts[1], body=parts[2]))
+            commits.append(CommitInfo(sha=sha, subject=subject, body=body))
         return commits
 
     def decide_release(self, stability: StabilityResult, min_interval_hours: int) -> dict[str, Any]:
@@ -445,26 +436,29 @@ class AutoReleaseGate:
             "elapsed_seconds": int(elapsed.total_seconds()),
         }
 
-    def apply_release(self, decision: dict[str, Any]) -> None:
+    def dispatch_release(self, decision: dict[str, Any]) -> None:
         if not decision.get("ready"):
             raise RuntimeError("release decision is not ready")
-        version = decision.get("to_version")
-        if not isinstance(version, str):
-            raise RuntimeError("release decision has no to_version")
-        touched = self.write_version(version)
-        decision["applied_at"] = isoformat(self.now())
         write_json(self.decision_path, decision)
-        relative_paths = [str(path.relative_to(self.repo_root)) for path in touched]
-        relative_paths.append(str(self.decision_path.relative_to(self.repo_root)))
-        self.run_git(["git", "add", *relative_paths])
-        self.run_git(["git", "commit", "-m", f"chore(release): bump to {version}"])
-        self.run_git(["git", "push", "origin", "HEAD"])
+        write_json(self.candidate_path, self.release_candidate(decision))
 
-    def run_git(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
-        result = self.runner(cmd, self.repo_root)
-        if result.returncode != 0:
-            raise RuntimeError(f"{' '.join(cmd)} failed: {result.stderr.strip()}")
-        return result
+    def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "schema": "decision-artifact-only/v1",
+            "generated_at": isoformat(self.now()),
+            "decision_artifact": str(self.decision_path.relative_to(self.repo_root)),
+            "from_version": decision.get("from_version"),
+            "to_version": decision.get("to_version"),
+            "bump_type": decision.get("bump_type"),
+            "ready": decision.get("ready"),
+            "host_opt_in": "RELEASE_AUTO_ENABLE=true",
+            "lifecycle_owner": "controller-or-release.yml",
+            "next_step_hint": (
+                "Controller or release.yml may consume this artifact, re-check host opt-in, "
+                "then run the existing version bump/release pipeline. auto_release_gate.py "
+                "does not bump, commit, push, tag, publish, merge, or close."
+            ),
+        }
 
 
 def resolve_field(data: Any, field: str) -> Any:
@@ -479,29 +473,6 @@ def resolve_field(data: Any, field: str) -> Any:
             raise KeyError(f"cannot resolve {part!r} in {field}")
         current = current[part]
     return current
-
-
-def set_field(data: Any, field: str, value: str) -> None:
-    current = data
-    parts = field.split(".")
-    for part in parts[:-1]:
-        if isinstance(current, list):
-            if not part.isdigit():
-                raise KeyError(f"expected list index at {part!r} in {field}")
-            current = current[int(part)]
-            continue
-        if not isinstance(current, dict):
-            raise KeyError(f"cannot resolve {part!r} in {field}")
-        current = current[part]
-    last = parts[-1]
-    if isinstance(current, list):
-        if not last.isdigit():
-            raise KeyError(f"expected list index at {last!r} in {field}")
-        current[int(last)] = value
-    elif isinstance(current, dict):
-        current[last] = value
-    else:
-        raise KeyError(f"cannot set {last!r} in {field}")
 
 
 def parse_semver(version: Any) -> tuple[int, int, int]:
@@ -563,7 +534,7 @@ def print_summary(decision: dict[str, Any]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--apply", action="store_true", help="bump mapped manifests, commit, and push")
+    parser.add_argument("--dispatch", action="store_true", help="write decision and release-candidate artifacts only")
     parser.add_argument("--score-only", action="store_true", help="compute stability score only")
     parser.add_argument("--min-recent-merges", type=int, default=int(os.environ.get("RELEASE_AUTO_MIN_MERGES", "1")))
     parser.add_argument("--min-interval-hours", type=int, default=int(os.environ.get("RELEASE_AUTO_MIN_INTERVAL_HOURS", "2")))
@@ -586,10 +557,15 @@ def main(argv: list[str] | None = None) -> int:
         print_summary(decision)
         if not decision.get("ready"):
             return 0
-        write_json(gate.decision_path, decision)
-        if args.apply:
-            gate.apply_release(decision)
-            print(f"auto-release applied: {decision['to_version']}")
+        if args.dispatch:
+            gate.dispatch_release(decision)
+            print(
+                "auto-release dispatch artifact written: "
+                f"{gate.candidate_path.relative_to(repo_root)}; "
+                "controller or release.yml owns bump/commit/push"
+            )
+        else:
+            write_json(gate.decision_path, decision)
     except Exception as exc:
         print(f"auto_release_gate.py: {exc}", file=sys.stderr)
         return 1

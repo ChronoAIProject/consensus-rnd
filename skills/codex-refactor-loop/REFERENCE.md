@@ -10,7 +10,7 @@ The following excerpts preserve the detailed controller runbook that was moved o
 <a id="release-decision-schema"></a>
 ### Release decision schema
 
-`auto_release_gate.py` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables dry-run decision writes or `--apply`. `--score-only` prints the same stability calculation without requiring opt-in and without writing state.
+`auto_release_gate.py` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. The decider is decision-artifact-only and does not run `git`; controller or `release.yml` owns any manifest bump, commit, push, tag, publish, merge, or close action.
 
 Stability score is the percentage of the eight boolean signals that pass. `ready=true` requires score 100 plus the release interval and at least one commit since the last release. Live signal inputs are intentionally narrow:
 
@@ -21,13 +21,13 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 | `no_human_decision_label` | No open issue or PR has `👤 human:需-maintainer-决策`. |
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
 | `p0_alert_streak_ok` | `.refactor-loop/.concurrency-monitor-state.json` zero streak and recent P0 alert lines are both at most 3 in the last 30 minutes. |
-| `recent_pr_merges_min` | `git log --merges` has at least `RELEASE_AUTO_MIN_MERGES` commits in the last two hours(default 1). |
+| `recent_pr_merges_min` | `.refactor-loop/state/recent-pr-merges.json` reports at least `RELEASE_AUTO_MIN_MERGES` commits in the last two hours(default 1). |
 | `fresh_heartbeats` | At least five entries in `.refactor-loop/state/daemon-heartbeats.json` are fresh within 90 seconds. |
 | `no_unresolved_human_escalation` | `.refactor-loop/state/meta-resolutions.json` has zero `unresolved_escalate_human` entries. |
 
 Tests or controller-side aggregators may write `.refactor-loop/state/auto-release-signals.json` with either booleans or `{ "passed": bool, ... }` objects for those same keys. When that file exists, it is the deterministic source for the eight gate signals.
 
-Semver bump is computed from commits since the latest `vX.Y.Z` tag: `feat!:` or `BREAKING CHANGE:` yields `major`; otherwise any `feat:` yields `minor`; otherwise `fix:`, `perf:`, `refactor:`, or any other commit yields `patch`. If stability is not ready, no commits exist, or the minimum release interval has not elapsed, `bump_type` is null and `to_version == from_version`.
+Semver bump is computed from `.refactor-loop/state/release-commits.json` entries since the latest release: `feat!:` or `BREAKING CHANGE:` yields `major`; otherwise any `feat:` yields `minor`; otherwise `fix:`, `perf:`, `refactor:`, or any other commit yields `patch`. If stability is not ready, no commits exist, or the minimum release interval has not elapsed, `bump_type` is null and `to_version == from_version`.
 
 `.refactor-loop/state/release-decision.json` fields:
 
@@ -43,7 +43,7 @@ Semver bump is computed from commits since the latest `vX.Y.Z` tag: `feat!:` or 
 | `ready` | True only when all stability, interval, and commit gates pass. |
 | `blocked_reasons` | Failed signal keys plus `min_interval` or `no_commits_since_last_release` when applicable. |
 | `release_interval` | Last release timestamp, minimum hours, elapsed seconds, and pass/fail status. |
-| `applied_at` | Added by `--apply` after mapped manifest versions are written. |
+| `release-candidate.json` | Separate artifact written by `--dispatch`; contains the decision path, target version, host opt-in hint, and lifecycle owner for controller/workflow consumption. |
 
 <a id="host-runtime-details"></a>
 ## Host 运行编排(daemon 启动 + 运行节奏适配)(强制)
