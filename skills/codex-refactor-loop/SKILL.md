@@ -243,6 +243,18 @@ The floor is local because it prevents loop stalls.
 
 More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-details).
 
+## Named runtime exception — concurrency_monitor auto-topup(per #57)
+
+`skills/codex-refactor-loop/scripts/concurrency_monitor.py` 的 `top_up_from_dispatch_queue` + tick() deficit 分支 = **第二个** Phase 9 / maintainer-directive 等价授权的 controller-runtime 直接 dispatch 路径(narrow allowlist):
+
+- **Narrow allowlist**: 只在 `actual < max(expected, CODEX_FLOOR)` 且 `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` 非空时 fork `spawn-codex.sh` detached;不读 prompt body、不决定 cd / log path,只消费 controller / actor 入队 spec。
+- **Host-agnostic**: dispatch JSON schema host-agnostic;cd/prompt/log path 由入队方决定,不含 host fact。
+- **No lifecycle authority**: 不开 / 关 issue / PR,不打 label,不 commit / push;只 fork 进程 + 归档 JSON + 写 event log。
+- **Behavior tests**: `test_concurrency_monitor.py` 覆盖 priority order / overshoot prevention / dispatch_one / tick() 整链 / floor 边界 / archive collision / filename-derived task_id。
+- **Source-regression**: `test_ensure_project_rules_fixed_points.py` 字面断言本段标题 + "top_up_from_dispatch_queue" + "DISPATCH_FIRED" + "CONCURRENCY_LOW" + "narrow allowlist" 等关键字面。
+
+授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
+
 ## Spawn Contract
 
 Mainline spawn contract:

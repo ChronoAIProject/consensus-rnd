@@ -85,7 +85,7 @@ Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always che
 }
 ```
 
-Required fields are `task_id`, `cd`, `prompt`, and `log`; `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
+Required fields are `cd`, `prompt`, and `log`; `task_id` defaults to the `.dispatch.json` filename stem if omitted, and `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
 
 Auto-dispatch semantics:
 - On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.

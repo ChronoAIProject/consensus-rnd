@@ -757,6 +757,26 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
+    def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        heading = "## Named runtime exception — concurrency_monitor auto-topup(per #57)"
+        self.assertIn(heading, skill_text)
+        start = skill_text.index(heading)
+        end = skill_text.index("## Spawn Contract", start)
+        paragraph = skill_text[start:end]
+
+        for required in (
+            "narrow allowlist",
+            "No lifecycle authority",
+            "top_up_from_dispatch_queue",
+            "DISPATCH_FIRED",
+            "CONCURRENCY_LOW",
+            "maintainer-directive equivalence",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, paragraph)
+
 
 class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
     # Refactor (iter3/skill-human-label-taxonomy):

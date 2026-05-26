@@ -287,6 +287,9 @@ def launch_dispatch(payload: dict) -> None:
     )
 
 
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: controller-only dispatch; monitor could report deficits but did not consume queued work.
+#   New principle: monitor may fire one queued dispatch from the narrow dispatch-queue allowlist and archive it.
 def dispatch_one_from_queue() -> tuple[str, str, str] | None:
     next_file = next_dispatch_file()
     if next_file is None:
@@ -304,8 +307,10 @@ def dispatch_one_from_queue() -> tuple[str, str, str] | None:
     return task_id, priority, reason
 
 
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: monitor only alerted; actual<floor waited for the LLM controller's next wakeup.
+#   New principle: monitor automatically consumes dispatch-queue entries until the floor is satisfied or queue is empty.
 def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
-    # Refactor (iter4/concurrency-auto-topup): Old pattern: monitor 只 alert,actual<floor 等 LLM controller 下次 wakeup 才派. New principle: monitor 自动从 dispatch-queue 消费,与 daemon-first 哲学 align。
     if actual >= floor:
         return actual
     max_dispatches = floor - actual
@@ -319,6 +324,9 @@ def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
     return actual
 
 
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: single no-gap sentinel path could alert and leave deficit repair to a later controller wakeup.
+#   New principle: no-gap alerting continues into deficit detection so queued work can be fired in the same tick.
 def tick() -> None:
     state = load_state()
     zero_streak = int(state.get("zero_streak", 0))
@@ -347,12 +355,13 @@ def tick() -> None:
     else:
         state["zero_streak"] = 0
 
-    if actual < floor:
+    target = max(expected, floor)
+    if actual < target:
         if dispatch_queue_empty():
             write_pending_event(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
             log(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
         else:
-            actual = top_up_from_dispatch_queue(actual, floor)
+            actual = top_up_from_dispatch_queue(actual, target)
 
     save_state(state)
 
