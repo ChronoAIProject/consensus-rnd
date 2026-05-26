@@ -12,7 +12,8 @@
 
 1. `skills/codex-refactor-loop/scripts/codex-progress-reporter.sh`
    - 改动 1:`post_or_update` 的 delete 分支 — 只有 `gh api DELETE` 返回 success 或 404 才 `state_set finished=true`;其他失败保留 state 不变,下 tick 重试。
-   - 改动 2:tick 顶部增加 **orphan sweep** — 扫 state.json,对 `finished=true && cid != "0" && cid != "deleted" && cid != "gone"` 的 entry 再次 attempt delete(GitHub 上 comment 还在 → 删;404 → 标记 gone)。
+   - 改动 2:`post_or_update` 的 terminal skip 条件增加 orphan 例外 — 对仍有对应 log 的 `finished=true && cid != "0"` state entry,不 short-circuit,而是重新进入 delete 分支 attempt delete(GitHub 上 comment 还在 → 删;404 → 标记 gone)。
+   - 改动 3:新增 `TEST_NO_LOOP=1` source-time test seam,只允许 behavior test source daemon 后直接调用函数;禁止生产 daemon 启动使用。
 2. `skills/codex-refactor-loop/scripts/test_codex_progress_reporter_orphan.sh`(新增)
    - 模拟 delete 失败 → 下 tick 重试 → success 后 finished=true。
    - 模拟 GitHub 上 comment 已 404 → 标记 gone 而非死循环。
@@ -28,4 +29,3 @@
 ## 后续 routing
 
 - 该 directive 提交后会与现有 issue #70 r1 solver 并行,不阻塞 #70 design(它评估的是 daemon 整体架构而非 orphan bug)。
-
