@@ -14,6 +14,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
 CONTROLLER_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "controller_lib.sh"
+REPO_SLUG_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "repo_slug.sh"
 HUMAN_LABEL = "👤 human:需-maintainer-决策"
 
 
@@ -26,6 +27,7 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.directive_dir = self.root / ".refactor-loop" / "runs" / "maintainer-directives"
         self.directive_dir.mkdir(parents=True)
         shutil.copy2(CONTROLLER_LIB, self.controller)
+        shutil.copy2(REPO_SLUG_LIB, self.root / "repo_slug.sh")
 
         fake_gh = self.root / "gh"
         fake_gh.write_text(

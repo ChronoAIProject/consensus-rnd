@@ -33,6 +33,7 @@ concurrency_monitor.py — 监控 active work 是否出现 0 codex gap
 
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import datetime, timezone
@@ -66,6 +67,8 @@ REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
+STATUSLINE_SNAPSHOT = REPO_ROOT / ".refactor-loop" / "state" / "statusline-snapshot.json"
+PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 DISPATCH_QUEUE = REPO_ROOT / ".refactor-loop" / "dispatch-queue"
 DISPATCH_DISPATCHED = REPO_ROOT / ".refactor-loop" / "dispatch-dispatched"
 SPAWN_CODEX = Path(__file__).resolve().parent / "spawn-codex.sh"
@@ -122,6 +125,72 @@ def load_state() -> dict:
 def save_state(s: dict) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     STATE_FILE.write_text(json.dumps(s, indent=2))
+
+
+def codex_floor() -> int:
+    try:
+        floor = int(os.getenv("CODEX_FLOOR", "5"))
+    except ValueError:
+        floor = 5
+    return max(floor, 2)
+
+
+def newest_progress_marker_at() -> float | None:
+    newest: float | None = None
+    for directory in (REPO_ROOT / ".refactor-loop" / "logs", REPO_ROOT / ".refactor-loop" / "runs"):
+        if not directory.exists():
+            continue
+        for path in directory.rglob("*"):
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if not PROGRESS_MARKER_RE.search(text):
+                continue
+            mtime = path.stat().st_mtime
+            newest = mtime if newest is None else max(newest, mtime)
+    return newest
+
+
+def freeze_minutes(now: float | None = None) -> int:
+    marker_at = newest_progress_marker_at()
+    if marker_at is None:
+        return 0
+    if now is None:
+        now = time.time()
+    return max(0, int((now - marker_at) / 60))
+
+
+def write_statusline_snapshot(
+    *,
+    actual: int,
+    expected: int,
+    p0_streak: int,
+    last_p0_at: str | None,
+    open_pr_count: int,
+    open_issue_count: int,
+    now: datetime | None = None,
+) -> None:
+    """Write the Claude Code statusline snapshot atomically."""
+    if now is None:
+        now = datetime.now(timezone.utc)
+    payload = {
+        "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "actual": actual,
+        "expected": expected,
+        "floor": codex_floor(),
+        "p0_streak": p0_streak,
+        "last_p0_at": last_p0_at,
+        "freeze_minutes": freeze_minutes(now.timestamp()),
+        "open_pr_count": open_pr_count,
+        "open_issue_count": open_issue_count,
+    }
+    STATUSLINE_SNAPSHOT.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATUSLINE_SNAPSHOT.with_name(f".{STATUSLINE_SNAPSHOT.name}.tmp.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    os.rename(tmp, STATUSLINE_SNAPSHOT)
 
 
 def count_in_flight_codex() -> int:
@@ -316,12 +385,18 @@ def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
 #   Old pattern: single no-gap sentinel path could alert and leave deficit repair to a later controller wakeup.
 #   New principle: no-gap alerting continues into deficit detection so queued work can be fired in the same tick.
 def tick() -> None:
+    # Refactor (iter4/issue51-r3-consensus):
+    #   Old pattern: 无 ambient visibility;maintainer 需手动跑 peek.sh
+    #   New principle: concurrency_monitor tick 原子写 statusline-snapshot.json,statusline.sh consumer < 200ms 读;
+    #     无新 daemon,无 checked-in installer(per #51 r3 META_JUDGE_DONE:consensus:C-minimal-statusline-via-concurrency_monitor-snapshot)
     state = load_state()
     zero_streak = int(state.get("zero_streak", 0))
 
     items = list_auto_loop_issues()
     expected, breakdown = compute_expected(items)
     actual = count_in_flight_codex()
+    open_pr_count = sum(1 for item in items if item["kind"] == "pr")
+    open_issue_count = sum(1 for item in items if item["kind"] == "issue")
     floor = configured_floor()
 
     log(f"actual={actual} expected={expected} floor={floor} zero_streak={zero_streak}")
@@ -330,6 +405,8 @@ def tick() -> None:
     if expected > 0 and actual == 0:
         zero_streak += 1
         state["zero_streak"] = zero_streak
+        p0_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        state["last_p0_at"] = p0_at
         detail = {
             "actual": 0,
             "expected": expected,
@@ -340,6 +417,19 @@ def tick() -> None:
         }
         write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
         log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {ALERT_LOG}")
+        # P0 + queued dispatch: fire topup immediately in same tick (per #57 auto-topup contract)
+        if not dispatch_queue_empty():
+            actual = top_up_from_dispatch_queue(actual, max(expected, configured_floor()))
+        write_statusline_snapshot(
+            actual=actual,
+            expected=expected,
+            p0_streak=zero_streak,
+            last_p0_at=p0_at,
+            open_pr_count=open_pr_count,
+            open_issue_count=open_issue_count,
+        )
+        save_state(state)
+        return
     else:
         state["zero_streak"] = 0
 
@@ -351,6 +441,14 @@ def tick() -> None:
         else:
             actual = top_up_from_dispatch_queue(actual, target)
 
+    write_statusline_snapshot(
+        actual=actual,
+        expected=expected,
+        p0_streak=0,
+        last_p0_at=state.get("last_p0_at"),
+        open_pr_count=open_pr_count,
+        open_issue_count=open_issue_count,
+    )
     save_state(state)
 
 

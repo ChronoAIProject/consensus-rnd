@@ -71,7 +71,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         skill_lines = len(self.skill.splitlines())
 
         self.assertGreaterEqual(reference_lines, 2000)
-        self.assertLessEqual(reference_lines, 2450)
+        self.assertLessEqual(reference_lines, 2500)
         self.assertGreater(reference_lines, skill_lines * 2)
 
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
@@ -111,6 +111,56 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn(".controller-pending-events.log", self.reference)
         self.assertIn("no lifecycle authority", self.reference)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.reference)
+
+
+class AutoLoopStatuslineContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.skill = read(SKILL_MD)
+        self.reference = read(REFERENCE_MD)
+
+    def test_skill_contains_statusline_consensus_section(self) -> None:
+        required = (
+            "## Claude Code statusline(per #51 consensus)",
+            "**Producer**",
+            "**Consumer**",
+            "**Install**",
+            "**无新 daemon**",
+            "**手动一行,无 installer script**",
+            "Named runtime exception",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+    def test_statusline_contract_does_not_add_daemon_or_installer(self) -> None:
+        scripts_dir = SKILL_ROOT / "scripts"
+        self.assertFalse((scripts_dir / "installer.sh").exists())
+        self.assertFalse((scripts_dir / "install-statusline.sh").exists())
+        combined = self.skill + "\n" + self.reference
+        forbidden = (
+            "StatuslineDaemon",
+            "StatusLineDaemon",
+            "StatuslineController",
+            "new daemon class",
+            "自动修改 settings.json",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, combined)
+
+    def test_reference_documents_statusline_snapshot_schema(self) -> None:
+        self.assertIn("### Statusline snapshot schema", self.reference)
+        for field in (
+            '"actual"',
+            '"expected"',
+            '"floor"',
+            '"p0_streak"',
+            '"freeze_minutes"',
+            '"open_pr_count"',
+            '"open_issue_count"',
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, self.reference)
 
 
 if __name__ == "__main__":
