@@ -355,6 +355,17 @@ More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-det
 
 授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
 
+## Named runtime surface — codex-progress-reporter TEST_NO_LOOP(per #69)
+
+`skills/codex-refactor-loop/scripts/codex-progress-reporter.sh` supports `TEST_NO_LOOP=1` only as a source-time test seam for `scripts/test_codex_progress_reporter_orphan.sh`.
+
+- **Allowed**: behavior tests may set `TEST_NO_LOOP=1`, source the reporter inside an isolated tmp repo with stubbed `gh` and `repo_slug.sh`, and call functions such as `post_or_update` directly.
+- **Forbidden**: production daemon startup, controller prompts, cron/launchd helpers, host wrappers, and manual operator runbooks must not set `TEST_NO_LOOP`; it must not be used to skip the daemon loop in a live host.
+- **Fact source**: runtime truth remains `.refactor-loop/codex-progress-state.json`, `.refactor-loop/logs/*.log`, and GitHub comment existence via `gh api`. The test seam does not create a new state file, queue, lifecycle authority, or host fact source.
+- **Verification**: `bash skills/codex-refactor-loop/scripts/test_codex_progress_reporter_orphan.sh` covers delete success, transient delete failure retry, 404 gone handling, and prior orphan retry; `python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'` includes source-regression assertions for this narrow surface.
+
+授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md`(maintainer-directive for issue #69 orphan progress comments)。
+
 ## Spawn Contract
 
 Mainline spawn contract:
