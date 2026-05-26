@@ -5,7 +5,7 @@
 # 避免人工 grep / parse 出错(pr1_num empty bug 那种)。
 #
 # 输出:
-#   1. 活跃 codex 数 + 每个的 log 名(harness-tracked vs detached 分别标)
+#   1. 活跃 codex 数 + 每个的 log 名
 #   2. 完成 markers + 推荐下一步路由(per skill route table)
 #   3. 每个 open auto-loop PR 的 CI + reviewer 状态
 #   4. monitor zero_streak 最大值(过去 10 tick)
@@ -31,12 +31,12 @@ gh_repo_args=()
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {
-  # Scope to THIS repo by absolute REPO_ROOT, not the relative `.refactor-loop/`
-  # substring (which two loops on one machine share -> cross-host over-count).
-  # Requires callers to pass an absolute --cd so REPO_ROOT is in the cmdline.
-  # Exclude ` -c ` lines: each codex yields a real `bash spawn-codex.sh` supervisor
-  # AND a shell `-c` wrapper that echoes the command; count only the supervisor.
-  ps -eo command= | awk -v repo="$REPO_ROOT" 'repo != "" && /spawn-codex[.]sh/ && index($0, repo) && index($0, " -c ")==0 { print }'
+  # Refactor (iter4/spawn-codex-pid-registry):
+  #   Old pattern: ps -eo command | grep spawn-codex.sh, then REPO_ROOT/cmdline filtering.
+  #   New principle: list $REPO_ROOT/.refactor-loop/spawned/*.pid — self-maintained per-repo registry.
+  local spawned_dir="$REPO_ROOT/.refactor-loop/spawned"
+  [ -d "$spawned_dir" ] || return 0
+  find "$spawned_dir" -maxdepth 1 -name "*.pid" -type f 2>/dev/null | sort
 }
 
 MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"
@@ -106,7 +106,7 @@ n=$(list_loop_codex | wc -l | tr -d ' ')
 echo ""
 echo "▍活跃 codex: ${n}"
 if [ "$n" -gt 0 ]; then
-  list_loop_codex | sed -E 's/.*--log [^ ]*\/([^ ]+)\.log.*/  • \1/' | sort
+  list_loop_codex | sed -E 's|.*/([^/]+)\.pid$|  • \1|' | sort
 fi
 
 # 2. Recently finished markers (last 60 min) + routing hint

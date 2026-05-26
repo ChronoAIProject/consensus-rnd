@@ -23,7 +23,19 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 
 **6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
 
-**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):每 wakeup `pgrep -f <daemon>` 应 = 1(`comment-monitor.sh` 偶显 2 是 script+内部子循环,正常)。重复 → `pkill -f <daemon>` 全清后按上面 pattern 重启 1 个,验 `pgrep` = 1。
+**daemon 健康强制**(尤其 `dev_sync_daemon` 多实例会 race):每 wakeup 读取 `.refactor-loop/heartbeats/<daemon>.ts`;heartbeat-mtime 距 now <90s 为 alive。**不**用 ps grep / process-table daemon-name 判健康,同主机另一仓库的 daemon 会造成假阳。重复实例的进程清理是人工维修动作,不是健康 source-of-truth。
+
+### 数本仓库 codex / daemon health(强制 per-repo,不跨仓库)
+
+<!--
+# Refactor (iter4/spawn-codex-pid-registry):
+#   Old pattern: ps grep spawn-codex.sh / daemon-name,再用路径或名字猜测归属,同机多仓库会假阳/假阴。
+#   New principle: codex 数读本仓库 spawned registry;daemon 健康读本仓库 heartbeat-mtime。
+-->
+
+- **codex 数**:`ls $REPO_ROOT/.refactor-loop/spawned/ | wc -l`(每 `spawn-codex.sh` 自维护)。每个任务文件为 `.refactor-loop/spawned/<task-id>.pid`;文档中也称 `task-id.pid`。不要 `ps grep spawn-codex.sh`。
+- **daemon 健康**:`.refactor-loop/heartbeats/<daemon>.ts` heartbeat-mtime 距 now <90s 为 alive。示例:`hb=".refactor-loop/heartbeats/${daemon}.ts"; [ -f "$hb" ] && [ $(($(date +%s) - $(cat "$hb"))) -lt 90 ] && alive=yes || alive=no`。不要 `ps grep daemon-name`(同主机另一仓库的 daemon 会假阳)。
+- 这是 #49 anti-stop Layer 0+,源回归测试 `RepoLocalDetectionTests` 守护此 invariant。
 
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
@@ -53,14 +65,13 @@ ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**�
 
 **更隐蔽的同机多 loop 过计(dogfood 实测)**:即使只数「含 `spawn-codex.sh`」的 codex,如果再用**相对子串** `.refactor-loop/logs/` / `.refactor-loop/prompts/` 做 scope,**同一台机器跑两个不同仓库的本 skill 时会互相过计**——两个 loop 的相对路径子串完全相同。实测另一 host 的 loop 在跑时,本仓库 `concurrency_monitor` 报 `actual=8` 而本仓库实际只有 1 个 codex,floor 被骗成"满",本仓库 codex 永远补不上去、可能长期单线程。
 
-**修正(强制)**:floor 只数**本仓库(本 loop)的 codex** —— 命令行含 `spawn-codex.sh` **且含本仓库绝对路径 `$REPO_ROOT`**。
-- spawn 时 caller **必须传绝对 `--cd`**(audit 用 `--cd $REPO_ROOT`;implement/verify 用绝对 worktree 路径),使 `$REPO_ROOT` 进入进程 cmdline;sibling worktree `<repo>-wt-*` 以 `$REPO_ROOT` 为前缀,亦匹配。
-- ❌ **不要**只用相对子串 `.refactor-loop/logs/` 做 scope(同机多 loop 互相过计)。
-- **去重(强制)**:每个 codex 会派生**两个**含 `spawn-codex.sh` 的进程 —— 真 supervisor(`bash <path>/spawn-codex.sh --cd ...`)+ 一个 shell `-c` wrapper(harness 后台任务回显整条命令)。两个都数 = 每个真 codex 被算成 2,`CODEX_FLOOR=2` 会被**单个**真 codex 满足 → 永远凑不到真正 2 并行。**排除含 ` -c ` 的行**,只数真 supervisor(spawn-codex.sh 自身不带 ` -c ` flag)。
+**修正(强制)**:floor 只数**本仓库(本 loop)的 codex** —— `.refactor-loop/spawned/*.pid`。`spawn-codex.sh` 在启动 codex 前写 `.refactor-loop/spawned/<task-id>.pid`,退出 trap 只删除自己的 PID 文件。
+- ❌ **不要**用相对子串 `.refactor-loop/logs/` 做 scope(同机多 loop 互相过计)。
+- ❌ **不要**用 `ps grep spawn-codex.sh` + `$REPO_ROOT` prefix-match 做 scope(path normalization / abs-relative 变化会假阴,同机其它仓库会假阳)。
 - 不数 host 其它系统 / 其它仓库的 codex。
 - 低于 `$CODEX_FLOOR` 个**本仓库** codex 才补(`CODEX_FLOOR` 由 host.env 注入,默认 5,**硬下限 2** —— 详见下「Concurrency floor」节)。
 
-`concurrency_monitor.py` 的 `count_in_flight_codex()` 与 `peek.sh` 的 `list_loop_codex()` 均已按 `$REPO_ROOT` 绝对路径 scope。
+`concurrency_monitor.py` 的 `count_in_flight_codex()` 与 `peek.sh` 的 `list_loop_codex()` 均读 `$REPO_ROOT/.refactor-loop/spawned/*.pid`。
 
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
 
@@ -146,7 +157,7 @@ gh issue view <N> --json comments --jq '
 ### Wakeup 第一动作:`bash <skill-root>/scripts/peek.sh`(强制)
 
 减少人工 grep / parse 错误。一眼看全:
-- 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
+- 活跃 codex 数(只数本 loop:`.refactor-loop/spawned/*.pid`)
 - 最近 60 min 完成 codex marker + 推荐下一步(按 SKILL route table)
 - Open auto-loop PR 的 CI + state
 - Monitor zero_streak 当前 / max
@@ -164,7 +175,7 @@ gh issue view <N> --json comments --jq '
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 -->
 
-**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `spawn-codex.sh` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
+**铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `.refactor-loop/spawned/*.pid`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
 **Controller wakeup 第一动作**:`bash <skill-root>/scripts/peek.sh`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
@@ -227,7 +238,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 **60s** 周期 daemon,只监控 no-gap sentinel:
 - expected = active issue/PR 数(per phase 表)
-- actual = `spawn-codex.sh` 且命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`
+- actual = `$REPO_ROOT/.refactor-loop/spawned/*.pid` 数量
 - **P0 规则**:`expected > 0 AND actual == 0` → **IMMEDIATE** alert(streak=1 即触发,不等 2 tick)。这是 no-gap-violation。
 - 写 `.refactor-loop/.concurrency-alert.log` + `.controller-pending-events.log`(controller 下次 wakeup 必读)
 - 不读取 `CODEX_FLOOR`,不判断 refill 候选,不写非零 floor-deficit 事件,不自动 spawn codex。floor 补给只属于 controller wakeup step 1.5。
@@ -377,7 +388,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
-3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`,逐个验 `.refactor-loop/heartbeats/<daemon>.ts` heartbeat-mtime <90s。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
@@ -873,13 +884,15 @@ Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
 - `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector.
-Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority. Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `spawn-codex.sh --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
+Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn, no git, no GitHub, no lifecycle authority. Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or `.refactor-loop/spawned/<target-log-stem>.pid` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
 dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **phase9_router_daemon.py** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Phase 6 现在 controller 只 verify daemon 健康
-ps -ef | grep dev-sync-daemon.sh | grep -v grep | wc -l  # 必须 >=1
+daemon=dev_sync_daemon.py
+hb=".refactor-loop/heartbeats/${daemon}.ts"
+[ -f "$hb" ] && [ $(($(date +%s) - $(cat "$hb"))) -lt 90 ] && alive=yes || alive=no
 tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 daemon 死 → restart `nohup ... >> log 2>&1 & disown`。
@@ -890,7 +903,7 @@ tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FA
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
 - ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
-- ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
+- ❌ 用 ps grep / process-table daemon-name 判 daemon 健康;必须读 heartbeat-mtime。
 
 ### Manual recovery
 
@@ -949,7 +962,7 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 - daemon 不依赖 controller 中转,无中间 event log
 - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
 - 启动:`nohup bash -c 'source .refactor-loop/host.env && exec bash <skill-root>/scripts/triage-monitor.sh' >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
-- Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+- Liveness:每 wakeup 读 `.refactor-loop/heartbeats/triage-monitor.sh.ts` heartbeat-mtime,<90s 为 alive,死了 restart
 - Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
 - Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
 
@@ -1552,7 +1565,7 @@ Concretely, this means:
 
 **问题**:之前 "iteration boundary" 是 merge-driven:等 iter N 最后 cluster PR merge 才派 iter N+1 audit。但 iter N 走到 fix r2/r3 阶段时常常只有 1 codex 在跑(fix codex 单点),其他 phase 都在等。codex 总并发数掉到 1-2,远低于本地资源能撑的并行度。
 
-**floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
+**floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(读 `$REPO_ROOT/.refactor-loop/spawned/*.pid`,见上「数本仓库 codex / daemon health」节;❌ 不要用相对子串或 ps grep,同机多 loop 会过计致本仓库永远补不上)。
 
 **规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。**唯一执行位置**:controller 每次 wakeup 的 step 1.5,并且必须在任何 `ScheduleWakeup` 之前执行;`concurrency_monitor.py` 只做 no-gap sentinel,不承担 floor 观察/补给职责。
 
@@ -1596,8 +1609,8 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 ```bash
 source .refactor-loop/host.env                              # 取 REPO_ROOT / CODEX_FLOOR
 FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2
-# 只数本仓库 codex:含 spawn-codex.sh 且含本仓库绝对路径 $REPO_ROOT(scope,防同机多 loop 过计)
-ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
+# 只数本仓库 codex:spawn-codex.sh 自维护 per-repo PID registry
+ACTIVE=$(find "$REPO_ROOT/.refactor-loop/spawned" -maxdepth 1 -name "*.pid" -type f 2>/dev/null | wc -l | tr -d ' ')
 NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 

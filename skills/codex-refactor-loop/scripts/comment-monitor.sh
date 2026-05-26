@@ -42,9 +42,11 @@ if [ -z "${MAINTAINER_WHITELIST:-}" ]; then
   exit 2
 fi
 STATE_FILE="${STATE_FILE:-$REPO_ROOT/.refactor-loop/comment-monitor-state.json}"
+HEARTBEAT_FILE="$REPO_ROOT/.refactor-loop/heartbeats/comment-monitor.sh.ts"
 INTERVAL="${INTERVAL:-30}"
 
 mkdir -p "$(dirname "$STATE_FILE")"
+mkdir -p "$(dirname "$HEARTBEAT_FILE")"
 [ -f "$STATE_FILE" ] || echo '{}' > "$STATE_FILE"
 
 # Maintainer whitelist is injected by the host project and fails closed when missing.
@@ -92,7 +94,15 @@ mark_seen() {
   jq --arg id "$id" '. + {($id): "seen"}' "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
 
+write_heartbeat() {
+  # Refactor (iter4/spawn-codex-pid-registry):
+  #   Old pattern: controller health checked daemon names via process-table grep.
+  #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+  date +%s > "$HEARTBEAT_FILE"
+}
+
 while true; do
+  write_heartbeat
   # Auto-discover targets: open issues with refactor-design-needed label + open PRs with auto-loop label
   targets=$(
     {

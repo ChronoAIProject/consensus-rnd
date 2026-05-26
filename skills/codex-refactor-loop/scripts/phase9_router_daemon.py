@@ -269,15 +269,11 @@ class Phase9Router:
     def _in_flight(self, log_path: Path) -> bool:
         if log_path.exists():
             return True
-        try:
-            ps = subprocess.run(["ps", "-eo", "command="], capture_output=True, text=True, check=False)
-        except OSError:
-            return False
-        target = str(log_path)
-        for line in ps.stdout.splitlines():
-            if "spawn-codex.sh" in line and target in line and " -c " not in line:
-                return True
-        return False
+        # Refactor (iter4/spawn-codex-pid-registry):
+        #   Old pattern: ps -eo command | grep spawn-codex.sh --log <target>.
+        #   New principle: spawned/<task-id>.pid is the per-repo source of truth for in-flight targets.
+        reg_file = self.repo_root / ".refactor-loop" / "spawned" / f"{log_path.stem}.pid"
+        return reg_file.exists()
 
     def _read_ledger(self) -> set[str]:
         keys: set[str] = set()
@@ -375,6 +371,15 @@ class Phase9Router:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def write_heartbeat(repo_root: Path) -> None:
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: controller health checked daemon names via process-table grep.
+    #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+    heartbeat = repo_root / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.py.ts"
+    heartbeat.parent.mkdir(parents=True, exist_ok=True)
+    heartbeat.write_text(f"{int(time.time())}\n", encoding="utf-8")
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Narrow Phase 9 router daemon")
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -394,9 +399,11 @@ def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], No
     router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)
     with router.singleton():
         if args.once:
+            write_heartbeat(repo_root)
             router.tick()
             return 0
         while True:
+            write_heartbeat(repo_root)
             router.tick()
             time.sleep(args.interval)
 

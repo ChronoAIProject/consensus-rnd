@@ -89,11 +89,37 @@ if [[ -e "$LOG" ]]; then
 fi
 : > "$LOG"
 
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  REPO_ROOT="$(cd "$CD" && git rev-parse --show-toplevel 2>/dev/null || true)"
+fi
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  echo "REPO_ROOT is unset and could not be derived from --cd: $CD" >&2
+  exit 2
+fi
+
 # Debug banner — caller / `tail` sees exact paths immediately.
 # Both prompt + log are real files on disk; debug by `cat <prompt-path>` and `cat <log-path>`.
 BANNER="SPAWN: prompt=$PROMPT log=$LOG cd=$CD stall=${STALL}s${MODEL:+ model=$MODEL}"
 echo "$BANNER" >&2
 echo "$BANNER" >> "$LOG"
+
+# Refactor (iter4/spawn-codex-pid-registry):
+#   Old pattern: 依赖外部 ps -eo command | grep spawn-codex.sh + abs path prefix-match REPO_ROOT 数本仓库 codex(跨仓库假阳/假阴).
+#   New principle: spawn-codex.sh 自己 mkdir + 写 .refactor-loop/spawned/<task-id>.pid,trap EXIT 清理,concurrency 直接 ls 计数。
+SPAWNED_DIR="${REPO_ROOT}/.refactor-loop/spawned"
+mkdir -p "$SPAWNED_DIR"
+TASK_ID="$(basename "$LOG" .log)"
+REG_FILE="$SPAWNED_DIR/${TASK_ID}.pid"
+{
+  echo "pid=$$"
+  echo "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL"
+  echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$REG_FILE"
+
+cleanup_spawned() {
+  rm -f "$REG_FILE"
+}
+trap cleanup_spawned EXIT INT TERM
 
 # Standard args:
 # - --dangerously-bypass-approvals-and-sandbox: required for unattended mode (caller-supplied authorization).
@@ -148,6 +174,7 @@ cleanup_child() {
   if (( CLEANUP_CHILD == 1 )) && kill -0 "$CHILD" 2>/dev/null; then
     kill_process_group "$CHILD"
   fi
+  cleanup_spawned
 }
 trap cleanup_child INT TERM HUP EXIT
 
@@ -175,6 +202,7 @@ done
 wait "$CHILD" 2>/dev/null
 EXIT=$?
 CLEANUP_CHILD=0
+cleanup_spawned
 trap - INT TERM HUP EXIT
 set -e
 

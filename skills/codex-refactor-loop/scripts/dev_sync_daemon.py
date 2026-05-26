@@ -77,11 +77,20 @@ REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BAS
 SPAWN_CODEX = SKILL_ROOT / "scripts" / "spawn-codex.sh"
 LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
 PENDING_EVENTS_FILE = MAIN_REPO / ".refactor-loop" / ".controller-pending-events.log"
+HEARTBEAT_FILE = MAIN_REPO / ".refactor-loop" / "heartbeats" / "dev_sync_daemon.py.ts"
 
 
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"[{ts}] {msg}", flush=True)
+
+
+def write_heartbeat() -> None:
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: controller health checked daemon names via process-table grep.
+    #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+    HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    HEARTBEAT_FILE.write_text(f"{int(time.time())}\n", encoding="utf-8")
 
 
 def run(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess:
@@ -133,23 +142,11 @@ def reset_to_remote(cwd: Path) -> bool:
 
 def codex_resolve_in_flight() -> bool:
     """Return whether this repo already has a dev-sync resolver supervisor."""
-    # Refactor (iter3/skill-hygiene-scripts):
-    #   Old: relative pgrep matched any host containing .refactor-loop/dev-sync-codex.
-    #   New: inspect process commands and require this repo/worktree absolute scope.
-    #   This mirrors count_in_flight_codex() so sibling host repos cannot suppress dispatch.
-    repo = str(MAIN_REPO)
-    worktree = str(WORKTREE)
-    for line in run(["ps", "-eo", "command="]).stdout.splitlines():
-        if "spawn-codex.sh" not in line:
-            continue
-        if "dev-sync-codex-" not in line:
-            continue
-        if repo not in line and worktree not in line:
-            continue
-        if " -c " in line:
-            continue
-        return True
-    return False
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: process-table command parsing for dev-sync spawn-codex.sh supervisors.
+    #   New principle: inspect this repo's .refactor-loop/spawned/dev-sync-codex-*.pid registry.
+    spawned_dir = MAIN_REPO / ".refactor-loop" / "spawned"
+    return spawned_dir.exists() and any(spawned_dir.glob("dev-sync-codex-*.pid"))
 
 
 def dispatch_codex_resolve() -> None:
@@ -529,6 +526,7 @@ def main() -> None:
         sys.exit(1)
     while True:
         try:
+            write_heartbeat()
             tick()
         except Exception as e:
             log(f"EXCEPTION in tick: {e!r}")

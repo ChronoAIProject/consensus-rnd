@@ -13,7 +13,7 @@ concurrency_monitor.py — 监控 active work 是否出现 0 codex gap
   - 🛠️ implementing         → 1 implement codex
   - ⚙️ ci-running           → 0(等 CI,无需 codex)
   - 🚀 pr-open(待派 reviewer) → 0~3
-- Compare with loop-owned spawn-codex wrapper processes.
+- Compare with loop-owned spawn-codex registry files.
 - 只监控 no-gap:P0 `expected > 0 and actual == 0` 立即告警
 
 主动介入修复:
@@ -77,6 +77,8 @@ REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
+SPAWNED_DIR = REPO_ROOT / ".refactor-loop" / "spawned"
+HEARTBEAT_FILE = REPO_ROOT / ".refactor-loop" / "heartbeats" / "concurrency_monitor.py.ts"
 
 # phase label → 期望 codex 数(per active issue/PR)
 PHASE_EXPECTED = {
@@ -101,6 +103,14 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}", flush=True)
 
 
+def write_heartbeat() -> None:
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: controller health checked daemon names via process-table grep.
+    #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+    HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    HEARTBEAT_FILE.write_text(f"{int(time.time())}\n", encoding="utf-8")
+
+
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
 
@@ -120,38 +130,13 @@ def save_state(s: dict) -> None:
 
 
 def count_in_flight_codex() -> int:
-    """Count THIS repo's in-flight loop codex only — scoped by absolute REPO_ROOT.
-
-    Cross-host over-count bug: two codex-refactor-loop loops on one machine share
-    the relative `.refactor-loop/` substring, so a relative-only filter counts the
-    OTHER host's codex too (observed actual=8 when this repo had 1) -> floor looks
-    permanently "full" and this repo can starve below its minimum. Scope by the
-    absolute REPO_ROOT: spawn-codex.sh always carries it (caller passes an absolute
-    --cd; sibling worktree paths `<repo>-wt-...` are REPO_ROOT-prefixed too), so a
-    foreign loop at a different path is correctly excluded.
-
-    Contract: callers MUST pass an absolute --cd (and absolute --log/--add-dir) so
-    REPO_ROOT appears in the process cmdline. A relative --cd breaks this scope.
-
-    De-dup: each spawned codex shows up as TWO `spawn-codex.sh`-bearing processes —
-    the real supervisor (`bash <path>/spawn-codex.sh --cd ...`) AND a shell `-c`
-    wrapper that echoes the whole command (the Claude Code harness's background-task
-    wrapper, or any `bash -c "...spawn-codex.sh..."`). Counting both double-counts,
-    so a floor of 2 would be "satisfied" by a single real codex. Exclude any
-    cmdline containing ` -c ` so only the real supervisor is counted (1 per codex);
-    spawn-codex.sh itself never takes ` -c ` flags.
-    """
-    repo = str(REPO_ROOT)
-    n = 0
-    for line in run(["ps", "-eo", "command="]).stdout.splitlines():
-        if "spawn-codex.sh" not in line:
-            continue
-        if repo not in line:
-            continue  # another host's loop on the same machine — not ours
-        if " -c " in line:
-            continue  # shell -c wrapper / harness command-echo, not the real supervisor
-        n += 1
-    return n
+    """Count THIS repo's in-flight loop codex from the local spawn registry."""
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: process-table command parsing for spawn-codex.sh with REPO_ROOT scoping.
+    #   New principle: ls $REPO_ROOT/.refactor-loop/spawned/*.pid — self-maintained per-repo registry.
+    if not SPAWNED_DIR.exists():
+        return 0
+    return len(list(SPAWNED_DIR.glob("*.pid")))
 
 
 def list_auto_loop_issues() -> list[dict]:
@@ -249,6 +234,7 @@ def main() -> None:
     log(f"concurrency_monitor (Python) started: interval={INTERVAL}s")
     while True:
         try:
+            write_heartbeat()
             tick()
         except Exception as e:
             log(f"EXCEPTION in tick: {e!r}")

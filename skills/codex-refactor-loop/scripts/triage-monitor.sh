@@ -63,8 +63,9 @@ TRIAGE_MAX_RETRIES="${TRIAGE_MAX_RETRIES:-3}"
 TRIAGE_RETRY_BACKOFF_SECONDS="${TRIAGE_RETRY_BACKOFF_SECONDS:-300}"
 STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"
 PENDING_LOG="$REPO_ROOT/.refactor-loop/.controller-pending-events.log"
+HEARTBEAT_FILE="$REPO_ROOT/.refactor-loop/heartbeats/triage-monitor.sh.ts"
 
-mkdir -p "$REPO_ROOT/.refactor-loop/prompts" "$REPO_ROOT/.refactor-loop/logs"
+mkdir -p "$REPO_ROOT/.refactor-loop/prompts" "$REPO_ROOT/.refactor-loop/logs" "$(dirname "$HEARTBEAT_FILE")"
 [ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"
 
 log() {
@@ -73,6 +74,13 @@ log() {
   #   New: state transitions are logged around claimed/spawned/failed/done records.
   #   This makes retry/backoff behavior diagnosable from the daemon log.
   echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"
+}
+
+write_heartbeat() {
+  # Refactor (iter4/spawn-codex-pid-registry):
+  #   Old pattern: controller health checked daemon names via process-table grep.
+  #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+  date +%s > "$HEARTBEAT_FILE"
 }
 
 state_status() {
@@ -170,6 +178,7 @@ mark_failed_retry() {
 log "triage-monitor started: interval=${INTERVAL}s"
 
 while true; do
+  write_heartbeat
   # Query open issues with auto-loop-triage label
   issues=$(gh issue list "${gh_repo_args[@]}" --label "auto-loop-triage" --state open --json number,author --jq '.[] | "\(.number) \(.author.login)"' 2>/dev/null)
   if [ -z "$issues" ]; then

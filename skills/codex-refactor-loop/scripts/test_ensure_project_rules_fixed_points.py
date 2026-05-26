@@ -931,7 +931,7 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
             self.assertEqual(log.read_text(encoding="utf-8"), original_log)
             self.assertNotIn("--overwrite-finished-log", (SKILL_ROOT / "scripts" / "spawn-codex.sh").read_text(encoding="utf-8"))
 
-    def test_dev_sync_resolver_in_flight_is_scoped_to_this_repo_and_skips_shell_wrappers(self) -> None:
+    def test_dev_sync_resolver_in_flight_uses_local_pid_registry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
@@ -940,6 +940,11 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
             repo.mkdir()
             worktree.mkdir()
             sibling.mkdir()
+            spawned = repo / ".refactor-loop" / "spawned"
+            sibling_spawned = sibling / ".refactor-loop" / "spawned"
+            spawned.mkdir(parents=True)
+            sibling_spawned.mkdir(parents=True)
+            sibling_spawned.joinpath("dev-sync-codex-1.pid").write_text("pid=999\n", encoding="utf-8")
             env = os.environ.copy()
             env.update(
                 {
@@ -957,19 +962,16 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
                     "-c",
                     """
 import os
-import types
 import dev_sync_daemon
 
-def check(line):
-    dev_sync_daemon.run = lambda cmd: types.SimpleNamespace(stdout=line + "\\n")
-    return dev_sync_daemon.codex_resolve_in_flight()
-
 repo = os.environ["REPO"]
-wt = os.environ["WORKTREE"]
-sibling = os.environ["SIBLING"]
-print(check(f"bash {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd {wt} --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
-print(check(f"bash {sibling}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {sibling}/.refactor-loop/logs/dev-sync-codex-1.log"))
-print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"))
+spawned = os.path.join(repo, ".refactor-loop", "spawned")
+print(dev_sync_daemon.codex_resolve_in_flight())
+open(os.path.join(spawned, "dev-sync-codex-1.pid"), "w", encoding="utf-8").write("pid=123\\n")
+print(dev_sync_daemon.codex_resolve_in_flight())
+open(os.path.join(spawned, "reviewer-1.pid"), "w", encoding="utf-8").write("pid=456\\n")
+os.remove(os.path.join(spawned, "dev-sync-codex-1.pid"))
+print(dev_sync_daemon.codex_resolve_in_flight())
 """,
                 ],
                 env=env,
@@ -979,7 +981,7 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout.splitlines(), ["True", "False", "False"])
+            self.assertEqual(result.stdout.splitlines(), ["False", "True", "False"])
 
     def test_triage_monitor_state_helpers_recover_legacy_entries_and_advance_by_log_markers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1516,6 +1518,105 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("`CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional", skill_text)
         self.assertIn("<skill-root>/scripts/peek.sh", skill_text)
         self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
+
+
+class RepoLocalDetectionTests(unittest.TestCase):
+    """Regression coverage for per-repo codex/daemon detection."""
+
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def rel_paths(self, *patterns: str) -> list[Path]:
+        return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
+
+    # Refactor (iter4/spawn-codex-pid-registry):
+    #   Old pattern: spawn detection lived outside spawn-codex.sh in process-table grep callers.
+    #   New principle: spawn-codex.sh owns .refactor-loop/spawned/<task-id>.pid lifecycle via trap cleanup.
+    def test_spawn_codex_writes_local_pid_registry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            log = repo / ".refactor-loop" / "logs" / "fix-pr44-round-2.log"
+            script = root / "registry-smoke.sh"
+            script.write_text(
+                """#!/usr/bin/env bash
+set -euo pipefail
+REPO_ROOT="$1"
+CD="$REPO_ROOT"
+PROMPT="$REPO_ROOT/.refactor-loop/prompts/fix.md"
+LOG="$REPO_ROOT/.refactor-loop/logs/fix-pr44-round-2.log"
+STALL=30
+mkdir -p "$(dirname "$PROMPT")" "$(dirname "$LOG")"
+touch "$PROMPT" "$LOG"
+SPAWNED_DIR="${REPO_ROOT}/.refactor-loop/spawned"
+mkdir -p "$SPAWNED_DIR"
+TASK_ID="$(basename "$LOG" .log)"
+REG_FILE="$SPAWNED_DIR/${TASK_ID}.pid"
+{
+  echo "pid=$$"
+  echo "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL"
+  echo "started=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$REG_FILE"
+cleanup_spawned() {
+  rm -f "$REG_FILE"
+}
+trap cleanup_spawned EXIT INT TERM
+test -f "$REG_FILE"
+grep -q "cmdline=spawn-codex.sh --cd $CD --prompt $PROMPT --log $LOG --stall $STALL" "$REG_FILE"
+""",
+                encoding="utf-8",
+            )
+            script.chmod(0o755)
+
+            result = subprocess.run([str(script), str(repo)], capture_output=True, text=True, check=False)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((repo / ".refactor-loop" / "spawned" / "fix-pr44-round-2.pid").exists())
+
+    def test_concurrency_monitor_counts_spawned_dir_not_ps(self) -> None:
+        monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
+
+        self.assertNotIn("ps -eo command", monitor_text)
+        self.assertNotIn("pgrep spawn-codex.sh", monitor_text)
+        self.assertIn('SPAWNED_DIR = REPO_ROOT / ".refactor-loop" / "spawned"', monitor_text)
+        self.assertIn('SPAWNED_DIR.glob("*.pid")', monitor_text)
+
+    def test_no_active_script_uses_ps_grep_for_daemon_name(self) -> None:
+        checked = self.rel_paths(
+            "skills/codex-refactor-loop/scripts/*.sh",
+            "skills/codex-refactor-loop/scripts/*.py",
+            "skills/codex-refactor-loop/prompts/*.md",
+        )
+        bad_patterns = (
+            re.compile(r"ps\s+-eo\s+command\s*\|.*grep\s+-E\s+['\"]\((concurrency_monitor|comment-monitor|codex-progress-reporter|dev_sync_daemon|triage-monitor)"),
+            re.compile(r"ps\s+-ef\s*\|.*grep\s+(concurrency_monitor|comment-monitor|codex-progress-reporter|dev_sync_daemon|triage-monitor)"),
+            re.compile(r"pgrep\s+(-[^\s]+\s+)*['\"]?(concurrency_monitor|comment-monitor|codex-progress-reporter|dev_sync_daemon|triage-monitor)"),
+        )
+
+        for path in checked:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=rel):
+                for pattern in bad_patterns:
+                    self.assertIsNone(pattern.search(text), pattern.pattern)
+
+    def test_reference_md_documents_pid_registry_protocol(self) -> None:
+        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+
+        self.assertIn(".refactor-loop/spawned/", reference_text)
+        self.assertIn("task-id.pid", reference_text)
+        self.assertIn(".refactor-loop/heartbeats/<daemon>.ts", reference_text)
+        self.assertIn("mtime", reference_text)
+
+    def test_heartbeat_mtime_is_canonical_daemon_health_method(self) -> None:
+        docs = "\n".join(
+            self.read_rel(rel)
+            for rel in ("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/REFERENCE.md")
+        )
+
+        self.assertTrue("heartbeat-mtime" in docs or "90s" in docs)
+        self.assertIn("**不**用 ps grep", docs)
 
 
 # Refactor (iter3/skill-contract-test-suite):

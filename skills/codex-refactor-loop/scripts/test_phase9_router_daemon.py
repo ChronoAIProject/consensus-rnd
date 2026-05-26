@@ -107,15 +107,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.assertEqual(self.commands, [])
             self.assertEqual(self.ledger_entries(), [])
 
-        with self.subTest("ps command line"):
+        with self.subTest("spawned registry"):
             self.tmp.cleanup()
             self.setUp()
             self.solver_triplet(issue=38, round_no=5)
             target_log = self.router._log_path("38", 5, "judge")
-            ps_output = f"/bin/sh /tmp/spawn-codex.sh --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+            spawned = self.repo / ".refactor-loop" / "spawned"
+            spawned.mkdir(parents=True)
+            spawned.joinpath(f"{target_log.stem}.pid").write_text("pid=123\n", encoding="utf-8")
 
-            with mock.patch("phase9_router_daemon.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
-                self.router.tick()
+            self.router.tick()
 
             self.assertEqual(self.commands, [])
             self.assertEqual(self.ledger_entries(), [])

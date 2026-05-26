@@ -42,11 +42,18 @@ STATE_DIR=".refactor-loop"
 STATE_FILE="$STATE_DIR/codex-progress-state.json"
 LOG_DIR="$STATE_DIR/logs"
 PROMPTS_DIR="$STATE_DIR/prompts"
+HEARTBEAT_FILE="$STATE_DIR/heartbeats/codex-progress-reporter.sh.ts"
 
-mkdir -p "$STATE_DIR"
+mkdir -p "$STATE_DIR" "$(dirname "$HEARTBEAT_FILE")"
 [ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"
 
 log_msg() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
+write_heartbeat() {
+  # Refactor (iter4/spawn-codex-pid-registry):
+  #   Old pattern: controller health checked daemon names via process-table grep.
+  #   New principle: daemon writes repo-local heartbeat timestamp; controller uses heartbeat-mtime <90s.
+  date +%s > "$HEARTBEAT_FILE"
+}
 
 # parse log basename → target number (issue or PR)
 # 优先从对应 prompt 文件 grep "#NNN"; 次选从 log 文件名 pattern 提取
@@ -246,6 +253,7 @@ post_or_update() {
 
 # 主 loop
 while true; do
+  write_heartbeat
   log_msg "tick"
   for log in "$LOG_DIR"/*.log; do
     [ -f "$log" ] || continue

@@ -27,7 +27,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 | Work unit state | WorkUnitV1 is stable v1; do not rename, migrate, or wrap it. | Read and write existing v1 containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [WorkUnitV1](REFERENCE.md#workunitv1-contract), [state schema](REFERENCE.md#state-schema) | `.refactor-loop/state.json` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](REFERENCE.md#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Phase 9 multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [phase 9 details](REFERENCE.md#phase-9-details) | `solver-*.md`, `meta-judge.md` |
-| Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `spawn-codex.sh` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](REFERENCE.md#concurrency-floor-details) | `concurrency_monitor.py`, `peek.sh` |
+| Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `.refactor-loop/spawned/*.pid` registry files; top up before ScheduleWakeup. | [concurrency floor details](REFERENCE.md#concurrency-floor-details) | `concurrency_monitor.py`, `peek.sh` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `👤 human:需-maintainer-决策` only after allowed meta-layer routes. | [label bootstrap loops](REFERENCE.md#label-bootstrap-loops) | `controller_lib.sh`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](REFERENCE.md#codex-invocation-details) | `spawn-codex.sh` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](REFERENCE.md#hard-rules-details) | prompt templates |
@@ -125,7 +125,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
-8. ensure all 6 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, `triage-monitor.sh`, and `phase9_router_daemon.py`.
+8. ensure all 6 daemons are alive by heartbeat-mtime(<90s) and singleton intent: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, `triage-monitor.sh`, and `phase9_router_daemon.py`.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
@@ -235,8 +235,9 @@ The floor is local because it prevents loop stalls.
 
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
-- Count only this repository's loop codexes: command line contains `spawn-codex.sh` and the absolute `$REPO_ROOT`.
-- Exclude shell ` -c ` wrapper rows so each real codex counts once.
+- Count only this repository's loop codexes: `ls $REPO_ROOT/.refactor-loop/spawned/*.pid`.
+- `spawn-codex.sh` writes `.refactor-loop/spawned/<task-id>.pid` and removes only its own file on exit.
+- **不**用 ps grep for codex counts or daemon health; daemon health is heartbeat-mtime(`<90s`) on `.refactor-loop/heartbeats/<daemon>.ts`.
 - `concurrency_monitor.py` 只做 no-gap sentinel; the controller owns top-up.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor and no higher-priority actionable marker exists, dispatch audit/self-audit/retrospective-compatible work per current phase.
