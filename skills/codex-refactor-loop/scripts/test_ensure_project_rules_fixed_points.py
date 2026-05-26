@@ -1518,6 +1518,31 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
 
 
+class AuditDerivedHygieneExceptionTests(unittest.TestCase):
+    """Source regressions for the PR #48 audit-derived hygiene exception."""
+
+    def clause_text(self) -> str:
+        lines = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8").splitlines()
+        return "\n".join(lines[38:45])
+
+    def test_hygiene_exception_clause_requires_host_agnostic(self) -> None:
+        self.assertIn("host-agnostic", self.clause_text())
+
+    def test_hygiene_exception_clause_requires_source_regression(self) -> None:
+        clause = self.clause_text()
+        self.assertTrue("源回归" in clause or "source-regression test" in clause)
+
+    def test_hygiene_exception_clause_requires_per_item_marking(self) -> None:
+        clause = self.clause_text()
+        self.assertIn("FIX_REPORT 逐项标", clause)
+        self.assertIn("✓", clause)
+        self.assertIn("⏭", clause)
+        self.assertIn("❌", clause)
+
+    def test_hygiene_exception_clause_requires_refactor_self_doc(self) -> None:
+        self.assertIn("Refactor (iterN/cluster): Old pattern: ... New principle: ...", self.clause_text())
+
+
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
