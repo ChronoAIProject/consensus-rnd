@@ -264,4 +264,59 @@ verify_trunk_build() {
   return 0
 }
 
+# Refactor (iter4/skill-safe-push-helper): Old pattern: controller 每次 commit 后直接 push,
+# 但 dev_sync_daemon 在独立 worktree 同步 origin/dev -> auto-refact-dev 时会先 push,导致
+# main repo HEAD 落后远端;controller 这边 push 撞 non-fast-forward,必须手动 pull --rebase。
+# New principle: 强制走 safe_push,内置 fetch + 必要时 rebase --autostash + 再 push;
+# 同时暴露 safe_sync_main 在 session 入口 / pre-commit 时主动追远端。
+# (2026-05-26 maintainer-directive 等价 Phase 9 共识)
+
+# Usage: safe_push <remote> <branch>
+# Behavior: fetch remote/branch; if local diverges or is behind, rebase --autostash;
+#   then push. Returns non-zero if rebase has conflicts (caller must resolve).
+safe_push() {
+  local remote="${1:-origin}"
+  local branch="${2:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)}"
+  if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+    echo "safe_push: cannot determine branch (HEAD detached?); aborting" >&2
+    return 2
+  fi
+  ( cd "$REPO_ROOT" || return 1
+    git fetch "$remote" "$branch" 2>&1 | tail -3
+    local behind
+    behind=$(git rev-list --count "HEAD..$remote/$branch")
+    if [ "${behind:-0}" -gt 0 ]; then
+      echo "safe_push: local behind $remote/$branch by $behind commit(s); rebasing"
+      if ! git pull --rebase --autostash "$remote" "$branch"; then
+        echo "❌ safe_push: rebase conflict on $remote/$branch — resolve manually then push" >&2
+        return 3
+      fi
+    fi
+    git push "$remote" "$branch"
+  )
+}
+
+# Usage: safe_sync_main [remote] [branch]
+# Idempotent fast-forward of the current working tree to the remote tip. Use at session
+# start or before commits to avoid the safe_push rebase path. No-op when already current.
+safe_sync_main() {
+  local remote="${1:-origin}"
+  local branch="${2:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD)}"
+  if [ -z "$branch" ] || [ "$branch" = "HEAD" ]; then
+    echo "safe_sync_main: cannot determine branch; skipping" >&2
+    return 0
+  fi
+  ( cd "$REPO_ROOT" || return 1
+    git fetch "$remote" "$branch" 2>&1 | tail -3
+    local behind
+    behind=$(git rev-list --count "HEAD..$remote/$branch")
+    if [ "${behind:-0}" -gt 0 ]; then
+      echo "safe_sync_main: local behind $remote/$branch by $behind; pulling --rebase --autostash"
+      git pull --rebase --autostash "$remote" "$branch"
+    else
+      echo "safe_sync_main: already up to date with $remote/$branch"
+    fi
+  )
+}
+
 # ⟦AI:AUTO-LOOP⟧
