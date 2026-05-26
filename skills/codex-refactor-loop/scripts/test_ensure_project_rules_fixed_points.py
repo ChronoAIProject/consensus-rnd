@@ -1960,6 +1960,64 @@ class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
                     self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
 
 
+class ScopedNamedSurfaceAuthorizationParagraphTests(unittest.TestCase):
+    """#60 r1 consensus 守护 Phase 9 named runtime surface 授权不被偷扩。"""
+
+    @staticmethod
+    def _paragraph_containing(needle: str) -> str:
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        return next(p for p in paragraphs if needle in p)
+
+    def test_scoped_named_surface_paragraph_has_required_keywords(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("deep consensus", "named runtime surface", "host-agnostic",
+                     "narrow allowlist", "no lifecycle authority", "behavior tests",
+                     "source-regression"):
+            self.assertIn(term, p)
+
+    def test_scoped_named_surface_paragraph_has_negative_boundaries(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("不放宽", "merge gate", "CI/release policy", "语言 policy",
+                     "Tier I/II", "CLAUDE.md 修宪", "独立 PR 自我放行权"):
+            self.assertIn(term, p)
+
+    def test_scoped_named_surface_paragraph_has_lifecycle_authority_carveout(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("release/lifecycle surface 仅产出 durable decision/candidate artifact",
+                     "controller 或 release pipeline", "host opt-in + 有效 artifact"):
+            self.assertIn(term, p)
+
+    def test_no_generic_phase9_authorization_paragraph_exists(self):
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        for p in paragraphs:
+            lowered = p.lower()
+            if ".refactor-loop/runs/maintainer-directives/" in p:
+                continue
+            if "phase 9" in lowered and "授权" in p:
+                with self.subTest(paragraph=p[:80]):
+                    self.assertIn("host-agnostic", p)
+                    self.assertIn("no lifecycle authority", p)
+                    self.assertIn("narrow allowlist", p)
+
+    def test_no_maintainer_directive_used_as_pr_release_or_observability_authorization(self):
+        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
+        forbidden_terms = (
+            "release/lifecycle surface",
+            "release decision-artifact",
+            "release-readiness",
+            "observability surface",
+            "observability per #51",
+            "release decision-artifact per #56",
+            "PR #58",
+            "PR #59",
+        )
+        for term in forbidden_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, p)
+
+
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
