@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Sleep allowlist (per tests-reviewer):
+# 本测试为 wrapper lifecycle 行为测试,需 fake codex 进程在 wrapper 启动→运行→退出
+# 这段时间内 PID file 存在,wrapper 结束后 trap cleanup 删除。sleep 是必要的(无 sync 替代),
+# allowlisted per source-regression test_ensure_project_rules_fixed_points.py 的 sleep-allowlist 段。
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 SPAWN_CODEX="$SCRIPT_DIR/spawn-codex.sh"
 TEST_TMP=""

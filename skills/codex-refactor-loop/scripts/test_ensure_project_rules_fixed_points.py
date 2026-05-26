@@ -937,12 +937,16 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
             repo = root / "repo"
             worktree = root / "repo-wt-dev-sync"
             sibling = root / "sibling"
+            fake_codex = root / "codex"
             repo.mkdir()
             worktree.mkdir()
             sibling.mkdir()
+            fake_codex.symlink_to("/bin/sleep")
             spawned = repo / ".refactor-loop" / "spawned"
             sibling_spawned = sibling / ".refactor-loop" / "spawned"
+            logs = repo / ".refactor-loop" / "logs"
             spawned.mkdir(parents=True)
+            logs.mkdir(parents=True)
             sibling_spawned.mkdir(parents=True)
             sibling_spawned.joinpath("dev-sync-codex-1.pid").write_text("pid=999\n", encoding="utf-8")
             env = os.environ.copy()
@@ -962,19 +966,34 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
                     "-c",
                     """
 import os
+import subprocess
 import dev_sync_daemon
 
 repo = os.environ["REPO"]
+codex = os.environ["CODEX"]
 spawned = os.path.join(repo, ".refactor-loop", "spawned")
 print(dev_sync_daemon.codex_resolve_in_flight())
-open(os.path.join(spawned, "dev-sync-codex-1.pid"), "w", encoding="utf-8").write("pid=123\\n")
-print(dev_sync_daemon.codex_resolve_in_flight())
-open(os.path.join(spawned, "reviewer-1.pid"), "w", encoding="utf-8").write("pid=456\\n")
-os.remove(os.path.join(spawned, "dev-sync-codex-1.pid"))
-print(dev_sync_daemon.codex_resolve_in_flight())
+proc = subprocess.Popen([codex, "30"])
+try:
+    open(os.path.join(spawned, "dev-sync-codex-1.pid"), "w", encoding="utf-8").write(
+        f"pid={proc.pid}\\n"
+        f"repo_root={repo}\\n"
+        f"log={repo}/.refactor-loop/logs/dev-sync-codex-1.log\\n"
+    )
+    print(dev_sync_daemon.codex_resolve_in_flight())
+    open(os.path.join(spawned, "reviewer-1.pid"), "w", encoding="utf-8").write("pid=456\\n")
+    os.remove(os.path.join(spawned, "dev-sync-codex-1.pid"))
+    print(dev_sync_daemon.codex_resolve_in_flight())
+finally:
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
 """,
                 ],
-                env=env,
+                env={**env, "CODEX": str(fake_codex)},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -1618,6 +1637,34 @@ class SpawnCodexPidRegistryContractTests(unittest.TestCase):
         text = directive.read_text(encoding="utf-8")
         self.assertIn("改一下skills, 是检测方法的问题,用错了脚本", text)
         self.assertIn("改由数codex, 变成数本仓库的脚本", text)
+
+
+class SpawnCodexShellTestSleepAllowlistTests(unittest.TestCase):
+    """sleep-allowlist source regressions for wrapper lifecycle shell tests."""
+
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def rel_paths(self, *patterns: str) -> list[Path]:
+        return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
+
+    def test_spawn_codex_pid_registry_shell_test_documents_sleep_allowlist(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/test_spawn_codex_pid_registry.sh")
+
+        self.assertIn("Sleep allowlist", text)
+        self.assertIn("wrapper lifecycle 行为测试", text)
+        self.assertIn("sleep 是必要的", text)
+
+    def test_other_shell_tests_do_not_add_raw_sleep_numbers(self) -> None:
+        allowed = "skills/codex-refactor-loop/scripts/test_spawn_codex_pid_registry.sh"
+        raw_sleep_number = re.compile(r"(^|[;&|]\s*)sleep\s+[0-9]+(?:\.[0-9]+)?(?:\s|$)")
+
+        for path in self.rel_paths("skills/codex-refactor-loop/scripts/test_*.sh"):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            if rel == allowed:
+                continue
+            with self.subTest(path=rel):
+                self.assertIsNone(raw_sleep_number.search(path.read_text(encoding="utf-8")), rel)
 
 
 # Refactor (iter3/skill-contract-test-suite):

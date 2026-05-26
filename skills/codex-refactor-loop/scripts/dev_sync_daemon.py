@@ -143,10 +143,81 @@ def reset_to_remote(cwd: Path) -> bool:
 def codex_resolve_in_flight() -> bool:
     """Return whether this repo already has a dev-sync resolver supervisor."""
     # Refactor (iter4/spawn-codex-pid-registry):
-    #   Old pattern: process-table command parsing for dev-sync spawn-codex.sh supervisors.
-    #   New principle: inspect this repo's .refactor-loop/spawned/dev-sync-codex-*.pid registry.
+    #   Old pattern: raw dev-sync-codex-*.pid file presence blocked new resolver dispatch forever.
+    #   New principle: count only live repo-local registry entries whose PID still looks like codex.
     spawned_dir = MAIN_REPO / ".refactor-loop" / "spawned"
-    return spawned_dir.exists() and any(spawned_dir.glob("dev-sync-codex-*.pid"))
+    return spawned_dir.exists() and any(_registry_entry_alive(path) for path in spawned_dir.glob("dev-sync-codex-*.pid"))
+
+
+def _read_pid_registry(path: Path) -> dict[str, str]:
+    entry: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            entry[key.strip()] = value.strip()
+    return entry
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _pid_command(pid: int) -> str:
+    r = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    if r.returncode != 0:
+        return ""
+    return r.stdout.strip()
+
+
+def _pid_looks_like_codex(pid: int) -> bool:
+    command = _pid_command(pid)
+    if not command:
+        return False
+    return "codex" in command.lower()
+
+
+def _registry_entry_alive(path: Path) -> bool:
+    try:
+        entry = _read_pid_registry(path)
+    except OSError:
+        return False
+
+    repo_text = entry.get("repo_root")
+    if repo_text:
+        try:
+            if Path(repo_text).expanduser().resolve() != MAIN_REPO.resolve():
+                return False
+        except OSError:
+            return False
+
+    log_text = entry.get("log")
+    if not log_text:
+        return False
+    try:
+        log_path = Path(log_text).expanduser()
+        if not log_path.is_absolute():
+            log_path = (MAIN_REPO / log_path).resolve()
+        else:
+            log_path = log_path.resolve()
+        log_path.relative_to(MAIN_REPO.resolve())
+    except (OSError, ValueError):
+        return False
+    if not log_path.name.startswith("dev-sync-codex-"):
+        return False
+
+    try:
+        pid = int(entry.get("pid", ""))
+    except ValueError:
+        return False
+    if pid <= 0:
+        return False
+    return _pid_alive(pid) and _pid_looks_like_codex(pid)
 
 
 def dispatch_codex_resolve() -> None:

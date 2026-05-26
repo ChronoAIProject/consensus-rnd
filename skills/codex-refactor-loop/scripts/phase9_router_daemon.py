@@ -276,6 +276,9 @@ class Phase9Router:
         return self._registry_entry_alive(reg_file, log_path)
 
     def _registry_entry_alive(self, reg_file: Path, expected_log: Path) -> bool:
+        # Refactor (iter4/issue52-r1):
+        #   Old pattern: in-flight detection trusted process-table text for a target log.
+        #   New principle: one helper validates repo/log/PID fields from the spawn registry before suppressing dispatch.
         try:
             entry = self._read_pid_registry(reg_file)
         except OSError:
@@ -307,6 +310,9 @@ class Phase9Router:
         return self._pid_alive(entry.get("pid"))
 
     def _read_pid_registry(self, reg_file: Path) -> dict[str, str]:
+        # Refactor (iter4/issue52-r1):
+        #   Old pattern: router had no structured local record to parse for spawned workers.
+        #   New principle: parse key=value registry files written by spawn-codex.sh.
         entry: dict[str, str] = {}
         for line in reg_file.read_text(encoding="utf-8", errors="replace").splitlines():
             key, sep, value = line.partition("=")
@@ -315,6 +321,9 @@ class Phase9Router:
         return entry
 
     def _pid_alive(self, pid_text: str | None) -> bool:
+        # Refactor (iter4/issue52-r1):
+        #   Old pattern: router inferred liveness from grep matches that could outlive workers.
+        #   New principle: a registry entry is live only while os.kill(pid, 0) accepts the recorded child PID.
         if not pid_text:
             return False
         try:

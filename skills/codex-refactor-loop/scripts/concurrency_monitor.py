@@ -130,6 +130,9 @@ def save_state(s: dict) -> None:
 
 
 def _read_pid_registry(path: Path) -> dict[str, str]:
+    # Refactor (iter4/issue52-r1):
+    #   Old pattern: monitor inferred spawned codex state from process-table text.
+    #   New principle: parse the repo-local spawn-codex registry schema mechanically.
     entry: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         key, sep, value = line.partition("=")
@@ -139,6 +142,9 @@ def _read_pid_registry(path: Path) -> dict[str, str]:
 
 
 def _pid_alive(pid_text: str | None) -> bool:
+    # Refactor (iter4/issue52-r1):
+    #   Old pattern: any matching command line could count as active work.
+    #   New principle: a registry entry counts only while its recorded child PID is alive.
     if not pid_text:
         return False
     try:
@@ -157,6 +163,9 @@ def _pid_alive(pid_text: str | None) -> bool:
 
 
 def _is_repo_log(log_text: str | None) -> bool:
+    # Refactor (iter4/issue52-r1):
+    #   Old pattern: repo scoping came from grep text that could cross-match other worktrees.
+    #   New principle: validate the registry log path resolves under this REPO_ROOT.
     if not log_text:
         return False
     try:
@@ -173,6 +182,9 @@ def _is_repo_log(log_text: str | None) -> bool:
 
 
 def _registry_entry_alive(path: Path) -> bool:
+    # Refactor (iter4/issue52-r1):
+    #   Old pattern: spawned state had no single trust boundary for repo/log/pid checks.
+    #   New principle: central helper accepts only live, repo-local, in-repo-log registry entries.
     try:
         entry = _read_pid_registry(path)
     except OSError:
