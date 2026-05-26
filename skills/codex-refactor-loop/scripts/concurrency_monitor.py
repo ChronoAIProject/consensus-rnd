@@ -162,6 +162,29 @@ def _pid_alive(pid_text: str | None) -> bool:
     return True
 
 
+def _pid_command(pid_text: str | None) -> str:
+    try:
+        pid = int(pid_text or "")
+    except ValueError:
+        return ""
+    if pid <= 0:
+        return ""
+    r = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True)
+    if r.returncode != 0:
+        return ""
+    return r.stdout.strip()
+
+
+def _pid_looks_like_codex(pid_text: str | None) -> bool:
+    # Refactor (iter4/issue52-r4):
+    #   Old pattern: any live PID with a repo-local log could count as loop work.
+    #   New principle: registry entries count only when the live PID command still looks like codex.
+    command = _pid_command(pid_text)
+    if not command:
+        return False
+    return "codex" in command.lower()
+
+
 def _is_repo_log(log_text: str | None) -> bool:
     # Refactor (iter4/issue52-r1):
     #   Old pattern: repo scoping came from grep text that could cross-match other worktrees.
@@ -196,7 +219,8 @@ def _registry_entry_alive(path: Path) -> bool:
                 return False
         except OSError:
             return False
-    return _pid_alive(entry.get("pid")) and _is_repo_log(entry.get("log"))
+    pid_text = entry.get("pid")
+    return _pid_alive(pid_text) and _pid_looks_like_codex(pid_text) and _is_repo_log(entry.get("log"))
 
 
 def count_in_flight_codex() -> int:
