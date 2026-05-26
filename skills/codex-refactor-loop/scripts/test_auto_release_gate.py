@@ -72,8 +72,65 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
     return tmp
 
 
-def write_opt_in(repo: Path, enabled: bool = True) -> None:
-    (repo / "host.env").write_text(f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n", encoding="utf-8")
+def write_opt_in(
+    repo: Path,
+    enabled: bool = True,
+    review_base: str = "review-base",
+    integration: str = "integration-branch",
+) -> None:
+    (repo / "host.env").write_text(
+        "\n".join(
+            [
+                f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
+                f"export REVIEW_BASE_BRANCH={review_base}",
+                f"export INTEGRATION_BRANCH={integration}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+
+def write_gh_stub(bin_dir: Path) -> None:
+    gh = bin_dir / "gh"
+    gh.write_text(
+        """#!/usr/bin/env python3
+import json
+import sys
+from datetime import datetime, timezone
+
+now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+args = sys.argv[1:]
+if args[:3] == ["run", "list", "--branch"]:
+    print(json.dumps([
+        {"databaseId": 1, "createdAt": now, "conclusion": "success", "status": "completed", "name": "contract-tests"},
+        {"databaseId": 2, "createdAt": now, "conclusion": "success", "status": "completed", "name": "manifest-version-sync"},
+    ]))
+    raise SystemExit(0)
+if len(args) >= 2 and args[1] == "list":
+    print("[]")
+    raise SystemExit(0)
+print("[]")
+""",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+
+
+def write_live_state(repo: Path) -> None:
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    state = repo / ".refactor-loop/state"
+    write_json(state / "daemon-heartbeats.json", {name: now for name in (
+        "concurrency_monitor.py",
+        "codex-progress-reporter.sh",
+        "comment-monitor.sh",
+        "dev_sync_daemon.py",
+        "triage-monitor.sh",
+        "phase9_router_daemon.py",
+    )})
+    write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
+    write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
+    write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 0})
 
 
 def write_green_signals(repo: Path) -> None:
@@ -180,6 +237,69 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((repo / ".refactor-loop/state/release-decision.json").exists())
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_score_only_cli_prints_stability_no_decision_write(self) -> None:
+        """--score-only path prints stability summary, does not write decision.json or bump."""
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_green_signals(repo)
+            before = (repo / "package.json").read_text(encoding="utf-8")
+            env = {**os.environ, "REPO_ROOT": str(repo)}
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            summary = json.loads(result.stdout)
+            self.assertIn("stability", summary)
+            self.assertIn("ready", summary["stability"])
+            self.assertIn("score", summary["stability"])
+            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_live_stability_collector_path_without_fixtures(self) -> None:
+        """Without signal monkey-patching, exercise the live collector path end-to-end."""
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            subprocess.run(
+                ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-q", "-m", "feat: live collector"],
+                cwd=repo,
+                check=True,
+            )
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir)
+            env = {
+                **os.environ,
+                "REPO_ROOT": str(repo),
+                "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+            }
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py"))],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("check branches: trunk-review, release-integration", result.stdout)
+            decision = read_json(repo / ".refactor-loop/state/release-decision.json")
+            self.assertIsInstance(decision, dict)
+            assert isinstance(decision, dict)
+            for key in ("from_version", "to_version", "stability_score", "signals", "ready", "blocked_reasons"):
+                self.assertIn(key, decision)
+            ci_signal = decision["signals"]["required_checks_recent_green"]
+            self.assertEqual(set(ci_signal["branches"]), {"trunk-review", "release-integration"})
+            self.assertTrue(ci_signal["passed"])
 
     def test_apply_bumps_and_pushes_version_files(self) -> None:
         with copy_repo_fixture() as tmp:

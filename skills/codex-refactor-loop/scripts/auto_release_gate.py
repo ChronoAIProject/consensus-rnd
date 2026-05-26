@@ -118,6 +118,13 @@ def load_host_env(repo_root: Path) -> dict[str, str]:
     return values
 
 
+def inject_host_env(repo_root: Path) -> dict[str, str]:
+    values = load_host_env(repo_root)
+    for key, value in values.items():
+        os.environ[key] = value
+    return values
+
+
 def repo_root_from_env() -> Path:
     env_root = os.environ.get("REPO_ROOT")
     if env_root:
@@ -235,7 +242,20 @@ class AutoReleaseGate:
 
     def required_checks_recent_green(self, since: datetime) -> dict[str, Any]:
         required = ("contract-tests", "manifest-version-sync")
-        branches = ("dev", "auto-refact-dev")
+        try:
+            review_base = os.environ["REVIEW_BASE_BRANCH"].strip()
+            integration = os.environ["INTEGRATION_BRANCH"].strip()
+        except KeyError as exc:
+            missing = exc.args[0]
+            reason = f"missing {missing} from host.env/environment; unsafe to infer release check branch"
+            print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
+            return {"passed": False, "reason": reason, "source": "env"}
+        if not review_base or not integration:
+            reason = "empty REVIEW_BASE_BRANCH or INTEGRATION_BRANCH; unsafe to infer release check branch"
+            print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
+            return {"passed": False, "reason": reason, "source": "env"}
+        branches = (review_base, integration)
+        print(f"check branches: {review_base}, {integration}")
         evidence: dict[str, Any] = {}
         for branch in branches:
             result = self.runner(
@@ -536,14 +556,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         repo_root = repo_root_from_env()
         gate = AutoReleaseGate(repo_root)
-        host_env = load_host_env(repo_root)
+        host_env = inject_host_env(repo_root)
         if not args.score_only and host_env.get("RELEASE_AUTO_ENABLE") != "true":
             print("auto-release noop: RELEASE_AUTO_ENABLE is not true in host.env")
             return 0
 
         stability = gate.compute_stability(min_recent_merges=args.min_recent_merges)
         if args.score_only:
-            print(json.dumps({"ready": stability.ready, "score": stability.score, "signals": stability.signals}, ensure_ascii=False, indent=2))
+            print(json.dumps({"stability": {"ready": stability.ready, "score": stability.score, "signals": stability.signals}}, ensure_ascii=False, indent=2))
             return 0
 
         decision = gate.decide_release(stability, args.min_interval_hours)
