@@ -39,3 +39,5 @@
 - `skills/codex-refactor-loop/` 为 host 项目移植,**verbatim**,仍带"重构"外壳与少量 host 主张。泛化路线见 `README.md` 的「泛化路线」。脱壳 / 重命名前不要改它的正文逻辑；例外：经 Phase 9 deep consensus 明确授权的 host-agnostic bootstrap / policy 注入修正可先落地，但不得引入具体 host 事实，且必须配套行为测试。
 
 **该例外同时覆盖** Phase 9 共识授权的**确定性 controller-runtime 路由 daemon**(例如 narrow allowlist phase router):必须 host-agnostic、必须 narrow allowlist 不引入 lifecycle authority、必须配套行为测试与 source-regression test、必须在 SKILL.md 加 named exception 段。这是为了把可机械的 controller 工作从长跑 LLM 搬到脚本(维护者明示 "LLM 长时间运行会退化,但是脚本不会"，见 issue #37 共识)。
+
+**该例外也可由 maintainer-directive artifact 等价证明**:仅限 audit-derived、`requires_design=false` 的机械型 hygiene 批次;当维护者在 `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` 明示授权该批次时,该 artifact 可视为 Phase 9 deep consensus 等价证明。该等价证明不新增独立 PR 自我放行权,也不放宽 merge gate、CI/release policy、语言 policy、lifecycle authority 或 Tier I/II 边界,不得作为任意 `CLAUDE.md` 修宪授权;覆盖项仍必须 host-agnostic、不得引入具体 host 事实、必须配套行为测试与源回归测试/source-regression test、必须保留 `Refactor (iterN/cluster): Old pattern: ... New principle: ...` 自文档块,并在 FIX_REPORT 逐项标 fixed / already addressed / blocked。

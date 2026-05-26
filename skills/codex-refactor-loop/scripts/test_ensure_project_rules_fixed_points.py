@@ -1518,6 +1518,44 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("<skill-root>/scripts/spawn-codex.sh", skill_text)
 
 
+class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
+    """#54 r2 consensus 守护 paragraph-scoped 不被任何 future PR 偷扩。"""
+
+    @staticmethod
+    def _paragraph_containing(needle: str) -> str:
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        return next(p for p in paragraphs if needle in p)
+
+    def test_maintainer_directive_equivalence_paragraph_has_scope(self):
+        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
+        for term in ("audit-derived", "requires_design=false", "机械型 hygiene 批次",
+                     "maintainer-directive artifact", "Phase 9 deep consensus 等价证明"):
+            self.assertIn(term, p)
+
+    def test_maintainer_directive_equivalence_paragraph_pins_constraints(self):
+        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
+        for term in ("host-agnostic", "源回归测试", "Refactor (iterN/cluster):",
+                     "Old pattern:", "New principle:", "FIX_REPORT", "fixed", "already addressed", "blocked"):
+            self.assertIn(term, p)
+
+    def test_maintainer_directive_equivalence_paragraph_pins_negative_boundaries(self):
+        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
+        for term in ("merge gate", "CI/release policy", "语言 policy",
+                     "lifecycle authority", "Tier I/II", "`CLAUDE.md` 修宪"):
+            self.assertIn(term, p)
+
+    def test_no_standalone_audit_derived_authority_paragraph(self):
+        """断不存在另一独立 paragraph 含 audit-derived 但**不**含 maintainer-directive 路径,
+        且含授权/等价证明等 term — 防 future PR 偷开 standalone audit-derived 自授权。"""
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        for p in paragraphs:
+            if ("audit-derived" in p or "requires_design=false" in p) and ".refactor-loop/runs/maintainer-directives/" not in p:
+                for forbidden in ("授权", "等价证明", "pre-authorized", "无需逐项 Phase 9"):
+                    self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
+
+
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
