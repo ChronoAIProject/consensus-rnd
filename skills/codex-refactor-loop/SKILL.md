@@ -81,6 +81,26 @@ Host config rules:
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
+## Autonomous release gate(per #56 consensus)
+
+The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: fully autonomous publish after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
+
+Command contract:
+
+| Command | Behavior |
+|---|---|
+| `<skill-root>/scripts/auto_release_gate.py` | Dry-run. Compute stability, decide release type when ready, write `.refactor-loop/state/release-decision.json`, and print a summary. |
+| `<skill-root>/scripts/auto_release_gate.py --apply` | Apply only a ready decision: bump all `.version-bump.json` mapped manifests, commit, and push `HEAD`; `release.yml` owns publish on push. |
+| `<skill-root>/scripts/auto_release_gate.py --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
+
+Stability requires all signals green: recent `contract-tests` and `manifest-version-sync` success on `dev` and `auto-refact-dev`; zero open `⏸️ phase:blocked` PRs; zero `👤 human:需-maintainer-决策` labels; zero Phase 8 reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](REFERENCE.md#release-decision-schema).
+
+`release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`.
+
+Forbidden: do not add per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization. The host opt-in is durable until removed from `host.env`.
+
+Named exception: this autonomous release gate is host-agnostic and has no lifecycle authority. It only reads repo state, computes stability, bumps mapped release manifests, commits, and pushes; it does not open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.

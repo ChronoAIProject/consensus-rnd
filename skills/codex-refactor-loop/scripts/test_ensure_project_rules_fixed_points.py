@@ -1933,6 +1933,37 @@ class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
                     self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
 
 
+class AutonomousReleaseGateContractTests(unittest.TestCase):
+    """#56 r2 consensus autonomous release gate contract."""
+
+    def read_skill(self) -> str:
+        return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    def test_skill_documents_autonomous_release_gate_title(self) -> None:
+        self.assertIn("## Autonomous release gate(per #56 consensus)", self.read_skill())
+
+    def test_skill_documents_opt_in_gate_literal(self) -> None:
+        text = self.read_skill()
+        self.assertIn("$RELEASE_AUTO_ENABLE=true", text)
+        self.assertIn("opt-in", text)
+
+    def test_skill_rejects_mandatory_per_release_authorization(self) -> None:
+        text = self.read_skill()
+        forbidden_patterns = (
+            r"mandatory per-release\s+maintainer emoji react",
+            r"mandatory per-release\s+approval issue",
+            r"mandatory per-release\s+release-candidate\.json authorization",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, text))
+
+    def test_skill_pins_named_exception_boundaries(self) -> None:
+        text = self.read_skill()
+        self.assertIn("host-agnostic", text)
+        self.assertIn("no lifecycle authority", text)
+
+
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
