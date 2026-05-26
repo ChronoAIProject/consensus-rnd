@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -45,6 +46,18 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
 
     def snapshot_path(self) -> Path:
         return self.repo / ".refactor-loop" / "state" / "statusline-snapshot.json"
+
+    def write_snapshot(self, *, now: datetime | None = None) -> dict:
+        self.monitor.write_statusline_snapshot(
+            actual=1,
+            expected=1,
+            p0_streak=0,
+            last_p0_at=None,
+            open_pr_count=0,
+            open_issue_count=0,
+            now=now,
+        )
+        return json.loads(self.snapshot_path().read_text(encoding="utf-8"))
 
     def fake_gh(self, cmd: list[str]) -> SimpleNamespace:
         if cmd[:3] == ["gh", "issue", "list"]:
@@ -215,6 +228,38 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.assertEqual(data["open_pr_count"], expected_prs)
         self.assertEqual(data["open_issue_count"], expected_issues)
         self.assertEqual((expected_prs, expected_issues), (1, 2))
+
+    def test_invalid_codex_floor_falls_back_to_default_5(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_FLOOR": "invalid"}, clear=False):
+            data = self.write_snapshot()
+
+        self.assertEqual(data["floor"], 5)
+
+    def test_codex_floor_one_clamps_to_minimum_two(self) -> None:
+        with mock.patch.dict(os.environ, {"CODEX_FLOOR": "1"}, clear=False):
+            data = self.write_snapshot()
+
+        self.assertEqual(data["floor"], 2)
+
+    def test_marker_file_with_valid_marker_and_controlled_mtime_yields_freeze_minutes(self) -> None:
+        now = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+        marker = self.repo / ".refactor-loop" / "logs" / "worker.log"
+        marker.write_text("PHASE: implementation progress\n", encoding="utf-8")
+        os.utime(marker, (now.timestamp() - 7 * 60, now.timestamp() - 7 * 60))
+
+        data = self.write_snapshot(now=now)
+
+        self.assertEqual(data["freeze_minutes"], 7)
+
+    def test_files_without_valid_markers_keep_freeze_minutes_zero(self) -> None:
+        now = datetime(2026, 5, 26, 12, 0, 0, tzinfo=timezone.utc)
+        non_marker = self.repo / ".refactor-loop" / "logs" / "worker.log"
+        non_marker.write_text("phase implementation progress without marker syntax\n", encoding="utf-8")
+        os.utime(non_marker, (now.timestamp() - 30 * 60, now.timestamp() - 30 * 60))
+
+        data = self.write_snapshot(now=now)
+
+        self.assertEqual(data["freeze_minutes"], 0)
 
 
 if __name__ == "__main__":
