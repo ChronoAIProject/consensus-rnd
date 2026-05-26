@@ -2050,6 +2050,72 @@ class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
                     self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
 
 
+class AutonomousReleaseGateContractTests(unittest.TestCase):
+    """#56 r2 consensus autonomous release gate contract."""
+
+    def read_skill(self) -> str:
+        return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+    def read_gate_source(self) -> str:
+        return (SKILL_ROOT / "scripts" / "auto_release_gate.py").read_text(encoding="utf-8")
+
+    def autonomous_release_gate_section(self) -> str:
+        text = self.read_skill()
+        match = re.search(
+            r"## Named runtime exception — autonomous release gate\(per #56\)(.*?)\n## Wakeup Skeleton",
+            text,
+            flags=re.S,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        return match.group(1)
+
+    def test_skill_documents_autonomous_release_gate_title(self) -> None:
+        self.assertIn("## Named runtime exception — autonomous release gate(per #56)", self.read_skill())
+
+    def test_skill_documents_opt_in_gate_literal(self) -> None:
+        text = self.read_skill()
+        self.assertIn("$RELEASE_AUTO_ENABLE=true", text)
+        self.assertIn("opt-in", text)
+
+    def test_skill_rejects_mandatory_per_release_authorization(self) -> None:
+        text = self.read_skill()
+        forbidden_patterns = (
+            r"mandatory per-release\s+maintainer emoji react",
+            r"mandatory per-release\s+approval issue",
+            r"mandatory per-release\s+release-candidate\.json authorization",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, text))
+
+    def test_skill_pins_named_exception_boundaries(self) -> None:
+        text = self.read_skill()
+        self.assertIn("host-agnostic", text)
+        self.assertIn("no lifecycle authority", text)
+
+    def test_skill_documents_fail_closed_release_gate(self) -> None:
+        text = self.read_skill()
+        self.assertIn("fail-closed", text)
+
+    def test_skill_documents_decision_artifact_only_release_boundary(self) -> None:
+        section = self.autonomous_release_gate_section()
+        self.assertIn("**禁止** decider 直接 bump/commit/push", section)
+        self.assertIn("decision-artifact-only", section)
+
+    def test_auto_release_gate_source_has_no_direct_lifecycle_calls(self) -> None:
+        source = self.read_gate_source()
+        forbidden = (
+            "subprocess.run(['git', 'push']",
+            'subprocess.run(["git", "push"]',
+            '["git"',
+            "bump_version",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, source)
+
+
 class ScopedNamedSurfaceAuthorizationParagraphTests(unittest.TestCase):
     """#60 r1 consensus 守护 Phase 9 named runtime surface 授权不被偷扩。"""
 

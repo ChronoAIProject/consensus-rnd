@@ -81,6 +81,34 @@ Host config rules:
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
+## Named runtime exception — autonomous release gate(per #56)
+
+The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: autonomous release decision after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
+
+`auto_release_gate.py` is decision-artifact-only. **禁止** decider 直接 bump/commit/push: it must not run `git`, bump mapped manifests, commit, push, tag, publish, merge, close, or otherwise exercise lifecycle authority. It only computes stability from GitHub/state artifacts and writes durable release decision/candidate artifacts for the controller or release pipeline to consume.
+
+Command contract:
+
+| Command | Behavior |
+|---|---|
+| `<skill-root>/scripts/auto_release_gate.py` | Dry-run. Compute stability, decide release type when ready, write `.refactor-loop/state/release-decision.json`, and print a summary. |
+| `<skill-root>/scripts/auto_release_gate.py --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller or `release.yml` owns bump/commit/push. |
+| `<skill-root>/scripts/auto_release_gate.py --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
+
+Stability requires all signals green and fail-closed handling on missing or red evidence: recent `contract-tests` and `manifest-version-sync` success on `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `⏸️ phase:blocked` PRs; zero `👤 human:需-maintainer-决策` labels; zero Phase 8 reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](REFERENCE.md#release-decision-schema).
+
+`release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, host opt-in name, and lifecycle owner.
+
+## Release pipeline integration(post-#61)
+
+The release lifecycle surface consumes the decision-artifact-only output. A scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, then call the existing version bump command, commit/push the mapped manifest changes, and let `release.yml` publish. Alternatively, `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same host opt-in, bump/publish through its own guarded jobs, and record the result.
+
+In both integrations, `auto_release_gate.py` remains the decider only. The controller or workflow owns lifecycle operations and must re-validate the host opt-in before mutating git state or publishing.
+
+Forbidden: do not add per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization. The host opt-in is durable until removed from `host.env`.
+
+Named exception: this autonomous release gate is host-agnostic and has no lifecycle authority. It only reads repo state/GitHub evidence, computes stability, and writes durable decision/candidate artifacts; it does not run `git`, bump mapped release manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
+
 ## Claude Code statusline(per #51 consensus)
 
 `skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、P0 streak、freeze 指示)。
