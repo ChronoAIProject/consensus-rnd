@@ -170,6 +170,41 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 1)
 
+    def test_tick_dispatches_toward_expected_count_not_just_floor(self) -> None:
+        """When expected > floor, tick fires deficit toward expected (not just floor)."""
+        for i in range(4):
+            self.write_dispatch("p1", f"expected-task-{i}")
+        active_items = [
+            {"number": i, "kind": "issue", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}
+            for i in range(4)
+        ]
+        calls: list[list[str]] = []
+        counts = [2, 3, 4]
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
+                with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=active_items):
+                    self.monitor.tick()
+
+        self.assertEqual(len(calls), 2)
+        remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
+        self.assertEqual(len(remaining), 2)
+
+    def test_dispatch_json_without_stall_uses_default_5400(self) -> None:
+        """A dispatch JSON missing the `stall` field falls back to --stall 5400 on launch."""
+        dispatch = self.write_dispatch("p1", "default-stall-task")
+        payload = json.loads(dispatch.read_text(encoding="utf-8"))
+        del payload["stall"]
+        dispatch.write_text(json.dumps(payload), encoding="utf-8")
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            self.monitor.dispatch_one_from_queue()
+
+        self.assertEqual(len(calls), 1)
+        stall_index = calls[0].index("--stall")
+        self.assertEqual(calls[0][stall_index + 1], "5400")
+
     def test_configured_floor_invalid_falls_back(self) -> None:
         os.environ["CODEX_FLOOR"] = "abc"
         self.monitor = importlib.reload(self.monitor)
