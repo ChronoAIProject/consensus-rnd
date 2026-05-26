@@ -773,6 +773,17 @@ class WorktreeLocationConventionTests(unittest.TestCase):
         self.assertIn("Refactor (iter4/skill-worktree-inside-repo)", text)
         self.assertNotIn('f"{MAIN_REPO}-wt-dev-sync"', text)
 
+    def test_peek_sh_skip_list_covers_both_dev_sync_layouts(self):
+        """#50 共识:peek.sh case 必须 skip 历史 sibling 和新 inside dev-sync。
+        防 PR #50 后人改 peek.sh 漏掉一种导致 dev-sync 被误算成 stale worktree 清理。"""
+        src = (REPO_ROOT / "skills/codex-refactor-loop/scripts/peek.sh").read_text()
+        # 历史 sibling 兼容(已 merge 但未清理的旧 worktree)
+        self.assertIn('"$(basename "$REPO_ROOT")-wt-dev-sync"', src,
+            "peek.sh skip list 漏 sibling dev-sync(PR #50 前的历史路径)")
+        # 新 inside 路径
+        self.assertIn('"dev-sync"', src,
+            "peek.sh skip list 漏 inside dev-sync(PR #50 后的路径)")
+
     def test_no_sibling_worktree_pattern_in_active_scripts(self) -> None:
         allowed = {
             "scripts/peek.sh",
