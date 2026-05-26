@@ -13,7 +13,7 @@ __pycache__/
 node_modules/
 
 # Git worktrees(skill 运行时可能创建)
-.worktrees/
+/.worktrees/
 
 # Claude Code 本地设置(.claude/skills 软链需 track,故只忽略本地设置)
 .claude/settings.local.json

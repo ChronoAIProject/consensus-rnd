@@ -127,7 +127,7 @@ def count_in_flight_codex() -> int:
     OTHER host's codex too (observed actual=8 when this repo had 1) -> floor looks
     permanently "full" and this repo can starve below its minimum. Scope by the
     absolute REPO_ROOT: spawn-codex.sh always carries it (caller passes an absolute
-    --cd; sibling worktree paths `<repo>-wt-...` are REPO_ROOT-prefixed too), so a
+    --cd; inside worktree paths `<repo>/.worktrees/...` are REPO_ROOT-prefixed too), so a
     foreign loop at a different path is correctly excluded.
 
     Contract: callers MUST pass an absolute --cd (and absolute --log/--add-dir) so

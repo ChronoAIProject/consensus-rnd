@@ -40,14 +40,16 @@ fi
 # Fixes "git worktree add already exists" — detect-or-create
 # Usage: safe_worktree <iter> <cluster-id> <base-ref>
 # Sets WT_PATH and BRANCH env vars on success.
+# Refactor (iter4/skill-worktree-inside-repo): Old pattern: sibling `<repo>-wt-<name>/`. New principle: inside `<repo>/.worktrees/<name>/` + gitignored.
 safe_worktree() {
   local iter="$1" cluster="$2" base="$3"
-  WT_PATH="${REPO_ROOT}-wt-iter${iter}-${cluster}"
+  WT_PATH="${REPO_ROOT}/.worktrees/iter${iter}-${cluster}"
   BRANCH="refactor/iter${iter}-${cluster}"
   if [ -d "$WT_PATH" ]; then
     echo "  ✓ worktree exists: $WT_PATH" >&2
     return 0
   fi
+  mkdir -p "${REPO_ROOT}/.worktrees"
   if git -C "$REPO_ROOT" show-ref --quiet "refs/heads/$BRANCH"; then
     git -C "$REPO_ROOT" worktree add "$WT_PATH" "$BRANCH" 2>&1 | tail -2 >&2
   else

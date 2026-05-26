@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
+# Refactor (iter4/skill-worktree-inside-repo): Old pattern: sibling `<repo>-wt-<name>/`. New principle: inside `<repo>/.worktrees/<name>/` + gitignored.
 """
 dev_sync_daemon.py — 自动 merge origin/dev → auto-refact-dev 的 daemon
 
 daemon 跑在独立 worktree,main repo controller 工作不受 daemon 的 merge 状态干扰。
 
 设计:
-- 独立 worktree:$REPO_ROOT-wt-dev-sync(off auto-refact-dev)
+- 独立 worktree:$REPO_ROOT/.worktrees/dev-sync(off auto-refact-dev)
 - 600s 周期 check `git rev-list HEAD..origin/dev`
 - behind>0:try ff-only → no-ff merge → 冲突 spawn-codex resolve
 - 成功 → push origin auto-refact-dev → main repo controller 下次 fetch 拉到
@@ -71,7 +72,7 @@ def skill_root() -> Path:
 INTERVAL = int(os.environ.get("INTERVAL", "600"))
 SKILL_ROOT = skill_root()
 MAIN_REPO = git_repo_root()
-WORKTREE = Path(os.environ.get("WORKTREE", f"{MAIN_REPO}-wt-dev-sync"))
+WORKTREE = Path(os.environ.get("WORKTREE", str(MAIN_REPO / ".worktrees" / "dev-sync")))
 INTEGRATION = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
 REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
 SPAWN_CODEX = SKILL_ROOT / "scripts" / "spawn-codex.sh"

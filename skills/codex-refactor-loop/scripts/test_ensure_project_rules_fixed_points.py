@@ -751,6 +751,55 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
 
+class WorktreeLocationConventionTests(unittest.TestCase):
+    # Refactor (iter4/skill-worktree-inside-repo): Old pattern: sibling `<repo>-wt-<name>/`. New principle: inside `<repo>/.worktrees/<name>/` + gitignored.
+    def test_safe_worktree_creates_inside_repo(self) -> None:
+        text = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+
+        self.assertIn('WT_PATH="${REPO_ROOT}/.worktrees/iter${iter}-${cluster}"', text)
+        self.assertIn('mkdir -p "${REPO_ROOT}/.worktrees"', text)
+        self.assertIn("Refactor (iter4/skill-worktree-inside-repo)", text)
+
+    def test_gitignore_has_worktrees_entry(self) -> None:
+        text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
+
+        self.assertIn("/.worktrees/", text.splitlines())
+
+    def test_dev_sync_daemon_uses_inside_path(self) -> None:
+        text = (SKILL_ROOT / "scripts" / "dev_sync_daemon.py").read_text(encoding="utf-8")
+
+        self.assertIn("独立 worktree:$REPO_ROOT/.worktrees/dev-sync", text)
+        self.assertIn('MAIN_REPO / ".worktrees" / "dev-sync"', text)
+        self.assertIn("Refactor (iter4/skill-worktree-inside-repo)", text)
+        self.assertNotIn('f"{MAIN_REPO}-wt-dev-sync"', text)
+
+    def test_no_sibling_worktree_pattern_in_active_scripts(self) -> None:
+        allowed = {
+            "scripts/peek.sh",
+        }
+        offenders: list[str] = []
+        for path in sorted((SKILL_ROOT / "scripts").glob("*")):
+            if not path.is_file():
+                continue
+            if path.name.startswith("test_"):
+                continue
+            rel = path.relative_to(SKILL_ROOT).as_posix()
+            if rel in allowed:
+                continue
+            text = path.read_text(encoding="utf-8")
+            if "${REPO_ROOT}-wt-" in text:
+                offenders.append(rel)
+
+        self.assertEqual(offenders, [])
+
+    def test_reference_md_documents_inside_convention(self) -> None:
+        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+
+        self.assertIn("`$REPO_ROOT/.worktrees/<name>/`", text)
+        self.assertIn("`/.worktrees/`", text)
+        self.assertIn("所有 daemon/codex/implement worktree 都在 `$REPO_ROOT/.worktrees/` 内", text)
+
+
 class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
     # Refactor (iter3/skill-human-label-taxonomy):
     #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
@@ -935,10 +984,10 @@ class ScriptHygieneSourceRegressionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
-            worktree = root / "repo-wt-dev-sync"
+            worktree = repo / ".worktrees" / "dev-sync"
             sibling = root / "sibling"
             repo.mkdir()
-            worktree.mkdir()
+            worktree.mkdir(parents=True)
             sibling.mkdir()
             env = os.environ.copy()
             env.update(
@@ -1191,7 +1240,7 @@ esac
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             repo = root / "repo"
-            wt = root / "repo-wt-dev-sync"
+            wt = repo / ".worktrees" / "dev-sync"
             repo.mkdir()
             self.run_git(repo, "init")
             self.run_git(repo, "config", "user.email", "test@example.invalid")
@@ -1203,6 +1252,7 @@ esac
             self.run_git(repo, "branch", "auto-refact-dev")
             (repo / "conflict.txt").write_text("dev\n", encoding="utf-8")
             self.run_git(repo, "commit", "-am", "dev change")
+            wt.parent.mkdir(parents=True)
             self.run_git(repo, "worktree", "add", "--detach", str(wt), "auto-refact-dev")
             (wt / "conflict.txt").write_text("integration\n", encoding="utf-8")
             self.run_git(wt, "commit", "-am", "integration change")
