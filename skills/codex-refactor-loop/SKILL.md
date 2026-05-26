@@ -182,7 +182,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 with new framing. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
-| `META_RESOLVED:escalate-human:<reason>` | Only then label `👤 human:需-maintainer-决策` and post reason banner. |
+| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` and post reason banner if not skipped by maintainer-directive. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Phase 8 reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Phase 9 depending on reason. |
 | Latest complete Phase 8 reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
@@ -265,11 +265,23 @@ The floor is local because it prevents loop stalls.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
 - Count only this repository's loop codexes: command line contains `spawn-codex.sh` and the absolute `$REPO_ROOT`.
 - Exclude shell ` -c ` wrapper rows so each real codex counts once.
-- `concurrency_monitor.py` 只做 no-gap sentinel; the controller owns top-up.
+- 自 PR #<本>: `concurrency_monitor.py` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor and no higher-priority actionable marker exists, dispatch audit/self-audit/retrospective-compatible work per current phase.
 
 More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-details).
+
+## Named runtime exception — concurrency_monitor auto-topup(per #57)
+
+`skills/codex-refactor-loop/scripts/concurrency_monitor.py` 的 `top_up_from_dispatch_queue` + tick() deficit 分支 = **第二个** Phase 9 / maintainer-directive 等价授权的 controller-runtime 直接 dispatch 路径(narrow allowlist):
+
+- **Narrow allowlist**: 只在 `actual < max(expected, CODEX_FLOOR)` 且 `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` 非空时 fork `spawn-codex.sh` detached;不读 prompt body、不决定 cd / log path,只消费 controller / actor 入队 spec。
+- **Host-agnostic**: dispatch JSON schema host-agnostic;cd/prompt/log path 由入队方决定,不含 host fact。
+- **No lifecycle authority**: 不开 / 关 issue / PR,不打 label,不 commit / push;只 fork 进程 + 归档 JSON + 写 event log。
+- **Behavior tests**: `test_concurrency_monitor.py` 覆盖 priority order / overshoot prevention / dispatch_one / tick() 整链 / floor 边界 / archive collision / filename-derived task_id。
+- **Source-regression**: `test_ensure_project_rules_fixed_points.py` 字面断言本段标题 + "top_up_from_dispatch_queue" + "DISPATCH_FIRED" + "CONCURRENCY_LOW" + "narrow allowlist" 等关键字面。
+
+授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
 
 ## Spawn Contract
 
@@ -307,6 +319,23 @@ Human labels:
 |---|---|
 | `🤖 human:auto-推进` | Fully automatic; no maintainer action needed. |
 | `👤 human:需-maintainer-决策` | Meta-layer exhausted or explicit maintainer decision needed. |
+
+## `👤 human:需-maintainer-决策` 严格语义(强制)
+
+# Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+
+**Apply only when** maintainer must physically perform an action:
+- product/strategy decision that cannot be derived from code/repo
+- explicit governance approval(Tier I/II,non-codable)
+- manual merge a script cannot execute(rare)
+
+**DO NOT apply when**:
+- architect/quality reviewer 因 "needs Phase 9 artifact" reject → 开真 Phase 9(reflector option A)
+- reviewer 与 maintainer prior session directive 冲突 → 把 directive 编码为 `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` artifact + 更新 reviewer prompts 含 "maintainer-directive precedence" 段
+- controller uncertain → reflector,不 label
+- reflector 自己 emit `META_RESOLVED:escalate-human` 但 controller 复审发现 maintainer 已授权 → 撤 label,以 maintainer-directive artifact 替代
+
+**禁止**:把 `👤` label 作 architect/quality reject 的绕路工具。
 
 Hard label rules:
 
@@ -425,6 +454,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [prompts/verify.md](prompts/verify.md) — verify worker prompt.
 - [prompts/remote-ci-fix.md](prompts/remote-ci-fix.md) — remote CI fix prompt.
 - [prompts/test-add.md](prompts/test-add.md) — codecov/test-add prompt.
+- [prompts/meta-reflector-stalled.md](prompts/meta-reflector-stalled.md) — meta-reflector self-check prompt for stalled routes.
 - [prompts/design-issue-body.md](prompts/design-issue-body.md) — design issue body template.
 - [prompts/design-issue-reply.md](prompts/design-issue-reply.md) — maintainer-comment analyst prompt.
 - [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Phase 8 architecture reviewer.

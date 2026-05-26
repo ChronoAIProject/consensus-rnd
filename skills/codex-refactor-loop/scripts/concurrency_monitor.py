@@ -14,13 +14,14 @@ concurrency_monitor.py — 监控 active work 是否出现 0 codex gap
   - ⚙️ ci-running           → 0(等 CI,无需 codex)
   - 🚀 pr-open(待派 reviewer) → 0~3
 - Compare with loop-owned spawn-codex wrapper processes.
-- 只监控 no-gap:P0 `expected > 0 and actual == 0` 立即告警
+- 监控 no-gap:P0 `expected > 0 and actual == 0` 立即告警
+- 当 actual < CODEX_FLOOR 且 dispatch-queue 非空时,自动消费队列补到 floor
 
 主动介入修复:
 1. 写告警到 `.refactor-loop/.concurrency-alert.log`(append + timestamp + 详情)
 2. 写到 `.refactor-loop/.controller-pending-events.log`(controller 下次 wakeup 处理)
 3. log 详细 expected breakdown(哪些 issue/PR 缺 codex)
-4. 不读取 floor 配置,不判断 floor deficit,不自动 spawn codex
+4. 从 `.refactor-loop/dispatch-queue/<priority>/` 自动派发 queued codex,并归档 audit trail
 
 启动:
   nohup python3 .claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py \\
@@ -68,6 +69,10 @@ ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
 STATUSLINE_SNAPSHOT = REPO_ROOT / ".refactor-loop" / "state" / "statusline-snapshot.json"
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
+DISPATCH_QUEUE = REPO_ROOT / ".refactor-loop" / "dispatch-queue"
+DISPATCH_DISPATCHED = REPO_ROOT / ".refactor-loop" / "dispatch-dispatched"
+SPAWN_CODEX = Path(__file__).resolve().parent / "spawn-codex.sh"
+PRIORITIES = ("p0", "p1", "p2")
 
 # phase label → 期望 codex 数(per active issue/PR)
 PHASE_EXPECTED = {
@@ -94,6 +99,18 @@ def log(msg: str) -> None:
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, capture_output=True, text=True)
+
+
+def utc_ts() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def configured_floor() -> int:
+    try:
+        floor = int(os.environ.get("CODEX_FLOOR", "5"))
+    except ValueError:
+        floor = 5
+    return max(2, floor)
 
 
 def load_state() -> dict:
@@ -258,7 +275,7 @@ def compute_expected(items: list[dict]) -> tuple[int, list[dict]]:
 
 def write_alert(msg: str, detail: dict) -> None:
     ALERT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ts = utc_ts()
     line = f"[{ts}] {msg} | detail={json.dumps(detail, ensure_ascii=False)}"
     with ALERT_LOG.open("a") as f:
         f.write(line + "\n")
@@ -267,10 +284,107 @@ def write_alert(msg: str, detail: dict) -> None:
         f.write(f"{ts} concurrency-alert {msg}\n")
 
 
+def write_pending_event(event: str) -> None:
+    PENDING_EVENTS.parent.mkdir(parents=True, exist_ok=True)
+    with PENDING_EVENTS.open("a") as f:
+        f.write(f"{utc_ts()} {event}\n")
+
+
+def dispatch_queue_files() -> list[tuple[str, Path]]:
+    files: list[tuple[str, Path]] = []
+    for priority in PRIORITIES:
+        priority_dir = DISPATCH_QUEUE / priority
+        if not priority_dir.is_dir():
+            continue
+        files.extend((priority, path) for path in sorted(priority_dir.glob("*.dispatch.json")))
+    return files
+
+
+def dispatch_queue_empty() -> bool:
+    return not dispatch_queue_files()
+
+
+def next_dispatch_file() -> tuple[str, Path] | None:
+    files = dispatch_queue_files()
+    if not files:
+        return None
+    return files[0]
+
+
+def archive_dispatched(path: Path, payload: dict, task_id: str) -> Path:
+    DISPATCH_DISPATCHED.mkdir(parents=True, exist_ok=True)
+    payload["dispatch_at"] = utc_ts()
+    payload["source_dispatch_file"] = str(path)
+    archive = DISPATCH_DISPATCHED / f"{task_id}.json"
+    if archive.exists():
+        stamp = payload["dispatch_at"].replace(":", "").replace("-", "")
+        archive = DISPATCH_DISPATCHED / f"{task_id}-{stamp}.json"
+    archive.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.unlink()
+    return archive
+
+
+def launch_dispatch(payload: dict) -> None:
+    subprocess.Popen(
+        [
+            "nohup",
+            str(SPAWN_CODEX),
+            "--cd",
+            str(payload["cd"]),
+            "--prompt",
+            str(payload["prompt"]),
+            "--log",
+            str(payload["log"]),
+            "--stall",
+            str(payload.get("stall", 5400)),
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: controller-only dispatch; monitor could report deficits but did not consume queued work.
+#   New principle: monitor may fire one queued dispatch from the narrow dispatch-queue allowlist and archive it.
+def dispatch_one_from_queue() -> tuple[str, str, str] | None:
+    next_file = next_dispatch_file()
+    if next_file is None:
+        return None
+    priority, path = next_file
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
+    reason = str(payload.get("reason", ""))
+    payload["task_id"] = task_id
+    payload["priority"] = priority
+    launch_dispatch(payload)
+    archive_dispatched(path, payload, task_id)
+    write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
+    log(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
+    return task_id, priority, reason
+
+
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: monitor only alerted; actual<floor waited for the LLM controller's next wakeup.
+#   New principle: monitor automatically consumes dispatch-queue entries until the floor is satisfied or queue is empty.
+def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
+    if actual >= floor:
+        return actual
+    max_dispatches = floor - actual
+    for _ in range(max_dispatches):
+        fired = dispatch_one_from_queue()
+        if fired is None:
+            break
+        actual = count_in_flight_codex()
+        if actual >= floor:
+            break
+    return actual
+
+
+# Refactor (iter4/concurrency-auto-topup):
+#   Old pattern: single no-gap sentinel path could alert and leave deficit repair to a later controller wakeup.
+#   New principle: no-gap alerting continues into deficit detection so queued work can be fired in the same tick.
 def tick() -> None:
-    # Refactor (iter3/skill-concurrency-floor-enforcement):
-    #   Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
-    #   New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
     # Refactor (iter4/issue51-r3-consensus):
     #   Old pattern: 无 ambient visibility;maintainer 需手动跑 peek.sh
     #   New principle: concurrency_monitor tick 原子写 statusline-snapshot.json,statusline.sh consumer < 200ms 读;
@@ -283,8 +397,9 @@ def tick() -> None:
     actual = count_in_flight_codex()
     open_pr_count = sum(1 for item in items if item["kind"] == "pr")
     open_issue_count = sum(1 for item in items if item["kind"] == "issue")
+    floor = configured_floor()
 
-    log(f"actual={actual} expected={expected} zero_streak={zero_streak}")
+    log(f"actual={actual} expected={expected} floor={floor} zero_streak={zero_streak}")
 
     # P0 no-gap rule: any active task with zero loop-owned codex alerts immediately.
     if expected > 0 and actual == 0:
@@ -302,6 +417,9 @@ def tick() -> None:
         }
         write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
         log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {ALERT_LOG}")
+        # P0 + queued dispatch: fire topup immediately in same tick (per #57 auto-topup contract)
+        if not dispatch_queue_empty():
+            actual = top_up_from_dispatch_queue(actual, max(expected, configured_floor()))
         write_statusline_snapshot(
             actual=actual,
             expected=expected,
@@ -314,6 +432,14 @@ def tick() -> None:
         return
     else:
         state["zero_streak"] = 0
+
+    target = max(expected, floor)
+    if actual < target:
+        if dispatch_queue_empty():
+            write_pending_event(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
+            log(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
+        else:
+            actual = top_up_from_dispatch_queue(actual, target)
 
     write_statusline_snapshot(
         actual=actual,

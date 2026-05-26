@@ -613,6 +613,7 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
             "audit.md",
             "design-issue-body.md",
             "implement.md",
+            "meta-reflector-stalled.md",
             "verify.md",
             "remote-ci-fix.md",
             "test-add.md",
@@ -1030,14 +1031,18 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
 
 
 class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
-    # Refactor (iter3/skill-concurrency-floor-enforcement):
-    #   Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
-    #   New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
-    def test_concurrency_monitor_is_no_gap_only(self) -> None:
+    # Refactor (iter4/concurrency-auto-topup):
+    #   Old pattern: monitor 只 alert,actual<floor 等 LLM controller 下次 wakeup 才派
+    #   New principle: monitor 自动从 dispatch-queue 消费,与 daemon-first 哲学 align。
+    def test_concurrency_monitor_auto_topup_is_queue_scoped(self) -> None:
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
 
         self.assertIn("no-gap-violation", monitor_text)
         self.assertIn("expected > 0 and actual == 0", monitor_text)
+        self.assertIn("dispatch-queue", monitor_text)
+        self.assertIn("DISPATCH_FIRED:", monitor_text)
+        self.assertIn("CONCURRENCY_LOW:actual=", monitor_text)
+        self.assertIn('os.environ.get("CODEX_FLOOR"', monitor_text)
         for forbidden in (
             "MIN_PARALLEL",
             "codex-floor-deficit",
@@ -1048,13 +1053,13 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, monitor_text)
-        self.assertNotIn('os.environ.get("CODEX_FLOOR"', monitor_text)
 
-    def test_skill_assigns_floor_to_controller_step_1_5_only(self) -> None:
+    def test_skill_documents_monitor_queue_topup_and_controller_step_1_5(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
 
-        self.assertIn("concurrency_monitor.py` 只做 no-gap sentinel", skill_text)
+        self.assertIn("dispatch-queue 非空时自动派发", skill_text)
+        self.assertIn("低于预期数就继续派发", skill_text)
         self.assertIn("controller 每次 wakeup 的 step 1.5", skill_text)
         self.assertIn("必须在任何 `ScheduleWakeup` 之前执行", skill_text)
         self.assertIn("FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))", skill_text)
@@ -1062,7 +1067,30 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("codex-floor-deficit", skill_text)
         self.assertNotIn("ACTIVE <= 2", skill_text)
         self.assertIn("[concurrency floor details](REFERENCE.md#concurrency-floor-details)", skill_text)
+        self.assertIn("Dispatch queue protocol", reference_text)
+        self.assertIn("DISPATCH_FIRED:<task-id>:<priority>:<reason>", reference_text)
+        self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
+
+    def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        heading = "## Named runtime exception — concurrency_monitor auto-topup(per #57)"
+        self.assertIn(heading, skill_text)
+        start = skill_text.index(heading)
+        end = skill_text.index("## Spawn Contract", start)
+        paragraph = skill_text[start:end]
+
+        for required in (
+            "narrow allowlist",
+            "No lifecycle authority",
+            "top_up_from_dispatch_queue",
+            "DISPATCH_FIRED",
+            "CONCURRENCY_LOW",
+            "maintainer-directive equivalence",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, paragraph)
 
 
 class WorktreeLocationConventionTests(unittest.TestCase):
@@ -1230,6 +1258,95 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
                         or "lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))" in line
                         or "Old: 四个 Human label(含两个 🆘)" in line
                     )
+
+
+class HumanLabelSemanticsTests(unittest.TestCase):
+    # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def test_skill_md_has_strict_human_label_semantics_section(self) -> None:
+        skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+
+        self.assertIn("## `👤 human:需-maintainer-决策` 严格语义(强制)", skill)
+        for token in (
+            "Apply only when",
+            "DO NOT apply when",
+            "禁止",
+            "architect/quality reviewer",
+            "needs Phase 9 artifact",
+            "maintainer-directive",
+            "绕路工具",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, skill)
+
+    def test_reflector_prompts_include_maintainer_directive_self_check(self) -> None:
+        reflector_prompts = sorted((SKILL_ROOT / "prompts").glob("meta-reflector*.md"))
+        self.assertGreaterEqual(len(reflector_prompts), 1)
+        combined_prompts = "\n".join(path.read_text(encoding="utf-8") for path in reflector_prompts)
+        controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+        combined = combined_prompts + "\n" + controller_lib
+
+        for token in (
+            "META_RESOLVED:escalate-human",
+            "maintainer already authorized",
+            ".refactor-loop/runs/maintainer-directives/",
+            "META_RESOLVED:re-design:reframe-with-maintainer-directive",
+            "apply_human_label_or_skip",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+    def test_no_active_script_unconditionally_applies_human_label(self) -> None:
+        scripts = [
+            path
+            for pattern in ("*.sh", "*.py")
+            for path in (SKILL_ROOT / "scripts").glob(pattern)
+            if not path.name.startswith("test_")
+        ]
+        bare_add_label = re.compile(r"gh\s+pr\s+edit\b.*--add-label\s+[\"'][^\"']*👤 human:需-maintainer-决策")
+        offenders: list[str] = []
+
+        for path in scripts:
+            in_helper = False
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if path.name == "controller_lib.sh" and line.startswith("apply_human_label_or_skip()"):
+                    in_helper = True
+                if in_helper and line == "}":
+                    in_helper = False
+                    continue
+                if bare_add_label.search(line) and not in_helper:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}:{line.strip()}")
+
+        self.assertEqual(offenders, [])
+
+    def test_maintainer_directive_artifact_pattern_documented(self) -> None:
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+
+        for token in (
+            ".refactor-loop/runs/maintainer-directives/<date>-<topic>.md",
+            "Phase 9 artifact",
+            "architect",
+            "maintainer-directive artifact",
+            "replacement path",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, reference)
+
+    def test_session_2026_05_26_misuse_recorded(self) -> None:
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+
+        for token in (
+            "Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)",
+            "PR #47/#48/#50/#52",
+            "architect codex",
+            "option C",
+            "issue #54",
+            "label 严语义 + helper 守护",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, reference)
 
 
 class NamingPolicySourceRegressionTests(unittest.TestCase):
@@ -1931,6 +2048,64 @@ class MaintainerDirectiveEquivalenceParagraphTests(unittest.TestCase):
             if ("audit-derived" in p or "requires_design=false" in p) and ".refactor-loop/runs/maintainer-directives/" not in p:
                 for forbidden in ("授权", "等价证明", "pre-authorized", "无需逐项 Phase 9"):
                     self.assertNotIn(forbidden, p, f"独立 audit-derived 段不可含 {forbidden}")
+
+
+class ScopedNamedSurfaceAuthorizationParagraphTests(unittest.TestCase):
+    """#60 r1 consensus 守护 Phase 9 named runtime surface 授权不被偷扩。"""
+
+    @staticmethod
+    def _paragraph_containing(needle: str) -> str:
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        return next(p for p in paragraphs if needle in p)
+
+    def test_scoped_named_surface_paragraph_has_required_keywords(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("deep consensus", "named runtime surface", "host-agnostic",
+                     "narrow allowlist", "no lifecycle authority", "behavior tests",
+                     "source-regression"):
+            self.assertIn(term, p)
+
+    def test_scoped_named_surface_paragraph_has_negative_boundaries(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("不放宽", "merge gate", "CI/release policy", "语言 policy",
+                     "Tier I/II", "CLAUDE.md 修宪", "独立 PR 自我放行权"):
+            self.assertIn(term, p)
+
+    def test_scoped_named_surface_paragraph_has_lifecycle_authority_carveout(self):
+        p = self._paragraph_containing("named runtime surface")
+        for term in ("release/lifecycle surface 仅产出 durable decision/candidate artifact",
+                     "controller 或 release pipeline", "host opt-in + 有效 artifact"):
+            self.assertIn(term, p)
+
+    def test_no_generic_phase9_authorization_paragraph_exists(self):
+        text = (REPO_ROOT / "CLAUDE.md").read_text()
+        paragraphs = re.split(r"\n\s*\n", text)
+        for p in paragraphs:
+            lowered = p.lower()
+            if ".refactor-loop/runs/maintainer-directives/" in p:
+                continue
+            if "phase 9" in lowered and "授权" in p:
+                with self.subTest(paragraph=p[:80]):
+                    self.assertIn("host-agnostic", p)
+                    self.assertIn("no lifecycle authority", p)
+                    self.assertIn("narrow allowlist", p)
+
+    def test_no_maintainer_directive_used_as_pr_release_or_observability_authorization(self):
+        p = self._paragraph_containing(".refactor-loop/runs/maintainer-directives/")
+        forbidden_terms = (
+            "release/lifecycle surface",
+            "release decision-artifact",
+            "release-readiness",
+            "observability surface",
+            "observability per #51",
+            "release decision-artifact per #56",
+            "PR #58",
+            "PR #59",
+        )
+        for term in forbidden_terms:
+            with self.subTest(term=term):
+                self.assertNotIn(term, p)
 
 
 # Refactor (iter3/skill-contract-test-suite):

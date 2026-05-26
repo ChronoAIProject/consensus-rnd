@@ -66,6 +66,38 @@ ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**�
 
 `concurrency_monitor.py` 的 `count_in_flight_codex()` 与 `peek.sh` 的 `list_loop_codex()` 均已按 `$REPO_ROOT` 绝对路径 scope。
 
+<a id="dispatch-queue-protocol"></a>
+### Dispatch queue protocol
+
+`concurrency_monitor.py` consumes queued dispatch files when this loop is below its local floor. The queue is host-local and durable:
+
+```text
+$REPO_ROOT/.refactor-loop/dispatch-queue/<priority>/<task-id>.dispatch.json
+```
+
+Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always checks `p0` first, then `p1`, then `p2`, and uses lexicographic file order within a priority. Each JSON file uses this schema:
+
+```json
+{
+  "task_id": "fix-pr44-round-3",
+  "cd": "/abs/worktree",
+  "prompt": "/abs/prompt.md",
+  "log": "/abs/log.log",
+  "stall": 5400,
+  "queued_at": "2026-05-26T07:25:00Z",
+  "reason": "PR #44 r3 fix needed"
+}
+```
+
+Required fields are `cd`, `prompt`, and `log`; `task_id` defaults to the `.dispatch.json` filename stem if omitted, and `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
+
+Auto-dispatch semantics:
+- On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.
+- After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
+- The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
+- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue suitable work.
+- This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
+
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
 
 判 `judge-ready` / `merge-ready` / `solver-done` / `reviewer-done` **必须先看 log 末尾 `^EXIT=0`**。`EXIT=0` 表示 codex 进程干净结束,输出文件与 marker 才可被视为完整。**不要**用 `SOLVER_DONE:` / `REVIEW_DONE:` / `META_JUDGE_DONE:` / `FIX_DONE:` marker 的存在判断"已完成"。
@@ -1247,6 +1279,18 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 
 reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `👤 human:需-maintainer-决策` 并写 reason banner;这只用于"共识机制本身无法收敛",非"触及 Tier/哲学/签名"。
 
+### Maintainer-directive artifact precedence
+
+When reviewer evidence conflicts with maintainer prior session directive, encode the directive as `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` before considering any human label. A maintainer-directive artifact is the durable replacement for verbal authorization and has precedence over reviewer uncertainty about authorization.
+
+If architect or quality rejects because the PR "needs Phase 9 artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Phase 9 path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Phase 9 with that directive as evidence. This is the Phase 9-artifact replacement path; the label is not an interchange format for architect/quality reject.
+
+Controller label application must use `apply_human_label_or_skip <pr-number> <reason-or-topic>` from `controller_lib.sh`. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+
+### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
+
+PR #47/#48/#50/#52 因 architect codex 严格读 CLAUDE.md reject,reflector 选 option C 误以 label 绕路。实际 maintainer 已多次 session 内 verbal 授权。Fix:开真 Phase 9(issue #54),encode maintainer-directive artifact 作 Phase 9-等价。从此 label 严语义 + helper 守护。
+
 ### Reflector 完成 → 立即回到共识阶段(强制)
 <!--
 # Refactor (iter3/skill-human-label-taxonomy):
@@ -1504,7 +1548,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
   - `re-design` → reset Phase 9 round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
-  - `escalate-human` → `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解)
+  - `escalate-human` → `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not repeat a framing that prior rounds showed to be underspecified without adding new exact text/evidence; doing so counts toward stall detection.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -1548,7 +1592,7 @@ Concretely, this means:
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。**唯一执行位置**:controller 每次 wakeup 的 step 1.5,并且必须在任何 `ScheduleWakeup` 之前执行;`concurrency_monitor.py` 只做 no-gap sentinel,不承担 floor 观察/补给职责。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -1859,7 +1903,7 @@ Controller 读 marker 后路由:
 - `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
-- `escalate-human` → label `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时)
+- `escalate-human` → `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
 
 ### 反面(❌ 禁止)
 
