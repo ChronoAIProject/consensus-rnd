@@ -91,6 +91,15 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()
 
+    def test_apply_human_label_when_directives_dir_absent(self) -> None:
+        """Helper handles missing maintainer-directives directory gracefully."""
+        self.directive_dir.rmdir()
+
+        result = self.run_helper("55", "reason")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_human_label_applied_once()
+
     def test_apply_human_label_applies_when_directive_unrelated(self) -> None:
         self.write_directive(
             "2026-05-26-other.md",
