@@ -130,6 +130,32 @@ open_pr_with_label() {
   export PR_NUM
 }
 
+# Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+# Apply the maintainer-decision label only after checking maintainer-directive artifacts.
+# Usage: apply_human_label_or_skip <pr-or-issue-number> <reason-or-topic>
+apply_human_label_or_skip() {
+  local pr_or_issue="$1" reason="${2:-}"
+  if [ -z "$pr_or_issue" ]; then
+    echo "apply_human_label_or_skip: missing pr_or_issue" >&2
+    return 2
+  fi
+
+  local directive_dir="${REPO_ROOT}/.refactor-loop/runs/maintainer-directives"
+  if [ -d "$directive_dir" ]; then
+    local needle target
+    target="${pr_or_issue#\#}"
+    for needle in "$pr_or_issue" "#${target}" "${reason}"; do
+      [ -z "$needle" ] && continue
+      if grep -RIlF -- "$needle" "$directive_dir"/*.md >/dev/null 2>&1; then
+        echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
+        return 1
+      fi
+    done
+  fi
+
+  gh pr edit "$pr_or_issue" "${gh_repo_args[@]}" --add-label "👤 human:需-maintainer-决策" 2>&1 >/dev/null
+}
+
 # Substitute {{handlebars}} placeholders in a template using current env vars
 # Usage: render_template <template-file> <output-file>
 # Reads $WORK_UNIT_ID, $CLUSTER_ID, $ITERATION, $WORKTREE_PATH, $BRANCH, $OLD_PATTERN, $NEW_PRINCIPLE, $SCOPE_PATHS, $VERIFICATION_HINTS, and $VAR in template.

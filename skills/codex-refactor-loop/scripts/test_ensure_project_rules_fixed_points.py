@@ -299,6 +299,7 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
             "audit.md",
             "design-issue-body.md",
             "implement.md",
+            "meta-reflector-stalled.md",
             "verify.md",
             "remote-ci-fix.md",
             "test-add.md",
@@ -856,6 +857,95 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
                         or "lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))" in line
                         or "Old: 四个 Human label(含两个 🆘)" in line
                     )
+
+
+class HumanLabelSemanticsTests(unittest.TestCase):
+    # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+    def read_rel(self, rel: str) -> str:
+        return (REPO_ROOT / rel).read_text(encoding="utf-8")
+
+    def test_skill_md_has_strict_human_label_semantics_section(self) -> None:
+        skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+
+        self.assertIn("## `👤 human:需-maintainer-决策` 严格语义(强制)", skill)
+        for token in (
+            "Apply only when",
+            "DO NOT apply when",
+            "禁止",
+            "architect/quality reviewer",
+            "needs Phase 9 artifact",
+            "maintainer-directive",
+            "绕路工具",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, skill)
+
+    def test_reflector_prompts_include_maintainer_directive_self_check(self) -> None:
+        reflector_prompts = sorted((SKILL_ROOT / "prompts").glob("meta-reflector*.md"))
+        self.assertGreaterEqual(len(reflector_prompts), 1)
+        combined_prompts = "\n".join(path.read_text(encoding="utf-8") for path in reflector_prompts)
+        controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+        combined = combined_prompts + "\n" + controller_lib
+
+        for token in (
+            "META_RESOLVED:escalate-human",
+            "maintainer already authorized",
+            ".refactor-loop/runs/maintainer-directives/",
+            "META_RESOLVED:re-design:reframe-with-maintainer-directive",
+            "apply_human_label_or_skip",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+    def test_no_active_script_unconditionally_applies_human_label(self) -> None:
+        scripts = [
+            path
+            for pattern in ("*.sh", "*.py")
+            for path in (SKILL_ROOT / "scripts").glob(pattern)
+            if not path.name.startswith("test_")
+        ]
+        bare_add_label = re.compile(r"gh\s+pr\s+edit\b.*--add-label\s+[\"'][^\"']*👤 human:需-maintainer-决策")
+        offenders: list[str] = []
+
+        for path in scripts:
+            in_helper = False
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if path.name == "controller_lib.sh" and line.startswith("apply_human_label_or_skip()"):
+                    in_helper = True
+                if in_helper and line == "}":
+                    in_helper = False
+                    continue
+                if bare_add_label.search(line) and not in_helper:
+                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{line_no}:{line.strip()}")
+
+        self.assertEqual(offenders, [])
+
+    def test_maintainer_directive_artifact_pattern_documented(self) -> None:
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+
+        for token in (
+            ".refactor-loop/runs/maintainer-directives/<date>-<topic>.md",
+            "Phase 9 artifact",
+            "architect",
+            "maintainer-directive artifact",
+            "replacement path",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, reference)
+
+    def test_session_2026_05_26_misuse_recorded(self) -> None:
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+
+        for token in (
+            "Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)",
+            "PR #47/#48/#50/#52",
+            "architect codex",
+            "option C",
+            "issue #54",
+            "label 严语义 + helper 守护",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, reference)
 
 
 class NamingPolicySourceRegressionTests(unittest.TestCase):
