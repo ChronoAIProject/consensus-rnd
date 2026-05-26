@@ -1,11 +1,11 @@
 #!/bin/bash
 # codex-progress-reporter.sh
-# 每 600s 扫 .refactor-loop/logs/*.log; 对未结束 (无 EXIT=) 的 log 提取 tail; edit-in-place
+# 每 600s 扫 .refactor-loop/logs/*.log; 对未结束 (无 EXIT=0) 的 log 提取 tail; edit-in-place
 # 一条 progress comment 到关联 issue/PR. 首次创建, 后续 update 同一 comment id.
-# 不会膨胀评论数. 完成时(检测到 EXIT=) 自动 post 终结 banner 并停止追该 log.
+# 不会膨胀评论数. 成功完成时(检测到 EXIT=0) 自动删除进展评论并停止追该 log.
 #
 # State: .refactor-loop/codex-progress-state.json
-#   { "<log-basename>": { "target": "<issue-or-pr>", "kind": "issue|pr", "comment_id": <id>, "last_md5": "<sha>", "finished": false } }
+#   { "<log-basename>": { "target": "<issue-or-pr>", "kind": "issue|pr", "comment_id": <id>, "last_md5": "<sha>", "finished": "false|true|failed" } }
 #
 # 启动: bash .claude/skills/codex-refactor-loop/scripts/codex-progress-reporter.sh &
 # 停止: kill <pid>
@@ -22,20 +22,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   exit 2
 fi
 cd "$REPO_ROOT"
-REPO="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${REPO:-}" ] && ! [[ "$REPO" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$REPO'" >&2
-  exit 2
-fi
-if [ -n "${REPO:-}" ]; then
-  :
-else
-  REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
-fi
-if [ -z "${REPO:-}" ]; then
-  echo "FATAL: GH_REPO_SLUG is unset and gh repo view failed" >&2
-  exit 2
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+REPO="$(resolve_github_repo_slug 1 1)" || exit $?
 
 INTERVAL="${INTERVAL:-600}"
 STATE_DIR=".refactor-loop"
@@ -80,10 +68,26 @@ parse_kind() {
   fi
 }
 
-is_finished() {
+# Refactor (iter4/issue17-hygiene): Old pattern: binary in_flight/done handling treated failed codex exits as done and deleted the progress comment. New principle: tri-state in_flight/exit_ok/exit_failed keeps failed comments and state.finished=failed visible to maintainers.
+exit_status() {
   # 只看末 5 行 — wrapper 在结束时 append "EXIT=<code>\nDONE_AT=..." 作为最后两行
   # 不能 grep 全 log,因为 codex 中途可能 echo / cat 含 "EXIT=" 的内容造成误判
-  tail -5 "$1" | grep -q "^EXIT="
+  local line code
+  line=$(tail -5 "$1" 2>/dev/null | grep -E "^EXIT=[0-9]+$" | tail -1 || true)
+  if [ -z "$line" ]; then
+    echo "in_flight"
+    return
+  fi
+  code="${line#EXIT=}"
+  if [ "$code" = "0" ]; then
+    echo "exit_ok"
+  else
+    echo "exit_failed"
+  fi
+}
+
+is_finished() {
+  [ "$(exit_status "$1")" = "exit_ok" ]
 }
 
 # zombie: 30 min 未写,但无 EXIT marker → 进程很可能死了,不该再当 in-flight 持续 post
@@ -115,16 +119,36 @@ build_body() {
   local elapsed_min=$(( elapsed_s / 60 ))
   local tail_block
   tail_block=$(extract_tail "$log")
+  local status_line delete_note
+  if [ "$finished" = "failed" ]; then
+    status_line="❌ 失败; 已跑 ${elapsed_min} min"
+    delete_note="codex 已非零退出;保留此 comment 直到 controller 处理失败。"
+  else
+    status_line="⏳ 进行中; 已跑 ${elapsed_min} min"
+    delete_note="自动更新每 10 分钟;edit-in-place 不堆评论;codex EXIT=0 后此 comment 自动删除。"
+  fi
   cat <<EOF
-## 📊 codex 进展 $base (⏳ 进行中; 已跑 ${elapsed_min} min)
+## 📊 codex 进展 $base (${status_line})
 
 \`\`\`
 $tail_block
 \`\`\`
 
-> 自动更新每 10 分钟;edit-in-place 不堆评论;**codex 完成后此 comment 自动删除**。
+> ${delete_note}
 🤖 controller progress reporter
+
+⟦AI:AUTO-LOOP⟧
 EOF
+}
+
+hash_body() {
+  if command -v md5 >/dev/null 2>&1; then
+    md5
+  elif command -v md5sum >/dev/null 2>&1; then
+    md5sum | awk '{print $1}'
+  else
+    python3 -c 'import hashlib, sys; print(hashlib.md5(sys.stdin.buffer.read()).hexdigest())'
+  fi
 }
 
 state_get() {
@@ -136,7 +160,7 @@ state_set() {
   local key=$1 target=$2 kind=$3 cid=$4 md5=$5 finished=$6
   local tmp
   tmp=$(mktemp)
-  jq --arg k "$key" --arg t "$target" --arg kd "$kind" --argjson cid "$cid" --arg m "$md5" --argjson fin "$finished" \
+  jq --arg k "$key" --arg t "$target" --arg kd "$kind" --argjson cid "$cid" --arg m "$md5" --arg fin "$finished" \
     '.[$k] = {target: $t, kind: $kd, comment_id: $cid, last_md5: $m, finished: $fin}' \
     "$STATE_FILE" > "$tmp" && mv "$tmp" "$STATE_FILE"
 }
@@ -161,19 +185,20 @@ post_or_update() {
   fi
   [ -z "$cid" ] && cid="null"
 
-  if is_finished "$log"; then
-    finished="true"
-  elif is_zombie "$log"; then
+  case "$(exit_status "$log")" in
+    exit_ok) finished="true" ;;
+    exit_failed) finished="failed" ;;
+    *) finished="false" ;;
+  esac
+  if [ "$finished" = "false" ] && is_zombie "$log"; then
     log_msg "skip zombie log $base (no EXIT, mtime > 30 min)"
     return
-  else
-    finished="false"
   fi
 
-  # 已 finished 且上次已记录 finished=true → skip
+  # 已 terminal 且上次已记录同一 terminal state → skip
   local prev_finished
   prev_finished=$(state_get "$base" "finished")
-  if [ "$finished" = "true" ] && [ "$prev_finished" = "true" ]; then
+  if [ "$finished" = "$prev_finished" ] && { [ "$finished" = "true" ] || [ "$finished" = "failed" ]; }; then
     return
   fi
 
@@ -191,7 +216,7 @@ post_or_update() {
 
   local body cur_md5
   body=$(build_body "$base" "$log" "$finished")
-  cur_md5=$(echo "$body" | md5)
+  cur_md5=$(printf '%s' "$body" | hash_body)
 
   # 内容没变化且没 finish 切换 → skip
   if [ "$cur_md5" = "$prev_md5" ] && [ "$finished" = "$prev_finished" ]; then

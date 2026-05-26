@@ -21,13 +21,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   exit 2
 fi
 cd "$REPO_ROOT"
-GH_REPO_SLUG="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${GH_REPO_SLUG:-}" ] && ! [[ "$GH_REPO_SLUG" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$GH_REPO_SLUG'" >&2
-  exit 2
-fi
-gh_repo_args=()
-[ -n "${GH_REPO_SLUG:-}" ] && gh_repo_args=(--repo "$GH_REPO_SLUG")
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+set_gh_repo_args 0 0 || exit $?
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {

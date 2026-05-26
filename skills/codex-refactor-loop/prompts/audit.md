@@ -120,8 +120,8 @@ human_brief:
 
 1. `problem_statement_*` 不能是 audit YAML 复述；必须是面向"刚来的人"的解释。
 2. `problem_example_code` 必须是真实 verbatim copy + annotation comments；禁止伪造或省略。
-3. **每个 `_en` 字段必须有对等 `_zh` 字段，且内容完全等价**：信息密度、段落数、决策点列举数必须一致。禁止 `_zh` 写"见英文部分"或更短的 TL;DR 版本——这违反 SKILL.md "Bilingual rule (双语规则)"。`_zh` 自身必须是非中文母语 reviewer 看不到 `_en` 也能行动的完整解释。缺 `_zh` 或 `_zh` 显著短于 `_en` → controller 验收为 `AUDIT_INCOMPLETE: human_brief_missing_or_unbalanced_zh`。
-4. `design_question_pattern_en/zh` 是 cluster 专属问题，不是通用模板套话；要让 reviewer 看到就能直接回答。
+3. 不要生成历史 `_en` / `_zh` 双字段；`human_brief` 只用无后缀中文字段。若必须引用英文代码、错误文本、路径或 GitHub handle，原样保留。
+4. `design_question` 是 cluster 专属问题，不是通用模板套话；要让 reviewer 看到就能直接回答。
 
 输出格式（每 cluster 一节，frontmatter + cluster sections，沿用现有 YAML 结构）。
 

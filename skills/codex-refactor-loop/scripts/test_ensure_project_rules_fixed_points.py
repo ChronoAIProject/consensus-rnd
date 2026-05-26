@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ensure_project_rules_fixed_points import (
     CANONICAL_BODY,
@@ -47,6 +49,318 @@ PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "triage-external-issue.md",
     "verify.md",
 )
+
+
+class ScriptHygieneBehaviorTests(unittest.TestCase):
+    def clean_github_env(self, updates: dict[str, str] | None = None) -> dict[str, str]:
+        env = os.environ.copy()
+        for key in ("GH_REPO_SLUG", "GH_REPO", "GH_OWNER", "GH_REPO_NAME"):
+            env.pop(key, None)
+        if updates:
+            env.update(updates)
+        return env
+
+    def run_repo_slug_function(self, command: str, env_updates: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        script = f'source "{SKILL_ROOT / "scripts" / "repo_slug.sh"}"; {command}'
+        return subprocess.run(
+            ["bash", "-c", script],
+            env=self.clean_github_env(env_updates),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def run_progress_function(
+        self,
+        function_name: str,
+        command: str,
+        *,
+        input_text: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        progress = SKILL_ROOT / "scripts" / "codex-progress-reporter.sh"
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        start = lines.index(f"{function_name}() {{")
+        end = next(index for index in range(start + 1, len(lines)) if lines[index] == "}")
+        with tempfile.TemporaryDirectory() as tmp:
+            func_file = Path(tmp) / f"{function_name}.sh"
+            func_file.write_text("\n".join(lines[start : end + 1]) + "\n", encoding="utf-8")
+            script = f'source "{func_file}"; {command}'
+            return subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                input=input_text,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    def run_progress_harness(
+        self,
+        command: str,
+        *,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        progress = SKILL_ROOT / "scripts" / "codex-progress-reporter.sh"
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        start = next(index for index, line in enumerate(lines) if line.startswith("log_msg()"))
+        end = lines.index("# 主 loop")
+        with tempfile.TemporaryDirectory() as tmp:
+            harness = Path(tmp) / "progress_harness.sh"
+            harness.write_text("\n".join(lines[start:end]) + "\n", encoding="utf-8")
+            script = f'source "{harness}"; {command}'
+            return subprocess.run(
+                ["bash", "-c", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+    def test_resolve_github_repo_slug_env_branches(self) -> None:
+        cases = [
+            ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, 0, "owner/repo\n", ""),
+            ("legacy_repo_slug", {"GH_REPO": "legacy/repo"}, 0, "legacy/repo\n", ""),
+            ("owner_and_name", {"GH_OWNER": "octo", "GH_REPO_NAME": "project"}, 0, "octo/project\n", ""),
+            ("missing_required", {}, 2, "", "FATAL: GH_REPO_SLUG is unset and gh repo view failed"),
+            ("invalid_bare_slug", {"GH_REPO_SLUG": "repo-only"}, 2, "", "FATAL: GH_REPO_SLUG must be OWNER/REPO"),
+        ]
+
+        for name, env_updates, expected_code, expected_stdout, expected_stderr in cases:
+            with self.subTest(case=name):
+                result = self.run_repo_slug_function("resolve_github_repo_slug 0 1", env_updates)
+
+                self.assertEqual(result.returncode, expected_code, result.stderr)
+                self.assertEqual(result.stdout, expected_stdout)
+                self.assertIn(expected_stderr, result.stderr)
+
+    def test_set_gh_repo_args_mutates_exports_and_populates_array(self) -> None:
+        command = (
+            "set_gh_repo_args 0 1 || exit $?; "
+            "printf 'slug=%s\\n' \"$GH_REPO_SLUG\"; "
+            "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+            "printf 'arg=%s\\n' \"${gh_repo_args[@]}\"; "
+            "bash -c 'printf \"child=%s\\n\" \"$GH_REPO_SLUG\"'"
+        )
+
+        result = self.run_repo_slug_function(command, {"GH_REPO_SLUG": "owner/repo"})
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["slug=owner/repo", "argc=2", "arg=--repo", "arg=owner/repo", "child=owner/repo"])
+
+    def test_set_gh_repo_args_empty_invalid_and_gh_view_fallback(self) -> None:
+        empty = self.run_repo_slug_function(
+            "set_gh_repo_args 0 0 || exit $?; "
+            "printf 'slug=<%s>\\n' \"$GH_REPO_SLUG\"; "
+            "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+            "bash -c 'printf \"child=<%s>\\n\" \"$GH_REPO_SLUG\"'",
+        )
+        self.assertEqual(empty.returncode, 0, empty.stderr)
+        self.assertEqual(empty.stdout.splitlines(), ["slug=<>", "argc=0", "child=<>"])
+
+        invalid = self.run_repo_slug_function("set_gh_repo_args 0 1", {"GH_REPO_SLUG": "repo-only"})
+        self.assertEqual(invalid.returncode, 2)
+        self.assertEqual(invalid.stdout, "")
+        self.assertIn("FATAL: GH_REPO_SLUG must be OWNER/REPO", invalid.stderr)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp)
+            gh = fakebin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "if [[ \"$1 $2 $3\" == \"repo view --json\" ]]; then\n"
+                "  printf 'fallback/slug\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = self.clean_github_env()
+            env["PATH"] = f"{fakebin}{os.pathsep}{env.get('PATH', '')}"
+            fallback = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    f'source "{SKILL_ROOT / "scripts" / "repo_slug.sh"}"; '
+                    "set_gh_repo_args 1 1 || exit $?; "
+                    "printf 'slug=%s\\n' \"$GH_REPO_SLUG\"; "
+                    "printf 'argc=%s\\n' \"${#gh_repo_args[@]}\"; "
+                    "printf 'arg=%s\\n' \"${gh_repo_args[@]}\"",
+                ],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(fallback.returncode, 0, fallback.stderr)
+        self.assertEqual(fallback.stdout.splitlines(), ["slug=fallback/slug", "argc=2", "arg=--repo", "arg=fallback/slug"])
+
+    def test_python_github_repo_slug_env_branches(self) -> None:
+        from repo_config import github_repo_slug
+
+        cases = [
+            ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, "owner/repo"),
+            ("legacy_repo_slug", {"GH_REPO": "legacy/repo"}, "legacy/repo"),
+            ("owner_and_name", {"GH_OWNER": "octo", "GH_REPO_NAME": "project"}, "octo/project"),
+            ("owner_and_bare_repo_fallback", {"GH_OWNER": "octo", "GH_REPO": "project"}, "octo/project"),
+            ("missing", {}, None),
+        ]
+
+        for name, env_updates, expected in cases:
+            with self.subTest(case=name):
+                with patch.dict(os.environ, env_updates, clear=True):
+                    self.assertEqual(github_repo_slug(), expected)
+
+    def test_progress_reporter_exit_status_reads_only_terminal_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixtures = {
+                "in_flight": "start\nEXIT=0\nstill\nrunning\nno\nterminal\nmarker\n",
+                "exit_ok": "start\nwork\nEXIT=0\nDONE_AT=now\n",
+                "exit_failed": "start\nwork\nEXIT=17\nDONE_AT=now\n",
+            }
+            expected = {
+                "in_flight": "in_flight\n",
+                "exit_ok": "exit_ok\n",
+                "exit_failed": "exit_failed\n",
+            }
+
+            for name, text in fixtures.items():
+                path = root / f"{name}.log"
+                path.write_text(text, encoding="utf-8")
+                with self.subTest(case=name):
+                    result = self.run_progress_function("exit_status", f'exit_status "{path}"')
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, expected[name])
+
+    def test_progress_reporter_exit_failed_keeps_comment_and_is_idempotent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state_dir = root / ".refactor-loop"
+            log_dir = state_dir / "logs"
+            fakebin = root / "fakebin"
+            state_dir.mkdir()
+            log_dir.mkdir()
+            fakebin.mkdir()
+            (state_dir / "codex-progress-state.json").write_text("{}\n", encoding="utf-8")
+            log_path = log_dir / "fix-pr47-round2.log"
+            log_path.write_text(
+                "start\n"
+                "working\n"
+                "important failure context\n"
+                "EXIT=17\n",
+                encoding="utf-8",
+            )
+            calls_path = root / "gh-calls.log"
+            body_path = root / "created-body.md"
+            gh = fakebin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
+                "if [[ \"$1 $2\" == \"pr view\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2\" == \"pr comment\" ]]; then\n"
+                "  body_file=''\n"
+                "  while [[ $# -gt 0 ]]; do\n"
+                "    if [[ \"$1\" == \"--body-file\" ]]; then\n"
+                "      body_file=\"$2\"\n"
+                "      break\n"
+                "    fi\n"
+                "    shift\n"
+                "  done\n"
+                "  cp \"$body_file\" \"$GH_BODY_CAPTURE\"\n"
+                "  printf 'https://github.com/owner/repo/pull/47#issuecomment-24680\\n'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"api -X DELETE\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$1 $2 $3\" == \"api -X PATCH\" ]]; then\n"
+                "  exit 0\n"
+                "fi\n"
+                "exit 1\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            env = os.environ.copy()
+            env.update(
+                {
+                    "GH_BODY_CAPTURE": str(body_path),
+                    "GH_CALLS": str(calls_path),
+                    "PATH": f"{fakebin}{os.pathsep}{env.get('PATH', '')}",
+                    "REPO": "owner/repo",
+                    "REPO_ROOT": str(root),
+                    "STATE_DIR": str(state_dir),
+                    "STATE_FILE": str(state_dir / "codex-progress-state.json"),
+                    "LOG_DIR": str(log_dir),
+                    "PROMPTS_DIR": str(state_dir / "prompts"),
+                }
+            )
+
+            result = self.run_progress_harness(
+                f'post_or_update "fix-pr47-round2" "{log_path}"; post_or_update "fix-pr47-round2" "{log_path}"',
+                env=env,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = calls_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(sum("pr comment 47" in call for call in calls), 1, calls)
+            self.assertFalse(any("api -X DELETE" in call for call in calls), calls)
+            self.assertFalse(any("api -X PATCH" in call for call in calls), calls)
+
+            body = body_path.read_text(encoding="utf-8")
+            self.assertIn("失败", body)
+            self.assertIn("controller progress reporter", body)
+            self.assertIn("⟦AI:AUTO-LOOP⟧", body)
+
+            state = json.loads((state_dir / "codex-progress-state.json").read_text(encoding="utf-8"))
+            self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
+            self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
+
+    def test_progress_reporter_hash_body_uses_md5_and_md5sum_fallbacks(self) -> None:
+        body = "stable body\nwith unicode sentinel: ⟦AI:AUTO-LOOP⟧\n"
+        expected = hashlib.md5(body.encode("utf-8")).hexdigest()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp) / "md5"
+            fakebin.mkdir()
+            md5 = fakebin / "md5"
+            md5.write_text(
+                f"#!/usr/bin/env bash\n{sys.executable} -c 'import hashlib, sys; print(hashlib.md5(sys.stdin.buffer.read()).hexdigest())'\n",
+                encoding="utf-8",
+            )
+            md5sum = fakebin / "md5sum"
+            md5sum.write_text("#!/usr/bin/env bash\nexit 99\n", encoding="utf-8")
+            md5.chmod(0o755)
+            md5sum.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fakebin}{os.pathsep}{env.get('PATH', '')}"
+
+            result = self.run_progress_function("hash_body", "hash_body", input_text=body, env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), expected)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fakebin = Path(tmp) / "md5sum"
+            fakebin.mkdir()
+            md5sum = fakebin / "md5sum"
+            md5sum.write_text(
+                f"#!/usr/bin/env bash\n{sys.executable} -c 'import hashlib, sys; print(hashlib.md5(sys.stdin.buffer.read()).hexdigest() + \"  -\")'\n",
+                encoding="utf-8",
+            )
+            md5sum.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = f"{fakebin}{os.pathsep}/usr/bin{os.pathsep}/bin"
+
+            result = self.run_progress_function("hash_body", "hash_body", input_text=body, env=env)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), expected)
 
 
 class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
@@ -1057,6 +1371,7 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
             (skill_root / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
             prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
             spawn_file.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+            (root / "repo_slug.sh").write_text((SKILL_ROOT / "scripts" / "repo_slug.sh").read_text(encoding="utf-8"), encoding="utf-8")
             triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
             triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
             triage_lib = root / "triage-monitor-functions.sh"
@@ -1306,6 +1621,7 @@ esac
             fakebin.mkdir()
             argv_log = root / "gh-argv.jsonl"
             controller_copy = root / "controller_lib.sh"
+            (root / "repo_slug.sh").write_text((SKILL_ROOT / "scripts" / "repo_slug.sh").read_text(encoding="utf-8"), encoding="utf-8")
             controller_text = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
             controller_text = controller_text.replace(
                 "import json, sys",
@@ -1697,6 +2013,17 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 self.assertRegex(text, r"\n⟦AI:AUTO-LOOP⟧\n")
                 self.assertIn("--body-file", text)
 
+        progress = self.read_rel("skills/codex-refactor-loop/scripts/codex-progress-reporter.sh")
+        self.assertRegex(progress, r"\n⟦AI:AUTO-LOOP⟧\n")
+        self.assertIn("controller progress reporter", progress)
+
+    def test_controller_generated_close_comment_uses_final_independent_sentinel(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+
+        self.assertIn("--comment \"$close_comment\"", text)
+        self.assertIn("printf '✅ Auto-merged via PR #%s。\\n\\n⟦AI:AUTO-LOOP⟧'", text)
+        self.assertNotIn("Auto-merged via PR #${pr}。⟦AI:AUTO-LOOP⟧", text)
+
     def test_github_repo_contract_uses_slug_not_bare_owner_repo_api_paths(self) -> None:
         checked = self.rel_paths(
             "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/host.env.example",
@@ -1709,9 +2036,44 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
         self.assertIn('export GH_REPO_SLUG="your-org/your-repo"', host_env)
         self.assertNotIn("export GH_REPO=", host_env)
+        shell_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_slug.sh")
+        self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', shell_helper)
         for rel in ("skills/codex-refactor-loop/scripts/controller_lib.sh", "skills/codex-refactor-loop/scripts/peek.sh", "skills/codex-refactor-loop/scripts/triage-monitor.sh"):
             with self.subTest(script=rel):
-                self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', self.read_rel(rel))
+                self.assertIn("repo_slug.sh", self.read_rel(rel))
+
+    def test_repo_slug_resolution_is_shared_across_shell_and_python_scripts(self) -> None:
+        shell_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_slug.sh")
+        python_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_config.py")
+
+        self.assertIn("resolve_github_repo_slug()", shell_helper)
+        self.assertIn("set_gh_repo_args()", shell_helper)
+        self.assertIn("def github_repo_slug()", python_helper)
+        self.assertIn("GH_REPO_SLUG", python_helper)
+        self.assertIn("GH_OWNER", python_helper)
+        self.assertIn("GH_REPO_NAME", python_helper)
+
+        for rel in (
+            "skills/codex-refactor-loop/scripts/comment-monitor.sh",
+            "skills/codex-refactor-loop/scripts/codex-progress-reporter.sh",
+            "skills/codex-refactor-loop/scripts/controller_lib.sh",
+            "skills/codex-refactor-loop/scripts/peek.sh",
+            "skills/codex-refactor-loop/scripts/triage-monitor.sh",
+        ):
+            text = self.read_rel(rel)
+            with self.subTest(shell=rel):
+                self.assertIn("repo_slug.sh", text)
+                self.assertNotIn('${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}', text)
+
+        for rel in (
+            "skills/codex-refactor-loop/scripts/concurrency_monitor.py",
+            "skills/codex-refactor-loop/scripts/post_banner.py",
+        ):
+            text = self.read_rel(rel)
+            with self.subTest(python=rel):
+                self.assertIn("from repo_config import github_repo_slug", text)
+                self.assertNotIn('os.environ.get("GH_OWNER")', text)
+                self.assertNotIn('os.environ.get("GH_REPO_NAME")', text)
 
     def test_optional_ci_guards_are_conditioned_on_non_empty_value(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/scripts/*.sh")
@@ -1790,27 +2152,48 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("反模式", active_docs)
 
     def test_phase9_language_policy_allowlist_is_narrow(self) -> None:
-        allowlist = {
-            "skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/audit.md",
-            "skills/codex-refactor-loop/prompts/design-issue-body.md", "skills/codex-refactor-loop/prompts/design-issue-reply.md",
-            "skills/codex-refactor-loop/prompts/meta-judge.md", "skills/codex-refactor-loop/prompts/solver-delete.md",
-            "skills/codex-refactor-loop/prompts/solver-minimal.md", "skills/codex-refactor-loop/prompts/solver-structural.md",
-        }
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
-        patterns = ("Bilingual rule", "双语强制", "## English", "Recommended framing (English)")
+        forbidden_patterns = ("Bilingual rule", "双语强制", "Bilingual EN+ZH", "## English", "Recommended framing (English)")
 
         for path in checked:
             rel = path.relative_to(REPO_ROOT).as_posix()
             text = path.read_text(encoding="utf-8")
-            for pattern in patterns:
-                if pattern not in text:
-                    continue
+            for pattern in forbidden_patterns:
                 with self.subTest(path=rel, pattern=pattern):
-                    self.assertIn(rel, allowlist)
+                    self.assertNotIn(pattern, text)
 
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         self.assertIn("Source files are English-only; external user-facing artifacts are 中文 by default", skill_text)
         self.assertIn("No mandatory parallel English section", skill_text)
+
+    def test_no_active_github_post_writer_reference_remains(self) -> None:
+        checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
+        self.assert_absent("github-post-writer", checked)
+        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        self.assertIn("Historical tombstone", reference)
+        self.assertIn("intentionally absent", reference)
+
+    def test_state_json_is_not_documented_as_phase_source_of_truth(self) -> None:
+        skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+
+        self.assertIn(".refactor-loop/state.json` is a resumability index and debug ledger", skill_text)
+        self.assertNotIn(".refactor-loop/state.json` tells the controller what can be resumed", skill_text)
+        self.assertLess(skill_text.index(".refactor-loop/logs/*` tells the controller"), skill_text.index(".refactor-loop/state.json` is a resumability index"))
+
+    def test_progress_reporter_clean_exit_hash_and_sentinel_contract(self) -> None:
+        text = self.read_rel("skills/codex-refactor-loop/scripts/codex-progress-reporter.sh")
+
+        self.assertIn('echo "exit_ok"', text)
+        self.assertIn('echo "exit_failed"', text)
+        self.assertIn('echo "in_flight"', text)
+        self.assertIn('[ "$(exit_status "$1")" = "exit_ok" ]', text)
+        self.assertNotIn('grep -q "^EXIT="', text)
+        self.assertIn("hash_body()", text)
+        self.assertIn("command -v md5", text)
+        self.assertIn("command -v md5sum", text)
+        self.assertIn("hashlib.md5", text)
+        self.assertNotIn('cur_md5=$(echo "$body" | md5)', text)
+        self.assertIn("codex 已非零退出;保留此 comment", text)
 
     def test_non_controller_prompts_keep_git_and_lifecycle_boundaries(self) -> None:
         controller_owned = {"_github-post-rules.md", "remote-ci-fix.md", "triage-external-issue.md"}

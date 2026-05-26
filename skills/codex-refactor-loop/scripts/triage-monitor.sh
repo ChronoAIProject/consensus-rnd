@@ -51,13 +51,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset; source .refactor-loop/host.env or set ALLOW_GIT_ROOT_FALLBACK=1 for interactive use" >&2
   exit 2
 fi
-GH_REPO_SLUG="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${GH_REPO_SLUG:-}" ] && ! [[ "$GH_REPO_SLUG" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$GH_REPO_SLUG'" >&2
-  exit 2
-fi
-gh_repo_args=()
-[ -n "${GH_REPO_SLUG:-}" ] && gh_repo_args=(--repo "$GH_REPO_SLUG")
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+set_gh_repo_args 0 0 || exit $?
 INTERVAL="${INTERVAL:-60}"
 TRIAGE_MAX_RETRIES="${TRIAGE_MAX_RETRIES:-3}"
 TRIAGE_RETRY_BACKOFF_SECONDS="${TRIAGE_RETRY_BACKOFF_SECONDS:-300}"

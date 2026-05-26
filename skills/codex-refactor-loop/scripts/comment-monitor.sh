@@ -23,20 +23,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset; source .refactor-loop/host.env or set ALLOW_GIT_ROOT_FALLBACK=1 for interactive use" >&2
   exit 2
 fi
-REPO="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${REPO:-}" ] && ! [[ "$REPO" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$REPO'" >&2
-  exit 2
-fi
-if [ -n "${REPO:-}" ]; then
-  :
-else
-  REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
-fi
-if [ -z "${REPO:-}" ]; then
-  echo "FATAL: GH_REPO_SLUG is unset and gh repo view failed" >&2
-  exit 2
-fi
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+REPO="$(resolve_github_repo_slug 1 1)" || exit $?
 if [ -z "${MAINTAINER_WHITELIST:-}" ]; then
   echo "FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed" >&2
   exit 2

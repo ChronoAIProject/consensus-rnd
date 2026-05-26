@@ -37,6 +37,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from repo_config import github_repo_slug
+
 
 def git_repo_root() -> Path:
     """Return the host repository root from env, or explicit interactive fallback."""
@@ -56,20 +58,6 @@ def git_repo_root() -> Path:
     if r.returncode != 0:
         raise RuntimeError("REPO_ROOT is unset and git rev-parse --show-toplevel failed")
     return Path(r.stdout.strip())
-
-
-def github_repo_slug() -> str | None:
-    slug = os.environ.get("GH_REPO_SLUG")
-    if slug:
-        return slug
-    repo = os.environ.get("GH_REPO")
-    if repo and "/" in repo:
-        return repo
-    owner = os.environ.get("GH_OWNER")
-    name = os.environ.get("GH_REPO_NAME") or repo
-    if owner and name:
-        return f"{owner}/{name}"
-    return None
 
 
 INTERVAL = int(os.environ.get("INTERVAL", "60"))  # 

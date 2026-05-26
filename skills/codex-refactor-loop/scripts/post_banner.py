@@ -30,6 +30,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from repo_config import github_repo_slug
+
 ROLE_NEXT_STEPS = {
     "test-add": "1. test-add 完成 marker `TEST_ADD_DONE:...`  2. controller 自动 commit + push  3. codecov 重测",
     "fix": "1. fix r<N> 完成 marker `FIX_DONE:...`  2. controller commit + push  3. 派 reviewer r<N+1>",
@@ -54,20 +56,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--stall", "--timeout", dest="stall", type=int, required=True,
                    help="codex no-output stall window seconds (for banner display)")
     return p.parse_args()
-
-
-def github_repo_slug() -> str | None:
-    slug = os.environ.get("GH_REPO_SLUG")
-    if slug:
-        return slug
-    repo = os.environ.get("GH_REPO")
-    if repo and "/" in repo:
-        return repo
-    owner = os.environ.get("GH_OWNER")
-    name = os.environ.get("GH_REPO_NAME") or repo
-    if owner and name:
-        return f"{owner}/{name}"
-    return None
 
 
 def main() -> int:
