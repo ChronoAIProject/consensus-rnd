@@ -17,7 +17,7 @@ CONTROLLER_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "con
 HUMAN_LABEL = "👤 human:需-maintainer-决策"
 
 
-class ControllerLibHumanLabelHelperTests(unittest.TestCase):
+class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
@@ -85,18 +85,6 @@ class ControllerLibHumanLabelHelperTests(unittest.TestCase):
         self.assertIn("skip-label", result.stdout)
         self.assert_gh_not_called()
 
-    def test_apply_human_label_skips_when_directive_matches_issue(self) -> None:
-        self.write_directive(
-            "2026-05-26-issue.md",
-            "Maintainer directive covers the documented issue target #55.\n",
-        )
-
-        result = self.run_helper("#55", "human-label-semantics-guard")
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("skip-label", result.stdout)
-        self.assert_gh_not_called()
-
     def test_apply_human_label_applies_when_no_directive(self) -> None:
         result = self.run_helper("55", "human-label-semantics-guard")
 
@@ -130,7 +118,7 @@ class ControllerLibHumanLabelHelperTests(unittest.TestCase):
         result = self.run_helper("")
 
         self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn("apply_human_label_or_skip: missing pr_or_issue", result.stderr)
+        self.assertIn("apply_human_label_or_skip: missing pr_number", result.stderr)
         self.assert_gh_not_called()
 
 

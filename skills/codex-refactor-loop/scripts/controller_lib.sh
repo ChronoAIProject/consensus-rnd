@@ -132,19 +132,19 @@ open_pr_with_label() {
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 # Apply the maintainer-decision label only after checking maintainer-directive artifacts.
-# Usage: apply_human_label_or_skip <pr-or-issue-number> <reason-or-topic>
+# Usage: apply_human_label_or_skip <pr-number> <reason-or-topic>
 apply_human_label_or_skip() {
-  local pr_or_issue="$1" reason="${2:-}"
-  if [ -z "$pr_or_issue" ]; then
-    echo "apply_human_label_or_skip: missing pr_or_issue" >&2
+  local pr_number="$1" reason="${2:-}"
+  if [ -z "$pr_number" ]; then
+    echo "apply_human_label_or_skip: missing pr_number" >&2
     return 2
   fi
 
   local directive_dir="${REPO_ROOT}/.refactor-loop/runs/maintainer-directives"
   if [ -d "$directive_dir" ]; then
     local needle target
-    target="${pr_or_issue#\#}"
-    for needle in "$pr_or_issue" "#${target}" "${reason}"; do
+    target="${pr_number#\#}"
+    for needle in "$pr_number" "#${target}" "${reason}"; do
       [ -z "$needle" ] && continue
       if grep -RIlF -- "$needle" "$directive_dir"/*.md >/dev/null 2>&1; then
         echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
@@ -153,7 +153,7 @@ apply_human_label_or_skip() {
     done
   fi
 
-  gh pr edit "$pr_or_issue" "${gh_repo_args[@]}" --add-label "👤 human:需-maintainer-决策" 2>&1 >/dev/null
+  gh pr edit "$pr_number" "${gh_repo_args[@]}" --add-label "👤 human:需-maintainer-决策" 2>&1 >/dev/null
 }
 
 # Substitute {{handlebars}} placeholders in a template using current env vars
