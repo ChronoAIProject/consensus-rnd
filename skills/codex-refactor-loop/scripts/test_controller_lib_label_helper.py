@@ -111,6 +111,18 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()
 
+    def test_apply_human_label_no_substring_false_match(self) -> None:
+        """Directive containing PR #555 must NOT match helper run for PR 55."""
+        self.write_directive(
+            "2026-05-26-pr-555.md",
+            "Maintainer directive for PR #555 covers a different path.\n",
+        )
+
+        result = self.run_helper("55", "human-label-semantics-guard")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_human_label_applied_once()
+
     def test_apply_human_label_skips_when_topic_in_directive_body(self) -> None:
         self.write_directive(
             "2026-05-26-topic.md",
@@ -122,6 +134,18 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertIn("skip-label", result.stdout)
         self.assert_gh_not_called()
+
+    def test_apply_human_label_partial_topic_not_authorized(self) -> None:
+        """Directive containing a topic fragment must not authorize the full topic."""
+        self.write_directive(
+            "2026-05-26-topic-fragment.md",
+            "Maintainer directive mentions only the fragment concur.\n",
+        )
+
+        result = self.run_helper("55", "concurrency")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_human_label_applied_once()
 
     def test_apply_human_label_missing_arg_returns_2(self) -> None:
         result = self.run_helper("")

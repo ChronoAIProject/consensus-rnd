@@ -142,15 +142,19 @@ apply_human_label_or_skip() {
 
   local directive_dir="${REPO_ROOT}/.refactor-loop/runs/maintainer-directives"
   if [ -d "$directive_dir" ]; then
-    local needle target
+    local target escaped_reason
     target="${pr_number#\#}"
-    for needle in "$pr_number" "#${target}" "${reason}"; do
-      [ -z "$needle" ] && continue
-      if grep -RIlF -- "$needle" "$directive_dir"/*.md >/dev/null 2>&1; then
+    if grep -RIlE "(^|[^0-9])(PR[ -]?)?#?${target}([^0-9]|$)" "$directive_dir"/*.md >/dev/null 2>&1; then
+      echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
+      return 1
+    fi
+    if [ -n "$reason" ]; then
+      escaped_reason=$(printf '%s\n' "$reason" | sed 's/[][(){}.^$*+?|\\]/\\&/g')
+      if grep -RIlE "(^|[^[:alnum:]_-])${escaped_reason}([^[:alnum:]_-]|$)" "$directive_dir"/*.md >/dev/null 2>&1; then
         echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
         return 1
       fi
-    done
+    fi
   fi
 
   gh pr edit "$pr_number" "${gh_repo_args[@]}" --add-label "👤 human:需-maintainer-决策" 2>&1 >/dev/null
