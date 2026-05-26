@@ -62,6 +62,38 @@ ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**�
 
 `concurrency_monitor.py` 的 `count_in_flight_codex()` 与 `peek.sh` 的 `list_loop_codex()` 均已按 `$REPO_ROOT` 绝对路径 scope。
 
+<a id="dispatch-queue-protocol"></a>
+### Dispatch queue protocol
+
+`concurrency_monitor.py` consumes queued dispatch files when this loop is below its local floor. The queue is host-local and durable:
+
+```text
+$REPO_ROOT/.refactor-loop/dispatch-queue/<priority>/<task-id>.dispatch.json
+```
+
+Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always checks `p0` first, then `p1`, then `p2`, and uses lexicographic file order within a priority. Each JSON file uses this schema:
+
+```json
+{
+  "task_id": "fix-pr44-round-3",
+  "cd": "/abs/worktree",
+  "prompt": "/abs/prompt.md",
+  "log": "/abs/log.log",
+  "stall": 5400,
+  "queued_at": "2026-05-26T07:25:00Z",
+  "reason": "PR #44 r3 fix needed"
+}
+```
+
+Required fields are `task_id`, `cd`, `prompt`, and `log`; `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
+
+Auto-dispatch semantics:
+- On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.
+- After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
+- The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
+- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue suitable work.
+- This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
+
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
 
 判 `judge-ready` / `merge-ready` / `solver-done` / `reviewer-done` **必须先看 log 末尾 `^EXIT=0`**。`EXIT=0` 表示 codex 进程干净结束,输出文件与 marker 才可被视为完整。**不要**用 `SOLVER_DONE:` / `REVIEW_DONE:` / `META_JUDGE_DONE:` / `FIX_DONE:` marker 的存在判断"已完成"。
@@ -1554,7 +1586,7 @@ Concretely, this means:
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。**唯一执行位置**:controller 每次 wakeup 的 step 1.5,并且必须在任何 `ScheduleWakeup` 之前执行;`concurrency_monitor.py` 只做 no-gap sentinel,不承担 floor 观察/补给职责。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|

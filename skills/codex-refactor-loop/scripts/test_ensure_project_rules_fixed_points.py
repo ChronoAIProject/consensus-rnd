@@ -716,14 +716,18 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
 
 
 class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
-    # Refactor (iter3/skill-concurrency-floor-enforcement):
-    #   Old pattern: concurrency_monitor 有误导性 low-threshold 路径,CODEX_FLOOR 强制职责不清
-    #   New principle: monitor 保持 no-gap-only;删 stale low-threshold 路径;CODEX_FLOOR 补给仅 controller wakeup step 1.5;SKILL 澄清职责(#14 delete 共识)
-    def test_concurrency_monitor_is_no_gap_only(self) -> None:
+    # Refactor (iter4/concurrency-auto-topup):
+    #   Old pattern: monitor 只 alert,actual<floor 等 LLM controller 下次 wakeup 才派
+    #   New principle: monitor 自动从 dispatch-queue 消费,与 daemon-first 哲学 align。
+    def test_concurrency_monitor_auto_topup_is_queue_scoped(self) -> None:
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
 
         self.assertIn("no-gap-violation", monitor_text)
         self.assertIn("expected > 0 and actual == 0", monitor_text)
+        self.assertIn("dispatch-queue", monitor_text)
+        self.assertIn("DISPATCH_FIRED:", monitor_text)
+        self.assertIn("CONCURRENCY_LOW:actual=", monitor_text)
+        self.assertIn('os.environ.get("CODEX_FLOOR"', monitor_text)
         for forbidden in (
             "MIN_PARALLEL",
             "codex-floor-deficit",
@@ -734,13 +738,13 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, monitor_text)
-        self.assertNotIn('os.environ.get("CODEX_FLOOR"', monitor_text)
 
-    def test_skill_assigns_floor_to_controller_step_1_5_only(self) -> None:
+    def test_skill_documents_monitor_queue_topup_and_controller_step_1_5(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
 
-        self.assertIn("concurrency_monitor.py` 只做 no-gap sentinel", skill_text)
+        self.assertIn("dispatch-queue 非空时自动派发", skill_text)
+        self.assertIn("低于预期数就继续派发", skill_text)
         self.assertIn("controller 每次 wakeup 的 step 1.5", skill_text)
         self.assertIn("必须在任何 `ScheduleWakeup` 之前执行", skill_text)
         self.assertIn("FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))", skill_text)
@@ -748,6 +752,9 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("codex-floor-deficit", skill_text)
         self.assertNotIn("ACTIVE <= 2", skill_text)
         self.assertIn("[concurrency floor details](REFERENCE.md#concurrency-floor-details)", skill_text)
+        self.assertIn("Dispatch queue protocol", reference_text)
+        self.assertIn("DISPATCH_FIRED:<task-id>:<priority>:<reason>", reference_text)
+        self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
 
