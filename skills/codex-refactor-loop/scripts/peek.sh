@@ -300,7 +300,7 @@ git worktree list --porcelain | grep "^worktree " | sed 's/^worktree //' | while
   base=$(basename "$wt")
   # skip main + dev-sync
   case "$base" in
-    "$(basename "$REPO_ROOT")" | "$(basename "$REPO_ROOT")-wt-dev-sync") continue ;;
+    "$(basename "$REPO_ROOT")" | "$(basename "$REPO_ROOT")-wt-dev-sync" | "dev-sync") continue ;;
   esac
   # If worktree branch is in remote merged-to-master list, mark stale
   branch=$(git -C "$wt" branch --show-current 2>/dev/null)

@@ -12,6 +12,10 @@ The following excerpts preserve the detailed controller runbook that was moved o
 
 dogfood 运行中固化的操作经验。host 注入的配置集中放 `$REPO_ROOT/.refactor-loop/host.env`(`export REPO_ROOT/GH_REPO_SLUG/INTEGRATION_BRANCH/REVIEW_BASE_BRANCH/BUILD_CMD/TEST_CMD/CI_GUARDS/SOURCE_GLOBS/MAINTAINER_WHITELIST` 等)。
 
+### Worktree 位置约定(强制)
+
+所有 daemon/codex/implement worktree 都在 `$REPO_ROOT/.worktrees/` 内,路径形如 `$REPO_ROOT/.worktrees/<name>/`。仓库根 `.gitignore` 必须包含 `/.worktrees/`,因此这些运行时 worktree 不进入发布产物。旧 sibling pattern `<repo>-wt-<name>/` 只作为历史兼容/清理线索出现,不得作为新 worktree 创建位置。
+
 ### Daemon 启动(强制 pattern — 必须注入 host.env)
 
 **禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD="cargo build --workspace"` 含空格 → `env` 把 `build` 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
@@ -54,7 +58,7 @@ ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**�
 **更隐蔽的同机多 loop 过计(dogfood 实测)**:即使只数「含 `spawn-codex.sh`」的 codex,如果再用**相对子串** `.refactor-loop/logs/` / `.refactor-loop/prompts/` 做 scope,**同一台机器跑两个不同仓库的本 skill 时会互相过计**——两个 loop 的相对路径子串完全相同。实测另一 host 的 loop 在跑时,本仓库 `concurrency_monitor` 报 `actual=8` 而本仓库实际只有 1 个 codex,floor 被骗成"满",本仓库 codex 永远补不上去、可能长期单线程。
 
 **修正(强制)**:floor 只数**本仓库(本 loop)的 codex** —— 命令行含 `spawn-codex.sh` **且含本仓库绝对路径 `$REPO_ROOT`**。
-- spawn 时 caller **必须传绝对 `--cd`**(audit 用 `--cd $REPO_ROOT`;implement/verify 用绝对 worktree 路径),使 `$REPO_ROOT` 进入进程 cmdline;sibling worktree `<repo>-wt-*` 以 `$REPO_ROOT` 为前缀,亦匹配。
+- spawn 时 caller **必须传绝对 `--cd`**(audit 用 `--cd $REPO_ROOT`;implement/verify 用绝对 worktree 路径),使 `$REPO_ROOT` 进入进程 cmdline;inside worktree `<repo>/.worktrees/*` 以 `$REPO_ROOT` 为前缀,亦匹配。
 - ❌ **不要**只用相对子串 `.refactor-loop/logs/` 做 scope(同机多 loop 互相过计)。
 - **去重(强制)**:每个 codex 会派生**两个**含 `spawn-codex.sh` 的进程 —— 真 supervisor(`bash <path>/spawn-codex.sh --cd ...`)+ 一个 shell `-c` wrapper(harness 后台任务回显整条命令)。两个都数 = 每个真 codex 被算成 2,`CODEX_FLOOR=2` 会被**单个**真 codex 满足 → 永远凑不到真正 2 并行。**排除含 ` -c ` 的行**,只数真 supervisor(spawn-codex.sh 自身不带 ` -c ` flag)。
 - 不数 host 其它系统 / 其它仓库的 codex。
@@ -537,9 +541,9 @@ Update state, advance to Phase 2 (with requires_design clusters excluded).
 
 ### Stale-worktree audit pollution(强制 pre-audit cleanup)
 
-**Bug 来源**:audit codex 默认在 `--cd $REPO_ROOT` 下扫描,但 `find` / `rg` 会无视 git boundary 扫到 sibling worktrees(`<repo>-wt-iterN-cluster-*` 等)。已 merge 但未清理的 worktree 里仍保留 pre-refactor src 文件,audit 把那些当成"现状"出 evidence,导致 cluster 描述指向 main 中**已删除**的文件路径(file:line 在 main 不存在)。
+**Bug 来源**:audit codex 默认在 `--cd $REPO_ROOT` 下扫描,但 `find` / `rg` 会无视 git boundary 扫到 inside worktrees(`$REPO_ROOT/.worktrees/iterN-cluster-*` 等)。已 merge 但未清理的 worktree 里仍保留 pre-refactor src 文件,audit 把那些当成"现状"出 evidence,导致 cluster 描述指向 main 中**已删除**的文件路径(file:line 在 main 不存在)。
 
-结构性教训:曾出现 audit 从已合并但未清理的 sibling worktree 读取过期 evidence,导致 cluster 指向 main 中已删除的 file:line。pre-audit 必须清理 stale worktree,并抽查 evidence file:line 在当前 main 真实存在。
+结构性教训:曾出现 audit 从已合并但未清理的 worktree 读取过期 evidence,导致 cluster 指向 main 中已删除的 file:line。pre-audit 必须清理 stale worktree,并抽查 evidence file:line 在当前 main 真实存在。
 
 **强制 pre-audit 步骤**(每次派 audit codex 前 controller 执行):
 
@@ -577,8 +581,9 @@ For each cluster in the current batch:
 1. Create worktree:
 
    ```bash
+   mkdir -p "$REPO_ROOT/.worktrees"
    git worktree add -b refactor/iterN-<cluster-id> \
-     .refactor-loop/worktrees/<cluster-id> HEAD
+     "$REPO_ROOT/.worktrees/iterN-<cluster-id>" HEAD
    ```
 
 2. Materialize prompt: copy `prompts/implement.md`, replace placeholders (`{{work_unit_id}}`,
@@ -648,7 +653,7 @@ $BUILD_CMD
 
 结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
 
-**cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd .refactor-loop/worktrees/<id>` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
+**cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd "$REPO_ROOT/.worktrees/<id>"` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
 
 For each `pass` cluster, serially:
 
@@ -756,7 +761,7 @@ For each `pass` cluster, serially:
      # If empty, gh pr create --base "<review_base_branch>" --head "<integration_branch>" --title "Refactor iter<N>: rollup" --body <scorecard.md>
      ```
 
-After merge of the cluster branch into its target → `git worktree remove .refactor-loop/worktrees/<cluster-id>`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
+After merge of the cluster branch into its target → `git worktree remove "$REPO_ROOT/.worktrees/<cluster-id>"`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
 
 If no clusters left in current batch → start next batch (Phase 2 again). If no batches left → start next iteration (Phase 1 again) or **start Phase 5 if there is an open PR for the trunk/cluster branches**.
 
@@ -1428,7 +1433,7 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
 | 下一步自动会做 | 1. 创 worktree + branch  2. 派 implement codex(5400s no-output stall window)  3. implement done 后 open PR + Phase 8 reviewer  4. PR merge 后 close 本 issue |
 | **是否需要人介入** | **❌ 否**(自动推进;maintainer 仍可在本 issue 评论 override) |
 
-📦 implement worktree:\`$REPO_ROOT-wt-iter${ITER}-${CLUSTER_ID}\`
+📦 implement worktree:\`$REPO_ROOT/.worktrees/iter${ITER}-${CLUSTER_ID}\`
 📦 implement branch:\`refactor/iter${ITER}-${CLUSTER_ID}-${SLUG}\`
 
 🤖 controller consensus card
@@ -2330,7 +2335,7 @@ If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a ne
 
 ### cwd leak in Phase 4 ("Already up to date.")
 
-Symptom: `git merge` after a `cd .refactor-loop/worktrees/<id>` chain prints `Already up to date.` instead of merging the branch into trunk.
+Symptom: `git merge` after a `cd "$REPO_ROOT/.worktrees/<id>"` chain prints `Already up to date.` instead of merging the branch into trunk.
 
 Cause: the harness persists Bash cwd across invocations, so an earlier `cd` into the worktree leaks into the merge call. The merge then runs from inside the worktree (which is already at the branch's tip), so git correctly reports no-op.
 
