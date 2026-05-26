@@ -89,10 +89,16 @@ def write_gh_stub(
     bin_dir: Path,
     *,
     run_conclusions: dict[str, str] | None = None,
+    run_names: list[str] | None = None,
+    run_exit_code: int = 0,
+    run_stdout: str | None = None,
     labeled_items: dict[str, list[dict[str, int]]] | None = None,
+    list_failures: dict[str, str] | None = None,
 ) -> None:
     run_conclusions = run_conclusions or {}
+    run_names = run_names or ["contract-tests", "manifest-version-sync"]
     labeled_items = labeled_items or {}
+    list_failures = list_failures or {}
     gh = bin_dir / "gh"
     gh.write_text(
         f"""#!/usr/bin/env python3
@@ -103,14 +109,32 @@ from datetime import datetime, timezone
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 args = sys.argv[1:]
 run_conclusions = {json.dumps(run_conclusions, ensure_ascii=False)}
+run_names = {json.dumps(run_names, ensure_ascii=False)}
+run_exit_code = {run_exit_code}
+run_stdout = {run_stdout!r}
 labeled_items = {json.dumps(labeled_items, ensure_ascii=False)}
+list_failures = {json.dumps(list_failures, ensure_ascii=False)}
 if args[:3] == ["run", "list", "--branch"]:
+    if run_exit_code:
+        print("simulated gh run list failure", file=sys.stderr)
+        raise SystemExit(run_exit_code)
+    if run_stdout is not None:
+        print(run_stdout)
+        raise SystemExit(0)
     print(json.dumps([
-        {{"databaseId": 1, "createdAt": now, "conclusion": run_conclusions.get("contract-tests", "success"), "status": "completed", "name": "contract-tests"}},
-        {{"databaseId": 2, "createdAt": now, "conclusion": run_conclusions.get("manifest-version-sync", "success"), "status": "completed", "name": "manifest-version-sync"}},
+        {{"databaseId": index + 1, "createdAt": now, "conclusion": run_conclusions.get(name, "success"), "status": "completed", "name": name}}
+        for index, name in enumerate(run_names)
     ]))
     raise SystemExit(0)
 if len(args) >= 2 and args[1] == "list":
+    kind = args[0]
+    failure = list_failures.get(kind)
+    if failure == "exit":
+        print(f"simulated gh {{kind}} list failure", file=sys.stderr)
+        raise SystemExit(3)
+    if failure == "invalid-json":
+        print("{{not-json")
+        raise SystemExit(0)
     label = args[args.index("--label") + 1] if "--label" in args else ""
     print(json.dumps(labeled_items.get(label, [])))
     raise SystemExit(0)
@@ -141,6 +165,8 @@ def write_live_state(repo: Path) -> None:
 
 def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subprocess.CompletedProcess[str]:
     env = {**os.environ, "REPO_ROOT": str(repo)}
+    env.pop("REVIEW_BASE_BRANCH", None)
+    env.pop("INTEGRATION_BRANCH", None)
     if bin_dir is not None:
         env["PATH"] = f"{bin_dir}{os.pathsep}{os.environ['PATH']}"
     return subprocess.run(
@@ -157,6 +183,44 @@ def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subpro
         text=True,
         check=False,
     )
+
+
+def assert_no_release_artifacts(test: unittest.TestCase, repo: Path) -> None:
+    test.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+    test.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
+
+
+def score_only_summary(test: unittest.TestCase, repo: Path, bin_dir: Path | None = None) -> dict[str, object]:
+    result = run_gate_cli(repo, bin_dir, "--score-only")
+    test.assertEqual(result.returncode, 0, result.stderr)
+    summary = json.loads(result.stdout[result.stdout.index("{"):])
+    test.assertIsInstance(summary, dict)
+    assert isinstance(summary, dict)
+    return summary
+
+
+def assert_signal_blocked(
+    test: unittest.TestCase,
+    repo: Path,
+    bin_dir: Path | None,
+    signal_name: str,
+    expected_reason: str,
+) -> None:
+    summary = score_only_summary(test, repo, bin_dir)
+    stability = summary["stability"]
+    test.assertIsInstance(stability, dict)
+    assert isinstance(stability, dict)
+    test.assertFalse(stability["ready"])
+    signals = stability["signals"]
+    test.assertIsInstance(signals, dict)
+    assert isinstance(signals, dict)
+    test.assertIn(signal_name, signals)
+    signal = signals[signal_name]
+    test.assertIsInstance(signal, dict)
+    assert isinstance(signal, dict)
+    test.assertFalse(signal["passed"])
+    test.assertIn(signal_name, str(signal.get("reason", "")))
+    test.assertIn(expected_reason, json.dumps(signal, ensure_ascii=False))
 
 
 def write_green_signals(repo: Path) -> None:
@@ -284,6 +348,120 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertFalse(summary["stability"]["ready"])
             self.assertIn("ci_red", summary["stability"]["signals"]["required_checks_recent_green"]["reason"])
 
+    def test_fail_closed_when_branch_env_unset(self) -> None:
+        cases = (
+            ("unset", "export RELEASE_AUTO_ENABLE=true\n", "REVIEW_BASE_BRANCH"),
+            (
+                "empty",
+                "\n".join([
+                    "export RELEASE_AUTO_ENABLE=true",
+                    "export REVIEW_BASE_BRANCH=",
+                    "export INTEGRATION_BRANCH=",
+                    "",
+                ]),
+                "empty REVIEW_BASE_BRANCH or INTEGRATION_BRANCH",
+            ),
+        )
+        for name, host_env, expected_reason in cases:
+            with self.subTest(name=name):
+                with copy_repo_fixture() as tmp:
+                    repo = Path(tmp) / "repo"
+                    (repo / "host.env").write_text(host_env, encoding="utf-8")
+                    write_live_state(repo)
+                    bin_dir = repo / "bin"
+                    bin_dir.mkdir()
+                    write_gh_stub(bin_dir)
+
+                    result = run_gate_cli(repo, bin_dir)
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("required_checks_recent_green", result.stdout)
+                    assert_no_release_artifacts(self, repo)
+                    assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", expected_reason)
+
+    def test_fail_closed_when_gh_run_list_nonzero(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir, run_exit_code=2)
+
+            result = run_gate_cli(repo, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("required_checks_recent_green", result.stdout)
+            assert_no_release_artifacts(self, repo)
+            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "gh run list failed")
+
+    def test_fail_closed_when_invalid_run_json(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir, run_stdout="{not-json")
+
+            result = run_gate_cli(repo, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("required_checks_recent_green", result.stdout)
+            assert_no_release_artifacts(self, repo)
+            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "invalid gh JSON")
+
+    def test_fail_closed_when_required_check_runs_missing(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir, run_names=["unrelated-check"])
+
+            result = run_gate_cli(repo, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("required_checks_recent_green", result.stdout)
+            assert_no_release_artifacts(self, repo)
+            summary = score_only_summary(self, repo, bin_dir)
+            stability = summary["stability"]
+            self.assertIsInstance(stability, dict)
+            assert isinstance(stability, dict)
+            self.assertFalse(stability["ready"])
+            signal = stability["signals"]["required_checks_recent_green"]
+            self.assertFalse(signal["passed"])
+            self.assertIn("required_checks_recent_green", signal["reason"])
+            self.assertIn("missing_required_checks_recent_green", signal["reason"])
+            branches = signal["branches"]
+            self.assertFalse(branches["trunk-review"]["contract-tests"])
+            self.assertFalse(branches["trunk-review"]["manifest-version-sync"])
+            self.assertFalse(branches["release-integration"]["contract-tests"])
+            self.assertFalse(branches["release-integration"]["manifest-version-sync"])
+
+    def test_fail_closed_when_gh_issue_pr_list_fails(self) -> None:
+        cases = (
+            ({"issue": "exit"}, "no_human_decision_label", "gh issue list failed"),
+            ({"pr": "invalid-json"}, "no_open_blocked_pr", "invalid gh JSON for pr"),
+        )
+        for list_failures, signal_name, expected_reason in cases:
+            with self.subTest(list_failures=list_failures):
+                with copy_repo_fixture() as tmp:
+                    repo = Path(tmp) / "repo"
+                    write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+                    write_live_state(repo)
+                    bin_dir = repo / "bin"
+                    bin_dir.mkdir()
+                    write_gh_stub(bin_dir, list_failures=list_failures)
+
+                    result = run_gate_cli(repo, bin_dir)
+
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(signal_name, result.stdout)
+                    assert_no_release_artifacts(self, repo)
+                    assert_signal_blocked(self, repo, bin_dir, signal_name, expected_reason)
+
     def test_fail_closed_when_blocked_or_human_label_present(self) -> None:
         cases = (
             ("⏸️ phase:blocked", "no_open_blocked_pr"),
@@ -314,7 +492,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertIn(signal_name, result.stdout)
-                    self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+                    assert_no_release_artifacts(self, repo)
                     score = subprocess.run(
                         [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only", "--min-recent-merges", "0"],
                         cwd=repo,
@@ -366,7 +544,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("no_phase8_reject_churn", result.stdout)
-            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            assert_no_release_artifacts(self, repo)
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
             score = gate.compute_stability(min_recent_merges=1)
             self.assertFalse(score.ready)
@@ -387,12 +565,33 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("p0_alert_streak_ok", result.stdout)
-            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            assert_no_release_artifacts(self, repo)
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
             score = gate.compute_stability(min_recent_merges=1)
             self.assertFalse(score.ready)
             self.assertFalse(score.signals["p0_alert_streak_ok"]["passed"])
             self.assertEqual(score.signals["p0_alert_streak_ok"]["zero_streak"], 4)
+
+    def test_fail_closed_when_p0_alert_streak_overflow(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 4})
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir)
+
+            result = run_gate_cli(repo, bin_dir)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("p0_alert_streak_ok", result.stdout)
+            assert_no_release_artifacts(self, repo)
+            summary = score_only_summary(self, repo, bin_dir)
+            signal = summary["stability"]["signals"]["p0_alert_streak_ok"]
+            self.assertFalse(signal["passed"])
+            self.assertEqual(signal["zero_streak"], 4)
+            self.assertIn("p0_alert_streak_ok", summary["stability"]["signals"])
 
     def test_fail_closed_when_recent_pr_merges_below_minimum(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -408,12 +607,13 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("recent_pr_merges_min", result.stdout)
-            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            assert_no_release_artifacts(self, repo)
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
             score = gate.compute_stability(min_recent_merges=1)
             self.assertFalse(score.ready)
             self.assertFalse(score.signals["recent_pr_merges_min"]["passed"])
-            self.assertEqual(score.signals["recent_pr_merges_min"]["reason"], "missing_recent_pr_merges_artifact")
+            self.assertIn("recent_pr_merges_min", score.signals["recent_pr_merges_min"]["reason"])
+            self.assertIn("missing_recent_pr_merges_artifact", score.signals["recent_pr_merges_min"]["reason"])
             self.assertEqual(score.signals["recent_pr_merges_min"]["minimum"], 1)
 
     def test_fail_closed_when_unresolved_human_escalation_exists(self) -> None:
@@ -430,12 +630,32 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("no_unresolved_human_escalation", result.stdout)
-            self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
+            assert_no_release_artifacts(self, repo)
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
             score = gate.compute_stability(min_recent_merges=1)
             self.assertFalse(score.ready)
             self.assertFalse(score.signals["no_unresolved_human_escalation"]["passed"])
             self.assertEqual(score.signals["no_unresolved_human_escalation"]["count"], 1)
+
+    def test_fail_closed_when_mapped_manifest_versions_diverge(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            package_json = read_json(repo / "package.json")
+            self.assertIsInstance(package_json, dict)
+            assert isinstance(package_json, dict)
+            package_json["version"] = "9.9.9"
+            write_json(repo / "package.json", package_json)
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir)
+
+            result = run_gate_cli(repo, bin_dir)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("mapped manifest versions are not synchronized", result.stderr)
+            assert_no_release_artifacts(self, repo)
 
     def test_dry_run_writes_decision_no_bump(self) -> None:
         with copy_repo_fixture() as tmp:

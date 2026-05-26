@@ -206,6 +206,7 @@ class AutoReleaseGate:
             self._fill_signal_defaults(signals, min_recent_merges)
         else:
             self._fill_live_signals(signals, min_recent_merges)
+        self._annotate_signal_reasons(signals)
         passed = sum(1 for value in signals.values() if value["passed"])
         score = int(round((passed / len(SIGNAL_NAMES)) * 100))
         return StabilityResult(ready=passed == len(SIGNAL_NAMES), score=score, signals=signals)
@@ -241,6 +242,15 @@ class AutoReleaseGate:
         signals["recent_pr_merges_min"] = self.recent_pr_merges_min(since_2h, min_recent_merges)
         signals["fresh_heartbeats"] = self.fresh_heartbeats()
         signals["no_unresolved_human_escalation"] = self.no_unresolved_human_escalation()
+
+    def _annotate_signal_reasons(self, signals: dict[str, dict[str, Any]]) -> None:
+        for name, signal in signals.items():
+            if signal.get("passed"):
+                continue
+            reason = signal.get("reason")
+            detail = reason if isinstance(reason, str) and reason else "failed"
+            if name not in detail:
+                signal["reason"] = f"{name}:{detail}"
 
     def required_checks_recent_green(self, since: datetime) -> dict[str, Any]:
         required = ("contract-tests", "manifest-version-sync")
