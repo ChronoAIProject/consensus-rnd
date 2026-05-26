@@ -196,21 +196,41 @@ post_or_update() {
   fi
 
   # 已 terminal 且上次已记录同一 terminal state → skip
+  # Refactor (issue-69/orphan-delete-retry): exception — if finished=true but state still
+  # carries a real comment_id (cid != 0 / "deleted" / "gone"), the prior delete attempt did
+  # not confirm. Fall through so the delete branch retries this tick instead of leaving an
+  # orphan progress comment on GitHub forever.
   local prev_finished
   prev_finished=$(state_get "$base" "finished")
-  if [ "$finished" = "$prev_finished" ] && { [ "$finished" = "true" ] || [ "$finished" = "failed" ]; }; then
+  local needs_delete_retry=0
+  if [ "$finished" = "true" ] && [ -n "$cid" ] && [ "$cid" != "null" ] && [ "$cid" != "0" ]; then
+    needs_delete_retry=1
+  fi
+  if [ "$finished" = "$prev_finished" ] && [ "$needs_delete_retry" = "0" ] && { [ "$finished" = "true" ] || [ "$finished" = "failed" ]; }; then
     return
   fi
 
   # 状态从 in-flight → finished: 删 comment + 从 state 移除
+  # Refactor (issue-69/orphan-delete-retry): Old pattern: marked finished=true regardless of
+  # delete result, so any transient DELETE failure (rate-limit / network) orphaned the comment
+  # forever (30 spam comments on issue #69 实证). New principle: only mark finished=true after
+  # confirmed delete OR confirmed 404; otherwise leave state untouched so next tick retries.
   if [ "$finished" = "true" ] && [ -n "$cid" ] && [ "$cid" != "null" ] && [ "$cid" != "0" ]; then
     if gh api -X DELETE "repos/$REPO/issues/comments/$cid" >/dev/null 2>&1; then
       log_msg "deleted progress comment for $base (finished, cid=$cid was=$kind #$target)"
+      state_set "$base" "$target" "$kind" "0" "deleted" "true"
     else
-      log_msg "FAIL to delete comment $cid for $base (already gone?); marking finished anyway"
+      # DELETE failed. Distinguish "already gone" (404 = ok, mark finished) from
+      # transient failure (still exists, leave state alone so we retry).
+      if ! gh api "repos/$REPO/issues/comments/$cid" >/dev/null 2>&1; then
+        log_msg "comment $cid for $base already 404; marking finished"
+        state_set "$base" "$target" "$kind" "0" "gone" "true"
+      else
+        log_msg "FAIL delete comment $cid for $base; comment still exists, retry next tick"
+        # Intentionally do NOT state_set — leave finished as-is so the next tick
+        # re-enters this branch.
+      fi
     fi
-    # mark finished in state so we don't re-create next tick
-    state_set "$base" "$target" "$kind" "0" "deleted" "true"
     return
   fi
 
@@ -268,6 +288,11 @@ post_or_update() {
 
   rm -f "$body_file"
 }
+
+# Test seam: when sourced with TEST_NO_LOOP=1, expose functions but skip the daemon loop.
+if [ "${TEST_NO_LOOP:-0}" = "1" ]; then
+  return 0 2>/dev/null || exit 0
+fi
 
 # 主 loop
 while true; do

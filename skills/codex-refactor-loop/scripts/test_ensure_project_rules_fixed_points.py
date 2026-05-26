@@ -2340,6 +2340,40 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertNotIn('cur_md5=$(echo "$body" | md5)', text)
         self.assertIn("codex 已非零退出;保留此 comment", text)
 
+    def test_progress_reporter_orphan_delete_retry_contract(self) -> None:
+        # Source-regression for the maintainer-directive at
+        # .refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md
+        # (re: issue #69 — 30 orphan progress comments accumulated after old daemon marked
+        # finished=true even when the GitHub DELETE call failed). The fix must:
+        #   1. Only mark finished=true when DELETE confirmed (success or 404).
+        #   2. Treat finished=true + non-zero comment_id as an orphan that needs delete retry.
+        #   3. Carry the old-/new-pattern Refactor comment so the rationale stays in source.
+        #   4. Expose a TEST_NO_LOOP=1 seam so the behavior test can source the daemon.
+        text = self.read_rel("skills/codex-refactor-loop/scripts/codex-progress-reporter.sh")
+
+        self.assertIn("Refactor (issue-69/orphan-delete-retry)", text)
+        self.assertIn("needs_delete_retry", text)
+        self.assertIn("comment still exists, retry next tick", text)
+        self.assertIn("already 404; marking finished", text)
+        self.assertIn('TEST_NO_LOOP', text)
+        # The bug-introducing line that unconditionally marked finished=true on any DELETE
+        # outcome must no longer be present.
+        self.assertNotIn('marking finished anyway', text)
+
+        # The accompanying behavior test must exist alongside the daemon.
+        test_path = SKILL_ROOT / "scripts" / "test_codex_progress_reporter_orphan.sh"
+        self.assertTrue(test_path.is_file(),
+                        f"behavior test missing: {test_path}")
+        test_text = test_path.read_text(encoding="utf-8")
+        for required in (
+            "test_delete_success_first_attempt",
+            "test_delete_fail_keeps_state_for_retry",
+            "test_delete_fail_but_404_marks_gone",
+            "test_orphan_state_retried_on_next_tick",
+        ):
+            with self.subTest(test=required):
+                self.assertIn(required, test_text)
+
     def test_non_controller_prompts_keep_git_and_lifecycle_boundaries(self) -> None:
         controller_owned = {"_github-post-rules.md", "remote-ci-fix.md", "triage-external-issue.md"}
         forbidden = ("git commit", "git push", "git checkout", "gh pr create", "gh pr merge", "gh issue close")
