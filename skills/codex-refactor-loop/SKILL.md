@@ -81,6 +81,34 @@ Host config rules:
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
+## Claude Code statusline(per #51 consensus)
+
+`skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、P0 streak、freeze 指示)。
+
+**Producer**:`concurrency_monitor.py` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。
+
+**Consumer**:`statusline.sh` 读 snapshot,bash + jq < 200ms。
+
+**Install**(host project,**手动一行,无 installer script**):
+
+```json
+// ~/.claude/settings.json
+"statusLine": "/abs/path/to/skills/codex-refactor-loop/scripts/statusline.sh"
+```
+
+(host 用安装后的 `<skill-root>/scripts/statusline.sh` 或拷过去的对应路径。)
+
+**Uninstall**:删 `statusLine` 字段即可。
+
+**Named runtime exception(per #51 consensus)**:
+- **Narrow allowlist**:concurrency_monitor 加一行 snapshot write;不增其他 producer 职责;不引入新 daemon。
+- **Host-agnostic**:snapshot schema 不含 host fact;statusline.sh 不假设 host repo 结构(只依赖 $REPO_ROOT)。
+- **No lifecycle authority**:statusline 只 read,不写 GitHub / git / file lifecycle。
+- **Behavior tests**:`test_statusline.sh` < 200ms + 各 state icon + freeze 指示。
+- **Source-regression**:本段 + Named exception 子段 + install one-liner。
+
+授权来源:`.refactor-loop/runs/phase9-issue51-r3-judge.md`(Phase 9 r3 3/3 unanimous consensus on C framing)。
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.

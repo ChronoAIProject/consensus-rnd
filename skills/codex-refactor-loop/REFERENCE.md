@@ -2163,6 +2163,38 @@ compatibility aliases only.
 <a id="state-schema"></a>
 ## State schema (`.refactor-loop/state.json`)
 
+### Statusline snapshot schema
+
+`concurrency_monitor.py` writes `.refactor-loop/state/statusline-snapshot.json` once per tick
+for the Claude Code statusline. The write is atomic (`tmp` file plus rename), and the consumer is
+read-only.
+
+```json
+{
+  "ts": "2026-05-26T08:45:00Z",
+  "actual": 7,
+  "expected": 5,
+  "floor": 4,
+  "p0_streak": 0,
+  "last_p0_at": null,
+  "freeze_minutes": 0,
+  "open_pr_count": 5,
+  "open_issue_count": 4
+}
+```
+
+Fields:
+
+- `ts`: UTC snapshot generation time.
+- `actual`: current this-loop `spawn-codex.sh` process count.
+- `expected`: current no-gap expected worker count from active auto-loop issues/PRs.
+- `floor`: host `CODEX_FLOOR`, with the existing hard lower bound of 2.
+- `p0_streak`: consecutive no-gap violation tick count.
+- `last_p0_at`: UTC timestamp of the latest P0 no-gap violation, or `null`.
+- `freeze_minutes`: whole minutes since the newest local PHASE/REVIEW/FIX/META marker file mtime; 0 when no marker exists.
+- `open_pr_count`: open auto-loop PR count from the same GitHub scan used by the monitor.
+- `open_issue_count`: open auto-loop issue count from the same GitHub scan used by the monitor.
+
 ```json
 {
   "schema_version": 1,
