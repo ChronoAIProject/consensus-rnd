@@ -132,7 +132,7 @@ Named exception: this autonomous release gate is host-agnostic and has no lifecy
 - **Narrow allowlist**:concurrency_monitor 写 snapshot + 顺手 stat `heartbeats/*.ts` 汇总 daemon 健康;不引入新 daemon、不持 lifecycle authority、不读 prompt body。
 - **Host-agnostic**:snapshot schema 不含 host fact;daemon 发现按 heartbeat 文件 glob,无 hard-coded daemon 列表;statusline.sh 不假设 host repo 结构(只依赖 $REPO_ROOT)。
 - **No lifecycle authority**:statusline 只 read,不写 GitHub / git / file lifecycle。
-- **Behavior tests**:`test_statusline.sh` < 200ms + 各 state icon + freeze 指示 + daemon health 显示;`test_concurrency_monitor.py::StatuslineDaemonHealthTests` 覆盖 fresh / stale / malformed / missing-dir / 动态发现 / snapshot 字段。
+- **Behavior tests**:`test_statusline.sh` < 200ms + 各 state icon + freeze 指示 + daemon health 显示;`test_concurrency_monitor.py::SnapshotDaemonHealthFieldTests` 覆盖 fresh / stale / malformed / missing-dir / 动态发现 / snapshot 字段。
 - **Source-regression**:本段 + Named exception 子段 + install one-liner。
 
 授权来源:`.refactor-loop/runs/phase9-issue51-r3-judge.md`(Phase 9 r3 3/3 unanimous consensus on C framing)。

@@ -295,7 +295,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.assertNotIn(" -c ", line)
 
 
-class StatuslineDaemonHealthTests(unittest.TestCase):
+class SnapshotDaemonHealthFieldTests(unittest.TestCase):
     """Producer side of the statusline daemon-health extension.
 
     Daemon heartbeat staleness is collected by concurrency_monitor and surfaced
