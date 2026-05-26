@@ -452,7 +452,44 @@ def tick() -> None:
     save_state(state)
 
 
-def main() -> None:
+# Refactor (iter4/skill-count-cli-canonical): Old pattern: 仅 daemon 模式,无 one-shot CLI
+# -> controller 想知道当前 codex 数只能手 ps | grep,容易跟 count_in_flight_codex 算法漂移
+# (per 2026-05-26 maintainer-directive)。 New principle: 暴露 --count-only / --list-codex
+# 让任何 caller 直接复用 canonical 算法。Daemon 主循环仍是默认行为。
+def list_in_flight_codex_lines() -> list[str]:
+    repo = str(REPO_ROOT)
+    lines: list[str] = []
+    for line in run(["ps", "-eo", "command="]).stdout.splitlines():
+        if "spawn-codex.sh" not in line:
+            continue
+        if repo not in line:
+            continue
+        if " -c " in line:
+            continue
+        lines.append(line)
+    return lines
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+    parser = argparse.ArgumentParser(description="concurrency monitor + canonical codex counter")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--count-only", action="store_true", help="print canonical in-flight codex count and exit")
+    mode.add_argument("--list-codex", action="store_true", help="print one supervisor cmdline per line and exit")
+    mode.add_argument("--once", action="store_true", help="run one tick and exit (no daemon loop)")
+    args = parser.parse_args(argv)
+
+    if args.count_only:
+        print(count_in_flight_codex())
+        return 0
+    if args.list_codex:
+        for line in list_in_flight_codex_lines():
+            print(line)
+        return 0
+    if args.once:
+        tick()
+        return 0
+
     log(f"concurrency_monitor (Python) started: interval={INTERVAL}s")
     while True:
         try:
@@ -463,4 +500,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

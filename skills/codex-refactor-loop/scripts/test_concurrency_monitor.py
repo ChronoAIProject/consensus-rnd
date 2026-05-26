@@ -248,6 +248,52 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         payload = json.loads(archive.read_text(encoding="utf-8"))
         self.assertEqual(payload["task_id"], "filename-task")
 
+    # Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep
+    # spawn-codex.sh 重新实现 count_in_flight_codex 逻辑 -> 容易跟 daemon 算法漂移。
+    # New principle: 暴露 `--count-only` / `--list-codex` 让 controller 直接复用 daemon
+    # 自带的 canonical 算法(per 2026-05-26 maintainer-directive)。
+    def test_count_only_cli_prints_canonical_in_flight_codex_count(self) -> None:
+        import io
+        fake_ps = (
+            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash -c spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
+            "bash spawn-codex.sh --cd /Users/other-host/repo --prompt /tmp/c.md --log /tmp/c.log\n"
+        )
+        captured = io.StringIO()
+        with mock.patch.object(
+            self.monitor.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=fake_ps, returncode=0),
+        ), mock.patch.object(sys, "stdout", captured):
+            exit_code = self.monitor.main(["--count-only"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured.getvalue().strip(), "2")
+
+    def test_list_codex_cli_prints_one_supervisor_per_line(self) -> None:
+        import io
+        fake_ps = (
+            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash -c spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
+        )
+        captured = io.StringIO()
+        with mock.patch.object(
+            self.monitor.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=fake_ps, returncode=0),
+        ), mock.patch.object(sys, "stdout", captured):
+            exit_code = self.monitor.main(["--list-codex"])
+
+        self.assertEqual(exit_code, 0)
+        lines = [line for line in captured.getvalue().splitlines() if line.strip()]
+        self.assertEqual(len(lines), 2)
+        for line in lines:
+            self.assertIn("spawn-codex.sh", line)
+            self.assertIn(str(self.repo), line)
+            self.assertNotIn(" -c ", line)
+
 
 if __name__ == "__main__":
     unittest.main()

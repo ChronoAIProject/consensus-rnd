@@ -42,6 +42,11 @@ KNOWN_PREFIXES = (
     *LIFECYCLE_PREFIXES,
 )
 MARKER_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+")
+# Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: 接受任意 marker payload,
+# 把含 `|` / `\"` / `*` / `r+1` / 反斜杠的 regex 片段当真 marker -> 每个旧 log 灌噪声进
+# pending-events。 New principle: 真实 marker 的 prefix + suffix 段只含 [A-Za-z0-9_./\-]
+# 及有限标点;含其他特殊字符即视为 prompt/regex 回显,拒绝(per 2026-05-26 maintainer-directive)。
+VALID_MARKER_PAYLOAD = re.compile(r"^[A-Z][A-Z0-9_]*:[A-Za-z0-9_./\-]+(?::[A-Za-z0-9_./\-]+)*$")
 
 
 @dataclass(frozen=True)
@@ -71,7 +76,10 @@ class Phase9Router:
         self.lock_path = self.loop_dir / "phase9-router.lock"
         self.spawn_codex = Path(__file__).resolve().parent / "spawn-codex.sh"
         self.command_runner = command_runner or self._default_runner
-        self._fallback_seen: set[str] = set()
+        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: 内存 only -> daemon
+        # 重启即丢失,re-emit 历史 fallback 灌爆 Monitor。 New principle: __init__ 扫已存在
+        # pending-events 中的 phase9-router-fallback 行 seed dedup set,跨重启幂等。
+        self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
 
     def tick(self) -> None:
         self.loop_dir.mkdir(parents=True, exist_ok=True)
@@ -119,16 +127,22 @@ class Phase9Router:
         stripped = line.strip().strip("`")
         if self._is_placeholder_or_echo(stripped):
             return None
+        candidate: str | None = None
         for prefix in KNOWN_PREFIXES:
             index = stripped.find(prefix)
             if index == -1:
                 continue
-            marker = stripped[index:].split()[0]
-            return marker.rstrip("`.,)")
-        match = MARKER_RE.search(stripped)
-        if match:
-            return match.group(0).rstrip("`.,)")
-        return None
+            candidate = stripped[index:].split()[0].rstrip("`.,);:|\"\\")
+            break
+        if candidate is None:
+            match = MARKER_RE.search(stripped)
+            if match:
+                candidate = match.group(0).rstrip("`.,);:|\"\\")
+        if candidate is None:
+            return None
+        if not VALID_MARKER_PAYLOAD.match(candidate):
+            return None
+        return candidate
 
     def _is_placeholder_or_echo(self, text: str) -> bool:
         if "<" in text and ">" in text:
@@ -138,7 +152,41 @@ class Phase9Router:
             return True
         if "round-n" in lowered:
             return True
+        # Refactor (iter4/skill-router-fallback-flood-fix): regex/grep alternation 或
+        # template 占位的常见特征:`|` 选择、`\"` 转义引号、`r+1` 占位、`*` 通配。这些行
+        # 几乎一定是 prompt 模板或 grep 命令的 marker 引用,不是真 codex 输出。
+        if "|" in text and any(prefix in text for prefix in KNOWN_PREFIXES):
+            return True
+        if "\\\"" in text or '\\"' in text:
+            return True
+        if "r+1" in text or "round-k+" in lowered or "round-n+" in lowered:
+            return True
+        if any(f"{prefix}*" in text or f"{prefix}:*" in text for prefix in KNOWN_PREFIXES):
+            return True
         return False
+
+    def _load_persisted_fallback_seen(self) -> set[str]:
+        """Seed _fallback_seen from existing pending-events log so restart is idempotent."""
+        seen: set[str] = set()
+        if not self.pending_events_path.exists():
+            return seen
+        try:
+            content = self.pending_events_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return seen
+        for line in content.splitlines():
+            idx = line.find("phase9-router-fallback")
+            if idx == -1:
+                continue
+            payload = line[idx + len("phase9-router-fallback"):].strip()
+            try:
+                event = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            log_path = event.get("log_path")
+            if isinstance(log_path, str):
+                seen.add(f"fallback:{log_path}")
+        return seen
 
     def _identity_from_path(self, path: Path) -> tuple[str | None, int | None, str | None]:
         match = re.search(
@@ -211,12 +259,17 @@ class Phase9Router:
                     ledger.add(key)
 
     def _append_fallbacks(self, markers: list[Marker], ledger: set[str]) -> None:
+        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: dedup 用
+        # (log_path, marker) 二元组,但 marker 文本随 extract 规则微调而变 -> 跨版本/
+        # 跨重启不稳。 New principle: dedup 仅按 log_path —— 一旦某 log 的任意 marker
+        # 已 surface 给 controller,该 log 后续 marker 不再重 emit;controller 若需细节,
+        # 可直接读 log 自取。这一改让 dedup 跨版本稳健。
         for marker in markers:
             if self._directly_handled(marker, ledger):
                 continue
             if marker.marker.startswith("SOLVER_DONE:"):
                 continue
-            event_key = f"fallback:{marker.log_path}:{marker.marker}"
+            event_key = f"fallback:{marker.log_path}"
             if event_key in self._fallback_seen:
                 continue
             self._fallback_seen.add(event_key)

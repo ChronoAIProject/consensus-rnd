@@ -330,6 +330,12 @@ The floor is local because it prevents loop stalls.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
 - Count only this repository's loop codexes: command line contains `spawn-codex.sh` and the absolute `$REPO_ROOT`.
 - Exclude shell ` -c ` wrapper rows so each real codex counts once.
+<!-- Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep spawn-codex.sh 重新实现 count_in_flight_codex 逻辑,容易跟 daemon 算法漂移。 New principle: 直接调 `python3 <skill-root>/scripts/concurrency_monitor.py --count-only` 拿 canonical 整数,或 `--list-codex` 拿每条 supervisor cmdline。禁止 controller 临时 ps/awk pipeline。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+- **Canonical CLI**(controller 强制使用,**禁止**手 `ps | grep`):
+  - `python3 <skill-root>/scripts/concurrency_monitor.py --count-only` → 打印 canonical 计数(int)并退出
+  - `python3 <skill-root>/scripts/concurrency_monitor.py --list-codex` → 每行一个 supervisor cmdline,scope `$REPO_ROOT` + 排除 ` -c ` wrapper
+  - `python3 <skill-root>/scripts/concurrency_monitor.py --once` → 跑一 tick 退出(替代曾 missing 的 one-shot 入口)
+  - 直接读 daemon 日志 `tail -1 .refactor-loop/logs/concurrency_monitor.log` 也是 canonical 来源;两条路径都比 controller 自重算 ps grep 安全。
 - 自 PR #<本>: `concurrency_monitor.py` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor and no higher-priority actionable marker exists, dispatch audit/self-audit/retrospective-compatible work per current phase. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。

@@ -212,6 +212,49 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         for marker in markers:
             self.assertIn(marker, events)
 
+    def test_phase9_router_persists_fallback_dedup_across_restart(self) -> None:
+        """Restart must not re-emit fallback events already in pending-events log."""
+        self.write_log("phase9-issue42-r1-judge.log", "META_RESOLVED:re-design:scope-too-broad")
+
+        self.router.tick()
+        first_events = self.pending_events()
+        self.assertEqual(first_events.count("META_RESOLVED:re-design:scope-too-broad"), 1)
+
+        fresh_router = Phase9Router(self.repo, command_runner=self.commands.append)
+        fresh_router.tick()
+
+        second_events = self.pending_events()
+        self.assertEqual(
+            second_events.count("META_RESOLVED:re-design:scope-too-broad"),
+            1,
+            "fallback event must not re-emit after daemon restart",
+        )
+
+    def test_phase9_router_rejects_junk_markers_with_regex_special_chars(self) -> None:
+        """Markers containing pipe/quote/backslash/template chars are prompt/regex echoes, not real markers."""
+        junk_lines = [
+            'grep "META_JUDGE_DONE:converge:r+1" log',
+            'pattern META_JUDGE_DONE:converge:round-2:With|round-3|Choose|minimal\\""',
+            "echo META_RESOLVED:re-design`:`",
+            'grep -E "META_JUDGE_DONE:consensus:false-positive-already-landed:no-op;" log',
+            "marker META_JUDGE_DONE:escalate:stalled:* placeholder",
+            'pattern META_RESOLVED:escalate-human|CANONICAL_HUMAN_LABELS\\""',
+            "regex IMPLEMENT_DONE|VERIFY_DONE|SOLVER_DONE)",
+        ]
+        self.write_log("phase9-issue42-r1-judge.log", *junk_lines)
+
+        self.router.tick()
+
+        events = self.pending_events()
+        self.assertEqual(self.commands, [])
+        for forbidden_token in ("r+1", "round-3|Choose", "no-op;", "stalled:*", "CANONICAL_HUMAN_LABELS"):
+            with self.subTest(forbidden_token=forbidden_token):
+                self.assertNotIn(
+                    forbidden_token,
+                    events,
+                    f"junk marker fragment must not leak into fallback events: {forbidden_token}",
+                )
+
     def test_phase9_router_source_does_not_introduce_forbidden_abstractions(self) -> None:
         """#37 consensus exception allows only private ledger plus fallback event."""
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
