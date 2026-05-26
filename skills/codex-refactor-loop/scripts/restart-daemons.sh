@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Refactor (iter4/issue49-r3-consensus):
-#   Old pattern: /tmp/restart-consensus-rnd-daemons.sh 一次性 manual script,host-specific path,session 间 lose
-#   New principle: checked-in helper, $REPO_ROOT-relative, idempotent + heartbeat-fresh skip;cron/launchd 自动跑;
-#     controller wakeup 检 stale 并调本 helper(per #49 r3 META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert)
+#   Old pattern: one-off /tmp/restart-consensus-rnd-daemons.sh manual script with host-specific paths that disappeared between sessions.
+#   New principle: checked-in helper, $REPO_ROOT-relative, idempotent + heartbeat-fresh skip, cron/launchd runnable;
+#     controller wakeup checks stale daemon heartbeats and invokes this helper(per #49 r3 META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert).
 #
 # Maintains singleton + heartbeat wrappers for the five long-running daemons.
 # This helper has no lifecycle authority and does not alter repository or

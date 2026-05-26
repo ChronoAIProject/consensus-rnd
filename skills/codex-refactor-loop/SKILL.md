@@ -138,7 +138,7 @@ launchd host template:
 - **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `triage-monitor`;不 spawn codex / commit / push / merge / label。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
-- **Behavior tests**: `test_restart_daemons.sh` 覆盖 fresh heartbeat skip / stale heartbeat restart / dead pid restart / concurrent helper no double-spawn。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale heartbeat restart / dead pid restart / concurrent helper no double-spawn。
 - **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check。
 
 授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
