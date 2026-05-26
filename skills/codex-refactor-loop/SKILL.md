@@ -138,8 +138,8 @@ launchd host template:
 - **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `triage-monitor`;不 spawn codex / commit / push / merge / label。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
-- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale heartbeat restart / dead pid restart / concurrent helper no double-spawn。
-- **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn。
+- **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens。
 
 授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
@@ -149,16 +149,16 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-3. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
-4. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
-5. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
-6. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
-7. Post GitHub banner and sync labels for each state transition.
-8. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
-9. Spawn the next codexes with harness background tasks if actionable work exists.
-10. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
-11. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
-12. Read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+3. Before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn, read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+4. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
+5. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
+6. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
+7. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
+8. Post GitHub banner and sync labels for each state transition.
+9. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
+10. Spawn the next codexes with harness background tasks if actionable work exists.
+11. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
+12. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
 
 ## Phase Index
 

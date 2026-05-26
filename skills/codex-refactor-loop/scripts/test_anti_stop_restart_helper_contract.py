@@ -61,9 +61,26 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
 
     def test_wakeup_skeleton_has_anti_stop_step_12(self) -> None:
         wakeup = self.skill.split("## Wakeup Skeleton", 1)[1].split("## Phase Index", 1)[0]
-        self.assertIn("12.", wakeup)
+        self.assertIn("3.", wakeup)
+        self.assertLess(
+            wakeup.index("restart-daemons.sh"),
+            wakeup.index("Sweep GitHub comments and pending events"),
+        )
+        self.assertLess(
+            wakeup.index("restart-daemons.sh"),
+            wakeup.index("Parse verdict markers"),
+        )
+        self.assertLess(
+            wakeup.index("restart-daemons.sh"),
+            wakeup.index("concurrency floor"),
+        )
+        self.assertLess(
+            wakeup.index("restart-daemons.sh"),
+            wakeup.index("Spawn the next codexes"),
+        )
         self.assertIn(".refactor-loop/heartbeats/*.ts", wakeup)
         self.assertIn(">90s", wakeup)
+        self.assertIn("stale/missing/malformed", wakeup)
         self.assertIn("restart-daemons.sh", wakeup)
         self.assertIn("无 progress >10 min", wakeup)
         self.assertIn(".refactor-loop/runs/", wakeup)
@@ -101,6 +118,38 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, self.helper)
         self.assertIn('cd "$REPO_ROOT"', self.helper)
+
+    def test_restart_helper_avoids_issue49_forbidden_runtime_sources(self) -> None:
+        forbidden = (
+            "ps ",
+            "ps\t",
+            "pgrep",
+            "AntiStopWatchdogV1",
+            "controller_watchdog.py",
+            "spawned registry",
+            "codex count",
+            "concurrency-monitor",
+            "dev-sync-daemon",
+            "triage_monitor",
+        )
+        anti_stop = self.skill.split(
+            "## Anti-stop restart helper cron/launchd install(per #49)",
+            1,
+        )[1].split("## Wakeup Skeleton", 1)[0]
+        combined = f"{anti_stop}\n{self.helper}"
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, combined)
+        required = (
+            "concurrency_monitor",
+            "comment-monitor",
+            "codex-progress-reporter",
+            "dev_sync_daemon",
+            "triage-monitor",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.helper)
 
 
 if __name__ == "__main__":

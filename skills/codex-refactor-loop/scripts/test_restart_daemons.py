@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import os
+import select
 import shutil
 import signal
 import subprocess
-import sys
 import tempfile
 import time
 import unittest
@@ -24,26 +24,24 @@ DAEMON_NAMES = (
     "triage-monitor",
 )
 
-# Sleep allowlist for this test file:
-# - The dummy daemons must stay alive long enough for restart-daemons.sh to observe them.
-# - Polling waits for the helper to create pid/heartbeat files across process boundaries.
-DUMMY_DAEMON_SLEEP_SECONDS = 0.1
-SHELL_DAEMON_SLEEP_SECONDS = 1
-POLL_INTERVAL_SECONDS = 0.1
-RACE_SETTLE_SECONDS = 0.5
 
-
-PYTHON_DAEMON = f"""#!/usr/bin/env python3
+PYTHON_DAEMON = """#!/usr/bin/env python3
 import os
 import signal
 import sys
-import time
 from pathlib import Path
 
 repo = Path(os.environ["REPO_ROOT"])
 name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
-with (repo / ".refactor-loop" / "logs" / f"{{name}}.starts").open("a", encoding="utf-8") as fh:
-    fh.write(f"{{os.getpid()}}\\n")
+with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
+    fh.write(f"{os.getpid()}\\n")
+fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
+if fifo.exists():
+    fd = os.open(fifo, os.O_WRONLY)
+    try:
+        os.write(fd, f"{os.getpid()}\\n".encode("utf-8"))
+    finally:
+        os.close(fd)
 
 running = True
 def stop(_signum, _frame):
@@ -53,15 +51,20 @@ signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 
 while running:
-    time.sleep({DUMMY_DAEMON_SLEEP_SECONDS})
+    signal.pause()
 """
 
 
-SHELL_DAEMON = f"""#!/usr/bin/env bash
+SHELL_DAEMON = """#!/usr/bin/env bash
 set -u
-echo "$$" >> "$REPO_ROOT/.refactor-loop/logs/${{RESTART_DAEMON_NAME}}.starts"
+echo "$$" >> "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.starts"
+if [ -p "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.start-fifo" ]; then
+  printf '%s\n' "$$" > "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.start-fifo"
+fi
 trap 'exit 0' TERM INT
-while true; do sleep {SHELL_DAEMON_SLEEP_SECONDS}; done
+while true; do
+  read _ < "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.hold"
+done
 """
 
 
@@ -76,6 +79,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             ".refactor-loop/heartbeats",
         ):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
+        for name in DAEMON_NAMES:
+            os.mkfifo(self.repo / ".refactor-loop" / "logs" / f"{name}.start-fifo")
+            os.mkfifo(self.repo / ".refactor-loop" / "logs" / f"{name}.hold")
         (self.skill / "scripts").mkdir(parents=True, exist_ok=True)
         shutil.copy2(HELPER, self.skill / "scripts" / "restart-daemons.sh")
         (self.skill / "scripts" / "restart-daemons.sh").chmod(0o755)
@@ -128,11 +134,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             return
         except PermissionError:
             return
-        deadline = time.monotonic() + 2
-        while time.monotonic() < deadline:
-            if not self._pid_alive(pid):
-                return
-            time.sleep(POLL_INTERVAL_SECONDS)
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -172,17 +173,29 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             return 0
         return len(starts.read_text(encoding="utf-8").splitlines())
 
-    def _wait_for_starts(self, name: str, expected: int) -> None:
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            if self._start_count(name) >= expected:
-                return
-            time.sleep(POLL_INTERVAL_SECONDS)
-        self.fail(f"timed out waiting for {name} starts >= {expected}")
+    def _read_start_signal(self, name: str, timeout: float = 5.0) -> int:
+        fifo = self.repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
+        fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+        try:
+            readable, _, _ = select.select([fd], [], [], timeout)
+            if not readable:
+                self.fail(f"timed out waiting for {name} start signal")
+            raw = os.read(fd, 64).decode("utf-8").strip()
+        finally:
+            os.close(fd)
+        self.assertTrue(raw.isdigit(), raw)
+        return int(raw)
+
+    def _stale_heartbeat(self, name: str) -> None:
+        stale_ts = int(time.time()) - 120
+        (self.repo / ".refactor-loop" / "heartbeats" / f"{name}.ts").write_text(
+            f"{stale_ts}\n",
+            encoding="utf-8",
+        )
 
     def test_idempotent_when_daemon_fresh(self) -> None:
         self._run_helper()
-        self._wait_for_starts("concurrency_monitor", 1)
+        self._read_start_signal("concurrency_monitor")
 
         self._run_helper()
 
@@ -190,17 +203,36 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_restarts_when_heartbeat_stale(self) -> None:
         self._run_helper()
-        self._wait_for_starts("comment-monitor", 1)
-        stale_ts = int(time.time()) - 120
-        (self.repo / ".refactor-loop" / "heartbeats" / "comment-monitor.ts").write_text(
-            f"{stale_ts}\n",
+        self._read_start_signal("comment-monitor")
+        self._stale_heartbeat("comment-monitor")
+
+        self._run_helper()
+
+        self._read_start_signal("comment-monitor")
+        self.assertEqual(2, self._start_count("comment-monitor"))
+
+    def test_restarts_when_heartbeat_missing(self) -> None:
+        self._run_helper()
+        self._read_start_signal("codex-progress-reporter")
+        (self.repo / ".refactor-loop" / "heartbeats" / "codex-progress-reporter.ts").unlink()
+
+        self._run_helper()
+
+        self._read_start_signal("codex-progress-reporter")
+        self.assertEqual(2, self._start_count("codex-progress-reporter"))
+
+    def test_restarts_when_heartbeat_malformed(self) -> None:
+        self._run_helper()
+        self._read_start_signal("triage-monitor")
+        (self.repo / ".refactor-loop" / "heartbeats" / "triage-monitor.ts").write_text(
+            "not-a-timestamp\n",
             encoding="utf-8",
         )
 
         self._run_helper()
 
-        self._wait_for_starts("comment-monitor", 2)
-        self.assertEqual(2, self._start_count("comment-monitor"))
+        self._read_start_signal("triage-monitor")
+        self.assertEqual(2, self._start_count("triage-monitor"))
 
     def test_restarts_when_pid_dead(self) -> None:
         (self.repo / ".refactor-loop" / "locks" / "dev_sync_daemon.pid").write_text(
@@ -214,10 +246,27 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self._run_helper()
 
-        self._wait_for_starts("dev_sync_daemon", 1)
+        self._read_start_signal("dev_sync_daemon")
         pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "dev_sync_daemon.pid")
         self.assertIsNotNone(pid)
         self.assertTrue(self._pid_alive(pid))
+
+    def test_stale_restart_cleans_up_old_wrapper(self) -> None:
+        self._run_helper()
+        self._read_start_signal("concurrency_monitor")
+        old_pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "concurrency_monitor.pid")
+        self.assertIsNotNone(old_pid)
+        self._stale_heartbeat("concurrency_monitor")
+
+        self._run_helper()
+
+        self._read_start_signal("concurrency_monitor")
+        new_pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "concurrency_monitor.pid")
+        self.assertIsNotNone(new_pid)
+        self.assertNotEqual(old_pid, new_pid)
+        self.assertFalse(self._pid_alive(old_pid))
+        self.assertTrue(self._pid_alive(new_pid))
+        self.assertEqual(2, self._start_count("concurrency_monitor"))
 
     def test_no_double_spawn_under_race(self) -> None:
         env = os.environ.copy()
@@ -238,8 +287,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(0, first.returncode, first_stdout + first_stderr)
         self.assertEqual(0, second.returncode, second_stdout + second_stderr)
 
-        self._wait_for_starts("triage-monitor", 1)
-        time.sleep(RACE_SETTLE_SECONDS)
+        self._read_start_signal("triage-monitor")
         self.assertEqual(1, self._start_count("triage-monitor"))
         self.assertEqual(1, self._start_count("concurrency_monitor"))
 
