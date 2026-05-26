@@ -593,6 +593,37 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(signal["zero_streak"], 4)
             self.assertIn("p0_alert_streak_ok", summary["stability"]["signals"])
 
+    def test_fail_closed_when_p0_alert_overflow_blocks_release(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_opt_in(repo, review_base="trunk-review", integration="release-integration")
+            write_live_state(repo)
+            alert_log = repo / ".refactor-loop/.concurrency-alert.log"
+            alert_log.parent.mkdir(parents=True, exist_ok=True)
+            now = datetime.now(timezone.utc).replace(microsecond=0)
+            alert_lines = [
+                f"[{iso}] P0 no-gap-violation: fixture {index}"
+                for index, iso in enumerate(
+                    (now - timedelta(minutes=offset)).isoformat().replace("+00:00", "Z")
+                    for offset in (1, 2, 3, 4)
+                )
+            ]
+            alert_log.write_text("\n".join(alert_lines) + "\n", encoding="utf-8")
+            bin_dir = repo / "bin"
+            bin_dir.mkdir()
+            write_gh_stub(bin_dir)
+
+            result = run_gate_cli(repo, bin_dir, "--dispatch")
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("p0_alert_streak_ok", result.stdout)
+            assert_no_release_artifacts(self, repo)
+            summary = score_only_summary(self, repo, bin_dir)
+            signal = summary["stability"]["signals"]["p0_alert_streak_ok"]
+            self.assertFalse(signal["passed"])
+            self.assertEqual(signal["zero_streak"], 0)
+            self.assertEqual(signal["recent_p0_alerts"], 4)
+
     def test_fail_closed_when_recent_pr_merges_below_minimum(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -678,7 +709,29 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
 
-    def test_dispatch_writes_candidate_artifact_no_lifecycle_ops(self) -> None:
+    def test_fail_closed_when_no_commits_since_last_release(self) -> None:
+        cases = ("absent", "empty")
+        for case in cases:
+            with self.subTest(case=case):
+                with copy_repo_fixture() as tmp:
+                    repo = Path(tmp) / "repo"
+                    write_green_signals(repo)
+                    if case == "absent":
+                        (repo / ".refactor-loop/state/release-commits.json").unlink()
+                    else:
+                        write_json(repo / ".refactor-loop/state/release-commits.json", {"commits": []})
+                    gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+                    stability = gate.compute_stability(min_recent_merges=0)
+                    decision = gate.decide_release(stability, min_interval_hours=2)
+
+                    self.assertTrue(stability.ready)
+                    self.assertFalse(decision["ready"])
+                    self.assertIsNone(decision["bump_type"])
+                    self.assertEqual(decision["to_version"], decision["from_version"])
+                    self.assertEqual(decision["commits"], [])
+                    self.assertIn("no_commits_since_last_release", decision["blocked_reasons"])
+
+    def test_dispatch_happy_path_asserts_ready_and_version_transition(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_opt_in(repo)
@@ -699,11 +752,23 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             candidate_path = repo / ".refactor-loop/state/release-candidate.json"
             self.assertTrue(decision_path.exists())
             self.assertTrue(candidate_path.exists())
+            decision = read_json(decision_path)
+            self.assertIsInstance(decision, dict)
+            assert isinstance(decision, dict)
+            self.assertTrue(decision["ready"])
+            self.assertEqual(decision["bump_type"], "patch")
+            self.assertEqual(decision["from_version"], "0.1.0")
+            self.assertEqual(decision["to_version"], "0.1.1")
+            self.assertNotEqual(decision["to_version"], decision["from_version"])
             candidate = read_json(candidate_path)
             self.assertIsInstance(candidate, dict)
             assert isinstance(candidate, dict)
             self.assertEqual(candidate["schema"], "decision-artifact-only/v1")
             self.assertEqual(candidate["lifecycle_owner"], "controller-or-release.yml")
+            self.assertTrue(candidate["ready"])
+            self.assertEqual(candidate["bump_type"], "patch")
+            self.assertEqual(candidate["from_version"], decision["from_version"])
+            self.assertEqual(candidate["to_version"], decision["to_version"])
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
 
     def test_score_only_cli_prints_stability_no_decision_write(self) -> None:
