@@ -106,10 +106,10 @@ The release lifecycle surface consumes decision-artifact-only output: a schedule
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
 ## Named runtime exception — IntegrationSyncDaemonV1(per #53)
-Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: only in the dedicated integration worktree, sync integration branch via `git fetch`, `git rev-list`, `git rev-parse`, `git merge-base`, `git reset --hard`, `git rebase --rebase-merges`, `git merge --ff-only|--no-ff`, `git push origin HEAD:$INTEGRATION_BRANCH`, and force-with-lease adoption after merged rollup evidence. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct `$REVIEW_BASE_BRANCH` push, no generic lifecycle actor. Implement/fix workers still never commit, push, or open PRs.
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: detect-and-emit only in the dedicated integration worktree. The daemon may fetch refs, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, and emit `IntegrationSyncRequestV1` artifacts. Controller apply helpers consume those artifacts, re-check live state, and own git apply lifecycle. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct branch update, no generic lifecycle actor, and no lifecycle mutation verbs from the daemon. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
-Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes `TriageLifecycleRequestV1` artifacts for controller apply instead of mutating labels/body directly.
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes `ManualIssueTriageDecisionV1` artifacts for controller apply instead of mutating labels/body directly.
 
 ## Named runtime exception — IntegrationSyncDaemonV1(per #65)
 The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorizes the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
@@ -168,7 +168,7 @@ launchd host template:
 
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `triage-monitor`;不 spawn codex / commit / push / merge / label。
+- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;不 spawn codex / commit / push / merge / label。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn。
@@ -207,7 +207,7 @@ The phase index is the local routing map. It intentionally links to heavy detail
 | Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](REFERENCE.md#recovery-playbook) |
 | Phase 4 | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](REFERENCE.md#merge-and-push-details) |
 | Phase 5 | Watch remote CI after push; classify failures and route fix/test-add work immediately. | [remote CI details](REFERENCE.md#remote-ci-details) |
-| Phase 6 | Integration branch auto-sync is daemon-owned; controller verifies health and reacts to events. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) |
+| Phase 6 | Integration sync is daemon-owned detect-and-emit plus controller-owned git apply. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) |
 | Phase 7 | Sweep design issues and maintainer comments every wakeup. External issues enter through explicit labels or triage. | [design issue details](REFERENCE.md#design-issue-details) |
 | Phase 8 | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [phase 8 details](REFERENCE.md#phase-8-details) |
 | Phase 9 | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [phase 9 details](REFERENCE.md#phase-9-details) |
@@ -223,7 +223,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
-8. ensure all 6 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, `triage-monitor.sh`, and `phase9_router_daemon.py`.
+8. ensure all 5 daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
@@ -233,7 +233,7 @@ Phase 0 anti-patterns stay local because they are safety gates:
 
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
-- Do not start fewer than the six required daemons.
+- Do not start fewer than the five required daemons.
 - Do not initialize a state-v2, alternate queue, wrapper envelope, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 
@@ -567,7 +567,6 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [scripts/codex-progress-reporter.sh](scripts/codex-progress-reporter.sh) — progress comment daemon.
 - [scripts/comment-monitor.sh](scripts/comment-monitor.sh) — maintainer comment monitor.
 - [scripts/dev_sync_daemon.py](scripts/dev_sync_daemon.py) — integration sync daemon.
-- [scripts/triage-monitor.sh](scripts/triage-monitor.sh) — external issue triage daemon.
 - [scripts/phase9_router_daemon.py](scripts/phase9_router_daemon.py) — narrow Phase 9 direct-dispatch daemon.
 - [REFERENCE.md](REFERENCE.md) — heavy runbooks, templates, schemas, and recovery details.
 
@@ -705,17 +704,17 @@ Phase 5 guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Phase 6 guardrails: integration sync is daemon-owned; controller verifies daemon singleton health, reacts to pending events, and does not run an ad hoc sync loop when the daemon is healthy. Sync failures must be visible on GitHub. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
+Phase 6 guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits `IntegrationSyncRequestV1` and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume `IntegrationSyncRequestV1` artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
 ## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary
-`IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, merged-rollup adoption, and release-rollup pending-event detection. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort. Release-rollup pending events do not grant daemon PR lifecycle authority.
+`IntegrationSyncDaemonV1` owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and `IntegrationSyncRequestV1` artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.
 
 Phase 7 guardrails:
 
 1. Sweep design issues every wakeup.
 2. Maintainer replies that materially change framing reset the Phase 9 round.
 3. Bot comments and AI sentinel comments do not count as maintainer input.
-4. External issues require explicit opt-in labels or triage monitor normalization.
+4. External issues require explicit opt-in labels; controller wakeup sweep dispatches triage and applies `ManualIssueTriageDecisionV1` artifacts.
 5. Do not auto-implement from a free-form issue without Phase 9 consensus.
 
 Phase 8 guardrails:

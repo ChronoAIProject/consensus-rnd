@@ -267,6 +267,63 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("unexpected open", result.stdout)
 
+    def test_release_rollup_controller_helper_rejects_malformed_json_and_non_json_tail(self) -> None:
+        cases = [
+            ("malformed_json", '{"integration_branch":"auto-refact-dev",'),
+            ("non_json_tail", 'not-json-tail'),
+        ]
+
+        for name, event_json in cases:
+            with self.subTest(case=name):
+                result = self.run_controller_lib_harness(
+                    f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+                    prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid json", result.stderr)
+                self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_missing_required_field(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","ahead_count":1}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing facts: review_base_sha", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_pending_event_writer_preserves_newline_delimiter(self) -> None:
+        from test_dev_sync_daemon_state_machine import FakeGit, IntegrationSyncDaemonV1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worktree = root / "wt"
+            worktree.mkdir()
+            daemon = IntegrationSyncDaemonV1(
+                worktree=worktree,
+                main_repo=root,
+                command_runner=FakeGit(merge_base_adopted=True, release_ahead=2, remote_sha="i", review_base_sha="b"),
+                logger=lambda _msg: None,
+                ensure_worktree_fn=lambda: True,
+                merge_detector=lambda _cwd: False,
+                dirty_detector=lambda _cwd: False,
+                resolver_in_flight=lambda: False,
+                resolver_dispatcher=lambda: None,
+                release_rollup_min_commits=1,
+            )
+
+            daemon.tick()
+
+            events = root / ".refactor-loop" / ".controller-pending-events.log"
+            self.assertTrue(events.read_text(encoding="utf-8").endswith("\n"))
+
     def test_release_rollup_controller_helper_rejects_non_integer_ahead_count(self) -> None:
         event_json = (
             '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
@@ -364,190 +421,43 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("base=dev", result.stdout)
         self.assertIn("head=auto-refact-dev", result.stdout)
 
-    def test_triage_lifecycle_helper_accepts_valid_accept_request(self) -> None:
-        prelude = (
-            'gh() { printf "%s\\n" "$*" >> "$GH_CALLS"; return 0; }\n'
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## Proposed issue body\nwork_unit_id: issue-53\nkind: manual-work-unit\nproducer: manual-issue\nsource_ref: gh-issue-53\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
+    def test_triage_decision_marker_wrapper_delegates_to_apply_helper(self) -> None:
         result = self.run_controller_lib_harness(
-            'apply_triage_lifecycle_request 53; cat "$GH_CALLS"',
-            prelude=prelude,
+            'apply_triage_decision_marker "TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/triage-issue-53.json"',
+            prelude=(
+                'export CODEX_REFACTOR_LOOP_SKILL_ROOT="$REPO_ROOT/fake-skill"; '
+                'mkdir -p "$CODEX_REFACTOR_LOOP_SKILL_ROOT/scripts"; '
+                'cat > "$CODEX_REFACTOR_LOOP_SKILL_ROOT/scripts/apply_triage_decision.py" <<\'PY\'\n'
+                'import sys\nprint("apply-helper", sys.argv[1:])\nPY\n'
+            ),
         )
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("issue edit 53", result.stdout)
-        self.assertIn("--body-file", result.stdout)
-        self.assertIn("--remove-label auto-loop-triage", result.stdout)
-        self.assertIn("--add-label auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进,refactor-design-needed", result.stdout)
+        self.assertIn("apply-helper ['53', 'reject'", result.stdout)
+        self.assertIn(".refactor-loop/runs/triage-issue-53.json", result.stdout)
 
-    def test_apply_triage_lifecycle_request_valid_reject_removes_triage_label(self) -> None:
-        prelude = (
-            'gh() { printf "%s\\n" "$*" >> "$GH_CALLS"; return 0; }\n'
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
+    def test_triage_decision_marker_wrapper_rejects_unbounded_marker(self) -> None:
         result = self.run_controller_lib_harness(
-            'apply_triage_lifecycle_request 53; status=$?; cat "$GH_CALLS"; '
-            'if [ -f "$REPO_ROOT/.refactor-loop/.controller-pending-events.log" ]; then '
-            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
-            'fi; exit "$status"',
-            prelude=prelude,
-        )
-
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("issue edit 53", result.stdout)
-        self.assertIn("--remove-label auto-loop-triage", result.stdout)
-        self.assertNotIn("--add-label", result.stdout)
-        self.assertNotIn("TRIAGE_LIFECYCLE_PENDING", result.stdout)
-
-    def test_triage_lifecycle_helper_rejects_missing_sentinel(self) -> None:
-        prelude = (
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n'
-            'REQ\n'
-        )
-
-        result = self.run_controller_lib_harness(
-            'apply_triage_lifecycle_request 53; status=$?; '
-            'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
-            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
-            'exit "$status"',
-            prelude=prelude,
+            'apply_triage_decision_marker "TRIAGE_DECISION_DONE:53:close:.refactor-loop/runs/triage-issue-53.json"',
         )
 
         self.assertEqual(result.returncode, 2)
-        self.assertIn("TRIAGE_LIFECYCLE_PENDING:53:missing-final-sentinel", result.stdout)
-        self.assertNotIn("issue edit", result.stdout)
+        self.assertIn("invalid marker", result.stderr)
 
-    def test_triage_lifecycle_helper_rejects_issue_mismatch_and_invalid_label_transition(self) -> None:
-        cases = (
-            ("mismatch", "issue_number: 54", "verdict: reject", "label_transition: reject-remove-triage", "issue-number-mismatch:54"),
-            ("bad_label", "issue_number: 53", "verdict: accept", "label_transition: auto-loop", "invalid-label-transition:accept:auto-loop"),
-        )
-        for name, issue_line, verdict_line, label_line, expected in cases:
-            with self.subTest(case=name):
-                prelude = (
-                    'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-                    'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<REQ\n'
-                    f'## TriageLifecycleRequestV1\n{issue_line}\n{verdict_line}\nproposed_body_path: ""\n{label_line}\n'
-                    'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-                    'REQ\n'
-                )
-                result = self.run_controller_lib_harness(
-                    'apply_triage_lifecycle_request 53; status=$?; '
-                    'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
-                    'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
-                    'exit "$status"',
-                    prelude=prelude,
-                )
-                self.assertEqual(result.returncode, 2)
-                self.assertIn(f"TRIAGE_LIFECYCLE_PENDING:53:{expected}", result.stdout)
-                self.assertNotIn("issue edit", result.stdout)
-
-    def assert_triage_lifecycle_guard(
-        self,
-        command: str,
-        expected_event: str,
-        *,
-        prelude: str = "",
-    ) -> None:
+    def test_dev_sync_request_marker_wrapper_delegates_to_apply_helper(self) -> None:
         result = self.run_controller_lib_harness(
-            f'{command}; status=$?; '
-            'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
-            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
-            'exit "$status"',
-            prelude=prelude,
+            'apply_dev_sync_request_marker "DEV_SYNC_REQUEST:.refactor-loop/runs/integration-sync-request-x.json"',
+            prelude=(
+                'export CODEX_REFACTOR_LOOP_SKILL_ROOT="$REPO_ROOT/fake-skill"; '
+                'mkdir -p "$CODEX_REFACTOR_LOOP_SKILL_ROOT/scripts"; '
+                'cat > "$CODEX_REFACTOR_LOOP_SKILL_ROOT/scripts/apply_integration_sync_request.py" <<\'PY\'\n'
+                'import sys\nprint("sync-helper", sys.argv[1:])\nPY\n'
+            ),
         )
 
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertIn(expected_event, result.stdout)
-        self.assertNotIn("issue edit", result.stdout)
-
-    def test_apply_triage_lifecycle_request_rejects_invalid_issue_number(self) -> None:
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request not-an-issue",
-            "TRIAGE_LIFECYCLE_PENDING:not-an-issue:invalid-issue-number",
-        )
-
-    def test_apply_triage_lifecycle_request_rejects_missing_artifact(self) -> None:
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request 53",
-            "TRIAGE_LIFECYCLE_PENDING:53:missing-artifact:.refactor-loop/runs/triage-issue-53.md",
-        )
-
-    def test_apply_triage_lifecycle_request_rejects_missing_sentinel_present_true(self) -> None:
-        prelude = (
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: false\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request 53",
-            "TRIAGE_LIFECYCLE_PENDING:53:sentinel-field-not-true",
-            prelude=prelude,
-        )
-
-    def test_apply_triage_lifecycle_request_rejects_invalid_accept_proposed_body_path(self) -> None:
-        prelude = (
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## Proposed issue body\nwork_unit_id: issue-53\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/not-triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request 53",
-            "TRIAGE_LIFECYCLE_PENDING:53:invalid-proposed-body-path:.refactor-loop/runs/not-triage-issue-53.md",
-            prelude=prelude,
-        )
-
-    def test_apply_triage_lifecycle_request_rejects_missing_proposed_body(self) -> None:
-        prelude = (
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## Proposed issue body\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request 53",
-            "TRIAGE_LIFECYCLE_PENDING:53:missing-proposed-body",
-            prelude=prelude,
-        )
-
-    def test_apply_triage_lifecycle_request_rejects_reject_with_non_empty_proposed_body(self) -> None:
-        prelude = (
-            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
-            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
-            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: reject-remove-triage\n'
-            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
-            'REQ\n'
-        )
-
-        self.assert_triage_lifecycle_guard(
-            "apply_triage_lifecycle_request 53",
-            "TRIAGE_LIFECYCLE_PENDING:53:reject-proposed-body-must-be-empty",
-            prelude=prelude,
-        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("sync-helper", result.stdout)
+        self.assertIn(".refactor-loop/runs/integration-sync-request-x.json", result.stdout)
 
     def test_integration_sync_daemon_v1_release_rollup_exception_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -566,13 +476,51 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("open_release_rollup_pr_from_pending_event", reference)
         self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
         self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
-        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "integration worktree", "force-with-lease adoption"):
+        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "detect-and-emit", "IntegrationSyncRequestV1"):
             self.assertIn(marker, skill)
+        issue53_section = re.search(
+            r"## Named runtime exception — IntegrationSyncDaemonV1\(per #53\)(.*?)\n## Named runtime exception — observability-comment-writers",
+            skill,
+            re.S,
+        )
+        self.assertIsNotNone(issue53_section)
+        for forbidden in ("git push", "git reset", "git merge", "git rebase", "--force-with-lease", "force-with-lease adoption"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, issue53_section.group(1))
 
         for forbidden in ("$RELEASE_BRANCH", "RELEASE_BRANCH", "ReleaseRollupRequestV1"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)
         self.assertNotIn("gh pr create", daemon)
+
+    def test_integration_sync_daemon_command_body_is_detect_and_emit_only(self) -> None:
+        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        section = reference.split("Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:", 1)[1].split(
+            "### Phase 9 router daemon command body",
+            1,
+        )[0]
+
+        for marker in (
+            "`PRESERVE_LOCAL_AHEAD`",
+            "`ADOPT_MERGED_ROLLUP`",
+            "`RESET_TO_REMOTE`",
+            "`FORWARD_SYNC`",
+            "`IntegrationSyncRequestV1`",
+            "`DEV_SYNC_REQUEST:<path>`",
+            "controller helper",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, section)
+
+        forbidden_patterns = (
+            r"git push.*INTEGRATION",
+            r"git reset --hard.*INTEGRATION",
+            r"git merge.*INTEGRATION.*push",
+            r"--force-with-lease",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, section, re.S))
 
     def test_issue53_observability_and_project_rules_default_deny_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -599,9 +547,9 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("gh issue view / gh issue comment", post_rules)
         self.assertIn("gh pr view / gh pr comment / gh pr edit --body-file", post_rules)
 
-        for marker in ("TriageLifecycleRequestV1", "label_transition`(`accept-to-phase9`|`reject-remove-triage`)", "不直接 `gh issue edit` 改 body / label"):
+        for marker in ("ManualIssueTriageDecisionV1", "TRIAGE_DECISION_DONE", "不直接改 GitHub issue body / label"):
             self.assertIn(marker, triage_prompt)
-        self.assertNotIn("gh issue edit ${ISSUE_NUMBER}", triage_prompt)
+        self.assertNotIn("gh issue edit", triage_prompt)
 
     def test_python_github_repo_slug_env_branches(self) -> None:
         from repo_config import github_repo_slug
@@ -1488,13 +1436,13 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
         controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
 
-        required = ("TriageLifecycleRequestV1", "issue_number", "verdict`(`accept`|`reject`)", "proposed_body_path", "label_transition`(`accept-to-phase9`|`reject-remove-triage`)", "evidence_refs", "sentinel_present", "created_at", "artifact 末尾独立一行 `⟦AI:AUTO-LOOP⟧`")
+        required = ("ManualIssueTriageDecisionV1", "issue_number", "verdict", "body_artifact_path", "comment_artifact_path", "lifecycle_owner", "lifecycle_authority", "TRIAGE_DECISION_DONE")
         for marker in required:
             with self.subTest(marker=marker):
                 self.assertIn(marker, triage_prompt)
 
-        self.assertNotIn("gh issue edit ${ISSUE_NUMBER}", triage_prompt)
-        for marker in ("apply_triage_lifecycle_request()", "TRIAGE_LIFECYCLE_PENDING", 'tail -n 1 "$artifact"', "⟦AI:AUTO-LOOP⟧", "accept:accept-to-phase9", "reject:reject-remove-triage"):
+        self.assertNotIn("gh issue edit", triage_prompt)
+        for marker in ("apply_triage_decision_marker()", "TRIAGE_DECISION_DONE", "apply_triage_decision.py"):
             self.assertIn(marker, controller_lib)
 
     def test_triage_prompt_drops_old_refactor_only_and_docs_tooling_gates(self) -> None:
@@ -2191,212 +2139,31 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(result.stdout.splitlines(), ["True", "False", "False"])
 
-    def test_triage_monitor_state_helpers_recover_legacy_entries_and_advance_by_log_markers(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
-            log_file = root / ".refactor-loop" / "logs" / "triage-issue-42.log"
-            prompt_file = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts" / "triage-external-issue.md"
-            skill_root = root / ".claude" / "skills" / "codex-refactor-loop"
-            spawn_file = skill_root / "scripts" / "spawn-codex.sh"
-            state_file.parent.mkdir(parents=True)
-            log_file.parent.mkdir(parents=True)
-            prompt_file.parent.mkdir(parents=True)
-            spawn_file.parent.mkdir(parents=True)
-            state_file.write_text('{"42":"2026-01-01T00:00:00Z"}\n', encoding="utf-8")
-            (skill_root / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
-            prompt_file.write_text("Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n", encoding="utf-8")
-            spawn_file.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
-            (root / "repo_slug.sh").write_text((SKILL_ROOT / "scripts" / "repo_slug.sh").read_text(encoding="utf-8"), encoding="utf-8")
-            triage_source = (SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8")
-            triage_prefix = triage_source.split('log "triage-monitor started: interval=${INTERVAL}s"', 1)[0]
-            triage_lib = root / "triage-monitor-functions.sh"
-            triage_lib.write_text(triage_prefix, encoding="utf-8")
-            scenario = root / "scenario.sh"
-            scenario.write_text(
-                """#!/usr/bin/env bash
-set -euo pipefail
-source "$TRIAGE_LIB"
-printf 'legacy=%s retries=%s\\n' "$(state_status 42)" "$(state_retries 42)"
-set_state 42 claimed 0 0 "$LOG_FILE"
-printf 'claimed=%s log=%s\\n' "$(state_status 42)" "$(state_log_file 42)"
-printf 'partial_spawn=%s partial_exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
-printf 'SPAWN: prompt=x log=y cd=z stall=1s\\n' > "$LOG_FILE"
-printf 'spawn=%s exit=%s\\n' "$(log_has_spawn_or_exit_marker "$LOG_FILE" && echo yes || echo no)" "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
-printf 'noise\\nEXIT=0\\nDONE_AT=now\\n' >> "$LOG_FILE"
-printf 'done=%s\\n' "$(log_has_exit_marker "$LOG_FILE" && echo yes || echo no)"
-TRIAGE_RETRY_BACKOFF_SECONDS=7
-mark_failed_retry 42 0 "$LOG_FILE" missing-spawn-marker >/dev/null
-jq -r '"failed=" + .["42"].status + " retries=" + (.["42"].retries|tostring) + " next=" + ((.["42"].next_attempt > 0)|tostring)' "$STATE_FILE"
-""",
-                encoding="utf-8",
-            )
-            scenario.chmod(0o755)
-            env = os.environ.copy()
-            env.update(
-                {
-                    "REPO_ROOT": str(root),
-                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(skill_root),
-                    "STATE_FILE": str(state_file),
-                    "LOG_FILE": str(log_file),
-                    "TRIAGE_LIB": str(triage_lib),
-                    "TRIAGE_MAX_RETRIES": "3",
-                    "TRIAGE_RETRY_BACKOFF_SECONDS": "300",
-                }
-            )
-            result = subprocess.run(
-                ["bash", str(scenario)],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+    def test_triage_monitor_script_is_deleted_and_controller_sweep_owns_intake(self) -> None:
+        self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        self.assertIn("ManualIssueTriageDecisionV1", skill + reference)
+        self.assertIn("controller wakeup sweep", skill + reference)
+        self.assertNotIn("triage-monitor-state.json", skill + reference)
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                result.stdout.splitlines(),
-                [
-                    "legacy=failed retries=0",
-                    f"claimed=claimed log={log_file}",
-                    "partial_spawn=no partial_exit=no",
-                    "spawn=yes exit=no",
-                    "done=yes",
-                    "failed=failed retries=1 next=true",
-                ],
-            )
-
-    def test_triage_monitor_loop_dispatches_state_machine_branches_once(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            fakebin = root / "bin"
-            skill_scripts = root / ".claude" / "skills" / "codex-refactor-loop" / "scripts"
-            skill_prompts = root / ".claude" / "skills" / "codex-refactor-loop" / "prompts"
-            logs = root / ".refactor-loop" / "logs"
-            fakebin.mkdir()
-            skill_scripts.mkdir(parents=True)
-            skill_prompts.mkdir(parents=True)
-            logs.mkdir(parents=True)
-
-            (skill_prompts / "triage-external-issue.md").write_text(
-                "Issue ${ISSUE_NUMBER}\nAuthor: maintainer\n",
-                encoding="utf-8",
-            )
-            (root / ".claude" / "skills" / "codex-refactor-loop" / "SKILL.md").write_text(
-                "---\nname: codex-refactor-loop\n---\n",
-                encoding="utf-8",
-            )
-            (logs / "triage-issue-14-attempt-1.log").write_text("SPAWN: old\nEXIT=0\n", encoding="utf-8")
-            (logs / "triage-issue-15-attempt-1.log").write_text("SPAWN: old\n", encoding="utf-8")
-
-            state_file = root / ".refactor-loop" / "triage-monitor-state.json"
-            state_file.write_text(
-                json.dumps(
-                    {
-                        "10": {
-                            "status": "claimed",
-                            "retries": 0,
-                            "next_attempt": 4102444800,
-                            "log": str(logs / "triage-issue-10-attempt-1.log"),
-                        },
-                        "11": {
-                            "status": "claimed",
-                            "retries": 0,
-                            "next_attempt": 0,
-                            "log": str(logs / "triage-issue-11-attempt-1.log"),
-                        },
-                        "12": {
-                            "status": "failed",
-                            "retries": 1,
-                            "next_attempt": 0,
-                            "log": str(logs / "triage-issue-12-attempt-1.log"),
-                        },
-                        "14": {
-                            "status": "spawned",
-                            "retries": 0,
-                            "next_attempt": 0,
-                            "log": str(logs / "triage-issue-14-attempt-1.log"),
-                        },
-                        "15": {
-                            "status": "claimed",
-                            "retries": 0,
-                            "next_attempt": 4102444800,
-                            "log": str(logs / "triage-issue-15-attempt-1.log"),
-                        },
-                    }
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            gh = fakebin / "gh"
-            gh.write_text(
-                """#!/usr/bin/env bash
-if [[ "$1" == "issue" && "$2" == "list" ]]; then
-  printf '10 alice\\n11 bob\\n12 carol\\n13 dave\\n14 erin\\n15 frank\\n'
-  exit 0
-fi
-exit 64
-""",
-                encoding="utf-8",
-            )
-            gh.chmod(0o755)
-
-            spawn = skill_scripts / "spawn-codex.sh"
-            spawn.write_text(
-                """#!/usr/bin/env bash
-set -euo pipefail
-log=""
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --log) log="$2"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-printf '%s\\n' "$ISSUE_NUMBER" >> "$REPO_ROOT/.refactor-loop/spawn-invocations.txt"
-case "$ISSUE_NUMBER" in
-  12|13) printf 'SPAWN: fake issue %s\\n' "$ISSUE_NUMBER" > "$log" ;;
-  *) exit 65 ;;
-esac
-""",
-                encoding="utf-8",
-            )
-            spawn.chmod(0o755)
-
-            env = os.environ.copy()
-            env.update(
-                {
-                    "PATH": f"{fakebin}{os.pathsep}{env['PATH']}",
-                    "REPO_ROOT": str(root),
-                    "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(root / ".claude" / "skills" / "codex-refactor-loop"),
-                    "GH_REPO_SLUG": "owner/repo",
-                    "TRIAGE_MONITOR_ONCE": "1",
-                    "TRIAGE_MONITOR_TEST_WAIT_SPAWN": "1",
-                    "TRIAGE_RETRY_BACKOFF_SECONDS": "1",
-                    "TRIAGE_MAX_RETRIES": "3",
-                }
-            )
-            result = subprocess.run(
-                ["bash", str(SKILL_ROOT / "scripts" / "triage-monitor.sh")],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            self.assertEqual(state["10"]["status"], "claimed")
-            self.assertEqual(state["10"]["next_attempt"], 4102444800)
-            self.assertEqual(state["11"]["status"], "failed")
-            self.assertEqual(state["11"]["retries"], 1)
-            self.assertEqual(state["12"]["status"], "spawned")
-            self.assertEqual(state["12"]["retries"], 1)
-            self.assertEqual(state["13"]["status"], "spawned")
-            self.assertEqual(state["14"]["status"], "done")
-            self.assertEqual(state["15"]["status"], "spawned")
-            self.assertEqual((root / ".refactor-loop" / "spawn-invocations.txt").read_text(encoding="utf-8").splitlines(), ["12", "13"])
-            self.assertIn("failed: triage issue #11 attempt 1/3: missing-spawn-marker", result.stdout)
-            self.assertIn("done: triage codex for issue #14", result.stdout)
+    def test_daemon_roster_source_regression_has_no_six_daemon_or_triage_required_runtime(self) -> None:
+        text = (
+            (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+            + "\n"
+            + (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        )
+        forbidden = (
+            "6 daemon",
+            "six required daemons",
+            "required-runtime triage-monitor",
+            "triage-monitor required-runtime",
+            "triage-monitor.sh required",
+            "required triage-monitor.sh",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, text)
 
     def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2585,60 +2352,9 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
             )
             self.assertEqual(result.stderr, "")
 
-    def test_triage_monitor_self_locates_before_state_mutation(self) -> None:
-        text = self.read_rel("skills/codex-refactor-loop/scripts/triage-monitor.sh")
-
-        self.assertIn("resolve_skill_root()", text)
-        self.assertIn('CODEX_REFACTOR_LOOP_SKILL_ROOT', text)
-        self.assertIn('${BASH_SOURCE[0]}', text)
-        self.assertIn('resolved_skill_root="$(resolve_skill_root)"', text)
-        self.assertIn('TRIAGE_PROMPT_TEMPLATE="$resolved_skill_root/prompts/triage-external-issue.md"', text)
-        self.assertIn('SPAWN_CODEX="$resolved_skill_root/scripts/spawn-codex.sh"', text)
-        self.assertIn("CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT", text)
-        self.assertIn('"$TRIAGE_PROMPT_TEMPLATE"', text)
-        self.assertIn('nohup bash "$SPAWN_CODEX"', text)
-        self.assertIn(
-            "# Refactor (iter3/skill-skill-root-contract): Old pattern: .claude/skills hardcoded lookup. New principle: self-locate from this script path, with optional validated CODEX_REFACTOR_LOOP_SKILL_ROOT override.",
-            text,
-        )
-        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
-        self.assertLess(text.index("CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT"), text.index('STATE_FILE="$REPO_ROOT/.refactor-loop/triage-monitor-state.json"'))
-        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('[ -f "$STATE_FILE" ] || echo "{}" > "$STATE_FILE"'))
-        self.assertLess(text.index('resolved_skill_root="$(resolve_skill_root)"'), text.index('jq --arg n "$issue"'))
-        self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/prompts/triage-external-issue.md', text)
-        self.assertNotIn('$REPO_ROOT/.claude/skills/codex-refactor-loop/scripts/spawn-codex.sh', text)
-
-    def test_triage_monitor_default_self_location_uses_bash_source_parent(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            installed = Path(tmp) / "skills" / "codex-refactor-loop"
-            scripts = installed / "scripts"
-            prompts = installed / "prompts"
-            scripts.mkdir(parents=True)
-            prompts.mkdir()
-            (installed / "SKILL.md").write_text("---\nname: codex-refactor-loop\n---\n", encoding="utf-8")
-            triage = scripts / "triage-monitor.sh"
-            triage.write_text((SKILL_ROOT / "scripts" / "triage-monitor.sh").read_text(encoding="utf-8"), encoding="utf-8")
-            triage.chmod(0o755)
-            spawn = scripts / "spawn-codex.sh"
-            spawn.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
-            spawn.chmod(0o755)
-            (prompts / "triage-external-issue.md").write_text("Issue ${ISSUE_NUMBER}\n", encoding="utf-8")
-
-            env = os.environ.copy()
-            env.pop("CODEX_REFACTOR_LOOP_SKILL_ROOT", None)
-            env["CODEX_REFACTOR_LOOP_SKILL_ROOT_PRINT"] = "1"
-            result = subprocess.run(
-                ["bash", str(triage)],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stdout, f"{installed.resolve()}\n")
-            self.assertEqual(result.stderr, "")
-            self.assertFalse((installed / ".refactor-loop").exists())
+    def test_deleted_triage_monitor_has_no_skill_root_contract(self) -> None:
+        self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
+        self.assertIn("ManualIssueTriageDecisionV1", self.read_rel("skills/codex-refactor-loop/prompts/triage-external-issue.md"))
 
     def test_invalid_specific_skill_root_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2665,15 +2381,7 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
                     "PYTHONPATH": str(SKILL_ROOT / "scripts"),
                 }
             )
-            triage = subprocess.run(
-                ["bash", str(SKILL_ROOT / "scripts" / "triage-monitor.sh")],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            self.assertNotEqual(triage.returncode, 0)
-            self.assertIn("invalid codex-refactor-loop skill root", triage.stderr)
+            self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
             self.assertFalse(state_file.exists())
 
             dev_sync = subprocess.run(
@@ -2698,7 +2406,6 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
 
         runtime_texts = {
             "dev_sync_daemon.py": self.read_rel("skills/codex-refactor-loop/scripts/dev_sync_daemon.py"),
-            "triage-monitor.sh": self.read_rel("skills/codex-refactor-loop/scripts/triage-monitor.sh"),
         }
         for name, text in runtime_texts.items():
             with self.subTest(runtime=name):
@@ -2713,7 +2420,6 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
             SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "REFERENCE.md",
             SKILL_ROOT / "scripts" / "dev_sync_daemon.py",
-            SKILL_ROOT / "scripts" / "triage-monitor.sh",
         ]
         for path in checked:
             rel = path.relative_to(REPO_ROOT).as_posix()
@@ -2886,7 +2592,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("export GH_REPO=", host_env)
         shell_helper = self.read_rel("skills/codex-refactor-loop/scripts/repo_slug.sh")
         self.assertIn('gh_repo_args=(--repo "$GH_REPO_SLUG")', shell_helper)
-        for rel in ("skills/codex-refactor-loop/scripts/controller_lib.sh", "skills/codex-refactor-loop/scripts/peek.sh", "skills/codex-refactor-loop/scripts/triage-monitor.sh"):
+        for rel in ("skills/codex-refactor-loop/scripts/controller_lib.sh", "skills/codex-refactor-loop/scripts/peek.sh"):
             with self.subTest(script=rel):
                 self.assertIn("repo_slug.sh", self.read_rel(rel))
 
@@ -2906,8 +2612,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "skills/codex-refactor-loop/scripts/codex-progress-reporter.sh",
             "skills/codex-refactor-loop/scripts/controller_lib.sh",
             "skills/codex-refactor-loop/scripts/peek.sh",
-            "skills/codex-refactor-loop/scripts/triage-monitor.sh",
-        ):
+            ):
             text = self.read_rel(rel)
             with self.subTest(shell=rel):
                 self.assertIn("repo_slug.sh", text)
@@ -2944,7 +2649,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
         host_env_text = self.read_rel("skills/codex-refactor-loop/host.env.example")
-        daemon_names = ("concurrency_monitor.py", "codex-progress-reporter.sh", "comment-monitor.sh", "dev_sync_daemon.py", "triage-monitor.sh")
+        daemon_names = ("concurrency_monitor.py", "codex-progress-reporter.sh", "comment-monitor.sh", "dev_sync_daemon.py")
 
         self.assertIn("bash -c 'source .refactor-loop/host.env && exec", skill_text)
         self.assertIn("[daemon command bodies](REFERENCE.md#daemon-command-bodies)", skill_text)

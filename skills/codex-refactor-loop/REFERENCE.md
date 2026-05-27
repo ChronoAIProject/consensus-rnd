@@ -68,7 +68,8 @@ Narrow allowlist: run `check_skill_degradation.py`, write `.refactor-loop/.degra
 nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/<daemon>.py' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
-**6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
+Integration sync requests use `IntegrationSyncRequestV1`; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
+**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration sync detection/request)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
@@ -439,7 +440,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 
 ### 首次唤醒强制序列(MANDATORY — 按序跑完才能 end turn)
 
-> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 6 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
+> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 5 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
 
 0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
@@ -455,13 +456,13 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
-3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`。随后运行 `bash <skill-root>/scripts/restart-daemons.sh` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `bash <skill-root>/scripts/peek.sh | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `phase9_router_daemon.py`。随后运行 `bash <skill-root>/scripts/restart-daemons.sh` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `bash <skill-root>/scripts/peek.sh | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只 bootstrap state + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
+- ❌ 只 bootstrap state + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -922,12 +923,12 @@ Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:
 1. `FETCH`: fetch origin in the daemon worktree.
 2. `CHECK_MERGE`: if a merge is in progress, observe or dispatch exactly one resolver codex. Resolver codexes resolve files and run `git merge --continue`; they never push, reset, or abort.
 3. `CHECK_DIRTY`: dirty non-merge worktrees skip without reset.
-4. `PRESERVE_LOCAL_AHEAD`: before any reset, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, push `HEAD:$INTEGRATION_BRANCH` and return. This preserves resolver continuation commits.
-5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, reset/replay onto `origin/$REVIEW_BASE_BRANCH`, then push only with exact `--force-with-lease=refs/heads/$INTEGRATION_BRANCH:<expected_remote_sha>`.
-6. `RESET_TO_REMOTE`: reset to `origin/$INTEGRATION_BRANCH` only after local-ahead preservation and rollup adoption checks.
-7. `FORWARD_SYNC`: merge `origin/$REVIEW_BASE_BRANCH` into integration using ff-only first, then no-ff merge; push with ordinary `git push origin HEAD:$INTEGRATION_BRANCH`.
+4. `PRESERVE_LOCAL_AHEAD`: before any controller-side alignment, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for the controller apply helper. This preserves resolver continuation commits without daemon-side git lifecycle authority.
+5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side adoption. The controller helper re-checks ancestry and live SHAs before applying.
+6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side remote alignment.
+7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side forward sync. The controller helper owns branch update mechanics and re-checks live state before applying.
 8. `DETECT_RELEASE_ROLLUP_NEEDED`: if `origin/$INTEGRATION_BRANCH` is ahead of `origin/$REVIEW_BASE_BRANCH` by at least `RELEASE_ROLLUP_MIN_COMMITS` and no open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` PR exists, append `DEV_SYNC_PENDING:release-rollup-needed:<json>` with branch names, SHAs, ahead count, timestamp, and reason. Cooldown only suppresses duplicate same-SHA events; it grants no lifecycle authority.
-Ambiguous rollup metadata, failed local-ahead push, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
+Ambiguous rollup metadata, failed request emission, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
 ### Phase 9 router daemon command body
 `phase9_router_daemon.py` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/phase9_router_daemon.py --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
@@ -1006,42 +1007,9 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 
 **Daemon 自包含**:
 
-`<skill-root>/scripts/triage-monitor.sh` 60s 周期:
-- 扫 `gh issue list --label "auto-loop-triage" --state open`
-- 新 issue → mark seen + **直接 spawn triage codex**(nohup + disown,daemon 自己派)
-- triage codex 自己读 issue body + update GitHub(reshape or 评论 + label 切换)
-- daemon 不依赖 controller 中转,无中间 event log
-- state 存 `.refactor-loop/triage-monitor-state.json` 防重复
-- 启动:`nohup bash -c 'source .refactor-loop/host.env && exec bash <skill-root>/scripts/triage-monitor.sh' >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
-- Liveness:每 wakeup 读 `.refactor-loop/heartbeats/triage-monitor.ts` / statusline snapshot;stale/missing/malformed 时调 `bash <skill-root>/scripts/restart-daemons.sh`
-- Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
-- Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
+Controller wakeup sweep handles external `auto-loop-triage` issue intake; `triage-monitor.sh` is deleted. Triage workers emit `ManualIssueTriageDecisionV1` plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
 
-结构性教训:triage daemon 只 emit event 等 controller 中转时,一旦 controller 未 sweep pending-events 就会漏处理外部 issue。修法是 daemon 直接 spawn triage codex,移除中转环节;daemon 自己 take action,controller 从 GitHub state 派生结果。
 
-Controller 每 wakeup sweep `--label "auto-loop-triage"`(daemon 漏了兜底),对每个新 issue:
-1. 派 **triage codex**(`prompts/triage-external-issue.md`)读 issue body + 判断:
-   - 是否是 concrete repository work unit suitable for consensus?
-   - 若是 → 调研代码 + 补 evidence / Fix Boundary / human_brief / decision questions + 重写 issue body 成含 `manual-issue` WorkUnitV1 字段的 standardized design issue 格式 + label 切换为 `auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进`(移除 `auto-loop-triage`)
-   - 若否 → 评论"不适合作为 manual-issue work unit(原因 XXX),退出 auto-loop";移除 `auto-loop-triage` label;不再处理
-2. Triage codex 完成后 issue 进 Phase 9 标准链路
-
-**triage codex 输出 marker**:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`
-
-**优势 vs Path A**:
-- maintainer 只加 1 label(易记)
-- body reshaping 由 codex 自动做(maintainer 不用学 design-issue body 模板)
-- 不适合 consensus 的 issue 会被自动拒绝(防 controller 把任意 issue 当 work unit 跑)
-- triage codex 调研代码补 evidence,solver 后续准
-
-### 反面(❌ 禁止)
-
-- ❌ controller 无 sweep `auto-loop-triage` label → 外部 issue 加 label 也无人接
-- ❌ Path B triage codex 直接派 solver 而不 reshape body → solver 找不到 evidence
-- ❌ triage codex 接受产品需求 / runtime bug report / duplicate / unclear / >50 files issue → Phase 9 完全错位
-- ❌ 加 `auto-loop` label 但忘加 `phase9-auto-solve` → controller 当普通 design issue 等 maintainer,不自动派 solver
-
-<a id="phase-8-details"></a>
 ## Phase 8 details
 
 ## Phase 8 — Multi-codex PR review with consensus merge
@@ -1964,7 +1932,7 @@ CI sweep contract: every controller wakeup checks open auto-loop PR checks, imme
 
 ## Codex 进展实时上报 — 强制
 
-`codex-progress-reporter.sh` is one of the six required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment only when the codex exits cleanly, and uses only log-tail `^EXIT=0` for successful completion detection. Nonzero `EXIT=<n>` is a failed terminal state that remains visible instead of being silently cleaned up.
+`codex-progress-reporter.sh` is one of the five required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment only when the codex exits cleanly, and uses only log-tail `^EXIT=0` for successful completion detection. Nonzero `EXIT=<n>` is a failed terminal state that remains visible instead of being silently cleaned up.
 
 <a id="label-bootstrap-loops"></a>
 ## Label bootstrap loops

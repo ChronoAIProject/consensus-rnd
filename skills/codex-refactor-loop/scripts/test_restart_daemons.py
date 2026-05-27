@@ -21,7 +21,7 @@ DAEMON_NAMES = (
     "comment-monitor",
     "codex-progress-reporter",
     "dev_sync_daemon",
-    "triage-monitor",
+    "phase9_router_daemon",
 )
 
 
@@ -96,9 +96,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        for script in ("concurrency_monitor.py", "dev_sync_daemon.py"):
+        for script in ("concurrency_monitor.py", "dev_sync_daemon.py", "phase9_router_daemon.py"):
             self._write_executable(self.skill / "scripts" / script, PYTHON_DAEMON)
-        for script in ("comment-monitor.sh", "codex-progress-reporter.sh", "triage-monitor.sh"):
+        for script in ("comment-monitor.sh", "codex-progress-reporter.sh"):
             self._write_executable(self.skill / "scripts" / script, SHELL_DAEMON)
 
     def tearDown(self) -> None:
@@ -223,16 +223,16 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_restarts_when_heartbeat_malformed(self) -> None:
         self._run_helper()
-        self._read_start_signal("triage-monitor")
-        (self.repo / ".refactor-loop" / "heartbeats" / "triage-monitor.ts").write_text(
+        self._read_start_signal("phase9_router_daemon")
+        (self.repo / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts").write_text(
             "not-a-timestamp\n",
             encoding="utf-8",
         )
 
         self._run_helper()
 
-        self._read_start_signal("triage-monitor")
-        self.assertEqual(2, self._start_count("triage-monitor"))
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(2, self._start_count("phase9_router_daemon"))
 
     def test_restarts_when_pid_dead(self) -> None:
         (self.repo / ".refactor-loop" / "locks" / "dev_sync_daemon.pid").write_text(
@@ -287,8 +287,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(0, first.returncode, first_stdout + first_stderr)
         self.assertEqual(0, second.returncode, second_stdout + second_stderr)
 
-        self._read_start_signal("triage-monitor")
-        self.assertEqual(1, self._start_count("triage-monitor"))
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(1, self._start_count("phase9_router_daemon"))
         self.assertEqual(1, self._start_count("concurrency_monitor"))
 
 

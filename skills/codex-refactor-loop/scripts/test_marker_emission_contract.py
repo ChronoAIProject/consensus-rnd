@@ -33,7 +33,7 @@ ROLE_MARKER_TOKENS = (
     "META_RESOLVED",
     "TEST_BLOCKED",
     "TEST_ADD_DONE",
-    "TRIAGE_DONE",
+    "TRIAGE_DECISION_DONE",
 )
 
 PROMPT_ALLOWLISTS = {
@@ -103,8 +103,8 @@ PROMPT_ALLOWLISTS = {
         "TEST_ADD_DONE:${CLUSTER_ID}:<status>",
     ),
     "triage-external-issue.md": (
-        "TRIAGE_DONE:${ISSUE_NUMBER}:accept:issue-${ISSUE_NUMBER}",
-        "TRIAGE_DONE:${ISSUE_NUMBER}:reject:<reject-type>",
+        "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:accept:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
+        "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:reject:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
     ),
 }
 

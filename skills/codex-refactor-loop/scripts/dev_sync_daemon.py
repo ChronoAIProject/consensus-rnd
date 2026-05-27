@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # Refactor (iter4/skill-worktree-inside-repo): Old pattern: sibling `<repo>-wt-<name>/`. New principle: inside `<repo>/.worktrees/<name>/` + gitignored.
 """
-dev_sync_daemon.py — 自动 merge origin/dev → auto-refact-dev 的 daemon
+dev_sync_daemon.py — detect integration sync needs and emit controller requests
 
-daemon 跑在独立 worktree,main repo controller 工作不受 daemon 的 merge 状态干扰。
+daemon 跑在独立 worktree,main repo controller 工作不受 daemon 状态干扰。
 
 设计:
 - 独立 worktree:$REPO_ROOT/.worktrees/dev-sync(off auto-refact-dev)
 - 600s 周期 check `git rev-list HEAD..origin/dev`
-- behind>0:try ff-only → no-ff merge → 冲突 spawn-codex resolve
-- 成功 → push origin auto-refact-dev → main repo controller 下次 fetch 拉到
+- behind>0:emit IntegrationSyncRequestV1 for controller-owned apply
+- conflict exists:spawn resolver worker; controller helper applies lifecycle after marker
 - main repo working tree 不被 merge 状态污染
 
 启动:
@@ -30,6 +30,8 @@ from pathlib import Path
 from contextlib import contextmanager
 import fcntl
 import json
+
+from integration_sync_requests import IntegrationSyncRequestV1, write_request_artifact
 
 
 def git_repo_root() -> Path:
@@ -81,20 +83,10 @@ PENDING_EVENTS_FILE = MAIN_REPO / ".refactor-loop" / ".controller-pending-events
 RELEASE_ROLLUP_MIN_COMMITS = int(os.environ.get("RELEASE_ROLLUP_MIN_COMMITS", "1"))
 RELEASE_ROLLUP_COOLDOWN_SECONDS = int(os.environ.get("RELEASE_ROLLUP_COOLDOWN_SECONDS", "21600"))
 
-# Refactor (iter5/cluster-issue53-codex-direct-git-gh):
-#   Old: documented IntegrationSyncDaemonV1 allowlist as a dead runtime tuple.
-#   New: keep the authorized command surface as source-regression documentation only.
-# IntegrationSyncDaemonV1(per #53) command surface, authorized by
-# .refactor-loop/runs/phase9-issue53-r7-judge.md. This daemon operates only in
-# the dedicated integration worktree. Documented allowed git shapes:
-# git fetch; git rev-list; git rev-parse; git merge-base; git reset --hard;
-# git rebase --rebase-merges; git merge --ff-only; git merge --no-ff;
-# git push origin HEAD:$INTEGRATION_BRANCH;
-# git push --force-with-lease origin HEAD:$INTEGRATION_BRANCH.
-# This is documentation for source-regression tests, not executable policy.
-# The daemon must not become a generic lifecycle actor: no worker-diff commit,
-# no PR create/merge/close/edit, no issue/label lifecycle, no tag/release, and
-# no direct REVIEW_BASE push.
+# IntegrationSyncDaemonV1(per #53/#70) is a no-lifecycle detector/write-artifact
+# runtime. It may read refs, compare ancestry, dispatch conflict resolution, write
+# IntegrationSyncRequestV1 artifacts, and append pending events. Controller-owned
+# helpers hold the lifecycle apply boundary.
 
 
 def log(msg: str) -> None:
@@ -125,7 +117,7 @@ def ensure_worktree() -> bool:
     """Ensure the daemon's dedicated worktree exists (detached HEAD off INTEGRATION).
 
     git 不允许两个 worktree checkout 同 branch,所以 daemon 用 detached HEAD。
-    Push 时 `git push origin HEAD:INTEGRATION` 显式映射回 branch。
+    Controller apply helpers later map detached HEAD back to the integration branch.
     """
     if not WORKTREE.exists():
         log(f"creating worktree {WORKTREE} (detached off origin/{INTEGRATION})")
@@ -136,16 +128,6 @@ def ensure_worktree() -> bool:
         if r.returncode != 0:
             log(f"FATAL: git worktree add failed: {r.stderr.strip()}")
             return False
-    return True
-
-
-def reset_to_remote(cwd: Path) -> bool:
-    """每 tick 开始 reset 到 origin/INTEGRATION,确保 base 最新。"""
-    run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
-    r = run(["git", "reset", "--hard", f"origin/{INTEGRATION}"], cwd=cwd)
-    if r.returncode != 0:
-        log(f"FAIL reset to origin/{INTEGRATION}: {r.stderr.strip()[:120]}")
-        return False
     return True
 
 
@@ -180,9 +162,9 @@ def dispatch_codex_resolve() -> None:
 
 ## Context
 
-dev_sync_daemon (Python) 在独立 worktree `{WORKTREE}` 做 merge,遇到冲突。你
-在该 worktree 内 resolve + `git add` + `git merge --continue`,**不 push**
-(daemon 后续 push)。
+dev_sync_daemon (Python) 在独立 worktree `{WORKTREE}` 检测到冲突状态。你在该
+worktree 内 resolve + `git add`,然后写 marker;controller apply helper 后续完成
+fixed lifecycle apply。
 
 ## 任务
 
@@ -191,15 +173,14 @@ dev_sync_daemon (Python) 在独立 worktree `{WORKTREE}` 做 merge,遇到冲突�
 3. 读每个冲突文件,理解 `origin/{REVIEW_BASE}` 改动 vs `{INTEGRATION}` 改动
 4. 合并(保留两者实质改动:tests / new files / docs / production code)
 5. `git add <files>`(已 resolve 的)
-6. `git merge --continue`(default merge message,带 `Sync {INTEGRATION} with {REVIEW_BASE}`)
-7. `$BUILD_CMD` 验证编译(失败修)
-8. 完成 marker:`DEV_SYNC_RESOLVED:<files-resolved>` 或 `DEV_SYNC_BLOCKED:<reason>`
+6. `$BUILD_CMD` 验证编译(失败修)
+7. 完成 marker:`DEV_SYNC_RESOLVED:<files-resolved>` 或 `DEV_SYNC_BLOCKED:<reason>`
 
 ## 硬约束
 
-- ❌ `git push` / `git merge --abort` / `git reset --hard`(daemon 控)
+- ❌ branch lifecycle apply / abort / destructive checkout reset(controller 控)
 - ❌ 删任一边的实质改动(test / production code / docs / proto)
-- ❌ 不 commit before `git merge --continue`(merge 自动 commit)
+- ❌ 不 commit;只 resolve + stage + marker
 - ❌ 写新产线代码(只 resolve + build verify)
 - proto 字段冲突(同字段号 不同语义)→ `DEV_SYNC_BLOCKED:proto-schema-conflict`
 - 整个工作在 worktree 内完成,不动 main repo `{MAIN_REPO}`
@@ -258,9 +239,10 @@ class RollupDetection:
     adoption: RollupAdoption | None = None
 
 
-# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemonV1 state machine boundary,resolver/rollup/push 全部 daemon-owned,controller 只 verify(#27 structural B 共识)
+# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemonV1 state machine boundary.
+# Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern: daemon-owned lifecycle apply. New principle: daemon detects and emits IntegrationSyncRequestV1; controller owns apply.
 class IntegrationSyncDaemonV1:
-    """Narrow state machine for integration-branch sync transitions."""
+    """Narrow detector for integration-branch sync transitions."""
 
     def __init__(
         self,
@@ -300,6 +282,15 @@ class IntegrationSyncDaemonV1:
         self.pending_events_file.parent.mkdir(parents=True, exist_ok=True)
         with self.pending_events_file.open("a", encoding="utf-8") as fh:
             fh.write(f"DEV_SYNC_PENDING:{reason}:{detail}\n")
+
+    def emit_sync_request(self, request: IntegrationSyncRequestV1) -> Path:
+        path = write_request_artifact(self.main_repo, request)
+        rel = path.relative_to(self.main_repo)
+        self.pending_events_file.parent.mkdir(parents=True, exist_ok=True)
+        with self.pending_events_file.open("a", encoding="utf-8") as fh:
+            fh.write(f"DEV_SYNC_REQUEST:{rel.as_posix()}\n")
+        self.log(f"emitted IntegrationSyncRequestV1 {rel.as_posix()}")
+        return path
 
     def local_ahead_count(self, cwd: Path) -> int:
         result = self.run(
@@ -425,17 +416,25 @@ class IntegrationSyncDaemonV1:
         self.append_pending_event("release-rollup-needed", json.dumps(event, sort_keys=True))
         return True
 
-    def push_clean_local_ahead_before_reset(self, cwd: Path) -> bool:
+    def request_clean_local_ahead(self, cwd: Path) -> bool:
         ahead_n = self.local_ahead_count(cwd)
         if ahead_n <= 0:
             return False
-        self.log(f"local HEAD is ahead of origin/{self.integration} by {ahead_n} commits; pushing before reset")
-        push = self.run(["git", "push", "origin", f"HEAD:{self.integration}"], cwd=cwd)
-        if push.returncode == 0:
-            self.log(f"pushed resolver/local-ahead HEAD → origin/{self.integration}")
-        else:
-            self.log(f"FAIL push local-ahead: {push.stderr.strip()[:120]}")
-            self.append_pending_event("local-ahead-push-failed", push.stderr.strip()[:160])
+        head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+        expected = self.remote_integration_sha(cwd)
+        if head.returncode != 0 or not expected:
+            self.append_pending_event("local-ahead-request-ambiguous", "missing-head-or-remote")
+            return True
+        self.emit_sync_request(
+            IntegrationSyncRequestV1(
+                kind="push-local-ahead",
+                integration_branch=self.integration,
+                review_base_branch=self.review_base,
+                worktree_head=head.stdout.strip(),
+                expected_remote_sha=expected,
+                evidence={"ahead_count": ahead_n, "reason": "local-head-ahead-of-integration"},
+            )
+        )
         return True
 
     def detect_merged_rollup(self, cwd: Path) -> RollupDetection | None:
@@ -498,7 +497,7 @@ class IntegrationSyncDaemonV1:
             ),
         )
 
-    def adopt_merged_rollup(self, cwd: Path, adoption: RollupAdoption) -> bool:
+    def request_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
         if not adoption.expected_remote_sha:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-expected-remote-sha")
             return True
@@ -513,45 +512,23 @@ class IntegrationSyncDaemonV1:
             self.append_pending_event("rollup-adoption-ambiguous", "post-rollup-count-unknown")
             return True
 
-        if replay_n == 0:
-            reset = self.run(["git", "reset", "--hard", f"origin/{self.review_base}"], cwd=cwd)
-            if reset.returncode != 0:
-                self.append_pending_event("rollup-adoption-reset-failed", reset.stderr.strip()[:160])
-                return True
-        else:
-            reset = self.run(["git", "reset", "--hard", f"origin/{self.integration}"], cwd=cwd)
-            if reset.returncode != 0:
-                self.append_pending_event("rollup-adoption-reset-failed", reset.stderr.strip()[:160])
-                return True
-            rebase = self.run(
-                ["git", "rebase", "--rebase-merges", "--onto", f"origin/{self.review_base}", adoption.old_head],
-                cwd=cwd,
+        head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+        if head.returncode != 0:
+            self.append_pending_event("rollup-adoption-ambiguous", "head-unknown")
+            return True
+        self.emit_sync_request(
+            IntegrationSyncRequestV1(
+                kind="adopt-merged-rollup",
+                integration_branch=self.integration,
+                review_base_branch=self.review_base,
+                worktree_head=head.stdout.strip(),
+                expected_remote_sha=adoption.expected_remote_sha,
+                old_rollup_head=adoption.old_head,
+                old_rollup_ahead_count=replay_n,
+                pr_number=adoption.pr_number,
+                evidence={"reason": "merged-rollup-adoption", "replay_count": replay_n},
             )
-            if rebase.returncode != 0:
-                self.append_pending_event("rollup-adoption-replay-conflict", rebase.stderr.strip()[:160])
-                return True
-
-        push = self.run(
-            [
-                "git",
-                "push",
-                f"--force-with-lease=refs/heads/{self.integration}:{adoption.expected_remote_sha}",
-                "origin",
-                f"HEAD:{self.integration}",
-            ],
-            cwd=cwd,
         )
-        if push.returncode == 0:
-            self.log(f"adopted merged rollup PR #{adoption.pr_number or '?'} onto origin/{self.integration}")
-        else:
-            self.append_pending_event("rollup-adoption-push-failed", push.stderr.strip()[:160])
-        return True
-
-    def reset_to_remote(self, cwd: Path) -> bool:
-        result = self.run(["git", "reset", "--hard", f"origin/{self.integration}"], cwd=cwd)
-        if result.returncode != 0:
-            self.log(f"FAIL reset to origin/{self.integration}: {result.stderr.strip()[:120]}")
-            return False
         return True
 
     def forward_sync_review_base(self, cwd: Path) -> None:
@@ -566,47 +543,22 @@ class IntegrationSyncDaemonV1:
             self.log(f"up-to-date with origin/{self.review_base}")
             return
 
-        self.log(f"behind origin/{self.review_base} by {behind_n} commits, attempting sync")
-
-        ff = self.run(["git", "merge", "--ff-only", f"origin/{self.review_base}"], cwd=cwd)
-        if ff.returncode == 0 and ("Fast-forward" in ff.stdout or "Already up to date" in ff.stdout):
-            self.log(f"ff-merged with origin/{self.review_base} (+{behind_n} commits)")
-            push = self.run(["git", "push", "origin", f"HEAD:{self.integration}"], cwd=cwd)
-            if push.returncode == 0:
-                self.log(f"pushed HEAD → origin/{self.integration}")
-            else:
-                self.log(f"FAIL push: {push.stderr.strip()[:120]}")
+        self.log(f"behind origin/{self.review_base} by {behind_n} commits, emitting controller request")
+        head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+        expected = self.remote_integration_sha(cwd)
+        if head.returncode != 0 or not expected:
+            self.append_pending_event("forward-sync-request-ambiguous", "missing-head-or-remote")
             return
-
-        self.log("ff-only not possible, attempting no-ff merge")
-        merge = self.run(
-            [
-                "git",
-                "merge",
-                "--no-ff",
-                "-m",
-                f"Sync {self.integration} with {self.review_base} (auto by dev_sync_daemon)",
-                f"origin/{self.review_base}",
-            ],
-            cwd=cwd,
+        self.emit_sync_request(
+            IntegrationSyncRequestV1(
+                kind="forward-sync-review-base",
+                integration_branch=self.integration,
+                review_base_branch=self.review_base,
+                worktree_head=head.stdout.strip(),
+                expected_remote_sha=expected,
+                evidence={"behind_count": behind_n, "reason": "review-base-ahead-of-integration"},
+            )
         )
-        if merge.returncode == 0:
-            self.log(f"no-ff merge-committed +{behind_n} commits")
-            push = self.run(["git", "push", "origin", f"HEAD:{self.integration}"], cwd=cwd)
-            if push.returncode == 0:
-                self.log(f"pushed HEAD → origin/{self.integration}")
-            else:
-                self.log(f"FAIL push after merge: {push.stderr.strip()[:120]}")
-            return
-
-        if self.merge_in_progress(cwd):
-            self.log("CONFLICT detected (merge in progress)")
-            if not self.codex_resolve_in_flight():
-                self.dispatch_codex_resolve()
-            else:
-                self.log("codex already resolving, skip this tick")
-        else:
-            self.log(f"FAIL merge but no MERGE_HEAD: {merge.stderr.strip()[:120]}")
 
     def tick(self) -> None:
         cwd = self.worktree
@@ -629,17 +581,14 @@ class IntegrationSyncDaemonV1:
             self.log("skip: worktree dirty (no merge in progress)")
             return
 
-        if self.push_clean_local_ahead_before_reset(cwd):
+        if self.request_clean_local_ahead(cwd):
             return
 
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
-            self.adopt_merged_rollup(cwd, rollup.adoption)
+            self.request_merged_rollup_adoption(cwd, rollup.adoption)
             return
         if rollup and rollup.status == "ambiguous":
-            return
-
-        if not self.reset_to_remote(cwd):
             return
 
         self.forward_sync_review_base(cwd)
