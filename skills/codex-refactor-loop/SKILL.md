@@ -324,7 +324,7 @@ Controller non-duties:
 
 The floor is local because it prevents loop stalls.
 
-<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 default action = envsubst 下一 iteration audit + harness background task spawn,不等 maintainer 反问触发。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 ordinary audit fallback is guarded by the latest controller-validated audit result, and a validated AUDIT_DONE:none:0 stops fabricated refill work.(2026-05-26 maintainer-directive + issue-86 Phase 9 consensus) -->
 
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
@@ -338,8 +338,10 @@ The floor is local because it prevents loop stalls.
   - 直接读 daemon 日志 `tail -1 .refactor-loop/logs/concurrency_monitor.log` 也是 canonical 来源;两条路径都比 controller 自重算 ps grep 安全。
 - 自 PR #<本>: `concurrency_monitor.py` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
-- If below floor and no higher-priority actionable marker exists, dispatch audit/self-audit/retrospective-compatible work per current phase. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- floor 不足时 default action(无 maintainer 反问触发的前提下):envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。"派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由;实际成本 = 2 行 envsubst + 1 个 background task。
+- If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Phase 7 / Phase 9 actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
+- Ordinary audit fallback is valid only before the latest controller-validated audit reaches `AUDIT_DONE:none:0`. Before that fixed point, the guarded fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。
+- After the latest controller-validated audit is `AUDIT_DONE:none:0` and no real queued/actionable work exists, emit `CONCURRENCY_LOW:no-work-after-audit-none` and do not fabricate ordinary audit, profile, planner, or synthetic producer work just to satisfy `$CODEX_FLOOR`.
+- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由 before the validated `AUDIT_DONE:none:0` fixed point; after that fixed point, the correct visible state is `CONCURRENCY_LOW:no-work-after-audit-none`, not fake work.
 
 More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-details).
 

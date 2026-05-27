@@ -137,7 +137,7 @@ Auto-dispatch semantics:
 - On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.
 - After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
 - The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
-- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue suitable work.
+- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue real work when one of the floor refill routes below is valid.
 - This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
 
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
@@ -1634,7 +1634,7 @@ Concretely, this means:
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若 latest controller-validated audit 已是 `AUDIT_DONE:none:0` 且没有真实 work,不得为了 floor 合成普通 audit 或 profile/planner work;写可见 `CONCURRENCY_LOW:no-work-after-audit-none`。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -1643,18 +1643,17 @@ Concretely, this means:
 
 **填 floor 优先级**(从高到低):
 
-1. **下一 iter audit**(若上一 iter audit `AUDIT_DONE` 且对应 N+1 audit log 不存在)— 最有价值,产出新 cluster 链路
-2. **next-next iter audit**(N+2,speculative parallel)— 即使 iter N+1 audit 仍在跑也可派
-3. **历史 closed design issue retrospective codex** — 检查最近 5 个 closed design issue,是否有 follow-up cluster 被漏(典型:reflector r4 提到的 "cross-stream unification" 应该被独立 cluster 捕获)
-4. **<skill-root>/scripts self-audit codex** — 审计 skill / scripts 自身 tech debt(过长 section / 重复 helper / 老 prompt 文件可删)
-5. **docs sync codex** — 用最近 merged PRs 自动更新 `docs/audit-scorecard/`(如缺)
-6. **CI guard completeness codex** — 检查 `$CI_GUARDS` 是否覆盖所有 CLAUDE 条款
+1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
+2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
+3. **Phase 7 / Phase 9 actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
+4. **Ordinary audit refill before fixed point** — envsubst next iteration `prompts/audit.md` only when the latest controller-validated audit is not `AUDIT_DONE:none:0`.
+5. **Visible low-floor stop** — when the latest controller-validated audit is `AUDIT_DONE:none:0` and no real work exists, write `CONCURRENCY_LOW:no-work-after-audit-none` and stop fabricating floor work.
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
-- ❌ "iter N 还没完"作为不派 N+1 / N+2 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ 所有 floor slot 都派 audit → 单一职责堆积,应混合 audit + retrospective + 自审
+- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 仍继续派普通 audit / self-audit / retrospective / profile / planner work 凑 floor → 必须写 `CONCURRENCY_LOW:no-work-after-audit-none`
 - ❌ 一次性派 `>= 15` 个 codex 凑吞吐。大 burst 会压 API,更容易触发 transient stream-disconnect,并让 prompt 回显误判与追踪问题一起放大。
 
 ### Transient stream-disconnect 处理(强制)
@@ -1681,17 +1680,20 @@ ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ &&
 NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
-# 按优先级派 NEEDED 个 codex,优先 audit,其次 retrospective / self-audit
-# (具体派什么由 controller 根据 priority 表决定)
+# 按优先级派 NEEDED 个 codex:
+# queue -> actionable marker / maintainer comment / CI red / no-gap / Phase 7/9 route
+# -> ordinary audit only before latest controller-validated AUDIT_DONE:none:0
+# -> CONCURRENCY_LOW:no-work-after-audit-none
 ```
 
 **反面禁止**:
-- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派 audit 提升并发
+- ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派真实 work 提升并发
 - ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
-- ❌ "iter N 还没完"作为不派 N+1 audit 的理由 → audit 与 cluster impl 完全独立,无依赖
+- ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
+- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后伪造普通 audit / producer work → 写 `CONCURRENCY_LOW:no-work-after-audit-none`
 
-结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启下一轮 audit。
+结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;但 controller-validated `AUDIT_DONE:none:0` 是 ordinary audit fixed point,不能为 floor 伪造 no-op work。
 
 ### Sync to remote in time (强制)
 

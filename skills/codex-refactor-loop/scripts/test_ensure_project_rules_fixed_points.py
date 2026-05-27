@@ -972,6 +972,57 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, combined)
 
+    def test_v1_producer_contract_remains_two_values(self) -> None:
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        match = re.search(
+            r"## Producers in v1\s*\n(?P<body>.*?)(?:\n### |\n## |\Z)",
+            reference_text,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(match, "Producers in v1 section missing")
+        producers = re.findall(r"^- `([^`]+)`$", match.group("body"), flags=re.MULTILINE)
+
+        self.assertEqual(producers, ["audit", "manual-issue"])
+        self.assertIn("controller recognizes exactly these producer values", match.group("body"))
+
+    def test_no_saturation_planner_or_profile_runtime_surface(self) -> None:
+        checked_paths = [
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "prompts" / "audit.md",
+            SKILL_ROOT / "prompts" / "triage-external-issue.md",
+            SKILL_ROOT / "prompts" / "implement.md",
+            SKILL_ROOT / "prompts" / "meta-judge.md",
+        ]
+        forbidden_tokens = (
+            "AuditSaturationPlannerV1",
+            "ProducerMixPlannerV1",
+            "dispatch_profile",
+            "audit-deep",
+            "open-issue-sweep",
+            "consensus-sweep",
+            "PRODUCER_DONE",
+        )
+        negative_only_tokens = (
+            "WorkUnitV2",
+            "ControllerEvent",
+            "ControllerCommand",
+        )
+        for script_path in (SKILL_ROOT / "scripts").iterdir():
+            if script_path.is_file() and not script_path.name.startswith("test_"):
+                checked_paths.append(script_path)
+
+        for path in checked_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                with self.subTest(path=path.name, token=token):
+                    self.assertNotIn(token, text)
+            for token in negative_only_tokens:
+                with self.subTest(path=path.name, token=token):
+                    for line in text.splitlines():
+                        if token in line:
+                            self.assertRegex(line, r"\b(do not|must not)\b")
+
     def test_manual_issue_reshape_requires_work_unit_v1_fields_without_audit_aliases(self) -> None:
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
 

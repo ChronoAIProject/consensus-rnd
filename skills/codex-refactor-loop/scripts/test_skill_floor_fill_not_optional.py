@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source-regression: SKILL.md Concurrency Floor 段必须明文 in-flight 不算 actionable marker."""
+"""Source-regression tests for the SKILL.md Concurrency Floor contract."""
 
 from __future__ import annotations
 
@@ -32,30 +32,48 @@ class FloorFillNotOptionalTests(unittest.TestCase):
         self.assertIn(
             "Refactor (iter4/skill-floor-fill-not-optional)",
             self.section,
-            "Refactor self-doc block missing — 2026-05-26 maintainer-directive 落地需保留",
+            "Refactor self-doc block must remain present",
         )
 
     def test_actionable_marker_bounded_by_exit_zero(self) -> None:
         self.assertRegex(
             self.section,
             r"Actionable marker.*EXIT=0",
-            "Concurrency Floor 段必须把 actionable marker 绑到 EXIT=0,防止 in-flight 被误当 actionable",
+            "Concurrency Floor must bind actionable markers to EXIT=0",
         )
 
     def test_in_flight_codex_explicitly_not_actionable(self) -> None:
         self.assertIn("in-flight codex", self.section)
-        self.assertIn("不是 actionable marker", self.section)
+        self.assertRegex(self.section, r"in-flight codex.*actionable marker")
 
-    def test_default_action_envsubst_audit(self) -> None:
+    def test_guarded_audit_fallback_before_fixed_point(self) -> None:
         for required in ("envsubst", "audit-iter-N", "harness background task"):
+            with self.subTest(required=required):
+                self.assertIn(required, self.section)
+        self.assertIn("Ordinary audit fallback is valid only before", self.section)
+        self.assertIn("latest controller-validated audit", self.section)
+
+    def test_none_zero_stops_fabricated_audit_and_surfaces_low_floor(self) -> None:
+        for required in (
+            "AUDIT_DONE:none:0",
+            "controller-validated",
+            "CONCURRENCY_LOW:no-work-after-audit-none",
+            "do not fabricate",
+        ):
             with self.subTest(required=required):
                 self.assertIn(required, self.section)
 
     def test_rationalization_wording_blocked(self) -> None:
-        # 维护者实证识别的 typical defer wording 必须显式列入禁止集
-        for phrase in ("派 audit 重", "target stale", "等 cascade", "和已有工作冲突"):
+        # Typical defer wording must stay explicitly blocked before the fixed point.
+        blocked_phrases = (
+            "\u6d3e audit \u91cd",
+            "target stale",
+            "\u7b49 cascade",
+            "\u548c\u5df2\u6709\u5de5\u4f5c\u51b2\u7a81",
+        )
+        for phrase in blocked_phrases:
             with self.subTest(phrase=phrase):
-                self.assertIn(phrase, self.section, f"防御 wording 缺失: {phrase}")
+                self.assertIn(phrase, self.section, f"Missing blocked wording: {phrase}")
 
 
 if __name__ == "__main__":
