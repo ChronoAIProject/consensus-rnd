@@ -457,11 +457,37 @@ class Phase9Router:
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
         )
 
+    # Refactor (iter5/issue-85-stalled-reflector-template):
+    #   Old pattern: generic 3-line fallback reflector prompt(无 template body / 无 solver evidence)
+    #   New principle: 嵌入完整 meta-reflector-stalled.md template + 9 个 solver log path evidence;
+    #                  template 缺失 fail closed(显式 missing-template prompt 含 META_RESOLVED:escalate-human)
     def _reflector_prompt(self, marker: Marker) -> str:
+        template = self._stalled_reflector_template()
+        evidence_lines = "\n".join(self._stalled_evidence_lines(marker.issue, marker.round))
         return (
             f"# Phase 9 stalled reflector\n\nIssue: #{marker.issue}\nRound: {marker.round}\n"
-            f"Stalled marker: {marker.marker}\n\nReflect on the convergence failure and emit META_RESOLVED.\n"
+            f"Stalled marker: {marker.marker}\n\n"
+            f"## Solver log evidence\n\n{evidence_lines}\n\n"
+            f"## Stalled reflector template\n\n{template}\n"
         )
+
+    def _stalled_reflector_template(self) -> str:
+        template_path = Path(__file__).resolve().parents[1] / "prompts" / "meta-reflector-stalled.md"
+        try:
+            return template_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            return (
+                f"FATAL: missing stalled reflector template: {template_path}\n"
+                f"Reason: {exc}\n"
+                "Do not infer a fallback route. Emit META_RESOLVED:escalate-human:missing-stalled-reflector-template\n"
+            )
+
+    def _stalled_evidence_lines(self, issue: str, round_no: int) -> list[str]:
+        lines = []
+        for r in range(round_no - 2, round_no + 1):
+            for role in ROLES:
+                lines.append(f"- r{r} {role}: {self._log_path(issue, r, role)}")
+        return lines
 
     def _log_path(self, issue: str, round_no: int, actor: str) -> Path:
         return self.logs_dir / f"phase9-issue{issue}-r{round_no}-{actor}.log"

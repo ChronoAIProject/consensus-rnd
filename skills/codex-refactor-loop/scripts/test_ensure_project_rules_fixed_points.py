@@ -1441,7 +1441,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
             "META_RESOLVED:escalate-human",
             "maintainer already authorized",
             ".refactor-loop/runs/maintainer-directives/",
-            "META_RESOLVED:re-design:reframe-with-maintainer-directive",
+            "META_RESOLVED:re-design:<reason>",
             "apply_human_label_or_skip",
         ):
             with self.subTest(token=token):
@@ -1454,22 +1454,26 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         prompt = self.read_rel("skills/codex-refactor-loop/prompts/meta-reflector-stalled.md")
 
         for token in (
+            "## Priority 0: mandatory no-framing drop",
             "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
-            "META_RESOLVED:drop:no-actionable-framing-after-N-rounds",
+            "must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`",
             "no-actionable-framing",
             "phase9-no-framing",
             "false-positive/wontfix cases and for phase9-no-framing cases",
             "Do not use `drop` to bypass architect/quality rejects",
+            "Do not route to re-design unless you can cite",
             "escalate-human 仍是 maintainer physical intervention 唯一出口",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
 
         self.assertLess(
-            prompt.index("Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?"),
+            prompt.index("## Priority 0: mandatory no-framing drop"),
             prompt.index("If any of answers 1-3 is yes"),
         )
         self.assertIn("If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.", prompt)
+        old_directive_marker = "META_RESOLVED:re-design:" + "reframe-with-maintainer-" + "directive"
+        self.assertNotIn(old_directive_marker, prompt)
 
     def test_meta_reflector_phase9_no_framing_evidence_routes_to_drop(self) -> None:
         # Refactor (iter210/reflector-third-escape-route):
@@ -1492,6 +1496,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
             token in prompt
             for token in (
                 "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
+                "must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`",
                 "there is no maintainer input",
                 "no distinct solvable framing remains",
                 "If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.",
@@ -1507,7 +1512,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         ):
             route = f"META_RESOLVED:drop:no-actionable-framing-after-{evidence['convergence_round']}-rounds"
         else:
-            route = "META_RESOLVED:re-design:reframe-with-maintainer-directive"
+            route = "META_RESOLVED:re-design:concrete-new-framing"
 
         self.assertEqual(route, "META_RESOLVED:drop:no-actionable-framing-after-4-rounds")
         self.assertNotIn("META_RESOLVED:re-design", route)

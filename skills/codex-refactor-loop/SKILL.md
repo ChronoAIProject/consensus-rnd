@@ -242,9 +242,9 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `phase9_router_daemon.py`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
 | `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap; this route may be executed directly by `phase9_router_daemon.py`. |
-| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; do not label human directly; this route may be executed directly by `phase9_router_daemon.py`. |
+| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `phase9_router_daemon.py`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
-| `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 with new framing. |
+| `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
 | `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` and post reason banner if not skipped by maintainer-directive. |
