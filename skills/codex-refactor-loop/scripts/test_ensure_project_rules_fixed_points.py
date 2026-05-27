@@ -1298,6 +1298,30 @@ class HumanLabelSemanticsTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
 
+    def test_meta_reflector_prompt_has_phase9_no_framing_drop_route(self) -> None:
+        # Refactor (iter210/reflector-third-escape-route):
+        #   Old pattern: stalled Phase 9 with unchanged solver text could only re-design toward a missing directive artifact.
+        #   New principle: source-regression keeps phase9-no-framing mapped to drop while escalate-human remains physical intervention only.
+        prompt = self.read_rel("skills/codex-refactor-loop/prompts/meta-reflector-stalled.md")
+
+        for token in (
+            "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
+            "META_RESOLVED:drop:no-actionable-framing-after-N-rounds",
+            "no-actionable-framing",
+            "phase9-no-framing",
+            "false-positive/wontfix cases and for phase9-no-framing cases",
+            "Do not use `drop` to bypass architect/quality rejects",
+            "escalate-human 仍是 maintainer physical intervention 唯一出口",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, prompt)
+
+        self.assertLess(
+            prompt.index("Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?"),
+            prompt.index("If any of answers 1-3 is yes"),
+        )
+        self.assertIn("If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.", prompt)
+
     def test_no_active_script_unconditionally_applies_human_label(self) -> None:
         scripts = [
             path
