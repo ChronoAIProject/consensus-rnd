@@ -32,7 +32,7 @@
 - **边界清晰,职责分层**:本文件承载**跨 skill 边界**与**仓库级宪法约束**;单个 skill 的工作流细则、术语定义、当前状态归该 skill 自维护,不复制回本文件。
 - **事实源唯一**:同一约束禁止在多处平行声明。版本号 → `.version-bump.json`;host 运行时事实 → `host.env`;skill 行为 → 该 skill 的 SKILL.md 与 `scripts/test_*.py`。
 - **抽象优先,行为契约**:skill 间通过 `host.env` + 文件 artifact + GitHub API 等稳定边界协作,不耦合彼此内部脚本;命名跟随职责,不泄露 runtime / 内部实现细节。
-- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority;授权来源必须 durable artifact + 仓库级文档双重锚定;通用授权、escape hatch、宽口径修宪一律视为设计未完成。
+- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority by default;授权来源必须 durable artifact + 仓库级文档双重锚定。#53 唯一 carveout 是 `IntegrationSyncDaemonV1` 在专用 integration worktree 内的 integration-branch git allowlist(`git fetch` / `rev-list` / `rev-parse` / `merge-base` / `reset --hard` / `rebase --rebase-merges` / `merge --ff-only|--no-ff` / `push HEAD:$INTEGRATION_BRANCH` / force-with-lease adoption),不得 commit worker diff、create/merge/close PR、开关 issue/PR/label、tag/release,不得作为 generic lifecycle actor;通用授权、escape hatch、宽口径修宪一律视为设计未完成。
 - **抽象一旦能被滥用即设计未完成**:允许绕过审查边界、merge gate、CLAUDE.md 修宪门槛的通用机制必须继续收窄。
 - **删除优先**:废弃 skill、deprecated wrapper、`*.bak/*.old/*.deprecated` 直接删除,不保留兼容空壳;历史由 git 与 CHANGELOG 保留。
 - **变更必须可验证**:行为约束必须落到机械验证手段(behavior test / source-regression test / 段落 lint);仅靠"agent 应该记得"承载的约束视为未落地。
@@ -57,7 +57,7 @@
 - **maintainer(人)**:产品/战略决策、治理级非可编码变更的授权、罕见手工 merge。
 - **agent(controller LLM)**:纯编排;长跑中读 daemon 维护的 counts / state / artifact,不重新自测。
 - **agent worker**(被派发的 codex / 其他 CLI 实例):承担所有思考密集工作 —— 实现、验证、修复、review、design solving。每个 worker 在隔离 worktree 内运行。
-- **daemon(`scripts/` 后台)**:可机械、状态确定的 controller 工作的实现载体。Daemon 是经共识授权的 narrow allowlist 例外,**不**持 lifecycle authority(不开关 issue/PR/label、不 commit/push/merge/tag/release publish)。
+- **daemon(`scripts/` 后台)**:可机械、状态确定的 controller 工作的实现载体。Daemon 是经共识授权的 narrow allowlist 例外,默认**不**持 lifecycle authority(不开关 issue/PR/label、不 commit/push/merge/tag/release publish);仅 #53 授权 `IntegrationSyncDaemonV1` 在专用 integration worktree 内执行 integration-branch git allowlist。Implement/fix worker 仍不得 commit、push、open PR、merge、close issue/PR。
 - **host 项目**:消费 skill 的下游项目。skill **无 host 项目改动权**:不修改 host 的 `.git` 配置 / CI 配置 / policy 文档;只在 `host.env` 暴露的 surface 上工作。host opt-in 缺失或为假时,所有相关 surface 静默 noop(`exit 0` + reason)。
 
 ## 新增 / 修改 skill
