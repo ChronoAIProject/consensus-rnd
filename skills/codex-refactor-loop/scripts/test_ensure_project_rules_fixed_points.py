@@ -769,6 +769,15 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
         self.assertIn("WAIT_EXPLICIT_APPROVAL", peek)
         self.assertIn("do not merge", peek)
 
+    def test_peek_finished_marker_detection_is_tail_scoped(self) -> None:
+        peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn('grep "^EXIT=" "$f"', peek)
+        self.assertIn('exit_line=$(tail -5 "$f" 2>/dev/null | grep -m1 "^EXIT=" || true)', peek)
+        self.assertIn('[ "$exit_line" != "EXIT=0" ] && continue', peek)
+        self.assertIn('tail -200 "$f"', peek)
+        self.assertNotIn("awk '/^EXIT=/{exit} {print}' \"$f\"", peek)
+
     def test_review_fix_blocks_only_on_reject(self) -> None:
         review_fix = (SKILL_ROOT / "prompts" / "review-fix.md").read_text(encoding="utf-8")
 

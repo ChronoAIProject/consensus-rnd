@@ -37,10 +37,11 @@ list_loop_codex() {
 MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"
 extract_terminal_marker() {
   local f="$1"
-  awk '/^EXIT=/{exit} {print}' "$f" 2>/dev/null |
+  tail -200 "$f" 2>/dev/null |
+    awk '{ line[NR]=$0 } /^EXIT=/{ last_exit=NR } END { limit=last_exit ? last_exit : NR + 1; for (i=1; i<limit; i++) print line[i] }' |
     grep -E "(${MARKER_RE}):" |
     sed -E 's/^[+[:space:]]+//; s/^.*(AUDIT_DONE:|AUDIT_INCOMPLETE:|IMPLEMENT_DONE:|IMPLEMENT_BLOCKED:|FIX_DONE:|FIX_BLOCKED:|REVIEW_DONE:|SOLVER_DONE:|META_JUDGE_DONE:|META_RESOLVED:|TEST_ADD_DONE:)/\1/' |
-    grep -vE '<reason>|<id>|<status>|<category>|<framing>|round-N|cluster-XXX' |
+    grep -vE '<reason>|<id>|<status>|<category>|<framing>|<short>|<verdict>|<role>|<summary>|<question>|<kind>|\{role\}|round-N|cluster-XXX|AUDIT_DONE:none:|AUDIT_INCOMPLETE:\*\)|META_RESOLVED:<kind>' |
     tail -1 |
     head -c 100
 }
@@ -113,9 +114,9 @@ echo ""
 echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
 find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
   base=$(basename "$f" .log)
-  # Skip in-progress (no EXIT line)
-  exit_line=$(grep "^EXIT=" "$f" 2>/dev/null | tail -1)
-  [ -z "$exit_line" ] && continue
+  # Skip in-progress and failed runs; terminal status is authoritative only in the tail.
+  exit_line=$(tail -5 "$f" 2>/dev/null | grep -m1 "^EXIT=" || true)
+  [ "$exit_line" != "EXIT=0" ] && continue
   marker=$(extract_terminal_marker "$f")
   [ -z "$marker" ] && continue
   # Routing hint
