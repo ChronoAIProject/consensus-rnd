@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -152,6 +152,55 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
         self.write_request({"expected_remote_sha": "old-sha"})
         self.self_assert_rejected("stale expected_remote_sha")
 
+    def test_apply_integration_sync_request_falls_back_to_no_ff_when_ff_only_fails(self) -> None:
+        self.write_request({"kind": "forward-sync-review-base"})
+
+        def ff_fails_no_ff_succeeds(cmd: list[str], cwd: Path, check: bool = False):
+            if cmd[:3] == ["git", "merge", "--ff-only"]:
+                self.commands.append(cmd)
+                return subprocess.CompletedProcess(cmd, 1, "", "not possible to fast-forward\n")
+            return self.fake_run(cmd, cwd, check)
+
+        with patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev", "REVIEW_BASE_BRANCH": "dev"}, clear=False):
+            with patch.object(apply_integration_sync_request, "run", ff_fails_no_ff_succeeds):
+                self.assertEqual(apply_integration_sync_request.apply_request(self.request_path, repo=self.repo, worktree=self.worktree), 0)
+
+        self.assertIn(["git", "merge", "--ff-only", "origin/dev"], self.commands)
+        self.assertIn(
+            [
+                "git",
+                "merge",
+                "--no-ff",
+                "-m",
+                "Sync auto-refact-dev with dev (controller apply)",
+                "origin/dev",
+            ],
+            self.commands,
+        )
+        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], self.commands)
+
+    def test_apply_integration_sync_request_skips_when_replay_n_is_zero(self) -> None:
+        self.write_request({"kind": "adopt-merged-rollup", "old_rollup_head": "old-head", "old_rollup_ahead_count": 0})
+
+        def zero_replay(cmd: list[str], cwd: Path, check: bool = False):
+            self.commands.append(cmd)
+            if cmd[:3] == ["git", "rev-list", "--count"]:
+                return subprocess.CompletedProcess(cmd, 0, "0\n", "")
+            return self.fake_run(cmd, cwd, check)
+
+        with patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev", "REVIEW_BASE_BRANCH": "dev"}, clear=False):
+            with patch.object(apply_integration_sync_request, "run", zero_replay):
+                self.assertEqual(apply_integration_sync_request.apply_request(self.request_path, repo=self.repo, worktree=self.worktree), 0)
+
+        self.assertIn(["git", "rev-list", "--count", "old-head..origin/auto-refact-dev"], self.commands)
+        self.assertIn(["git", "reset", "--hard", "origin/dev"], self.commands)
+        self.assertNotIn(["git", "reset", "--hard", "origin/auto-refact-dev"], self.commands)
+        self.assertNotIn(["git", "rebase", "--rebase-merges", "--onto", "origin/dev", "old-head"], self.commands)
+        self.assertIn(
+            ["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"],
+            self.commands,
+        )
+
     def test_rejects_branch_mismatch(self) -> None:
         self.write_request({"integration_branch": "other"})
         self.self_assert_rejected("branch mismatch")
@@ -290,6 +339,29 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=["auto-loop"])
         with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
             self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="accept"), 2)
+
+    def test_apply_triage_decision_rejects_path_traversal_and_does_not_mutate_github(self) -> None:
+        self.write_decision(comment_artifact_path="../../../etc/passwd")
+        mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
+
+        with patch.object(apply_triage_decision, "run_gh", mock_gh):
+            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+
+        rejected = self.repo / ".refactor-loop" / "runs" / "triage-decisions-applied" / f"{self.decision_path.stem}.rejected.json"
+        self.assertIn("artifact path outside repo", rejected.read_text(encoding="utf-8"))
+        self.assertEqual(mock_gh.call_count, 0)
+
+    def test_apply_triage_decision_rejects_missing_final_sentinel_and_does_not_mutate_github(self) -> None:
+        (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text("comment without sentinel\n", encoding="utf-8")
+        mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
+
+        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+            with patch.object(apply_triage_decision, "run_gh", mock_gh):
+                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+
+        rejected = self.repo / ".refactor-loop" / "runs" / "triage-decisions-applied" / f"{self.decision_path.stem}.rejected.json"
+        self.assertIn("comment artifact missing final sentinel", rejected.read_text(encoding="utf-8"))
+        self.assertEqual(mock_gh.call_count, 0)
 
     def test_schema_rejects_close_and_command_like_fields(self) -> None:
         self.write_decision(close=True)
