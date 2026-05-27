@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# Refactor (iter5/cluster-issue66-skill-degradation):
+# Old: no standalone watchdog, no DegradationCheck protocol, no plugin registry,
+# and no GitHub auto-open surface.
+# New: keep a single-file static drift checker; reuse the existing CI workflow,
+# concurrency_monitor's throttled hook, and peek's read-only surface; keep the
+# forbidden runtime/surface set explicit.
 """Static degradation checks for the codex-refactor-loop skill.
 
 SkillDegradationWatchV1 is intentionally a single read-only checker. It has no

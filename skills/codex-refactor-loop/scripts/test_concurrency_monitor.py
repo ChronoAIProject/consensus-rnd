@@ -311,6 +311,39 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertFalse((self.repo / "skills").exists())
         self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
 
+    def test_maybe_run_skill_degradation_watch_emits_alert_on_timeout(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
+        self.monitor = importlib.reload(self.monitor)
+        state: dict[str, object] = {}
+        timeout = self.monitor.subprocess.TimeoutExpired(cmd=["checker"], timeout=7)
+
+        with mock.patch.object(self.monitor, "run_skill_degradation_check", side_effect=timeout):
+            self.monitor.maybe_run_skill_degradation_watch(state)
+
+        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert checker-error", alert)
+        self.assertIn('"error": "timeout after 7s"', alert)
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log", events)
+
+    def test_maybe_run_skill_degradation_watch_emits_alert_on_generic_exception(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
+        self.monitor = importlib.reload(self.monitor)
+        state: dict[str, object] = {}
+
+        with mock.patch.object(
+            self.monitor,
+            "run_skill_degradation_check",
+            side_effect=RuntimeError("checker crashed"),
+        ):
+            self.monitor.maybe_run_skill_degradation_watch(state)
+
+        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert checker-error", alert)
+        self.assertIn("\"error\": \"RuntimeError('checker crashed')\"", alert)
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log", events)
+
     def test_degradation_hook_is_throttled(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
         self.monitor = importlib.reload(self.monitor)

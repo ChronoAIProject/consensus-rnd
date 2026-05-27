@@ -328,6 +328,12 @@ def write_pending_event(event: str) -> None:
         f.write(f"{utc_ts()} {event}\n")
 
 
+# Refactor (iter5/cluster-issue66-skill-degradation):
+# Old: no standalone watchdog, no DegradationCheck protocol, no plugin registry,
+# and no GitHub auto-open path.
+# New: runtime monitoring stays a concurrency_monitor throttled hook that calls
+# the single-file static checker and emits local alerts only; it is not an
+# independent watchdog.
 def degradation_watch_interval_seconds() -> int:
     raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "0")
     try:
