@@ -153,7 +153,6 @@ def write_live_state(repo: Path) -> None:
         "codex-progress-reporter.sh",
         "comment-monitor.sh",
         "dev_sync_daemon.py",
-        "triage-monitor.sh",
         "phase9_router_daemon.py",
     )})
     write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
@@ -520,7 +519,6 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                 "codex-progress-reporter.sh",
                 "comment-monitor.sh",
                 "dev_sync_daemon.py",
-                "triage-monitor.sh",
                 "phase9_router_daemon.py",
             )})
             write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})

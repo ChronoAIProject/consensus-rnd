@@ -189,4 +189,4 @@ start_daemon "concurrency_monitor" "python3 '$SKILL_ROOT/scripts/concurrency_mon
 start_daemon "comment-monitor" "bash '$SKILL_ROOT/scripts/comment-monitor.sh'"
 start_daemon "codex-progress-reporter" "INTERVAL=600 bash '$SKILL_ROOT/scripts/codex-progress-reporter.sh'"
 start_daemon "dev_sync_daemon" "python3 '$SKILL_ROOT/scripts/dev_sync_daemon.py'"
-start_daemon "triage-monitor" "bash '$SKILL_ROOT/scripts/triage-monitor.sh'"
+start_daemon "phase9_router_daemon" "python3 '$SKILL_ROOT/scripts/phase9_router_daemon.py'"

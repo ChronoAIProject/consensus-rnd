@@ -145,7 +145,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "comment-monitor",
             "codex-progress-reporter",
             "dev_sync_daemon",
-            "triage-monitor",
+            "phase9_router_daemon",
         )
         for token in required:
             with self.subTest(token=token):
