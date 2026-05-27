@@ -2,8 +2,12 @@
 """
 post_banner.py — 只 post GitHub status banner,不 spawn codex
 
-spawn_with_banner.py 的 detached Popen 模式让 harness 看不见 codex,导致
-codex done 后 controller 不知道,monitor 60s 报警但 controller 没有即时处理。
+自定义 detached Popen spawn 会让 harness 看不见 codex,导致 codex done 后
+controller 不知道,monitor 60s 报警但 controller 没有即时处理。
+
+Refactor (iter209/cluster-209-004-tombstone-cleanup):
+  Old pattern: Deprecated executable tombstone remains as a checked-in production script and the reference preserves a historical tombstone note.
+  New principle: Deprecated wrapper/tombstone files and historical policy stubs are deleted; active docs point directly at the supported replacement (post_banner.py + harness-tracked spawn-codex.sh).
 
 新架构:**两步**
 1. 此脚本(blocking,几秒)post banner 到 issue/PR

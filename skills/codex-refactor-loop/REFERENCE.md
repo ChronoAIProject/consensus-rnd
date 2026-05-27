@@ -396,7 +396,7 @@ rollup PR:
      --prompt <prompt-file> --log <log-file> --stall 5400
    ```
 
-**反模式(❌ controller 主链路禁用)`spawn_with_banner.py + Popen 自 detach`**:
+**反模式(❌ controller 主链路禁用)自定义 `Popen` detach spawn**:
 - 用 `Popen + start_new_session` 把 codex 脱离 python parent → harness 看不见 codex
 - 结果:codex done 1-13 分钟后 controller 才在下次 ScheduleWakeup 时才发现(0 codex 期间监控告警但 controller 在睡)
 - detached spawn 会让 harness 失去追踪,曾导致 codex 完成后 controller 长时间未醒,monitor 连续告警但无人处理。
@@ -1160,8 +1160,6 @@ EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation
 - 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`
 - controller 只读 log 末尾 marker,**不读 body**
-
-Historical tombstone: the old `prompts/github-post-writer.md` dedicated writer-codex flow is intentionally absent; do not recreate or route active policy through it.
 
 Rationale: 减少一跳 + 减少 controller 上下文负担 + 写 post 的 codex 本身就是最了解 artifact 的人,质量比 "翻译者" 更高。controller 边界仍是 git topology(commit/push/checkout)+ PR/issue 创建/merge/close lifecycle 决策,这些 codex 不动(per `_github-post-rules.md` "你不能调的" 列表)。
 
