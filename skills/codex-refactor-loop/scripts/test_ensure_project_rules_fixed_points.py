@@ -1997,6 +1997,49 @@ class HumanLabelSemanticsTests(unittest.TestCase):
 
         self.assertEqual(offenders, [])
 
+    def test_human_escalation_shortcut_text_is_forbidden(self) -> None:
+        checked = [
+            REPO_ROOT / "skills/codex-refactor-loop/scripts/peek.sh",
+            REPO_ROOT / "skills/codex-refactor-loop/prompts/review-fix.md",
+            REPO_ROOT / "skills/codex-refactor-loop/REFERENCE.md",
+        ]
+        checked_lines = [
+            f"{path.relative_to(REPO_ROOT)}:{line_no}:{line}"
+            for path in checked
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
+        ]
+        combined = "\n".join(checked_lines)
+
+        forbidden_patterns = (
+            re.compile(r"escalate:philosophy.*label.*human", re.IGNORECASE),
+            re.compile(r"FIX_BLOCKED.*" + "escalate " + "human", re.IGNORECASE),
+            re.compile("controller will " + "escalate to " + "human", re.IGNORECASE),
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern.pattern):
+                self.assertIsNone(pattern.search(combined))
+
+        self.assertIn("META_RESOLVED:escalate-human", combined)
+        self.assertIn("controller routes to reflector/meta-layer", combined)
+
+    def test_human_label_helper_requires_meta_resolved_source_marker(self) -> None:
+        controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
+        helper_start = controller_lib.index("apply_human_label_or_skip()")
+        helper_end = controller_lib.index("\n}\n\n# Substitute", helper_start)
+        helper_body = controller_lib[helper_start:helper_end]
+
+        for token in (
+            "source_marker",
+            "HUMAN_LABEL_SOURCE_MARKER",
+            "META_RESOLVED:escalate-human:*)",
+            "ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source",
+            "return 2",
+            "gh pr edit",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, helper_body)
+        self.assertNotIn("gh issue edit", helper_body)
+
     def test_maintainer_directive_artifact_pattern_documented(self) -> None:
         reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
 

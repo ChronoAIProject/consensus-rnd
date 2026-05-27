@@ -1321,7 +1321,7 @@ When reviewer evidence conflicts with maintainer prior session directive, encode
 
 If architect or quality rejects because the PR "needs Phase 9 artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Phase 9 path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Phase 9 with that directive as evidence. This is the Phase 9-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
-Controller label application must use `apply_human_label_or_skip <pr-number> <reason-or-topic>` from `controller_lib.sh`. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `controller_lib.sh`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
 ### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
 
@@ -1590,7 +1590,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
   - `re-design` → reset Phase 9 round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
-  - `escalate-human` → `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
+  - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not repeat a framing that prior rounds showed to be underspecified without adding new exact text/evidence; doing so counts toward stall detection.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -1947,7 +1947,7 @@ Controller 读 marker 后路由:
 - `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
-- `escalate-human` → `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
+- `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
 
 ### 反面(❌ 禁止)
 
