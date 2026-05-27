@@ -457,6 +457,10 @@ class Phase9Router:
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
         )
 
+    # Refactor (iter5/issue-85-stalled-reflector-template):
+    #   Old pattern: generic 3-line fallback reflector prompt(无 template body / 无 solver evidence)
+    #   New principle: 嵌入完整 meta-reflector-stalled.md template + 9 个 solver log path evidence;
+    #                  template 缺失 fail closed(显式 missing-template prompt 含 META_RESOLVED:escalate-human)
     def _reflector_prompt(self, marker: Marker) -> str:
         template = self._stalled_reflector_template()
         evidence_lines = "\n".join(self._stalled_evidence_lines(marker.issue, marker.round))
