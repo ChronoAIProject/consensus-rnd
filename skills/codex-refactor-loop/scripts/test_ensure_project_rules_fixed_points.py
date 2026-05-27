@@ -2548,6 +2548,39 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIsNone(re.search(r"\.proto\b", prompt_text))
 
 
+class Phase9RouterMarkerTailOnlySourceRegressionTests(unittest.TestCase):
+    """Phase 9 router daemon must scope marker parsing to log tail only."""
+
+    DAEMON_PATH = SKILL_ROOT / "scripts" / "phase9_router_daemon.py"
+
+    def test_collect_markers_uses_tail_only_with_constant(self) -> None:
+        src = self.DAEMON_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "Refactor (iter5/skill-marker-tail-only-scope)",
+            src,
+            "tail-only refactor self-documentation must remain attached",
+        )
+        self.assertIn("MARKER_TAIL_LINES", src,
+                      "tail-only constant must remain named")
+        # Both marker-parsing helpers must slice to tail (_collect_markers AND
+        # _collect_markers_from_path, the latter feeding _stalled_predicate_holds).
+        self.assertGreaterEqual(
+            src.count("self.MARKER_TAIL_LINES"),
+            2,
+            "tail-only slice must apply to both _collect_markers and _collect_markers_from_path",
+        )
+        self.assertNotIn(
+            'for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():',
+            src,
+            "_collect_markers must not iterate the entire log body",
+        )
+        self.assertNotIn(
+            'for line in path.read_text(encoding="utf-8", errors="replace").splitlines():',
+            src,
+            "_collect_markers_from_path must not iterate the entire log body",
+        )
+
+
 class Phase9RouterConvergeGuardSourceRegressionTests(unittest.TestCase):
     """Phase 9 router daemon must enforce judge-only source + monotonic round on converge dispatch."""
 

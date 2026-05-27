@@ -158,6 +158,75 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
 
+    def test_phase9_router_marker_tail_only_ignores_body_echo(self) -> None:
+        # Refactor (iter5/skill-marker-tail-only-scope):
+        # codex worker logs that echo prompt-body / grep-output / test-fixture
+        # marker text in the body (not tail) must NOT trigger dispatch.
+        # Negative path: body echo targets round-9 (distinct from tail's
+        # round-3). On the old broken implementation this would dispatch
+        # 90-9-* solvers; on the fixed implementation only 90-3-* appear.
+        path = self.repo / ".refactor-loop" / "logs" / "phase9-issue90-r2-judge.log"
+        body_pad = "\n".join(f"discussion line {i}" for i in range(60))
+        body_echo = (
+            "skills/codex-refactor-loop/scripts/test_phase9_router_daemon.py:171: "
+            '"META_JUDGE_DONE:converge:round-9:body-echo-from-test-fixture",'
+        )
+        actual_tail = "META_JUDGE_DONE:converge:round-3:real-tail-verdict"
+        path.write_text(
+            "\n".join([body_pad, body_echo, body_pad, actual_tail, "EXIT=0", ""]),
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        for forbidden_key in ("90-9-minimal", "90-9-structural", "90-9-delete"):
+            self.assertNotIn(forbidden_key, ledger_keys,
+                             "body-position round-9 echo must not dispatch round-9 solvers")
+        for command in self.commands:
+            joined = " ".join(command)
+            self.assertNotIn("phase9-issue90-r9-", joined,
+                             "no command may target round-9 (body echo)")
+            self.assertNotIn("body-echo-from-test-fixture", joined)
+        for key in ("90-3-minimal", "90-3-structural", "90-3-delete"):
+            self.assertIn(key, ledger_keys,
+                          "real tail verdict (round-3) must still spawn next round")
+
+    def test_phase9_router_stalled_predicate_uses_tail_only(self) -> None:
+        # Refactor (iter5/skill-marker-tail-only-scope):
+        # _stalled_predicate_holds must also scope to log tail so body-only
+        # SOLVER_DONE echoes cannot satisfy the stalled predicate.
+        body_pad_lines = [f"discussion line {i}" for i in range(60)]
+        for round_no in (1, 2, 3):
+            for role in ("minimal", "structural", "delete"):
+                body_echo = (
+                    "skills/codex-refactor-loop/scripts/grep_output_quote.txt: "
+                    f"SOLVER_DONE:{role}:same:body-echo-not-real-verdict"
+                )
+                self.write_log(
+                    f"phase9-issue91-r{round_no}-{role}.log",
+                    *body_pad_lines,
+                    body_echo,
+                    *body_pad_lines,
+                    "non-verdict tail line",
+                )
+        self.write_ledger_key("91-1-judge")
+        self.write_ledger_key("91-2-judge")
+        self.write_log(
+            "phase9-issue91-r3-judge.log",
+            "META_JUDGE_DONE:escalate:stalled:no-change",
+        )
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue91-r3-reflector.log" in " ".join(command)
+        ]
+        self.assertEqual(reflector_commands, [],
+                         "body-only SOLVER_DONE echoes must not satisfy stalled predicate")
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        self.assertNotIn("91-3-reflector", ledger_keys)
+
     def test_phase9_router_converge_ignores_non_judge_source_logs(self) -> None:
         # Refactor (iter5/skill-converge-source-and-monotonic-guard):
         # solver logs echoing a converge marker (e.g. from prompt body or codex
