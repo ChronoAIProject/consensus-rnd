@@ -1298,6 +1298,72 @@ class HumanLabelSemanticsTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
 
+    def test_meta_reflector_prompt_has_phase9_no_framing_drop_route(self) -> None:
+        # Refactor (iter210/reflector-third-escape-route):
+        #   Old pattern: stalled Phase 9 with unchanged solver text could only re-design toward a missing directive artifact.
+        #   New principle: source-regression keeps phase9-no-framing mapped to drop while escalate-human remains physical intervention only.
+        prompt = self.read_rel("skills/codex-refactor-loop/prompts/meta-reflector-stalled.md")
+
+        for token in (
+            "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
+            "META_RESOLVED:drop:no-actionable-framing-after-N-rounds",
+            "no-actionable-framing",
+            "phase9-no-framing",
+            "false-positive/wontfix cases and for phase9-no-framing cases",
+            "Do not use `drop` to bypass architect/quality rejects",
+            "escalate-human 仍是 maintainer physical intervention 唯一出口",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, prompt)
+
+        self.assertLess(
+            prompt.index("Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?"),
+            prompt.index("If any of answers 1-3 is yes"),
+        )
+        self.assertIn("If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.", prompt)
+
+    def test_meta_reflector_phase9_no_framing_evidence_routes_to_drop(self) -> None:
+        # Refactor (iter210/reflector-third-escape-route):
+        #   Old pattern: behavior for unchanged Phase 9 stall evidence still fell through to re-design/escalate-human.
+        #   New principle: representative no-framing evidence maps to drop, not another human/directive loop.
+        prompt = self.read_rel("skills/codex-refactor-loop/prompts/meta-reflector-stalled.md")
+        evidence = {
+            "convergence_round": 4,
+            "solver_verdict_texts": [
+                "no solvable framing remains; delete is unsafe, minimal is not actionable, structural has no concrete boundary",
+                "no solvable framing remains; delete is unsafe, minimal is not actionable, structural has no concrete boundary",
+                "no solvable framing remains; delete is unsafe, minimal is not actionable, structural has no concrete boundary",
+            ],
+            "maintainer_input_since_last_round": False,
+            "distinct_solvable_framing": False,
+        }
+
+        unchanged_solver_text = len(set(evidence["solver_verdict_texts"])) == 1
+        prompt_authorizes_no_framing_drop = all(
+            token in prompt
+            for token in (
+                "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
+                "there is no maintainer input",
+                "no distinct solvable framing remains",
+                "If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.",
+            )
+        )
+
+        if (
+            prompt_authorizes_no_framing_drop
+            and evidence["convergence_round"] >= 3
+            and unchanged_solver_text
+            and not evidence["maintainer_input_since_last_round"]
+            and not evidence["distinct_solvable_framing"]
+        ):
+            route = f"META_RESOLVED:drop:no-actionable-framing-after-{evidence['convergence_round']}-rounds"
+        else:
+            route = "META_RESOLVED:re-design:reframe-with-maintainer-directive"
+
+        self.assertEqual(route, "META_RESOLVED:drop:no-actionable-framing-after-4-rounds")
+        self.assertNotIn("META_RESOLVED:re-design", route)
+        self.assertNotIn("META_RESOLVED:escalate-human", route)
+
     def test_no_active_script_unconditionally_applies_human_label(self) -> None:
         scripts = [
             path
