@@ -757,8 +757,8 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
     def test_peek_uses_option_a_threshold(self) -> None:
         peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
 
-        self.assertIn('hint="→ latest complete reviewer round: reject=0 + approve>=1 => merge; all-comment => WAIT_EXPLICIT_APPROVAL"', peek)
         self.assertIn('if [ "$reject" = "0" ] && [ "$approve" -ge 1 ]; then', peek)
+        self.assertIn("MERGE_READY approve=${approve} comment=${comment} reject=0", peek)
         self.assertNotIn('"$approve" -ge 2', peek)
         self.assertNotIn("≥2 approve", peek)
 
@@ -1322,7 +1322,8 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
     def test_peek_hints_do_not_recommend_emergency_human_label(self) -> None:
         peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
 
-        self.assertIn('META_RESOLVED:escalate-human:*) hint="→ label 👤 + reason banner + push notify" ;;', peek)
+        self.assertNotIn("META_RESOLVED:escalate-human:*)", peek)
+        self.assertNotIn("reason banner + push notify", peek)
         self.assertNotIn("label 🆘 + push notify", peek)
 
         for line in peek.splitlines():
@@ -1333,6 +1334,28 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
                         or "lstrip().startswith(('## 📊', '## 🤖', '## ✅', '## 🆘'))" in line
                         or "Old: 四个 Human label(含两个 🆘)" in line
                     )
+
+    def test_peek_is_status_lens_not_generic_route_projector(self) -> None:
+        peek = (SKILL_ROOT / "scripts" / "peek.sh").read_text(encoding="utf-8")
+
+        for forbidden in (
+            "MARKER_RE=",
+            "extract_terminal_marker",
+            'case "$marker"',
+            "SOLVER_DONE:*)",
+            "META_JUDGE_DONE:*)",
+            "AUDIT_DONE:*)",
+            "IMPLEMENT_DONE:*)",
+            "FIX_DONE:*)",
+            "TEST_ADD_DONE:*)",
+            "META_RESOLVED:*)",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, peek)
+
+        self.assertIn("REVIEW_MARKER_TAIL_LINES=30", peek)
+        self.assertIn("extract_review_verdict_tail", peek)
+        self.assertIn("REVIEW_DONE:${pr_num}:${role}:(approve|comment|reject)", peek)
 
 
 class HumanLabelSemanticsTests(unittest.TestCase):

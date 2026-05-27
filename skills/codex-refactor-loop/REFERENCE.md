@@ -225,12 +225,14 @@ gh issue view <N> --json comments --jq '
 
 减少人工 grep / parse 错误。一眼看全:
 - 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
-- 最近 60 min 完成 codex marker + 推荐下一步(按 SKILL route table)
 - Open auto-loop PR 的 CI + state
-- Monitor zero_streak 当前 / max
+- Merge readiness reviewer truth table status
+- Daemon health / monitor zero_streak 当前 / max
+- Phase 9 router ledger 近 10 行
+- Pending events 近 10 行
 - Open auto-loop issue + phase label
 
-输出格式稳定,易于直接判断派什么。
+`peek.sh` 是 observability-only status lens,不显示 generic marker-to-route recommendation。Route authority remains SKILL Phase Routing + controller clean-exit log-tail sweep + `phase9_router_daemon.py`。
 
 <a id="wake-source-rules"></a>
 ## Wake source rules and no-gap details
