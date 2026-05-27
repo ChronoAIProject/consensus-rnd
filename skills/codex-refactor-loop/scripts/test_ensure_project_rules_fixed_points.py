@@ -2255,6 +2255,43 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("禁止** 裸 `nohup python3 <daemon> &`", reference_text)
         self.assertIn("不能用 `env $(grep ... host.env)`", host_env_text)
 
+    # Refactor (iter215/cluster-215-controller-process-selftest):
+    #   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
+    #   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
+    def test_controller_runbook_uses_daemon_state_not_process_probes_for_liveness(self) -> None:
+        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        controller_sections = {
+            "host-runtime": reference_text.split("### Daemon 启动(强制 pattern — 必须注入 host.env)", 1)[1].split(
+                "### Controller 主链路 wake 源不变量", 1
+            )[0],
+            "phase-0": reference_text.split("### 首次唤醒强制序列", 1)[1].split("#### ❌ 严禁", 1)[0],
+            "phase-6": reference_text.split("### Controller 每 wakeup 责任(只 verify daemon)", 1)[1].split("### Manual recovery", 1)[0],
+            "triage-daemon": reference_text.split("**Daemon 自包含**:", 1)[1].split("结构性教训:", 1)[0],
+        }
+
+        for name, section in controller_sections.items():
+            scan_text = "\n".join(
+                line
+                for line in section.splitlines()
+                if "Refactor (iter215/cluster-215-controller-process-selftest)" not in line
+                and "Old pattern:" not in line
+                and "New principle:" not in line
+            )
+            for forbidden in ("pgrep -f", "ps -ef | grep"):
+                with self.subTest(section=name, forbidden=forbidden):
+                    self.assertNotIn(forbidden, scan_text)
+
+        combined = "\n".join(controller_sections.values())
+        for required in (
+            "restart-daemons.sh",
+            "peek.sh",
+            "concurrency_monitor.py --count-only",
+            ".refactor-loop/heartbeats/*.ts",
+            ".refactor-loop/state/statusline-snapshot.json",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
     def test_label_taxonomy_matches_bootstrap_and_script_usage(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")

@@ -65,7 +65,11 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 
 **6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
 
-**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):每 wakeup `pgrep -f <daemon>` 应 = 1(`comment-monitor.sh` 偶显 2 是 script+内部子循环,正常)。重复 → `pkill -f <daemon>` 全清后按上面 pattern 重启 1 个,验 `pgrep` = 1。
+<!-- Refactor (iter215/cluster-215-controller-process-selftest):
+  Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
+  New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
+-->
+**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json`;任 heartbeat missing/malformed/stale `>90s` 时调用 `bash <skill-root>/scripts/restart-daemons.sh` 让 helper 内部维护 singleton + restart。`phase9_router_daemon.py` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
 
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
@@ -451,7 +455,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
-3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`,逐个 `pgrep -f <daemon>` 验 = 1。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `triage-monitor.sh` / `phase9_router_daemon.py`。随后运行 `bash <skill-root>/scripts/restart-daemons.sh` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `bash <skill-root>/scripts/peek.sh | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
@@ -942,11 +946,13 @@ Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.cont
 dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **phase9_router_daemon.py** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
-# Phase 6 现在 controller 只 verify daemon 健康
-ps -ef | grep dev-sync-daemon.sh | grep -v grep | wc -l  # 必须 >=1
-tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
+# Phase 6 现在 controller 只读 daemon-maintained health/log surface
+bash <skill-root>/scripts/restart-daemons.sh
+python3 <skill-root>/scripts/concurrency_monitor.py --count-only >/dev/null
+bash <skill-root>/scripts/peek.sh | tail -80
+tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
-若 daemon 死 → restart `nohup ... >> log 2>&1 & disown`。
+若 heartbeat stale/missing/malformed → 由 `restart-daemons.sh` 按 canonical wrapper 重启。
 若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。
 
 ### 反面(❌ 禁止)
@@ -954,7 +960,7 @@ tail -10 .refactor-loop/logs/dev-sync-daemon.log | grep -E "(DEV_SYNC_BLOCKED|FA
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
 - ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
-- ❌ 多 daemon 实例(`pgrep -c dev-sync-daemon` 必须 = 1)
+- ❌ controller 用 process probe 判断 daemon 单例;单例与 pid/kill 细节只属于 `restart-daemons.sh` / daemon 自身 helper 实现。
 
 ### Manual recovery
 
@@ -1013,7 +1019,7 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 - daemon 不依赖 controller 中转,无中间 event log
 - state 存 `.refactor-loop/triage-monitor-state.json` 防重复
 - 启动:`nohup bash -c 'source .refactor-loop/host.env && exec bash <skill-root>/scripts/triage-monitor.sh' >> .refactor-loop/logs/triage-monitor.log 2>&1 & disown`
-- Liveness:每 wakeup `ps -ef | grep triage-monitor.sh` 必须 ≥1,死了 restart
+- Liveness:每 wakeup 读 `.refactor-loop/heartbeats/triage-monitor.ts` / statusline snapshot;stale/missing/malformed 时调 `bash <skill-root>/scripts/restart-daemons.sh`
 - Codex 完成 marker:`TRIAGE_DONE:<issue>:<accept|reject>:<reason>`(写 issue 评论 + 切 label)
 - Controller 下次 wakeup 从 GitHub state derive(issue label 改了即看见)
 
