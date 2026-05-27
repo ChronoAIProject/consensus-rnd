@@ -420,12 +420,16 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         )
 
         result = self.run_controller_lib_harness(
-            'apply_triage_lifecycle_request 53; cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"',
+            'apply_triage_lifecycle_request 53; status=$?; '
+            'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
+            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
+            'exit "$status"',
             prelude=prelude,
         )
 
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 2)
         self.assertIn("TRIAGE_LIFECYCLE_PENDING:53:missing-final-sentinel", result.stdout)
+        self.assertNotIn("issue edit", result.stdout)
 
     def test_triage_lifecycle_helper_rejects_issue_mismatch_and_invalid_label_transition(self) -> None:
         cases = (
@@ -442,11 +446,108 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                     'REQ\n'
                 )
                 result = self.run_controller_lib_harness(
-                    'apply_triage_lifecycle_request 53; cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"',
+                    'apply_triage_lifecycle_request 53; status=$?; '
+                    'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
+                    'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
+                    'exit "$status"',
                     prelude=prelude,
                 )
-                self.assertEqual(result.returncode, 0)
+                self.assertEqual(result.returncode, 2)
                 self.assertIn(f"TRIAGE_LIFECYCLE_PENDING:53:{expected}", result.stdout)
+                self.assertNotIn("issue edit", result.stdout)
+
+    def assert_triage_lifecycle_guard(
+        self,
+        command: str,
+        expected_event: str,
+        *,
+        prelude: str = "",
+    ) -> None:
+        result = self.run_controller_lib_harness(
+            f'{command}; status=$?; '
+            'if [ -f "$GH_CALLS" ]; then cat "$GH_CALLS"; fi; '
+            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
+            'exit "$status"',
+            prelude=prelude,
+        )
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn(expected_event, result.stdout)
+        self.assertNotIn("issue edit", result.stdout)
+
+    def test_apply_triage_lifecycle_request_rejects_invalid_issue_number(self) -> None:
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request not-an-issue",
+            "TRIAGE_LIFECYCLE_PENDING:not-an-issue:invalid-issue-number",
+        )
+
+    def test_apply_triage_lifecycle_request_rejects_missing_artifact(self) -> None:
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request 53",
+            "TRIAGE_LIFECYCLE_PENDING:53:missing-artifact:.refactor-loop/runs/triage-issue-53.md",
+        )
+
+    def test_apply_triage_lifecycle_request_rejects_missing_sentinel_present_true(self) -> None:
+        prelude = (
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: false\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request 53",
+            "TRIAGE_LIFECYCLE_PENDING:53:sentinel-field-not-true",
+            prelude=prelude,
+        )
+
+    def test_apply_triage_lifecycle_request_rejects_invalid_accept_proposed_body_path(self) -> None:
+        prelude = (
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## Proposed issue body\nwork_unit_id: issue-53\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/not-triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request 53",
+            "TRIAGE_LIFECYCLE_PENDING:53:invalid-proposed-body-path:.refactor-loop/runs/not-triage-issue-53.md",
+            prelude=prelude,
+        )
+
+    def test_apply_triage_lifecycle_request_rejects_missing_proposed_body(self) -> None:
+        prelude = (
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## Proposed issue body\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request 53",
+            "TRIAGE_LIFECYCLE_PENDING:53:missing-proposed-body",
+            prelude=prelude,
+        )
+
+    def test_apply_triage_lifecycle_request_rejects_reject_with_non_empty_proposed_body(self) -> None:
+        prelude = (
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: reject-remove-triage\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        self.assert_triage_lifecycle_guard(
+            "apply_triage_lifecycle_request 53",
+            "TRIAGE_LIFECYCLE_PENDING:53:reject-proposed-body-must-be-empty",
+            prelude=prelude,
+        )
 
     def test_integration_sync_daemon_v1_release_rollup_exception_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
