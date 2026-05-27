@@ -116,6 +116,8 @@ echo "  ledger tail:"
 tail -10 .refactor-loop/phase9-router-ledger.jsonl 2>/dev/null | sed 's/^/    /' || true
 echo "  pending events tail:"
 tail -10 .refactor-loop/.controller-pending-events.log 2>/dev/null | sed 's/^/    /' || true
+echo "  Skill degradation alerts:"
+tail -n "${DEGRADATION_ALERT_TAIL_LINES:-10}" .refactor-loop/.degradation-alert.log 2>/dev/null | sed 's/^/    /' || true
 
 # 3. Open auto-loop PRs + state
 echo ""

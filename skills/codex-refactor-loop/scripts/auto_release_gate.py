@@ -253,7 +253,7 @@ class AutoReleaseGate:
                 signal["reason"] = f"{name}:{detail}"
 
     def required_checks_recent_green(self, since: datetime) -> dict[str, Any]:
-        required = ("contract-tests", "manifest-version-sync")
+        required = ("contract-tests", "manifest-version-sync", "skill-degradation")
         try:
             review_base = os.environ["REVIEW_BASE_BRANCH"].strip()
             integration = os.environ["INTEGRATION_BRANCH"].strip()

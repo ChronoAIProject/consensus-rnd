@@ -50,6 +50,13 @@ Semver bump is computed from `.refactor-loop/state/release-commits.json` entries
 
 dogfood 运行中固化的操作经验。host 注入的配置集中放 `$REPO_ROOT/.refactor-loop/host.env`(`export REPO_ROOT/GH_REPO_SLUG/INTEGRATION_BRANCH/REVIEW_BASE_BRANCH/BUILD_CMD/TEST_CMD/CI_GUARDS/SOURCE_GLOBS/MAINTAINER_WHITELIST` 等)。
 
+<a id="skill-degradation-watch-details"></a>
+### Skill degradation watch details
+`SkillDegradationWatchV1(per #66)` is authorized by `.refactor-loop/runs/phase9-issue66-r8-judge.md` and is intentionally delete-framed: no standalone watchdog, no seventh daemon, no `DegradationCheck` protocol, no plugin registry, no new event envelope, no auto-clean, no auto-fix, no GitHub lifecycle mutation, and no codex dispatch path.
+Static checker: `python3 skills/codex-refactor-loop/scripts/check_skill_degradation.py --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `auto_release_gate.py:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`, mirrored by `release.yml`. The checker is read-only and returns nonzero on missing named exception text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or missing runtime hook markers.
+Runtime hook: existing `concurrency_monitor.py`, no standalone daemon. `$DEGRADATION_WATCH_INTERVAL_SECONDS` controls throttle; unset or `0` disables and `host.env.example` opts in with `1800`. `$DEGRADATION_WATCH_TIMEOUT_SECONDS` defaults to `30`. Passing writes nothing; failing writes `.refactor-loop/.degradation-alert.log` and appends an existing-format pending event to `.refactor-loop/.controller-pending-events.log`.
+Alert formats: pending event `<UTC> skill-degradation-alert returncode=N log=.refactor-loop/.degradation-alert.log` or `<UTC> skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log`; alert log `[UTC] skill-degradation-alert <summary> | detail=<json>` with `returncode`, `stdout_tail`, `stderr_tail`, or `error`. `DEGRADATION_ALERT_TAIL_LINES` controls `peek.sh` display count for `.refactor-loop/.degradation-alert.log`, default `10`.
+Narrow allowlist: run `check_skill_degradation.py`, write `.refactor-loop/.degradation-alert.log`, append existing-format pending events, and expose read-only `peek.sh` status. Forbidden: no source mutation, git operations, GitHub issue/PR/body/label lifecycle mutation, codex dispatch, standalone daemon creation, WorkUnit/schema/envelope changes, protocol/plugin registry, auto-clean root garbage, and auto-fix API.
 ### Worktree 位置约定(强制)
 
 所有 daemon/codex/implement worktree 都在 `$REPO_ROOT/.worktrees/` 内,路径形如 `$REPO_ROOT/.worktrees/<name>/`。仓库根 `.gitignore` 必须包含 `/.worktrees/`,因此这些运行时 worktree 不进入发布产物。旧 sibling pattern `<repo>-wt-<name>/` 只作为历史兼容/清理线索出现,不得作为新 worktree 创建位置。
@@ -57,14 +64,11 @@ dogfood 运行中固化的操作经验。host 注入的配置集中放 `$REPO_RO
 ### Daemon 启动(强制 pattern — 必须注入 host.env)
 
 **禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD="cargo build --workspace"` 含空格 → `env` 把 `build` 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
-
 ```bash
 nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/<daemon>.py' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
-
 **6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration ← review_base 同步)、`triage-monitor.sh`(60s 外部 `auto-loop-triage` issue)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
-
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
@@ -83,16 +87,12 @@ controller 主链路**优先禁止**用 `( … ) & disown` / `nohup … &` / Bas
 - 每个 turn 结束**必须**有已确认的下次唤醒源:active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup 返回 `scheduled`。这是比"禁 detached"更本质的不变量。
 - daemon 自主动作可以 detached,但必须同时满足:prompt 落 `.refactor-loop/prompts/`,log 落 `.refactor-loop/logs/`,状态写 GitHub 或 pending event 可恢复,daemon 单例,并受 `peek.sh` / liveness 检查。
 - daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge.
-
 **反面(❌ 严禁)**:
 - ❌ detached codex 后发现没有 ScheduleWakeup,却 end turn。
 - ❌ 误以为 `concurrency_monitor.py` / progress reporter / comment monitor 单独会唤醒 controller。daemon **只写 alert 文件 / GitHub 评论 / pending event**;只有 mounted Monitor bridge 把 daemon event file 转成 controller wakeup 时,daemon events 才是 wake 源。
 - ❌ detached codex 已在跑,controller 为了"恢复追踪"直接 kill 并重派同任务。应让现有任务跑完,靠下次 wakeup sweep 接住。
-
 ### ScheduleWakeup 必须确认注册(强制)
-
 ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**兜底**,不是 daemon-event immediate lane。每次调用后**确认返回 `scheduled`**;若 malformed(如 `<invoke>` 漏 `antml:` 前缀)或未注册 → **立即重试**,绝不带着"以为排了但没排"的假设 end turn。turn 结束前心里要有一个**已确认的下次唤醒源**(daemon-event Monitor bridge active, task-notification 在飞, 或 ScheduleWakeup 已注册),否则 loop 就死了。
-
 ### 并发 floor 的 `ps codex` 在多系统 host 上会过计(强制修正)
 
 `concurrency_monitor` 与 floor 判定如果用全局 `ps codex exec | wc -l`,当 **host 仓库自身另有 codex-spawning 系统**(如 fkst supervisor 跑自己的 evolve/review 部门并 spawn codex)时,会把两套都算进去 → floor 永远"满"、永不补,而本 loop 实际可能 0 codex。

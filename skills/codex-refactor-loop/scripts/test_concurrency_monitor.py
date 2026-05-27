@@ -294,6 +294,56 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.assertIn(str(self.repo), line)
             self.assertNotIn(" -c ", line)
 
+    def test_degradation_hook_writes_alert_and_existing_pending_event_only_on_failure(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
+        self.monitor = importlib.reload(self.monitor)
+        state: dict[str, object] = {}
+        result = self.monitor.subprocess.CompletedProcess(["checker"], 1, stdout="bad drift\n", stderr="")
+
+        with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
+            self.monitor.maybe_run_skill_degradation_watch(state)
+
+        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert returncode=1", alert)
+        self.assertIn("bad drift", alert)
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("skill-degradation-alert returncode=1 log=.refactor-loop/.degradation-alert.log", events)
+        self.assertFalse((self.repo / "skills").exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+
+    def test_degradation_hook_is_throttled(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
+        self.monitor = importlib.reload(self.monitor)
+        state = {"last_degradation_watch_at": 1_000}
+
+        with mock.patch.object(self.monitor.time, "time", return_value=1_030):
+            with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
+                self.monitor.maybe_run_skill_degradation_watch(state)
+
+        run_check.assert_not_called()
+        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
+
+    def test_degradation_hook_success_writes_no_alert(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
+        self.monitor = importlib.reload(self.monitor)
+        state: dict[str, object] = {}
+        result = self.monitor.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
+
+        with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
+            self.monitor.maybe_run_skill_degradation_watch(state)
+
+        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+
+    def test_degradation_hook_disabled_by_zero_interval(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.monitor = importlib.reload(self.monitor)
+
+        with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
+            self.monitor.maybe_run_skill_degradation_watch({})
+
+        run_check.assert_not_called()
+
 
 class SnapshotDaemonHealthFieldTests(unittest.TestCase):
     """Producer side of the statusline daemon-health extension.

@@ -28,7 +28,7 @@ jobs:
         name: Verify required checks from issue 31
         with:
           script: |
-            const required = ["contract-tests", "manifest-version-sync"];
+            const required = ["contract-tests", "manifest-version-sync", "skill-degradation"];
             const { owner, repo } = context.repo;
             const ref = context.sha;
             const { data } = await github.rest.checks.listForRef({ owner, repo, ref });
