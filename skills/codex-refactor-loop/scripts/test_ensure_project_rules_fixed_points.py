@@ -639,6 +639,33 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertIn("AI 内容标识符", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
+    # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
+    #   Old pattern: implement-from-design could grow a second intake/helper prompt or producer registry abstraction.
+    #   New principle: implementation stays on the existing implement prompt path; no helper/fork/intake abstraction tokens.
+    def test_issue79_consensus_no_helper_or_fork_intake_abstraction(self) -> None:
+        prompts_root = SKILL_ROOT / "prompts"
+        prompt_paths = sorted(prompts_root.glob("*implement*.md"))
+        prompt_names = {path.name for path in prompt_paths}
+        forbidden_prompt_names = {"implement-from-design-issue.md"}
+        forbidden_tokens = (
+            "ImplementationIntakeV1",
+            "implementation_intake",
+            "implement_intake",
+            "normalizer helper",
+            "producer registry",
+        )
+
+        self.assertIn(prompts_root / "implement.md", prompt_paths)
+        for prompt_name in forbidden_prompt_names:
+            with self.subTest(prompt_name=prompt_name):
+                self.assertNotIn(prompt_name, prompt_names)
+
+        for path in prompt_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                with self.subTest(prompt=path.name, token=token):
+                    self.assertNotIn(token, text, f"r8 consensus(#79) forbids {token} in {path.name}")
+
     # Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
     #   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)
     #   New principle: delete solver 单 terminal vocabulary:delete/collapse/abstain/escalate;无 deferred side-channel、无 issue-create 命令建议;'not now' map 到 abstain/false-positive,lifecycle 决策归 controller/maintainer。
