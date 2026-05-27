@@ -6,9 +6,9 @@
 #
 # 输出:
 #   1. 活跃 codex 数 + 每个的 log 名(harness-tracked vs detached 分别标)
-#   2. 完成 markers + 推荐下一步路由(per skill route table)
-#   3. 每个 open auto-loop PR 的 CI + reviewer 状态
-#   4. monitor zero_streak 最大值(过去 10 tick)
+#   2. Open auto-loop PR CI + reviewer status
+#   3. Monitor zero_streak max over the last 10 ticks
+#   4. Phase 9 router ledger + pending events as facts only
 #
 # Usage: bash .claude/skills/codex-refactor-loop/scripts/peek.sh
 #
@@ -34,15 +34,15 @@ list_loop_codex() {
   ps -eo command= | awk -v repo="$REPO_ROOT" 'repo != "" && /spawn-codex[.]sh/ && index($0, repo) && index($0, " -c ")==0 { print }'
 }
 
-MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"
-extract_terminal_marker() {
-  local f="$1"
-  awk '/^EXIT=/{exit} {print}' "$f" 2>/dev/null |
-    grep -E "(${MARKER_RE}):" |
-    sed -E 's/^[+[:space:]]+//; s/^.*(AUDIT_DONE:|AUDIT_INCOMPLETE:|IMPLEMENT_DONE:|IMPLEMENT_BLOCKED:|FIX_DONE:|FIX_BLOCKED:|REVIEW_DONE:|SOLVER_DONE:|META_JUDGE_DONE:|META_RESOLVED:|TEST_ADD_DONE:)/\1/' |
-    grep -vE '<reason>|<id>|<status>|<category>|<framing>|round-N|cluster-XXX' |
-    tail -1 |
-    head -c 100
+REVIEW_MARKER_TAIL_LINES=30
+extract_review_verdict_tail() {
+  local log_path="$1"
+  local pr_num="$2"
+  local role="$3"
+  tail -n "$REVIEW_MARKER_TAIL_LINES" "$log_path" 2>/dev/null |
+    grep -E "REVIEW_DONE:${pr_num}:${role}:(approve|comment|reject)" |
+    sed -E "s/^.*REVIEW_DONE:${pr_num}:${role}:(approve|comment|reject).*$/\1/" |
+    tail -1
 }
 
 echo "═══════════════ peek $(date -u +%H:%M:%SZ) ═══════════════"
@@ -104,48 +104,18 @@ if [ "$n" -gt 0 ]; then
   list_loop_codex | sed -E 's/.*--log [^ ]*\/([^ ]+)\.log.*/  • \1/' | sort
 fi
 
-# 2. Recently finished markers (last 60 min) + routing hint
-# Refactor (iter3/skill-human-label-taxonomy):
-#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
-# Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
+# Refactor (iter5/issue-87-peek-status-lens):
+# Old pattern: generic marker projector plus 60-minute route-hint table in peek output.
+# New principle: observability-only status lens reads Phase 9 ledger/pending events as facts,
+# while merge readiness remains tail-only REVIEW_DONE consensus below.
+# 2. Phase 9 router ledger and pending events. Facts only; routing authority
+# remains Phase Routing, clean-exit log-tail sweep, and phase9_router_daemon.py.
 echo ""
-echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
-find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
-  base=$(basename "$f" .log)
-  # Skip in-progress (no EXIT line)
-  exit_line=$(grep "^EXIT=" "$f" 2>/dev/null | tail -1)
-  [ -z "$exit_line" ] && continue
-  marker=$(extract_terminal_marker "$f")
-  [ -z "$marker" ] && continue
-  # Routing hint
-  hint=""
-  case "$marker" in
-    IMPLEMENT_DONE:*:ok*)    hint="→ commit/push + open PR + 3 reviewer r1" ;;
-    IMPLEMENT_DONE:*:partial|IMPLEMENT_DONE:*:blocked) hint="→ inspect + re-prompt or escalate" ;;
-    IMPLEMENT_BLOCKED:*)     hint="→ inspect blocker + meta-reflect" ;;
-    FIX_DONE:*)              hint="→ commit/push + 3 reviewer r+1" ;;
-    FIX_BLOCKED:*)           hint="→ meta-reflect" ;;
-    REVIEW_DONE:*:approve)   hint="→ latest complete reviewer round: reject=0 + approve>=1 => merge; all-comment => WAIT_EXPLICIT_APPROVAL" ;;
-    REVIEW_DONE:*:comment)   hint="→ advisory; wait reviewers; all-comment => WAIT_EXPLICIT_APPROVAL, not fix" ;;
-    REVIEW_DONE:*:reject)    hint="→ wait other 2 reviewers,then fix r+1" ;;
-    SOLVER_DONE:*)           hint="→ wait other 2 solvers,then meta-judge" ;;
-    META_JUDGE_DONE:consensus:*) hint="→ implement codex (worktree + spawn)" ;;
-    META_JUDGE_DONE:converge:*)  hint="→ re-spawn 3 solver with convergence question" ;;
-    META_JUDGE_DONE:escalate:philosophy:*) hint="→ label escalate-human + ASCII problem banner" ;;
-    META_JUDGE_DONE:escalate:*)  hint="→ reflector codex" ;;
-    META_RESOLVED:retry-fix:*)   hint="→ implement codex(or fix r+1 if PR exists)" ;;
-    META_RESOLVED:re-design:*)   hint="→ close PR + Phase 9 fresh round" ;;
-    META_RESOLVED:re-cluster:*)  hint="→ close PR + audit re-split" ;;
-    META_RESOLVED:drop:*)        hint="→ close PR + close issue wontfix" ;;
-    META_RESOLVED:escalate-human:*) hint="→ label 👤 + reason banner + push notify" ;;
-    AUDIT_DONE:*)            hint="→ 验证 cluster evidence + 开 design issues + 派 implement" ;;
-    AUDIT_INCOMPLETE:*)      hint="→ re-dispatch audit with missing pieces" ;;
-    TEST_ADD_DONE:*)         hint="→ commit/push 等 CI" ;;
-  esac
-  echo "  • ${base}: ${marker}"
-  [ -n "$hint" ] && echo "    ${hint}"
-done
+echo "▍Phase 9 router / pending events:"
+echo "  ledger tail:"
+tail -10 .refactor-loop/phase9-router-ledger.jsonl 2>/dev/null | sed 's/^/    /' || true
+echo "  pending events tail:"
+tail -10 .refactor-loop/.controller-pending-events.log 2>/dev/null | sed 's/^/    /' || true
 
 # 3. Open auto-loop PRs + state
 echo ""
@@ -192,7 +162,7 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,t
   for role in architect tests quality; do
     f=".refactor-loop/logs/review-pr${pr_num}-${role}-r${max_round}.log"
     [ -f "$f" ] || continue
-    v=$(extract_terminal_marker "$f" | sed -E 's/.*:([a-z]+)\s*$/\1/')
+    v=$(extract_review_verdict_tail "$f" "$pr_num" "$role")
     case "$v" in
       approve) approve=$((approve+1)) ;;
       comment) comment=$((comment+1)) ;;
