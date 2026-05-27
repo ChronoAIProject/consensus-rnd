@@ -4,11 +4,13 @@
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。
 当前 v1 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；审计段查找、既有 artifact 文件名、分支/worktree 名和 marker 仍使用该 alias。
+实现上下文事实源是 `${WORK_UNIT_SOURCE_REF}`。audit-backed work unit 指向 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`；design-issue work unit 指向已达成共识的 decision artifact。
+`${DESIGN_DECISION_PATH}` 非空时走 design-issue pathway，读取该 consensus artifact；为空时走 audit-backed legacy pathway，读取 `${WORK_UNIT_SOURCE_REF}` 中的 "${CLUSTER_ID}" 一节。
 
 ## 必读上下文
 
 1. 主仓库 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 全部强制条款。
-2. 完整审计：`$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` 中 "${CLUSTER_ID}" 一节。
+2. 实现上下文：若 `${DESIGN_DECISION_PATH}` 非空，读取 `$REPO_ROOT/${DESIGN_DECISION_PATH}`；否则读取 `${WORK_UNIT_SOURCE_REF}` 中 "${CLUSTER_ID}" 一节。
 3. `$REPO_ROOT 的架构/词汇文档(若有)` 下相关权威文档。
 
 ## 错误模式 / 设计原则
@@ -36,7 +38,7 @@ ${SCOPE_PATHS}
 
 ## 流程
 
-1. 读 audit 段、读所有 `scope_paths` 文件。
+1. 按 `${DESIGN_DECISION_PATH}` 选择 design-issue consensus artifact 或 audit 段，读所有 `scope_paths` 文件。
 2. 打印 `PLAN:` 前缀的具体改动计划（一行一项）。
 3. 实施。
 4. 编译：`$BUILD_CMD`，失败时修复，最多 5 次迭代。
