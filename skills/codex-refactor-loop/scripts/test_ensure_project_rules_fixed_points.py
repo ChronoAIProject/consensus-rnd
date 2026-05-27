@@ -493,6 +493,35 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 self.assertNotIn(forbidden, combined)
         self.assertNotIn("gh pr create", daemon)
 
+    def test_integration_sync_daemon_command_body_is_detect_and_emit_only(self) -> None:
+        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        section = reference.split("Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:", 1)[1].split(
+            "### Phase 9 router daemon command body",
+            1,
+        )[0]
+
+        for marker in (
+            "`PRESERVE_LOCAL_AHEAD`",
+            "`ADOPT_MERGED_ROLLUP`",
+            "`RESET_TO_REMOTE`",
+            "`FORWARD_SYNC`",
+            "`IntegrationSyncRequestV1`",
+            "`DEV_SYNC_REQUEST:<path>`",
+            "controller helper",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, section)
+
+        forbidden_patterns = (
+            r"git push.*INTEGRATION",
+            r"git reset --hard.*INTEGRATION",
+            r"git merge.*INTEGRATION.*push",
+            r"--force-with-lease",
+        )
+        for pattern in forbidden_patterns:
+            with self.subTest(pattern=pattern):
+                self.assertIsNone(re.search(pattern, section, re.S))
+
     def test_issue53_observability_and_project_rules_default_deny_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         post_rules = (SKILL_ROOT / "prompts" / "_github-post-rules.md").read_text(encoding="utf-8")
