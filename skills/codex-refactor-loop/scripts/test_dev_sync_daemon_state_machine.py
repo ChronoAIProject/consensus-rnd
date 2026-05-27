@@ -756,6 +756,29 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
 
         self.assertEqual(self.release_rollup_events(), [])
 
+    def test_release_rollup_detector_skips_on_gh_pr_list_nonzero_returncode(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            gh_returncode=1,
+            gh_stderr="gh unavailable",
+        )
+
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(self.release_rollup_events(), [])
+
+    def test_release_rollup_detector_skips_on_malformed_gh_pr_list_stdout(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            open_gh_stdout="{not json",
+        )
+
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(self.release_rollup_events(), [])
+
     def test_release_rollup_needed_does_not_emit_below_threshold_or_without_ahead(self) -> None:
         for release_ahead, threshold in ((0, 1), (1, 2)):
             with self.subTest(release_ahead=release_ahead, threshold=threshold):

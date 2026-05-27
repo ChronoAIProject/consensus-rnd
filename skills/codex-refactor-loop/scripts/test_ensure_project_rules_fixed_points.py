@@ -297,6 +297,33 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("ahead_count must be positive", result.stderr)
         self.assertNotIn("unexpected open", result.stdout)
 
+    def test_release_rollup_controller_helper_rejects_branch_mismatch(self) -> None:
+        cases = [
+            (
+                "integration_branch_mismatch",
+                '{"integration_branch":"other-integration","review_base_branch":"dev",'
+                '"integration_sha":"i","review_base_sha":"b","ahead_count":1}',
+                "head must equal INTEGRATION_BRANCH",
+            ),
+            (
+                "review_base_branch_mismatch",
+                '{"integration_branch":"auto-refact-dev","review_base_branch":"main",'
+                '"integration_sha":"i","review_base_sha":"b","ahead_count":1}',
+                "base must equal REVIEW_BASE_BRANCH",
+            ),
+        ]
+
+        for name, event_json, expected_stderr in cases:
+            with self.subTest(case=name):
+                result = self.run_controller_lib_harness(
+                    f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+                    prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_stderr, result.stderr)
+                self.assertNotIn("unexpected open", result.stdout)
+
     def test_release_rollup_controller_helper_skips_open_pr_with_label_when_existing_rollup_exists(self) -> None:
         event_json = (
             '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
