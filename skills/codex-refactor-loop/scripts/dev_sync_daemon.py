@@ -78,6 +78,8 @@ REVIEW_BASE = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BAS
 SPAWN_CODEX = SKILL_ROOT / "scripts" / "spawn-codex.sh"
 LOCK_FILE = MAIN_REPO / ".refactor-loop" / "dev-sync-daemon.lock"
 PENDING_EVENTS_FILE = MAIN_REPO / ".refactor-loop" / ".controller-pending-events.log"
+RELEASE_ROLLUP_MIN_COMMITS = int(os.environ.get("RELEASE_ROLLUP_MIN_COMMITS", "1"))
+RELEASE_ROLLUP_COOLDOWN_SECONDS = int(os.environ.get("RELEASE_ROLLUP_COOLDOWN_SECONDS", "21600"))
 
 
 def log(msg: str) -> None:
@@ -259,6 +261,9 @@ class IntegrationSyncDaemonV1:
         dirty_detector=working_tree_dirty,
         resolver_in_flight=codex_resolve_in_flight,
         resolver_dispatcher=dispatch_codex_resolve,
+        release_rollup_min_commits: int = RELEASE_ROLLUP_MIN_COMMITS,
+        release_rollup_cooldown_seconds: int = RELEASE_ROLLUP_COOLDOWN_SECONDS,
+        now_provider=None,
     ) -> None:
         self.worktree = worktree
         self.main_repo = main_repo
@@ -272,6 +277,9 @@ class IntegrationSyncDaemonV1:
         self.codex_resolve_in_flight = resolver_in_flight
         self.dispatch_codex_resolve = resolver_dispatcher
         self.pending_events_file = main_repo / ".refactor-loop" / ".controller-pending-events.log"
+        self.release_rollup_min_commits = release_rollup_min_commits
+        self.release_rollup_cooldown_seconds = release_rollup_cooldown_seconds
+        self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
 
     def append_pending_event(self, reason: str, detail: str) -> None:
         self.pending_events_file.parent.mkdir(parents=True, exist_ok=True)
@@ -295,6 +303,112 @@ class IntegrationSyncDaemonV1:
             self.append_pending_event("remote-sha-unknown", result.stderr.strip()[:160])
             return None
         return result.stdout.strip()
+
+    def remote_branch_sha(self, cwd: Path, branch: str) -> str | None:
+        result = self.run(["git", "rev-parse", f"origin/{branch}"], cwd=cwd)
+        if result.returncode != 0:
+            self.log(f"skip release-rollup detector: origin/{branch} sha unavailable")
+            return None
+        return result.stdout.strip()
+
+    def release_rollup_ahead_count(self, cwd: Path) -> int:
+        result = self.run(
+            ["git", "rev-list", "--count", f"origin/{self.review_base}..origin/{self.integration}"],
+            cwd=cwd,
+        )
+        try:
+            return int(result.stdout.strip())
+        except ValueError:
+            self.log("skip release-rollup detector: ahead count unavailable")
+            return 0
+
+    def has_open_release_rollup_pr(self) -> bool:
+        result = self.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--head",
+                self.integration,
+                "--base",
+                self.review_base,
+                "--limit",
+                "1",
+                "--json",
+                "number,headRefName,baseRefName",
+            ],
+            cwd=self.main_repo,
+        )
+        if result.returncode != 0:
+            self.log("skip release-rollup detector: open PR query failed")
+            return True
+        try:
+            rows = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            self.log("skip release-rollup detector: open PR query returned invalid JSON")
+            return True
+        return bool(rows)
+
+    def release_rollup_event_recently_emitted(self, integration_sha: str, now: datetime) -> bool:
+        if self.release_rollup_cooldown_seconds <= 0 or not self.pending_events_file.exists():
+            return False
+        for line in self.pending_events_file.read_text(encoding="utf-8", errors="replace").splitlines():
+            prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
+            if not line.startswith(prefix):
+                continue
+            try:
+                event = json.loads(line[len(prefix):])
+            except json.JSONDecodeError:
+                continue
+            if event.get("integration_sha") != integration_sha:
+                continue
+            detected_at = event.get("detected_at")
+            if not detected_at:
+                return True
+            try:
+                prior = datetime.fromisoformat(detected_at.replace("Z", "+00:00"))
+            except ValueError:
+                return True
+            if (now - prior).total_seconds() <= self.release_rollup_cooldown_seconds:
+                return True
+        return False
+
+    # Refactor (iter5/issue-65-release-rollup-pending-event):
+    #   Old pattern: no release-rollup detection when integration was ahead of the review base without an open PR.
+    #   New principle: detect ahead + no open PR, then emit DEV_SYNC_PENDING:release-rollup-needed:<json>.
+    def detect_release_rollup_needed(self, cwd: Path) -> bool:
+        if self.release_rollup_min_commits <= 0:
+            return False
+        ahead_count = self.release_rollup_ahead_count(cwd)
+        if ahead_count < self.release_rollup_min_commits:
+            return False
+
+        integration_sha = self.remote_branch_sha(cwd, self.integration)
+        review_base_sha = self.remote_branch_sha(cwd, self.review_base)
+        if not integration_sha or not review_base_sha:
+            return False
+
+        if self.has_open_release_rollup_pr():
+            return False
+
+        now = self.now_provider()
+        if self.release_rollup_event_recently_emitted(integration_sha, now):
+            self.log(f"release-rollup pending event already emitted for {integration_sha}")
+            return False
+
+        event = {
+            "integration_branch": self.integration,
+            "review_base_branch": self.review_base,
+            "integration_sha": integration_sha,
+            "review_base_sha": review_base_sha,
+            "ahead_count": ahead_count,
+            "detected_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "reason": "integration-ahead-review-base-without-open-rollup-pr",
+        }
+        self.append_pending_event("release-rollup-needed", json.dumps(event, sort_keys=True))
+        return True
 
     def push_clean_local_ahead_before_reset(self, cwd: Path) -> bool:
         ahead_n = self.local_ahead_count(cwd)
@@ -433,6 +547,7 @@ class IntegrationSyncDaemonV1:
             behind_n = 0
 
         if behind_n == 0:
+            self.detect_release_rollup_needed(cwd)
             self.log(f"up-to-date with origin/{self.review_base}")
             return
 

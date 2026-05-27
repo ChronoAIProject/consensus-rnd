@@ -103,12 +103,13 @@ Stability requires all signals green and fail-closed handling on missing or red 
 
 The release lifecycle surface consumes the decision-artifact-only output. A scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, then call the existing version bump command, commit/push the mapped manifest changes, and let `release.yml` publish. Alternatively, `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same host opt-in, bump/publish through its own guarded jobs, and record the result.
 
-In both integrations, `auto_release_gate.py` remains the decider only. The controller or workflow owns lifecycle operations and must re-validate the host opt-in before mutating git state or publishing.
-
-Forbidden: do not add per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization. The host opt-in is durable until removed from `host.env`.
+In both integrations, `auto_release_gate.py` remains the decider only. The controller or workflow owns lifecycle operations and must re-validate the host opt-in before mutating git state or publishing. Forbidden: do not add per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization. The host opt-in is durable until removed from `host.env`.
 
 Named exception: this autonomous release gate is host-agnostic and has no lifecycle authority. It only reads repo state/GitHub evidence, computes stability, and writes durable decision/candidate artifacts; it does not run `git`, bump mapped release manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
+## Named runtime exception — IntegrationSyncDaemonV1(per #65)
+The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorizes the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
+**No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the Chinese PR body, and calls `open_release_rollup_pr_from_pending_event`, which delegates to `open_pr_with_label`. Behavior/source-regression tests cover event emission, suppression, cooldown, and forbidden daemon lifecycle tokens.
 ## Claude Code statusline(per #51 consensus)
 
 `skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
@@ -708,7 +709,7 @@ Phase 6 guardrails:
 4. Sync failures must be visible on GitHub.
 5. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
-Named exception: `IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, and merged-rollup adoption. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort.
+Named exception: `IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, merged-rollup adoption, and release-rollup pending-event detection. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort. Release-rollup pending events do not grant daemon PR lifecycle authority.
 
 Phase 7 guardrails:
 

@@ -117,6 +117,57 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 check=False,
             )
 
+    def run_controller_lib_harness(
+        self,
+        command: str,
+        *,
+        env_updates: dict[str, str] | None = None,
+        prelude: str = "",
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fakebin = root / "fakebin"
+            fakebin.mkdir()
+            gh = fakebin / "gh"
+            gh.write_text(
+                "#!/usr/bin/env bash\n"
+                "printf '%s\\n' \"$*\" >> \"$GH_CALLS\"\n"
+                "if [[ \"$1 $2\" == \"pr list\" ]]; then printf '[]\\n'; exit 0; fi\n"
+                "if [[ \"$1 $2 $3\" == \"repo view --json\" ]]; then printf 'owner/repo\\n'; exit 0; fi\n"
+                "exit 0\n",
+                encoding="utf-8",
+            )
+            gh.chmod(0o755)
+            body = root / "body.md"
+            body.write_text("body\n", encoding="utf-8")
+            calls = root / "gh-calls.log"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(root),
+                    "GH_REPO_SLUG": "owner/repo",
+                    "GH_CALLS": str(calls),
+                    "PATH": f"{fakebin}{os.pathsep}{env.get('PATH', '')}",
+                    "INTEGRATION_BRANCH": "auto-refact-dev",
+                    "REVIEW_BASE_BRANCH": "dev",
+                    "BODY_FILE": str(body),
+                }
+            )
+            if env_updates:
+                env.update(env_updates)
+            script = (
+                f'source "{SKILL_ROOT / "scripts" / "controller_lib.sh"}"; '
+                f"{prelude}\n"
+                f"{command}"
+            )
+            return subprocess.run(
+                ["bash", "-lc", script],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
     def test_resolve_github_repo_slug_env_branches(self) -> None:
         cases = [
             ("explicit_slug", {"GH_REPO_SLUG": "owner/repo"}, 0, "owner/repo\n", ""),
@@ -196,6 +247,145 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
 
         self.assertEqual(fallback.returncode, 0, fallback.stderr)
         self.assertEqual(fallback.stdout.splitlines(), ["slug=fallback/slug", "argc=2", "arg=--repo", "arg=fallback/slug"])
+
+    def test_release_rollup_controller_helper_rejects_invalid_head_base_or_facts(self) -> None:
+        cases = [
+            ("empty_head", '{"integration_branch":"","review_base_branch":"dev","integration_sha":"i","review_base_sha":"b","ahead_count":1}'),
+            ("empty_base", '{"integration_branch":"auto-refact-dev","review_base_branch":"","integration_sha":"i","review_base_sha":"b","ahead_count":1}'),
+            ("same_head_base", '{"integration_branch":"auto-refact-dev","review_base_branch":"auto-refact-dev","integration_sha":"i","review_base_sha":"b","ahead_count":1}'),
+            ("missing_sha", '{"integration_branch":"auto-refact-dev","review_base_branch":"dev","integration_sha":"","review_base_sha":"b","ahead_count":1}'),
+            ("missing_ahead", '{"integration_branch":"auto-refact-dev","review_base_branch":"dev","integration_sha":"i","review_base_sha":"b"}'),
+        ]
+
+        for name, event_json in cases:
+            with self.subTest(case=name):
+                result = self.run_controller_lib_harness(
+                    f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+                    prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_non_integer_ahead_count(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":"bad"}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ahead_count must be an integer", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_zero_ahead_count(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":0}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ahead_count must be positive", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_branch_mismatch(self) -> None:
+        cases = [
+            (
+                "integration_branch_mismatch",
+                '{"integration_branch":"other-integration","review_base_branch":"dev",'
+                '"integration_sha":"i","review_base_sha":"b","ahead_count":1}',
+                "head must equal INTEGRATION_BRANCH",
+            ),
+            (
+                "review_base_branch_mismatch",
+                '{"integration_branch":"auto-refact-dev","review_base_branch":"main",'
+                '"integration_sha":"i","review_base_sha":"b","ahead_count":1}',
+                "base must equal REVIEW_BASE_BRANCH",
+            ),
+        ]
+
+        for name, event_json, expected_stderr in cases:
+            with self.subTest(case=name):
+                result = self.run_controller_lib_harness(
+                    f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+                    prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+                )
+
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(expected_stderr, result.stderr)
+                self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_skips_open_pr_with_label_when_existing_rollup_exists(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":2,'
+            '"reason":"integration-ahead-review-base-without-open-rollup-pr"}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"gh() {{ if [[ \"$1 $2\" == \"pr list\" ]]; then printf '94\\n'; return 0; fi; command gh \"$@\"; }}; "
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"; "
+            'printf "PR_NUM=%s\\n" "$PR_NUM"',
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("release-rollup PR already exists: #94", result.stdout)
+        self.assertIn("PR_NUM=94", result.stdout)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_accepts_valid_event_and_delegates_to_open_pr_with_label(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":2,'
+            '"reason":"integration-ahead-review-base-without-open-rollup-pr"}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude=(
+                'open_pr_with_label() { '
+                'printf "title=%s\\nbody=%s\\nbase=%s\\nhead=%s\\n" "$1" "$2" "$3" "$4"; '
+                '}'
+            ),
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("title=Release rollup: auto-refact-dev to dev", result.stdout)
+        self.assertIn("base=dev", result.stdout)
+        self.assertIn("head=auto-refact-dev", result.stdout)
+
+    def test_integration_sync_daemon_v1_release_rollup_exception_contract(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        daemon = (SKILL_ROOT / "scripts" / "dev_sync_daemon.py").read_text(encoding="utf-8")
+        host_env = (SKILL_ROOT / "host.env.example").read_text(encoding="utf-8")
+        combined = "\n".join([skill, reference, daemon, host_env])
+
+        self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1(per #65)", skill)
+        self.assertIn("phase9-issue65-r7-judge.md", skill)
+        self.assertIn("DEV_SYNC_PENDING:release-rollup-needed", combined)
+        self.assertIn("release-rollup detection and existing-format pending-event emission only", skill)
+        self.assertIn("must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs", skill)
+        self.assertIn("must not run `gh pr create`", skill)
+        self.assertIn("push directly to `$REVIEW_BASE_BRANCH`", skill)
+        self.assertIn("open_release_rollup_pr_from_pending_event", reference)
+        self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
+        self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
+
+        for forbidden in ("$RELEASE_BRANCH", "RELEASE_BRANCH", "ReleaseRollupRequestV1"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
+        self.assertNotIn("gh pr create", daemon)
 
     def test_python_github_repo_slug_env_branches(self) -> None:
         from repo_config import github_repo_slug

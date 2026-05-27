@@ -818,12 +818,7 @@ For each `pass` cluster, serially:
       - Re-run local CI in worktree; on conflict, mark cluster `rework` and re-dispatch implement codex with conflict diff.
       - Force-push the cluster branch: `git push --force-with-lease origin refactor/iterN-<cluster-id>`.
 9b. Goto Phase 5 (remote CI watch on the cluster's PR).
-10b. After **all** iteration clusters have their PRs merged into `integration_branch`, ensure exactly one rollup PR exists from `integration_branch` to `review_base_branch`:
-     ```bash
-     gh pr list --head "<integration_branch>" --base "<review_base_branch>" --json number --jq '.[0].number'
-     # If empty, gh pr create --base "<review_base_branch>" --head "<integration_branch>" --title "Refactor iter<N>: rollup" --body <scorecard.md>
-     ```
-
+10b. After **all** iteration clusters have merged into `integration_branch`, Phase 6 may emit `DEV_SYNC_PENDING:release-rollup-needed:<json>`. Controller re-checks exactly one open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` rollup PR and, only when none exists, creates it through `open_release_rollup_pr_from_pending_event <event-json> <body-file>`. Daemon only detects/writes the event; PR create, labels, review gate, CI, and merge policy stay controller-owned.
 After merge of the cluster branch into its target → `git worktree remove "$REPO_ROOT/.worktrees/<cluster-id>"`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
 
 If no clusters left in current batch → start next batch (Phase 2 again). If no batches left → start next iteration (Phase 1 again) or **start Phase 5 if there is an open PR for the trunk/cluster branches**.
@@ -931,7 +926,7 @@ Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:
 5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, reset/replay onto `origin/$REVIEW_BASE_BRANCH`, then push only with exact `--force-with-lease=refs/heads/$INTEGRATION_BRANCH:<expected_remote_sha>`.
 6. `RESET_TO_REMOTE`: reset to `origin/$INTEGRATION_BRANCH` only after local-ahead preservation and rollup adoption checks.
 7. `FORWARD_SYNC`: merge `origin/$REVIEW_BASE_BRANCH` into integration using ff-only first, then no-ff merge; push with ordinary `git push origin HEAD:$INTEGRATION_BRANCH`.
-
+8. `DETECT_RELEASE_ROLLUP_NEEDED`: if `origin/$INTEGRATION_BRANCH` is ahead of `origin/$REVIEW_BASE_BRANCH` by at least `RELEASE_ROLLUP_MIN_COMMITS` and no open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` PR exists, append `DEV_SYNC_PENDING:release-rollup-needed:<json>` with branch names, SHAs, ahead count, timestamp, and reason. Cooldown only suppresses duplicate same-SHA events; it grants no lifecycle authority.
 Ambiguous rollup metadata, failed local-ahead push, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
 ### Phase 9 router daemon command body
@@ -953,8 +948,7 @@ bash <skill-root>/scripts/peek.sh | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 heartbeat stale/missing/malformed → 由 `restart-daemons.sh` 按 canonical wrapper 重启。
-若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。
-
+若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查 open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`。该 PR 进入既有 Phase 8 review gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
@@ -1388,6 +1382,12 @@ new_events=$(( cur_offset - prev_offset ))
 if (( new_events > 0 )); then
   # 有 daemon detect 但未 controller-process 的 events
   sed -n "$((prev_offset+1)),$((cur_offset))p" "$PENDING" | while read -r line; do
+    if [[ "$line" == DEV_SYNC_PENDING:release-rollup-needed:* ]]; then
+      event_json="${line#DEV_SYNC_PENDING:release-rollup-needed:}"
+      # Re-check open head/base PR; suppress if present, else open through helper.
+      process_release_rollup_needed "$event_json"
+      continue
+    fi
     # 解析 issue / author / comment_id,触发 maintainer-reply-resets-the-round
     process_maintainer_reply "$line"
   done
