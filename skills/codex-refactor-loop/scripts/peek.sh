@@ -104,6 +104,10 @@ if [ "$n" -gt 0 ]; then
   list_loop_codex | sed -E 's/.*--log [^ ]*\/([^ ]+)\.log.*/  • \1/' | sort
 fi
 
+# Refactor (iter5/issue-87-peek-status-lens):
+# Old pattern: generic marker projector plus 60-minute route-hint table in peek output.
+# New principle: observability-only status lens reads Phase 9 ledger/pending events as facts,
+# while merge readiness remains tail-only REVIEW_DONE consensus below.
 # 2. Phase 9 router ledger and pending events. Facts only; routing authority
 # remains Phase Routing, clean-exit log-tail sweep, and phase9_router_daemon.py.
 echo ""
