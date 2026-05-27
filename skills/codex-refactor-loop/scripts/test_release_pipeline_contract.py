@@ -192,6 +192,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
         for needle in (
             "contract-tests",
             "manifest-version-sync",
+            "skill-degradation",
             "required check",
             "already exists; no-op",
             "is not newer than latest tag",

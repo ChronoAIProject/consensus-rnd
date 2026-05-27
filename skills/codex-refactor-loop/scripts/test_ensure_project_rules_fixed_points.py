@@ -1213,6 +1213,43 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
                         if token in line:
                             self.assertRegex(line, r"\b(do not|must not)\b")
 
+    def test_skill_degradation_watch_v1_named_exception_and_delete_boundary(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        checker_text = (SKILL_ROOT / "scripts" / "check_skill_degradation.py").read_text(encoding="utf-8")
+        monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
+        host_env = (SKILL_ROOT / "host.env.example").read_text(encoding="utf-8")
+        combined = "\n".join([skill_text, reference_text, checker_text, monitor_text, host_env])
+
+        required_markers = (
+            "## Named runtime exception — SkillDegradationWatchV1(per #66)",
+            ".refactor-loop/runs/phase9-issue66-r8-judge.md",
+            "check_skill_degradation.py --static",
+            ".refactor-loop/.degradation-alert.log",
+            ".refactor-loop/.controller-pending-events.log",
+            "DEGRADATION_WATCH_INTERVAL_SECONDS",
+            "source mutation",
+            "git reset/rebase/merge/push",
+            "GitHub issue/PR/body/label lifecycle mutation",
+            "codex dispatch",
+            "standalone daemon creation",
+            "WorkUnit/schema/envelope changes",
+            "protocol/plugin registry",
+            "auto-clean root garbage",
+            "auto-fix API",
+        )
+        for marker in required_markers:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, combined)
+
+        self.assertFalse((SKILL_ROOT / "scripts" / "degradation_watchdog.py").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "degradation_checks.py").exists())
+        for token in ("DegradationCheck", "plugin registry", "standalone watchdog"):
+            with self.subTest(token=token):
+                for line in combined.splitlines():
+                    if token in line:
+                        self.assertRegex(line, r"(Forbidden|forbidden|no |No |rejecting|rejects|rejected|without|FORBIDDEN|禁止|拒绝)")
+
     def test_manual_issue_reshape_requires_work_unit_v1_fields_without_audit_aliases(self) -> None:
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
 

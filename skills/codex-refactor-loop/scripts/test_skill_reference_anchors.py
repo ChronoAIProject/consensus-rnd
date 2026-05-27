@@ -119,8 +119,12 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         self.reference = read(REFERENCE_MD)
 
     def test_skill_contains_statusline_consensus_section(self) -> None:
+        self.assertRegex(
+            self.skill,
+            r"(?m)^## Claude Code statusline\(per #51 consensus\)$",
+            "statusline consensus section must be an independent markdown heading",
+        )
         required = (
-            "## Claude Code statusline(per #51 consensus)",
             "**Producer**",
             "**Consumer**",
             "**Install**",

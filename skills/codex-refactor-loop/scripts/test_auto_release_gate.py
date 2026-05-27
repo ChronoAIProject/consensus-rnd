@@ -96,7 +96,7 @@ def write_gh_stub(
     list_failures: dict[str, str] | None = None,
 ) -> None:
     run_conclusions = run_conclusions or {}
-    run_names = run_names or ["contract-tests", "manifest-version-sync"]
+    run_names = run_names or ["contract-tests", "manifest-version-sync", "skill-degradation"]
     labeled_items = labeled_items or {}
     list_failures = list_failures or {}
     gh = bin_dir / "gh"
@@ -437,8 +437,10 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             branches = signal["branches"]
             self.assertFalse(branches["trunk-review"]["contract-tests"])
             self.assertFalse(branches["trunk-review"]["manifest-version-sync"])
+            self.assertFalse(branches["trunk-review"]["skill-degradation"])
             self.assertFalse(branches["release-integration"]["contract-tests"])
             self.assertFalse(branches["release-integration"]["manifest-version-sync"])
+            self.assertFalse(branches["release-integration"]["skill-degradation"])
 
     def test_fail_closed_when_gh_issue_pr_list_fails(self) -> None:
         cases = (

@@ -49,6 +49,21 @@ jobs:
       - name: Check manifest version sync
         run: python3 skills/codex-refactor-loop/scripts/check_manifest_version_sync.py
 
+  skill-degradation:
+    name: skill-degradation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check skill degradation
+        run: python3 skills/codex-refactor-loop/scripts/check_skill_degradation.py --static
+
   lint-advisory:
     name: lint-advisory
     runs-on: ubuntu-latest

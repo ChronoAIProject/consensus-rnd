@@ -110,12 +110,13 @@ Named exception: this autonomous release gate is host-agnostic and has no lifecy
 ## Named runtime exception — IntegrationSyncDaemonV1(per #65)
 The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorizes the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
 **No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the Chinese PR body, and calls `open_release_rollup_pr_from_pending_event`, which delegates to `open_pr_with_label`. Behavior/source-regression tests cover event emission, suppression, cooldown, and forbidden daemon lifecycle tokens.
-## Claude Code statusline(per #51 consensus)
 
+## Named runtime exception — SkillDegradationWatchV1(per #66) — Authorization source: `.refactor-loop/runs/phase9-issue66-r8-judge.md`. Single-file checker/gates: `check_skill_degradation.py`; CI required `skill-degradation` runs `<skill-root>/scripts/check_skill_degradation.py --static`; `auto_release_gate.py` requires it beside `contract-tests` and `manifest-version-sync`. **Narrow allowlist**: run `check_skill_degradation.py`; write `.refactor-loop/.degradation-alert.log`; append existing-format pending events to `.refactor-loop/.controller-pending-events.log`; expose read-only `peek.sh` status. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Runtime hook: `concurrency_monitor.py` may run the checker on `$DEGRADATION_WATCH_INTERVAL_SECONDS`; failures alert-only, passing writes nothing, and the hook must not mutate source, run git, call GitHub lifecycle APIs, spawn codex, create a daemon, or change WorkUnit/event schema; details: [skill degradation watch details](REFERENCE.md#skill-degradation-watch-details).
+
+## Claude Code statusline(per #51 consensus)
 `skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
 
 **Producer**:`concurrency_monitor.py` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。Snapshot 包含 `daemons` map(扫 `.refactor-loop/heartbeats/*.ts` 动态发现,每条记 `age_seconds` + `stale`,stale 阈值 90s)+ 汇总 `daemons_healthy` / `daemons_total`。
-
 **Consumer**:`statusline.sh` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`。
 
 **Install**(host project,**手动一行,无 installer script**):
@@ -124,7 +125,6 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 // ~/.claude/settings.json
 "statusLine": "/abs/path/to/skills/codex-refactor-loop/scripts/statusline.sh"
 ```
-
 (host 用安装后的 `<skill-root>/scripts/statusline.sh` 或拷过去的对应路径。)
 
 **Uninstall**:删 `statusLine` 字段即可。

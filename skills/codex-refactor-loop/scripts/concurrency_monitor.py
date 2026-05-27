@@ -35,6 +35,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -66,6 +67,7 @@ INTERVAL = int(os.environ.get("INTERVAL", "60"))  #
 REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
+DEGRADATION_ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".degradation-alert.log"
 PENDING_EVENTS = REPO_ROOT / ".refactor-loop" / ".controller-pending-events.log"
 STATUSLINE_SNAPSHOT = REPO_ROOT / ".refactor-loop" / "state" / "statusline-snapshot.json"
 HEARTBEATS_DIR = REPO_ROOT / ".refactor-loop" / "heartbeats"
@@ -92,6 +94,7 @@ PHASE_EXPECTED = {
 
 # consecutive no-gap counter persisted in state file
 STATE_FILE = REPO_ROOT / ".refactor-loop" / ".concurrency-monitor-state.json"
+CHECK_SKILL_DEGRADATION = Path(__file__).resolve().parent / "check_skill_degradation.py"
 
 
 def log(msg: str) -> None:
@@ -325,6 +328,89 @@ def write_pending_event(event: str) -> None:
         f.write(f"{utc_ts()} {event}\n")
 
 
+# Refactor (iter5/cluster-issue66-skill-degradation):
+# Old: no standalone watchdog, no DegradationCheck protocol, no plugin registry,
+# and no GitHub auto-open path.
+# New: runtime monitoring stays a concurrency_monitor throttled hook that calls
+# the single-file static checker and emits local alerts only; it is not an
+# independent watchdog.
+def degradation_watch_interval_seconds() -> int:
+    raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "0")
+    try:
+        interval = int(raw)
+    except ValueError:
+        interval = 1800
+    return max(0, interval)
+
+
+def degradation_watch_timeout_seconds() -> int:
+    raw = os.environ.get("DEGRADATION_WATCH_TIMEOUT_SECONDS", "30")
+    try:
+        timeout = int(raw)
+    except ValueError:
+        timeout = 30
+    return max(1, timeout)
+
+
+def run_skill_degradation_check() -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            sys.executable,
+            str(CHECK_SKILL_DEGRADATION),
+            "--static",
+            "--repo-root",
+            str(REPO_ROOT),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=degradation_watch_timeout_seconds(),
+    )
+
+
+def write_degradation_alert(result: subprocess.CompletedProcess | None, error: str | None = None) -> None:
+    DEGRADATION_ALERT_LOG.parent.mkdir(parents=True, exist_ok=True)
+    ts = utc_ts()
+    if result is None:
+        detail = {"error": error or "unknown"}
+        summary = "skill-degradation-alert checker-error"
+    else:
+        stdout = (result.stdout or "").strip()
+        stderr = (result.stderr or "").strip()
+        detail = {
+            "returncode": result.returncode,
+            "stdout_tail": stdout[-4000:],
+            "stderr_tail": stderr[-4000:],
+        }
+        summary = f"skill-degradation-alert returncode={result.returncode}"
+    with DEGRADATION_ALERT_LOG.open("a", encoding="utf-8") as f:
+        f.write(f"[{ts}] {summary} | detail={json.dumps(detail, ensure_ascii=False)}\n")
+    write_pending_event(f"{summary} log=.refactor-loop/.degradation-alert.log")
+
+
+def maybe_run_skill_degradation_watch(state: dict) -> None:
+    interval = degradation_watch_interval_seconds()
+    if interval <= 0:
+        return
+    now = int(time.time())
+    last = int(state.get("last_degradation_watch_at", 0) or 0)
+    if last and now - last < interval:
+        return
+    state["last_degradation_watch_at"] = now
+    try:
+        result = run_skill_degradation_check()
+    except subprocess.TimeoutExpired as exc:
+        write_degradation_alert(None, error=f"timeout after {exc.timeout}s")
+        log(f"skill-degradation-alert timeout after {exc.timeout}s; see {DEGRADATION_ALERT_LOG}")
+        return
+    except Exception as exc:
+        write_degradation_alert(None, error=repr(exc))
+        log(f"skill-degradation-alert exception={exc!r}; see {DEGRADATION_ALERT_LOG}")
+        return
+    if result.returncode != 0:
+        write_degradation_alert(result)
+        log(f"skill-degradation-alert returncode={result.returncode}; see {DEGRADATION_ALERT_LOG}")
+
+
 def dispatch_queue_files() -> list[tuple[str, Path]]:
     files: list[tuple[str, Path]] = []
     for priority in PRIORITIES:
@@ -426,6 +512,7 @@ def tick() -> None:
     #     无新 daemon,无 checked-in installer(per #51 r3 META_JUDGE_DONE:consensus:C-minimal-statusline-via-concurrency_monitor-snapshot)
     state = load_state()
     zero_streak = int(state.get("zero_streak", 0))
+    maybe_run_skill_degradation_watch(state)
 
     items = list_auto_loop_issues()
     expected, breakdown = compute_expected(items)
