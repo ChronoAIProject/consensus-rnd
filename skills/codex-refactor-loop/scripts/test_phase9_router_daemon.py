@@ -158,6 +158,36 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
 
+    def test_phase9_router_marker_tail_only_ignores_body_echo(self) -> None:
+        # Refactor (iter5/skill-marker-tail-only-scope):
+        # codex worker logs that echo prompt-body / grep-output / test-fixture
+        # marker text in the body (not tail) must NOT trigger dispatch.
+        path = self.repo / ".refactor-loop" / "logs" / "phase9-issue90-r2-judge.log"
+        body_pad = "\n".join(f"discussion line {i}" for i in range(60))
+        body_echo = (
+            "skills/codex-refactor-loop/scripts/test_phase9_router_daemon.py:171: "
+            '"META_JUDGE_DONE:converge:round-3:body-echo-from-test-fixture",'
+        )
+        actual_tail = "META_JUDGE_DONE:converge:round-3:real-tail-verdict"
+        path.write_text(
+            "\n".join([body_pad, body_echo, body_pad, actual_tail, "EXIT=0", ""]),
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        ledger_markers = [entry.get("marker", "") for entry in self.ledger_entries()]
+        for entry_marker in ledger_markers:
+            self.assertNotIn("body-echo-from-test-fixture", entry_marker,
+                             "body-position marker echo must not be classified as verdict")
+        for command in self.commands:
+            joined = " ".join(command)
+            self.assertNotIn("body-echo-from-test-fixture", joined)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        for key in ("90-3-minimal", "90-3-structural", "90-3-delete"):
+            self.assertIn(key, ledger_keys,
+                          "real tail verdict must still spawn next round")
+
     def test_phase9_router_converge_ignores_non_judge_source_logs(self) -> None:
         # Refactor (iter5/skill-converge-source-and-monotonic-guard):
         # solver logs echoing a converge marker (e.g. from prompt body or codex

@@ -103,6 +103,17 @@ class Phase9Router:
             lock.flush()
             yield
 
+    # Refactor (iter5/skill-marker-tail-only-scope):
+    #   Old pattern: scan entire log body for markers; codex worker logs that
+    #   happen to echo prompt-body / test-fixture / grep-output marker text
+    #   (e.g. `META_JUDGE_DONE:converge:round-3:echoed-from-prompt-body` from
+    #   test_phase9_router_daemon.py source listing) were classified as real
+    #   verdicts and triggered cascading dispatches.
+    #   New principle: real worker verdict markers always appear in the tail
+    #   alongside `EXIT=0`. Scan only the last MARKER_TAIL_LINES of each log.
+    #   Body-position prompt-body echoes never reach the marker parser.
+    MARKER_TAIL_LINES = 30
+
     def _collect_markers(self) -> list[Marker]:
         markers: list[Marker] = []
         for log_path in sorted(self.logs_dir.glob("*.log")):
@@ -111,7 +122,12 @@ class Phase9Router:
             issue, round_no, role_hint = self._identity_from_path(log_path)
             if issue is None or round_no is None:
                 continue
-            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            try:
+                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                continue
+            tail = lines[-self.MARKER_TAIL_LINES :] if len(lines) > self.MARKER_TAIL_LINES else lines
+            for line in tail:
                 marker = self._extract_marker(line)
                 if marker is None:
                     continue
