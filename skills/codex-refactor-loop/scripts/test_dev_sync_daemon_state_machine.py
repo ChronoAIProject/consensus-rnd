@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -31,16 +32,21 @@ class FakeGit:
         self,
         *,
         ahead: int = 0,
+        release_ahead: int = 0,
         behind: int = 0,
         remote_sha: str = "remote-sha",
+        review_base_sha: str = "review-base-sha",
         ahead_stdout: str | None = None,
+        release_ahead_stdout: str | None = None,
         behind_stdout: str | None = None,
         replay_count: int = 0,
         replay_count_stdout: str | None = None,
         remote_sha_returncode: int = 0,
         remote_sha_stderr: str = "",
         gh_rows: list[dict] | None = None,
+        open_gh_rows: list[dict] | None = None,
         gh_stdout: str | None = None,
+        open_gh_stdout: str | None = None,
         gh_returncode: int = 0,
         gh_stderr: str = "",
         merge_base_adopted: bool = False,
@@ -60,15 +66,19 @@ class FakeGit:
         push_stderr: str = "",
     ) -> None:
         self.ahead = ahead
+        self.release_ahead = release_ahead
         self.behind = behind
         self.remote_sha = remote_sha
+        self.review_base_sha = review_base_sha
         self.ahead_stdout = ahead_stdout
+        self.release_ahead_stdout = release_ahead_stdout
         self.behind_stdout = behind_stdout
         self.replay_count = replay_count
         self.replay_count_stdout = replay_count_stdout
         self.remote_sha_returncode = remote_sha_returncode
         self.remote_sha_stderr = remote_sha_stderr
         self.gh_stdout = gh_stdout
+        self.open_gh_stdout = open_gh_stdout
         self.gh_returncode = gh_returncode
         self.gh_stderr = gh_stderr
         self.merge_base_adopted = merge_base_adopted
@@ -88,6 +98,7 @@ class FakeGit:
         self.push_stderr = push_stderr
         self.commands: list[list[str]] = []
         self.gh_rows: list[dict] = gh_rows or []
+        self.open_gh_rows: list[dict] = open_gh_rows or []
 
     def __call__(self, cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess:
         self.commands.append(cmd)
@@ -100,6 +111,8 @@ class FakeGit:
             spec = cmd[3]
             if spec.startswith("origin/auto-refact-dev..HEAD"):
                 stdout = self.ahead_stdout if self.ahead_stdout is not None else f"{self.ahead}\n"
+            elif spec.startswith("origin/dev..origin/auto-refact-dev"):
+                stdout = self.release_ahead_stdout if self.release_ahead_stdout is not None else f"{self.release_ahead}\n"
             elif spec.startswith("HEAD..origin/dev"):
                 stdout = self.behind_stdout if self.behind_stdout is not None else f"{self.behind}\n"
             elif spec.startswith("old-head..origin/auto-refact-dev"):
@@ -110,6 +123,8 @@ class FakeGit:
             returncode = self.remote_sha_returncode
             stdout = f"{self.remote_sha}\n" if returncode == 0 else ""
             stderr = self.remote_sha_stderr
+        elif cmd[:3] == ["git", "rev-parse", "origin/dev"]:
+            stdout = f"{self.review_base_sha}\n"
         elif cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
             if cmd[3] == "origin/dev":
                 returncode = 0 if self.merge_base_adopted else 1
@@ -117,7 +132,10 @@ class FakeGit:
                 returncode = 0 if self.old_head_is_ancestor else 1
         elif cmd[:3] == ["gh", "pr", "list"]:
             returncode = self.gh_returncode
-            stdout = self.gh_stdout if self.gh_stdout is not None else json.dumps(self.gh_rows)
+            if "--state" in cmd and cmd[cmd.index("--state") + 1] == "open":
+                stdout = self.open_gh_stdout if self.open_gh_stdout is not None else json.dumps(self.open_gh_rows)
+            else:
+                stdout = self.gh_stdout if self.gh_stdout is not None else json.dumps(self.gh_rows)
             stderr = self.gh_stderr
         elif cmd[:3] == ["git", "merge", "--ff-only"]:
             returncode = self.ff_returncode if self.ff_returncode is not None else 0
@@ -167,6 +185,9 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
             dirty_detector=overrides.get("dirty_detector", lambda _cwd: False),
             resolver_in_flight=overrides.get("resolver_in_flight", lambda: False),
             resolver_dispatcher=overrides.get("resolver_dispatcher", lambda: None),
+            release_rollup_min_commits=overrides.get("release_rollup_min_commits", 0),
+            release_rollup_cooldown_seconds=overrides.get("release_rollup_cooldown_seconds", 21600),
+            now_provider=overrides.get("now_provider", lambda: datetime(2026, 5, 27, 0, 0, 0, tzinfo=timezone.utc)),
         )
 
     def command_index(self, fake: FakeGit, needle: list[str]) -> int:
@@ -180,6 +201,14 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
         if not path.exists():
             return []
         return path.read_text(encoding="utf-8").splitlines()
+
+    def release_rollup_events(self) -> list[dict]:
+        events = []
+        prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
+        for line in self.pending_events():
+            if line.startswith(prefix):
+                events.append(json.loads(line[len(prefix):]))
+        return events
 
     def test_clean_local_ahead_is_pushed_before_reset(self) -> None:
         fake = FakeGit(ahead=2)
@@ -702,6 +731,51 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
             ],
         )
 
+    def test_release_rollup_needed_emits_pending_event_when_integration_ahead_without_open_pr(self) -> None:
+        fake = FakeGit(merge_base_adopted=True, release_ahead=3, remote_sha="integration-sha", review_base_sha="base-sha")
+
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        events = self.release_rollup_events()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["integration_branch"], "auto-refact-dev")
+        self.assertEqual(events[0]["review_base_branch"], "dev")
+        self.assertEqual(events[0]["integration_sha"], "integration-sha")
+        self.assertEqual(events[0]["review_base_sha"], "base-sha")
+        self.assertEqual(events[0]["ahead_count"], 3)
+        self.assertEqual(events[0]["reason"], "integration-ahead-review-base-without-open-rollup-pr")
+
+    def test_release_rollup_needed_does_not_emit_when_open_rollup_pr_exists(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            open_gh_rows=[{"number": 77, "headRefName": "auto-refact-dev", "baseRefName": "dev"}],
+        )
+
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(self.release_rollup_events(), [])
+
+    def test_release_rollup_needed_does_not_emit_below_threshold_or_without_ahead(self) -> None:
+        for release_ahead, threshold in ((0, 1), (1, 2)):
+            with self.subTest(release_ahead=release_ahead, threshold=threshold):
+                self.tearDown()
+                self.setUp()
+                fake = FakeGit(merge_base_adopted=True, release_ahead=release_ahead)
+
+                self.daemon(fake, release_rollup_min_commits=threshold).tick()
+
+                self.assertEqual(self.release_rollup_events(), [])
+
+    def test_release_rollup_needed_cooldown_emits_same_integration_sha_once(self) -> None:
+        fake = FakeGit(merge_base_adopted=True, release_ahead=2, remote_sha="same-sha", review_base_sha="base-sha")
+        daemon = self.daemon(fake, release_rollup_min_commits=1, release_rollup_cooldown_seconds=3600)
+
+        daemon.tick()
+        daemon.tick()
+
+        self.assertEqual(len(self.release_rollup_events()), 1)
+
 
 class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
     def test_skill_phase6_names_integration_sync_daemon_v1(self) -> None:
@@ -758,6 +832,19 @@ class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, src)
+
+    def test_dev_sync_daemon_has_no_pr_lifecycle_or_direct_review_base_push(self) -> None:
+        src = DEV_SYNC.read_text(encoding="utf-8")
+        forbidden_tokens = (
+            "gh pr create",
+            "gh pr edit",
+            "gh pr merge",
+            "HEAD:$REVIEW_BASE_BRANCH",
+            "HEAD:{self.review_base}",
+        )
+        for token in forbidden_tokens:
+            with self.subTest(token=token):
+                self.assertNotIn(token, src)
 
 
 if __name__ == "__main__":
