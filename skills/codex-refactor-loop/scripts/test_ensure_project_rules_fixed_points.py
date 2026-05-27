@@ -639,6 +639,33 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertIn("AI 内容标识符", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
+    # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
+    #   Old pattern: implement-from-design could grow a second intake/helper prompt or producer registry abstraction.
+    #   New principle: implementation stays on the existing implement prompt path; no helper/fork/intake abstraction tokens.
+    def test_issue79_consensus_no_helper_or_fork_intake_abstraction(self) -> None:
+        prompts_root = SKILL_ROOT / "prompts"
+        prompt_paths = sorted(prompts_root.glob("*implement*.md"))
+        prompt_names = {path.name for path in prompt_paths}
+        forbidden_prompt_names = {"implement-from-design-issue.md"}
+        forbidden_tokens = (
+            "ImplementationIntakeV1",
+            "implementation_intake",
+            "implement_intake",
+            "normalizer helper",
+            "producer registry",
+        )
+
+        self.assertIn(prompts_root / "implement.md", prompt_paths)
+        for prompt_name in forbidden_prompt_names:
+            with self.subTest(prompt_name=prompt_name):
+                self.assertNotIn(prompt_name, prompt_names)
+
+        for path in prompt_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden_tokens:
+                with self.subTest(prompt=path.name, token=token):
+                    self.assertNotIn(token, text, f"r8 consensus(#79) forbids {token} in {path.name}")
+
     # Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
     #   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)
     #   New principle: delete solver 单 terminal vocabulary:delete/collapse/abstain/escalate;无 deferred side-channel、无 issue-create 命令建议;'not now' map 到 abstain/false-positive,lifecycle 决策归 controller/maintainer。
@@ -780,6 +807,9 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-007-work-unit-contract-schema):
     #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed
     #   New principle: source-regression coverage keeps WorkUnitV1 v1 containers authoritative and blocks premature work_units_* migration surface
+    # Refactor (iter9/issue79-design-implementation-intake):
+    #   Old pattern: implement prompt could only name audit-iter-N as its context source.
+    #   New principle: WORK_UNIT_SOURCE_REF plus optional DESIGN_DECISION_PATH selects the authoritative intake artifact without adding a prompt fork.
     def render_work_unit_template(self, *, work_unit_id: str | None, cluster_id: str) -> str:
         with tempfile.TemporaryDirectory() as tmp:
             template = Path(tmp) / "template.md"
@@ -811,6 +841,48 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             result = subprocess.run(
                 ["bash", "-lc", script],
                 env={**env, "TEMPLATE": str(template), "OUTPUT": str(output)},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return output.read_text(encoding="utf-8")
+
+    def render_implement_prompt(
+        self,
+        *,
+        cluster_id: str = "cluster-079",
+        work_unit_source_ref: str,
+        design_decision_path: str,
+    ) -> str:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "implement-rendered.md"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "REPO_ROOT": str(REPO_ROOT),
+                    "PROJECT_RULES": "AGENTS.md",
+                    "CLUSTER_ID": cluster_id,
+                    "WORK_UNIT_ID": cluster_id,
+                    "WORK_UNIT_SOURCE_REF": work_unit_source_ref,
+                    "DESIGN_DECISION_PATH": design_decision_path,
+                    "ITERATION": "9",
+                    "WORKTREE_PATH": "/tmp/worktree",
+                    "BRANCH": "refactor/iter9-cluster-079",
+                    "OLD_PATTERN": "single-source implementation context",
+                    "NEW_PRINCIPLE": "consensus artifact drives implementation",
+                    "SCOPE_PATHS": "skills/codex-refactor-loop/prompts/implement.md\nskills/codex-refactor-loop/scripts/test_*.py",
+                    "VERIFICATION_HINTS": "python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'",
+                    "HOST_COMMENT_RULE": "source files English-only; refactor self-documentation required",
+                    "HOST_PROTO_POLICY": "",
+                }
+            )
+
+            script = f'source "{SKILL_ROOT / "scripts" / "controller_lib.sh"}"; render_template "$TEMPLATE" "$OUTPUT"'
+            result = subprocess.run(
+                ["bash", "-lc", script],
+                env={**env, "TEMPLATE": str(SKILL_ROOT / "prompts" / "implement.md"), "OUTPUT": str(output)},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -938,6 +1010,57 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         for marker in ("producer: audit", "WorkUnitV1", "manual-issue"):
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, audit_prompt)
+
+    def test_implement_prompt_audit_dispatch_reads_work_unit_source_ref(self) -> None:
+        source_ref = "$REPO_ROOT/.refactor-loop/runs/audit-iter-9.md"
+        rendered = self.render_implement_prompt(
+            work_unit_source_ref=source_ref,
+            design_decision_path="",
+        )
+
+        required = (
+            f"实现上下文事实源是 `{source_ref}`",
+            "为空时走 audit-backed legacy pathway",
+            f"否则读取 `{source_ref}` 中 \"cluster-079\" 一节",
+            "skills/codex-refactor-loop/prompts/implement.md",
+            "skills/codex-refactor-loop/scripts/test_*.py",
+            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "source files English-only; refactor self-documentation required",
+            "⟦AI:AUTO-LOOP⟧",
+        )
+
+        for marker in required:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, rendered)
+
+    def test_implement_prompt_design_dispatch_reads_consensus_artifact(self) -> None:
+        decision_path = ".refactor-loop/runs/phase9-issue79-r8-judge.md"
+        rendered = self.render_implement_prompt(
+            work_unit_source_ref=decision_path,
+            design_decision_path=decision_path,
+        )
+
+        required = (
+            f"`{decision_path}` 非空时走 design-issue pathway",
+            f"读取 `{REPO_ROOT / decision_path}`",
+            "design-issue consensus artifact",
+            "skills/codex-refactor-loop/prompts/implement.md",
+            "skills/codex-refactor-loop/scripts/test_*.py",
+            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "source files English-only; refactor self-documentation required",
+            "⟦AI:AUTO-LOOP⟧",
+        )
+
+        for marker in required:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, rendered)
+
+    def test_implement_prompt_declares_design_intake_env_vars(self) -> None:
+        implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
+
+        for marker in ("${WORK_UNIT_SOURCE_REF}", "${DESIGN_DECISION_PATH}"):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, implement_prompt)
 
     def test_v1_operational_tokens_are_stable_and_not_renamed(self) -> None:
         # Refactor (iter2/cluster-009-marker-label-compat-migration):
