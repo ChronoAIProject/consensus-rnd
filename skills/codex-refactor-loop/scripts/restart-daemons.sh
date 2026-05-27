@@ -158,7 +158,9 @@ start_daemon() {
     printf "%s\n" "$$" > "$pid_file"
     (
       while true; do
-        date -u +%s > "$hb_file"
+        hb_tmp="${hb_file}.$$"
+        date -u +%s > "$hb_tmp"
+        mv "$hb_tmp" "$hb_file"
         sleep "$hb_interval"
       done
     ) &
