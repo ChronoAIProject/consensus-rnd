@@ -366,6 +366,38 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ),
         )
 
+    def test_stalled_reflector_prompt_fails_closed_on_template_oserror(self) -> None:
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=86, round_no=round_no, verdict="same")
+        self.write_ledger_key("86-1-judge")
+        self.write_ledger_key("86-2-judge")
+        stalled_marker = "META_JUDGE_DONE:escalate:stalled:no-actionable-framing"
+        self.write_log("phase9-issue86-r3-judge.log", stalled_marker)
+
+        original_read_text = Path.read_text
+
+        def read_text_or_fail_template(path: Path, *args: object, **kwargs: object) -> str:
+            if path.name == "meta-reflector-stalled.md":
+                raise OSError("template unavailable ⟦AI:AUTO-LOOP⟧")
+            return original_read_text(path, *args, **kwargs)
+
+        with mock.patch("phase9_router_daemon.Path.read_text", autospec=True, side_effect=read_text_or_fail_template):
+            self.router.tick()
+
+        prompt_path = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue86-r3-reflector.md"
+        prompt = prompt_path.read_text(encoding="utf-8")
+        for token in (
+            "FATAL: missing stalled reflector template",
+            "Do not infer a fallback route",
+            "META_RESOLVED:escalate-human:missing-stalled-reflector-template",
+            "template unavailable",
+            stalled_marker,
+            str(self.repo / ".refactor-loop" / "logs" / "phase9-issue86-r3-minimal.log"),
+            "⟦AI:AUTO-LOOP⟧",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, prompt)
+
     def test_phase9_router_stalled_rejects_changed_recent_verdict_text(self) -> None:
         for round_no, verdict in ((1, "same"), (2, "changed"), (3, "same")):
             self.solver_triplet(issue=39, round_no=round_no, verdict=verdict)
