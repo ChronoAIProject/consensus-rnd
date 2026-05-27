@@ -343,10 +343,18 @@ class Phase9Router:
         return recent[0] == recent[1] == recent[2]
 
     def _collect_markers_from_path(self, path: Path) -> list[str]:
+        # Refactor (iter5/skill-marker-tail-only-scope): same tail-only invariant
+        # as _collect_markers — _stalled_predicate_holds must not trust body-
+        # position SOLVER_DONE echoes when classifying convergence verdicts.
         if not path.exists():
             return []
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return []
+        tail = lines[-self.MARKER_TAIL_LINES :] if len(lines) > self.MARKER_TAIL_LINES else lines
         markers: list[str] = []
-        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        for line in tail:
             marker = self._extract_marker(line)
             if marker:
                 markers.append(marker)

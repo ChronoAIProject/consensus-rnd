@@ -2562,12 +2562,22 @@ class Phase9RouterMarkerTailOnlySourceRegressionTests(unittest.TestCase):
         )
         self.assertIn("MARKER_TAIL_LINES", src,
                       "tail-only constant must remain named")
-        self.assertIn("self.MARKER_TAIL_LINES", src,
-                      "tail-only slice must use the named constant")
+        # Both marker-parsing helpers must slice to tail (_collect_markers AND
+        # _collect_markers_from_path, the latter feeding _stalled_predicate_holds).
+        self.assertGreaterEqual(
+            src.count("self.MARKER_TAIL_LINES"),
+            2,
+            "tail-only slice must apply to both _collect_markers and _collect_markers_from_path",
+        )
         self.assertNotIn(
             'for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():',
             src,
             "_collect_markers must not iterate the entire log body",
+        )
+        self.assertNotIn(
+            'for line in path.read_text(encoding="utf-8", errors="replace").splitlines():',
+            src,
+            "_collect_markers_from_path must not iterate the entire log body",
         )
 
 
