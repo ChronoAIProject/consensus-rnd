@@ -639,6 +639,32 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertIn("AI 内容标识符", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
+    # Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
+    #   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)
+    #   New principle: delete solver 单 terminal vocabulary:delete/collapse/abstain/escalate;无 deferred side-channel、无 issue-create 命令建议;'not now' map 到 abstain/false-positive,lifecycle 决策归 controller/maintainer。
+    def test_delete_solver_has_no_defer_side_channel_or_issue_create_suggestion(self) -> None:
+        solver_delete = (SKILL_ROOT / "prompts" / "solver-delete.md").read_text(encoding="utf-8")
+        scan_text = "\n".join(
+            line
+            for line in solver_delete.splitlines()
+            if "Refactor (iter213/cluster-213-006-delete-solver-defer-escape)" not in line
+            and "Old pattern:" not in line
+            and "New principle:" not in line
+        )
+
+        forbidden_tokens = (
+            "Deferrable",
+            "Tracking issue (if defer)",
+            "tracking issue creation suggestion",
+            "gh issue create command suggestion",
+            "moving cluster to \"deferred\"",
+        )
+        for token in forbidden_tokens:
+            with self.subTest(token=token):
+                self.assertNotIn(token, scan_text)
+        self.assertIn("Either delete/collapse now", scan_text)
+        self.assertIn("Lifecycle decisions stay with controller/maintainer.", scan_text)
+
 
 class ContributingDocSourceRegressionTests(unittest.TestCase):
     def read_contributing(self) -> str:
