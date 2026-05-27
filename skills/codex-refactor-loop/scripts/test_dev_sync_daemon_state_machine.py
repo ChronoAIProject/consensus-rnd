@@ -803,7 +803,7 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
 class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
     def test_skill_phase6_names_integration_sync_daemon_v1(self) -> None:
         text = SKILL_MD.read_text(encoding="utf-8")
-        self.assertIn("Named exception: `IntegrationSyncDaemonV1`", text)
+        self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary", text)
         self.assertIn("resolver continuation push", text)
         self.assertIn("merged-rollup adoption", text)
 
@@ -835,11 +835,14 @@ class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
         self.assertGreater(lease_i, adopt_i)
         self.assertLess(lease_i, forward_i)
 
-    def test_project_rules_unchanged_and_no_forbidden_abstractions_for_integration_sync_daemon_v1(self) -> None:
+    def test_project_rules_default_deny_and_no_forbidden_abstractions_for_integration_sync_daemon_v1(self) -> None:
         for path in (CLAUDE_MD, AGENTS_MD):
             text = path.read_text(encoding="utf-8")
-            self.assertNotIn("IntegrationSyncDaemonV1", text)
-            self.assertNotIn("merged-rollup adoption", text)
+            self.assertIn("no lifecycle authority by default", text)
+            self.assertIn("#53 唯一 carveout", text)
+            self.assertIn("`IntegrationSyncDaemonV1`", text)
+            self.assertIn("专用 integration worktree", text)
+            self.assertIn("Implement/fix worker 仍不得 commit、push、open PR", text)
         src = DEV_SYNC.read_text(encoding="utf-8")
         for forbidden in (
             "IAsyncEnumerable",
@@ -862,12 +865,29 @@ class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
             "gh pr create",
             "gh pr edit",
             "gh pr merge",
+            "gh pr close",
+            "git tag",
+            "gh release",
             "HEAD:$REVIEW_BASE_BRANCH",
             "HEAD:{self.review_base}",
         )
         for token in forbidden_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, src)
+
+    def test_issue53_named_exception_and_daemon_allowlist_are_documented(self) -> None:
+        skill = SKILL_MD.read_text(encoding="utf-8")
+        src = DEV_SYNC.read_text(encoding="utf-8")
+        self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", skill)
+        self.assertIn(".refactor-loop/runs/phase9-issue53-r7-judge.md", skill)
+        self.assertIn("dedicated integration worktree", src)
+        self.assertIn("INTEGRATION_SYNC_DAEMON_V1_GIT_ALLOWLIST", src)
+        for token in ("git fetch", "git rev-list", "git rev-parse", "git merge-base", "git reset --hard", "git rebase --rebase-merges", "git merge --ff-only", "git merge --no-ff", "git push origin HEAD:$INTEGRATION_BRANCH", "git push --force-with-lease origin HEAD:$INTEGRATION_BRANCH"):
+            with self.subTest(token=token):
+                self.assertIn(token, src)
+        for forbidden in ("worker-diff commit", "no PR create/merge/close/edit", "no issue/label", "no tag/release", "no direct REVIEW_BASE push"):
+            with self.subTest(forbidden_doc=forbidden):
+                self.assertIn(forbidden, src)
 
 
 if __name__ == "__main__":

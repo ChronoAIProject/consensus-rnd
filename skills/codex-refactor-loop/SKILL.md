@@ -100,12 +100,16 @@ Stability requires all signals green and fail-closed handling on missing or red 
 `release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, host opt-in name, and lifecycle owner.
 
 ## Release pipeline integration(post-#61)
+The release lifecycle surface consumes decision-artifact-only output: a scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, call the existing version bump command, commit/push mapped manifests, and let `release.yml` publish; or `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same opt-in, bump/publish through guarded jobs, and record the result. `auto_release_gate.py` remains decider only; controller/workflow owns lifecycle operations and must re-validate host opt-in. Forbidden: per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization.
 
-The release lifecycle surface consumes the decision-artifact-only output. A scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, then call the existing version bump command, commit/push the mapped manifest changes, and let `release.yml` publish. Alternatively, `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same host opt-in, bump/publish through its own guarded jobs, and record the result.
+## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
+Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
-In both integrations, `auto_release_gate.py` remains the decider only. The controller or workflow owns lifecycle operations and must re-validate the host opt-in before mutating git state or publishing. Forbidden: do not add per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization. The host opt-in is durable until removed from `host.env`.
+## Named runtime exception — IntegrationSyncDaemonV1(per #53)
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: only in the dedicated integration worktree, sync integration branch via `git fetch`, `git rev-list`, `git rev-parse`, `git merge-base`, `git reset --hard`, `git rebase --rebase-merges`, `git merge --ff-only|--no-ff`, `git push origin HEAD:$INTEGRATION_BRANCH`, and force-with-lease adoption after merged rollup evidence. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct `$REVIEW_BASE_BRANCH` push, no generic lifecycle actor. Implement/fix workers still never commit, push, or open PRs.
 
-Named exception: this autonomous release gate is host-agnostic and has no lifecycle authority. It only reads repo state/GitHub evidence, computes stability, and writes durable decision/candidate artifacts; it does not run `git`, bump mapped release manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
+## Named runtime exception — observability-comment-writers(per #53)
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes `TriageLifecycleRequestV1` artifacts for controller apply instead of mutating labels/body directly.
 
 ## Named runtime exception — IntegrationSyncDaemonV1(per #65)
 The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorizes the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
@@ -701,15 +705,10 @@ Phase 5 guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Phase 6 guardrails:
+Phase 6 guardrails: integration sync is daemon-owned; controller verifies daemon singleton health, reacts to pending events, and does not run an ad hoc sync loop when the daemon is healthy. Sync failures must be visible on GitHub. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
-1. Integration sync is daemon-owned.
-2. Controller verifies daemon singleton health and reacts to pending events.
-3. Controller does not run an ad hoc sync loop when the daemon is healthy.
-4. Sync failures must be visible on GitHub.
-5. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
-
-Named exception: `IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, merged-rollup adoption, and release-rollup pending-event detection. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort. Release-rollup pending events do not grant daemon PR lifecycle authority.
+## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary
+`IntegrationSyncDaemonV1` owns integration branch auto-sync, resolver continuation push, merged-rollup adoption, and release-rollup pending-event detection. The controller verifies singleton health, reads pending events, fetches after daemon pushes, and does not run checkout/merge/push sync while the daemon is healthy. Resolver codexes resolve conflicts only; they never push, reset, or abort. Release-rollup pending events do not grant daemon PR lifecycle authority.
 
 Phase 7 guardrails:
 

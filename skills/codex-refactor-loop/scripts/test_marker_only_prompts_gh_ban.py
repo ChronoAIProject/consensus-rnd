@@ -31,7 +31,21 @@ REQUIRED_BAN_SUBSTRINGS = (
     "gh issue edit --remove-label",
     "gh pr edit --add-label",
     "gh pr edit --remove-label",
+    "git commit/push/checkout/merge/reset/rebase",
     "lifecycle / label 决策归 controller",
+)
+
+FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
+    "gh issue edit --add-label",
+    "gh issue edit --remove-label",
+    "gh pr edit --add-label",
+    "gh pr create",
+    "git commit",
+    "git push",
+    "git checkout",
+    "git merge",
+    "git reset",
+    "git rebase",
 )
 
 
@@ -58,6 +72,16 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                     body,
                     f"{filename} 缺少 Refactor self-doc 块",
                 )
+
+    def test_lifecycle_tokens_only_appear_in_ban_lines(self) -> None:
+        for filename in MARKER_ONLY_PROMPTS:
+            body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+            for token in FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS:
+                for line in body.splitlines():
+                    if token not in line:
+                        continue
+                    with self.subTest(prompt=filename, token=token, line=line):
+                        self.assertRegex(line, r"不可调|禁止|不得|marker/artifact-only|controller")
 
 
 if __name__ == "__main__":

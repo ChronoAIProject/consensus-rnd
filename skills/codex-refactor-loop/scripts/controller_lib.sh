@@ -246,6 +246,76 @@ open_release_rollup_pr_from_pending_event() {
     open_pr_with_label "Release rollup: ${RELEASE_ROLLUP_HEAD} to ${RELEASE_ROLLUP_BASE}" "$body_file" "$RELEASE_ROLLUP_BASE" "$RELEASE_ROLLUP_HEAD"
 }
 
+_triage_lifecycle_pending() {
+  local issue_number="$1" reason="$2"
+  mkdir -p "${REPO_ROOT}/.refactor-loop"
+  printf 'TRIAGE_LIFECYCLE_PENDING:%s:%s\n' "$issue_number" "$reason" >> "${REPO_ROOT}/.refactor-loop/.controller-pending-events.log"
+  echo "apply_triage_lifecycle_request: $reason" >&2
+}
+
+_triage_lifecycle_field() {
+  local artifact="$1" field="$2"
+  awk -v field="$field" '$0=="## TriageLifecycleRequestV1"{in_block=1;next} in_block&&/^## /{exit} in_block&&index($0,field ":")==1{value=substr($0,length(field)+2);sub(/^[[:space:]]+/,"",value);sub(/[[:space:]]+$/,"",value);print value;exit}' "$artifact"
+}
+
+_triage_lifecycle_accept_body() {
+  local artifact="$1"
+  awk '$0=="## Proposed issue body"{in_body=1;next} $0=="## TriageLifecycleRequestV1"{exit} in_body{print}' "$artifact"
+}
+
+# Apply a validated TriageLifecycleRequestV1 artifact.
+# Usage: apply_triage_lifecycle_request <issue-number>
+# Only accepts .refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.md, matching issue_number,
+# fixed label_transition values, and a final AI sentinel. Invalid requests append a
+# TRIAGE_LIFECYCLE_PENDING event and perform no GitHub mutation.
+apply_triage_lifecycle_request() {
+  local issue_number="$1"
+  if [[ ! "$issue_number" =~ ^[0-9]+$ ]]; then
+    _triage_lifecycle_pending "${issue_number:-unknown}" "invalid-issue-number"
+    return 2
+  fi
+
+  local artifact="${REPO_ROOT}/.refactor-loop/runs/triage-issue-${issue_number}.md"
+  local rel_artifact=".refactor-loop/runs/triage-issue-${issue_number}.md"
+  [ -f "$artifact" ] || { _triage_lifecycle_pending "$issue_number" "missing-artifact:$rel_artifact"; return 2; }
+  [ "$(tail -n 1 "$artifact")" = "⟦AI:AUTO-LOOP⟧" ] || { _triage_lifecycle_pending "$issue_number" "missing-final-sentinel:$rel_artifact"; return 2; }
+
+  local requested_issue verdict proposed_body_path label_transition sentinel_present
+  requested_issue="$(_triage_lifecycle_field "$artifact" "issue_number")"
+  verdict="$(_triage_lifecycle_field "$artifact" "verdict")"
+  proposed_body_path="$(_triage_lifecycle_field "$artifact" "proposed_body_path")"
+  label_transition="$(_triage_lifecycle_field "$artifact" "label_transition")"
+  sentinel_present="$(_triage_lifecycle_field "$artifact" "sentinel_present")"
+
+  [ "$requested_issue" = "$issue_number" ] || { _triage_lifecycle_pending "$issue_number" "issue-number-mismatch:$requested_issue"; return 2; }
+  [ "$sentinel_present" = "true" ] || { _triage_lifecycle_pending "$issue_number" "sentinel-field-not-true"; return 2; }
+  case "$verdict:$label_transition" in
+    accept:accept-to-phase9) ;;
+    reject:reject-remove-triage) ;;
+    *)
+      _triage_lifecycle_pending "$issue_number" "invalid-label-transition:$verdict:$label_transition"
+      return 2
+      ;;
+  esac
+
+  if [ "$verdict" = "accept" ]; then
+    [ "$proposed_body_path" = "$rel_artifact" ] || { _triage_lifecycle_pending "$issue_number" "invalid-proposed-body-path:$proposed_body_path"; return 2; }
+    local body_file
+    body_file="$(mktemp /tmp/triage-body.XXXXXXXX)"
+    _triage_lifecycle_accept_body "$artifact" > "$body_file"
+    [ -s "$body_file" ] || { rm -f "$body_file"; _triage_lifecycle_pending "$issue_number" "missing-proposed-body"; return 2; }
+    gh issue edit "$issue_number" "${gh_repo_args[@]}" --body-file "$body_file" \
+      --remove-label "auto-loop-triage" \
+      --add-label "auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进,refactor-design-needed"
+    local status=$?
+    rm -f "$body_file"
+    return "$status"
+  fi
+
+  [ -z "$proposed_body_path" ] || [ "$proposed_body_path" = '""' ] || { _triage_lifecycle_pending "$issue_number" "reject-proposed-body-must-be-empty"; return 2; }
+  gh issue edit "$issue_number" "${gh_repo_args[@]}" --remove-label "auto-loop-triage"
+}
+
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 # Apply the maintainer-decision label only after checking maintainer-directive artifacts.
 # Usage: apply_human_label_or_skip <pr-number> <reason-or-topic>

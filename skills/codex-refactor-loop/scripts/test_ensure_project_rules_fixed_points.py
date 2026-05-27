@@ -364,6 +364,66 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("base=dev", result.stdout)
         self.assertIn("head=auto-refact-dev", result.stdout)
 
+    def test_triage_lifecycle_helper_accepts_valid_accept_request(self) -> None:
+        prelude = (
+            'gh() { printf "%s\\n" "$*" >> "$GH_CALLS"; return 0; }\n'
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## Proposed issue body\nwork_unit_id: issue-53\nkind: manual-work-unit\nproducer: manual-issue\nsource_ref: gh-issue-53\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: accept\nproposed_body_path: .refactor-loop/runs/triage-issue-53.md\nlabel_transition: accept-to-phase9\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        result = self.run_controller_lib_harness(
+            'apply_triage_lifecycle_request 53; cat "$GH_CALLS"',
+            prelude=prelude,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("issue edit 53", result.stdout)
+        self.assertIn("--body-file", result.stdout)
+        self.assertIn("--remove-label auto-loop-triage", result.stdout)
+        self.assertIn("--add-label auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进,refactor-design-needed", result.stdout)
+
+    def test_triage_lifecycle_helper_rejects_missing_sentinel(self) -> None:
+        prelude = (
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n'
+            'REQ\n'
+        )
+
+        result = self.run_controller_lib_harness(
+            'apply_triage_lifecycle_request 53; cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"',
+            prelude=prelude,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("TRIAGE_LIFECYCLE_PENDING:53:missing-final-sentinel", result.stdout)
+
+    def test_triage_lifecycle_helper_rejects_issue_mismatch_and_invalid_label_transition(self) -> None:
+        cases = (
+            ("mismatch", "issue_number: 54", "verdict: reject", "label_transition: reject-remove-triage", "issue-number-mismatch:54"),
+            ("bad_label", "issue_number: 53", "verdict: accept", "label_transition: auto-loop", "invalid-label-transition:accept:auto-loop"),
+        )
+        for name, issue_line, verdict_line, label_line, expected in cases:
+            with self.subTest(case=name):
+                prelude = (
+                    'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+                    'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<REQ\n'
+                    f'## TriageLifecycleRequestV1\n{issue_line}\n{verdict_line}\nproposed_body_path: ""\n{label_line}\n'
+                    'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+                    'REQ\n'
+                )
+                result = self.run_controller_lib_harness(
+                    'apply_triage_lifecycle_request 53; cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"',
+                    prelude=prelude,
+                )
+                self.assertEqual(result.returncode, 0)
+                self.assertIn(f"TRIAGE_LIFECYCLE_PENDING:53:{expected}", result.stdout)
+
     def test_integration_sync_daemon_v1_release_rollup_exception_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
@@ -381,11 +441,42 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("open_release_rollup_pr_from_pending_event", reference)
         self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
         self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
+        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "integration worktree", "force-with-lease adoption"):
+            self.assertIn(marker, skill)
 
         for forbidden in ("$RELEASE_BRANCH", "RELEASE_BRANCH", "ReleaseRollupRequestV1"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)
         self.assertNotIn("gh pr create", daemon)
+
+    def test_issue53_observability_and_project_rules_default_deny_contract(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        post_rules = (SKILL_ROOT / "prompts" / "_github-post-rules.md").read_text(encoding="utf-8")
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+
+        for marker in ("## Named runtime exception — observability-comment-writers(per #53)", "comments, PR body edit, reactions", "deleting/updating own progress comments only", "Forbidden", "label mutation"):
+            self.assertIn(marker, skill)
+        for path in (REPO_ROOT / "CLAUDE.md", REPO_ROOT / "AGENTS.md"):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=path.name):
+                self.assertIn("no lifecycle authority by default", text)
+                self.assertIn("#53 唯一 carveout", text)
+                self.assertIn("IntegrationSyncDaemonV1", text)
+                self.assertIn("Implement/fix worker 仍不得 commit、push、open PR", text)
+
+        for forbidden in (
+            "gh issue edit --add-label",
+            "gh issue edit --remove-label",
+            "gh pr edit --add-label",
+        ):
+            with self.subTest(post_rules_forbidden=forbidden):
+                self.assertNotIn(forbidden, post_rules)
+        self.assertIn("gh issue view / gh issue comment", post_rules)
+        self.assertIn("gh pr view / gh pr comment / gh pr edit --body-file", post_rules)
+
+        for marker in ("TriageLifecycleRequestV1", "label_transition`(`accept-to-phase9`|`reject-remove-triage`)", "不直接 `gh issue edit` 改 body / label"):
+            self.assertIn(marker, triage_prompt)
+        self.assertNotIn("gh issue edit ${ISSUE_NUMBER}", triage_prompt)
 
     def test_python_github_repo_slug_env_branches(self) -> None:
         from repo_config import github_repo_slug
@@ -1267,6 +1358,19 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         for marker in required_markers:
             with self.subTest(marker=marker):
                 self.assertIn(marker, triage_prompt)
+
+    def test_triage_external_issue_uses_artifact_only_lifecycle_handoff(self) -> None:
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+
+        required = ("TriageLifecycleRequestV1", "issue_number", "verdict`(`accept`|`reject`)", "proposed_body_path", "label_transition`(`accept-to-phase9`|`reject-remove-triage`)", "evidence_refs", "sentinel_present", "created_at", "artifact 末尾独立一行 `⟦AI:AUTO-LOOP⟧`")
+        for marker in required:
+            with self.subTest(marker=marker):
+                self.assertIn(marker, triage_prompt)
+
+        self.assertNotIn("gh issue edit ${ISSUE_NUMBER}", triage_prompt)
+        for marker in ("apply_triage_lifecycle_request()", "TRIAGE_LIFECYCLE_PENDING", 'tail -n 1 "$artifact"', "⟦AI:AUTO-LOOP⟧", "accept:accept-to-phase9", "reject:reject-remove-triage"):
+            self.assertIn(marker, controller_lib)
 
     def test_triage_prompt_drops_old_refactor_only_and_docs_tooling_gates(self) -> None:
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")

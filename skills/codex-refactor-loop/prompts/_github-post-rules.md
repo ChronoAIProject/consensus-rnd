@@ -44,8 +44,8 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 
 ## 你能调的 gh 命令
 
-- `gh issue view / gh issue comment / gh issue edit --add-label / --remove-label`
-- `gh pr view / gh pr comment / gh pr edit --body-file / --add-label`
+- `gh issue view / gh issue comment`
+- `gh pr view / gh pr comment / gh pr edit --body-file`
 - `gh api ...` 读 / `gh api ... -X POST -f content=eyes` react
 - `mktemp /tmp/codex-post.XXXXXXXX` 写临时 body file
 
