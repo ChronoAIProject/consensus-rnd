@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 import apply_integration_sync_request
 import apply_triage_decision
+from triage_decisions import ACCEPT_LABELS
 
 
 class IntegrationSyncApplyHelperTests(unittest.TestCase):
@@ -28,6 +29,7 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
         self.request_path = self.repo / ".refactor-loop" / "runs" / "integration-sync-request-test.json"
         self.request_path.parent.mkdir(parents=True)
         self.request_path.write_text(json.dumps(self.valid_request()) + "\n", encoding="utf-8")
+        self.commands: list[list[str]] = []
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -52,6 +54,7 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
         self.request_path.write_text(json.dumps(data) + "\n", encoding="utf-8")
 
     def fake_run(self, cmd: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess[str]:
+        self.commands.append(cmd)
         if cmd[:2] == ["git", "fetch"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:3] == ["git", "rev-parse", "origin/auto-refact-dev"]:
@@ -74,6 +77,71 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
         with patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev", "REVIEW_BASE_BRANCH": "dev"}, clear=False):
             with patch.object(apply_integration_sync_request, "run", self.fake_run):
                 return apply_integration_sync_request.apply_request(self.request_path, repo=self.repo, worktree=self.worktree)
+
+    def applied_record(self) -> Path:
+        return self.repo / ".refactor-loop" / "runs" / "integration-sync-applied" / f"{self.request_path.stem}.applied.json"
+
+    def test_applies_valid_requests_with_bounded_git_side_effects_and_no_pending_event(self) -> None:
+        cases = [
+            (
+                "push-local-ahead",
+                {},
+                [
+                    ["git", "rev-list", "--count", "origin/auto-refact-dev..HEAD"],
+                    ["git", "push", "origin", "HEAD:auto-refact-dev"],
+                ],
+            ),
+            (
+                "continue-resolved-merge",
+                {},
+                [
+                    ["git", "merge", "--continue"],
+                    ["git", "push", "origin", "HEAD:auto-refact-dev"],
+                ],
+            ),
+            (
+                "forward-sync-review-base",
+                {},
+                [
+                    ["git", "merge", "--ff-only", "origin/dev"],
+                    ["git", "push", "origin", "HEAD:auto-refact-dev"],
+                ],
+            ),
+            (
+                "adopt-merged-rollup",
+                {"old_rollup_head": "old-head", "old_rollup_ahead_count": 1},
+                [
+                    ["git", "merge-base", "--is-ancestor", "old-head", "origin/auto-refact-dev"],
+                    ["git", "rev-list", "--count", "old-head..origin/auto-refact-dev"],
+                    ["git", "reset", "--hard", "origin/auto-refact-dev"],
+                    ["git", "rebase", "--rebase-merges", "--onto", "origin/dev", "old-head"],
+                    ["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"],
+                ],
+            ),
+        ]
+
+        for kind, updates, expected in cases:
+            with self.subTest(kind=kind):
+                self.commands = []
+                data = {"kind": kind, **updates}
+                self.write_request(data)
+                marker = self.applied_record()
+                if marker.exists():
+                    marker.unlink()
+                merge_head = self.worktree / ".git" / "MERGE_HEAD"
+                merge_head.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "continue-resolved-merge":
+                    merge_head.write_text("merge\n", encoding="utf-8")
+                elif merge_head.exists():
+                    merge_head.unlink()
+
+                self.assertEqual(self.apply(), 0)
+                applied = json.loads(marker.read_text(encoding="utf-8"))
+                self.assertEqual(applied["status"], "applied")
+                self.assertEqual(applied["reason"], kind)
+                for command in expected:
+                    self.assertIn(command, self.commands)
+                self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
 
     def self_assert_rejected(self, reason: str) -> None:
         self.assertEqual(self.apply(), 2)
@@ -149,6 +217,67 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         }
         data.update(updates)
         self.decision_path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+
+    def applied_record(self) -> Path:
+        return self.repo / ".refactor-loop" / "runs" / "triage-decisions-applied" / f"{self.decision_path.stem}.applied.json"
+
+    def test_reject_happy_path_comments_removes_triage_label_and_records_applied(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], _repo: Path) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return subprocess.CompletedProcess(["gh", *args], 0, "", "")
+
+        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+            with patch.object(apply_triage_decision, "run_gh", fake_gh):
+                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 0)
+
+        self.assertEqual(
+            calls,
+            [
+                ["issue", "comment", "53", "--body-file", str((self.repo / ".refactor-loop" / "runs" / "comment.md").resolve())],
+                ["issue", "edit", "53", "--remove-label", "auto-loop-triage"],
+            ],
+        )
+        applied = json.loads(self.applied_record().read_text(encoding="utf-8"))
+        self.assertEqual(applied["status"], "applied")
+        self.assertEqual(applied["reason"], "reject")
+        self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
+
+    def test_accept_happy_path_comments_edits_body_adds_fixed_labels_and_records_applied(self) -> None:
+        self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], _repo: Path) -> subprocess.CompletedProcess[str]:
+            calls.append(args)
+            return subprocess.CompletedProcess(["gh", *args], 0, "", "")
+
+        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+            with patch.object(apply_triage_decision, "run_gh", fake_gh):
+                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="accept"), 0)
+
+        expected_edit = [
+            "issue",
+            "edit",
+            "53",
+            "--body-file",
+            str((self.repo / ".refactor-loop" / "runs" / "body.md").resolve()),
+            "--remove-label",
+            "auto-loop-triage",
+        ]
+        for label in ACCEPT_LABELS:
+            expected_edit += ["--add-label", label]
+        self.assertEqual(
+            calls,
+            [
+                ["issue", "comment", "53", "--body-file", str((self.repo / ".refactor-loop" / "runs" / "comment.md").resolve())],
+                expected_edit,
+            ],
+        )
+        applied = json.loads(self.applied_record().read_text(encoding="utf-8"))
+        self.assertEqual(applied["status"], "applied")
+        self.assertEqual(applied["reason"], "accept")
+        self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
 
     def test_reject_apply_requires_current_triage_label_and_same_issue(self) -> None:
         with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: []):

@@ -462,7 +462,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只 bootstrap state + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
+- ❌ 只 bootstrap state + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑

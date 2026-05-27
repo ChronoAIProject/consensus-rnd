@@ -36,7 +36,6 @@ DAEMON_NAMES = (
     "codex-progress-reporter.sh",
     "comment-monitor.sh",
     "dev_sync_daemon.py",
-    "triage-monitor.sh",
     "phase9_router_daemon.py",
 )
 HEARTBEAT_FRESH_SECONDS = 90

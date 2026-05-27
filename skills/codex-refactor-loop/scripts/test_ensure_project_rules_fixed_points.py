@@ -2009,6 +2009,24 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
         self.assertIn("controller wakeup sweep", skill + reference)
         self.assertNotIn("triage-monitor-state.json", skill + reference)
 
+    def test_daemon_roster_source_regression_has_no_six_daemon_or_triage_required_runtime(self) -> None:
+        text = (
+            (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+            + "\n"
+            + (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        )
+        forbidden = (
+            "6 daemon",
+            "six required daemons",
+            "required-runtime triage-monitor",
+            "triage-monitor required-runtime",
+            "triage-monitor.sh required",
+            "required triage-monitor.sh",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, text)
+
     def test_dev_sync_merge_in_progress_detects_linked_worktree_gitdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
