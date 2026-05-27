@@ -225,10 +225,23 @@ class Phase9Router:
                 ledger.add(key)
 
     def _dispatch_meta_judge_routes(self, markers: list[Marker], ledger: set[str]) -> None:
+        # Refactor (iter5/skill-converge-source-and-monotonic-guard):
+        #   Old pattern: any log with `META_JUDGE_DONE:converge:round-N` marker
+        #   could trigger solver dispatch, and `target_round` was accepted even
+        #   if it equaled or preceded the source log's round. Result: solver
+        #   logs echoing prompt-body marker examples plus judge-self-referential
+        #   verdicts spawned cascading r3..r8 solver rounds with judge gaps.
+        #   New principle: only judge-role source logs may authorize a converge
+        #   dispatch (JUDGE markers come from JUDGE logs), and `target_round`
+        #   must be strictly greater than the source round (monotonic).
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
+                if marker.role != "judge":
+                    continue
                 target_round = self._round_from_converge(marker.marker)
                 if target_round is None:
+                    continue
+                if target_round <= marker.round:
                     continue
                 for role in ROLES:
                     key = self._key(marker.issue, target_round, role)
@@ -247,6 +260,8 @@ class Phase9Router:
                 continue
 
             if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
+                if marker.role != "judge":
+                    continue
                 key = self._key(marker.issue, marker.round, "reflector")
                 log_path = self._log_path(marker.issue, marker.round, "reflector")
                 if key in ledger or self._in_flight(log_path):
@@ -277,9 +292,15 @@ class Phase9Router:
 
     def _directly_handled(self, marker: Marker, ledger: set[str]) -> bool:
         if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
+            if marker.role != "judge":
+                return False
             target_round = self._round_from_converge(marker.marker)
-            return target_round is not None and all(self._key(marker.issue, target_round, role) in ledger for role in ROLES)
+            if target_round is None or target_round <= marker.round:
+                return False
+            return all(self._key(marker.issue, target_round, role) in ledger for role in ROLES)
         if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
+            if marker.role != "judge":
+                return False
             return self._key(marker.issue, marker.round, "reflector") in ledger
         return False
 

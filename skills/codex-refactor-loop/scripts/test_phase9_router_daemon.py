@@ -158,6 +158,86 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
 
+    def test_phase9_router_converge_ignores_non_judge_source_logs(self) -> None:
+        # Refactor (iter5/skill-converge-source-and-monotonic-guard):
+        # solver logs echoing a converge marker (e.g. from prompt body or codex
+        # brainstorming) must not authorize daemon to dispatch next-round
+        # solvers. Only judge-role logs may carry an authoritative converge
+        # verdict.
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue79-r2-{role}.log",
+                f"SOLVER_DONE:{role}:propose:settle",
+                "META_JUDGE_DONE:converge:round-3:echoed-from-prompt-body",
+            )
+
+        self.router.tick()
+
+        for command in self.commands:
+            joined = " ".join(command)
+            self.assertNotIn("phase9-issue79-r3-", joined,
+                             "solver-log converge marker must not spawn next round")
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        for forbidden in ("79-3-minimal", "79-3-structural", "79-3-delete"):
+            self.assertNotIn(forbidden, ledger_keys)
+
+    def test_phase9_router_converge_requires_strictly_greater_target_round(self) -> None:
+        # Refactor (iter5/skill-converge-source-and-monotonic-guard):
+        # judge emitting converge:round-N where N <= source round (e.g. r2 judge
+        # emitting converge:round-2 self-reference, or a smaller round number)
+        # must be treated as noop — otherwise daemon enters spawn loops over
+        # past rounds.
+        self.write_log(
+            "phase9-issue79-r2-judge.log",
+            "META_JUDGE_DONE:converge:round-2:self-reference-bug",
+        )
+        self.write_log(
+            "phase9-issue79-r5-judge.log",
+            "META_JUDGE_DONE:converge:round-4:backward-reference-bug",
+        )
+
+        self.router.tick()
+
+        for command in self.commands:
+            joined = " ".join(command)
+            self.assertNotIn("phase9-issue79-r2-minimal.log", joined)
+            self.assertNotIn("phase9-issue79-r2-structural.log", joined)
+            self.assertNotIn("phase9-issue79-r2-delete.log", joined)
+            self.assertNotIn("phase9-issue79-r4-minimal.log", joined)
+        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
+        for forbidden in ("79-2-minimal", "79-2-structural", "79-2-delete",
+                          "79-4-minimal", "79-4-structural", "79-4-delete"):
+            self.assertNotIn(forbidden, ledger_keys)
+
+    def test_phase9_router_converge_valid_judge_marker_still_spawns_next_round(self) -> None:
+        # Confirm the source/monotonic guards do not break the happy path:
+        # r4 judge emitting converge:round-5 must still spawn r5 solver triplet.
+        self.write_log(
+            "phase9-issue80-r4-judge.log",
+            "META_JUDGE_DONE:converge:round-5:legitimate-next-round",
+        )
+
+        self.router.tick()
+
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue80-r5-minimal.log", logs)
+        self.assertIn("phase9-issue80-r5-structural.log", logs)
+        self.assertIn("phase9-issue80-r5-delete.log", logs)
+
+    def test_phase9_router_stalled_ignores_non_judge_source_logs(self) -> None:
+        # Solver log emitting an escalate:stalled marker (echo/brainstorm)
+        # must not spawn reflector.
+        self.write_log(
+            "phase9-issue81-r3-minimal.log",
+            "SOLVER_DONE:minimal:ok:summary",
+            "META_JUDGE_DONE:escalate:stalled:echoed-from-prompt",
+        )
+
+        self.router.tick()
+
+        self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
+        self.assertNotIn("81-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
     def test_phase9_router_stalled_requires_valid_predicate(self) -> None:
         self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
         self.router.tick()

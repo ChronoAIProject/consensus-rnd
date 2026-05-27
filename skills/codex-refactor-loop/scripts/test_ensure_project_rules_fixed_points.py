@@ -2548,5 +2548,36 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIsNone(re.search(r"\.proto\b", prompt_text))
 
 
+class Phase9RouterConvergeGuardSourceRegressionTests(unittest.TestCase):
+    """Phase 9 router daemon must enforce judge-only source + monotonic round on converge dispatch."""
+
+    DAEMON_PATH = SKILL_ROOT / "scripts" / "phase9_router_daemon.py"
+
+    def test_dispatch_meta_judge_routes_requires_judge_role_and_monotonic_round(self) -> None:
+        src = self.DAEMON_PATH.read_text(encoding="utf-8")
+        self.assertIn(
+            "Refactor (iter5/skill-converge-source-and-monotonic-guard)",
+            src,
+            "refactor self-documentation must remain attached to converge guard",
+        )
+        self.assertIn('if marker.role != "judge":', src,
+                      "converge dispatch must require judge-role source log")
+        self.assertIn("if target_round <= marker.round:", src,
+                      "converge dispatch must require strictly greater target round")
+
+    def test_directly_handled_mirrors_converge_guards(self) -> None:
+        src = self.DAEMON_PATH.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            src.count('if marker.role != "judge":'),
+            2,
+            "judge-role guard must apply in both _dispatch_meta_judge_routes and _directly_handled",
+        )
+        self.assertGreaterEqual(
+            src.count("target_round <= marker.round"),
+            2,
+            "monotonic round guard must apply in both _dispatch_meta_judge_routes and _directly_handled",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
