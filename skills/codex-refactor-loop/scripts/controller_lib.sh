@@ -127,24 +127,14 @@ open_pr_with_label() {
   export PR_NUM
 }
 
-# Open the release rollup PR from a daemon pending event.
-# Usage: open_release_rollup_pr_from_pending_event <event-json> <body-file>
-# Validates the event is exactly $INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH
-# with non-empty SHA/ahead facts, then delegates lifecycle creation to
-# open_pr_with_label. This helper belongs to the controller lifecycle surface;
-# dev_sync_daemon.py must only emit the pending event.
-open_release_rollup_pr_from_pending_event() {
-  local event_json="$1" body_file="$2"
+_parse_release_rollup_pending_event() {
+  local event_json="$1"
   if [ -z "$event_json" ]; then
     echo "open_release_rollup_pr_from_pending_event: missing event json" >&2
     return 2
   fi
-  if [ -z "$body_file" ] || [ ! -f "$body_file" ]; then
-    echo "open_release_rollup_pr_from_pending_event: missing body file" >&2
-    return 2
-  fi
 
-  local parsed head base integration_sha review_base_sha ahead_count reason
+  local parsed
   parsed=$(EVENT_JSON="$event_json" python3 - <<'PY'
 import json
 import os
@@ -166,17 +156,17 @@ fields = [
 missing = [field for field in fields if event.get(field) in ("", None)]
 if missing:
     print("missing facts: " + ",".join(missing), file=sys.stderr)
-    sys.exit(3)
+    sys.exit(2)
 
 try:
     ahead = int(event["ahead_count"])
 except Exception:
     print("ahead_count must be an integer", file=sys.stderr)
-    sys.exit(3)
+    sys.exit(2)
 
 if ahead <= 0:
     print("ahead_count must be positive", file=sys.stderr)
-    sys.exit(3)
+    sys.exit(2)
 
 values = [
     event["integration_branch"],
@@ -194,42 +184,66 @@ PY
     return "$status"
   }
 
-  IFS=$'\t' read -r head base integration_sha review_base_sha ahead_count reason <<< "$parsed"
-  if [ -z "$head" ] || [ -z "$base" ]; then
+  IFS=$'\t' read -r RELEASE_ROLLUP_HEAD RELEASE_ROLLUP_BASE RELEASE_ROLLUP_INTEGRATION_SHA_VALUE RELEASE_ROLLUP_REVIEW_BASE_SHA_VALUE RELEASE_ROLLUP_AHEAD_COUNT_VALUE RELEASE_ROLLUP_REASON_VALUE <<< "$parsed"
+  if [ -z "$RELEASE_ROLLUP_HEAD" ] || [ -z "$RELEASE_ROLLUP_BASE" ]; then
     echo "open_release_rollup_pr_from_pending_event: head/base required" >&2
     return 2
   fi
-  if [ "$head" = "$base" ]; then
+  if [ "$RELEASE_ROLLUP_HEAD" = "$RELEASE_ROLLUP_BASE" ]; then
     echo "open_release_rollup_pr_from_pending_event: head and base must differ" >&2
     return 2
   fi
-  if [ "$head" != "$INTEGRATION_BRANCH" ]; then
+  if [ "$RELEASE_ROLLUP_HEAD" != "$INTEGRATION_BRANCH" ]; then
     echo "open_release_rollup_pr_from_pending_event: head must equal INTEGRATION_BRANCH" >&2
     return 2
   fi
-  if [ "$base" != "$REVIEW_BASE_BRANCH" ]; then
+  if [ "$RELEASE_ROLLUP_BASE" != "$REVIEW_BASE_BRANCH" ]; then
     echo "open_release_rollup_pr_from_pending_event: base must equal REVIEW_BASE_BRANCH" >&2
     return 2
   fi
-  if [ -z "$integration_sha" ] || [ -z "$review_base_sha" ] || [ -z "$ahead_count" ]; then
+  if [ -z "$RELEASE_ROLLUP_INTEGRATION_SHA_VALUE" ] || [ -z "$RELEASE_ROLLUP_REVIEW_BASE_SHA_VALUE" ] || [ -z "$RELEASE_ROLLUP_AHEAD_COUNT_VALUE" ]; then
     echo "open_release_rollup_pr_from_pending_event: sha and ahead facts required" >&2
     return 2
   fi
+}
+
+_release_rollup_pr_exists() {
+  local head="$1" base="$2"
+  gh pr list "${gh_repo_args[@]}" --state open --head "$head" --base "$base" --limit 1 --json number --jq '.[0].number // ""' 2>/dev/null || true
+}
+
+# Refactor (iter5/issue-65-release-rollup-pending-event):
+#   Old pattern: release-rollup event parsing, duplicate-open check, and PR creation were packed into one large controller helper.
+#   New principle: keep the public lifecycle helper as orchestration; isolate event parsing and existing-rollup lookup behind narrow helpers.
+# Open the release rollup PR from a daemon pending event.
+# Usage: open_release_rollup_pr_from_pending_event <event-json> <body-file>
+# Validates the event is exactly $INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH
+# with non-empty SHA/ahead facts, then delegates lifecycle creation to
+# open_pr_with_label. This helper belongs to the controller lifecycle surface;
+# dev_sync_daemon.py must only emit the pending event.
+open_release_rollup_pr_from_pending_event() {
+  local event_json="$1" body_file="$2"
+  if [ -z "$body_file" ] || [ ! -f "$body_file" ]; then
+    echo "open_release_rollup_pr_from_pending_event: missing body file" >&2
+    return 2
+  fi
+
+  _parse_release_rollup_pending_event "$event_json" || return "$?"
 
   local existing
-  existing=$(gh pr list "${gh_repo_args[@]}" --state open --head "$head" --base "$base" --limit 1 --json number --jq '.[0].number // ""' 2>/dev/null || true)
-  if [ -n "$existing" ]; then
+  existing=$(_release_rollup_pr_exists "$RELEASE_ROLLUP_HEAD" "$RELEASE_ROLLUP_BASE")
+  if [[ -n "$existing" && "$existing" =~ ^[0-9]+$ ]]; then
     PR_NUM="$existing"
     export PR_NUM
     echo "release-rollup PR already exists: #$existing"
     return 0
   fi
 
-  RELEASE_ROLLUP_REASON="$reason" \
-  RELEASE_ROLLUP_INTEGRATION_SHA="$integration_sha" \
-  RELEASE_ROLLUP_REVIEW_BASE_SHA="$review_base_sha" \
-  RELEASE_ROLLUP_AHEAD_COUNT="$ahead_count" \
-    open_pr_with_label "Release rollup: ${head} to ${base}" "$body_file" "$base" "$head"
+  RELEASE_ROLLUP_REASON="$RELEASE_ROLLUP_REASON_VALUE" \
+  RELEASE_ROLLUP_INTEGRATION_SHA="$RELEASE_ROLLUP_INTEGRATION_SHA_VALUE" \
+  RELEASE_ROLLUP_REVIEW_BASE_SHA="$RELEASE_ROLLUP_REVIEW_BASE_SHA_VALUE" \
+  RELEASE_ROLLUP_AHEAD_COUNT="$RELEASE_ROLLUP_AHEAD_COUNT_VALUE" \
+    open_pr_with_label "Release rollup: ${RELEASE_ROLLUP_HEAD} to ${RELEASE_ROLLUP_BASE}" "$body_file" "$RELEASE_ROLLUP_BASE" "$RELEASE_ROLLUP_HEAD"
 }
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.

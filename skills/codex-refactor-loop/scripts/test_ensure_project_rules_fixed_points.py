@@ -267,6 +267,55 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("unexpected open", result.stdout)
 
+    def test_release_rollup_controller_helper_rejects_non_integer_ahead_count(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":"bad"}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ahead_count must be an integer", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_zero_ahead_count(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":0}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("ahead_count must be positive", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_skips_open_pr_with_label_when_existing_rollup_exists(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","review_base_sha":"b","ahead_count":2,'
+            '"reason":"integration-ahead-review-base-without-open-rollup-pr"}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"gh() {{ if [[ \"$1 $2\" == \"pr list\" ]]; then printf '94\\n'; return 0; fi; command gh \"$@\"; }}; "
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"; "
+            'printf "PR_NUM=%s\\n" "$PR_NUM"',
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("release-rollup PR already exists: #94", result.stdout)
+        self.assertIn("PR_NUM=94", result.stdout)
+        self.assertNotIn("unexpected open", result.stdout)
+
     def test_release_rollup_controller_helper_accepts_valid_event_and_delegates_to_open_pr_with_label(self) -> None:
         event_json = (
             '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'

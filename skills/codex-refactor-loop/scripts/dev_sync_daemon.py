@@ -375,6 +375,9 @@ class IntegrationSyncDaemonV1:
                 return True
         return False
 
+    # Refactor (iter5/issue-65-release-rollup-pending-event):
+    #   Old pattern: no release-rollup detection when integration was ahead of the review base without an open PR.
+    #   New principle: detect ahead + no open PR, then emit DEV_SYNC_PENDING:release-rollup-needed:<json>.
     def detect_release_rollup_needed(self, cwd: Path) -> bool:
         if self.release_rollup_min_commits <= 0:
             return False
