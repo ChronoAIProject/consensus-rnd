@@ -666,93 +666,19 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("Lifecycle decisions stay with controller/maintainer.", scan_text)
 
 
-class ContributingDocSourceRegressionTests(unittest.TestCase):
-    def read_contributing(self) -> str:
-        return (REPO_ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+class RootMarkdownClosureSourceRegressionTests(unittest.TestCase):
+    # Refactor (iter214/cluster-214-003-root-md-surface-leak):
+    #   Old pattern: Root contains durable Markdown files outside the explicit root .md allowlist(CONTRIBUTING.md / IMPROVEMENT-BACKLOG.md 违反 CLAUDE.md 根目录 .md 收口子句)。
+    #   New principle: Root Markdown remains limited to documented allowlist;extra durable docs move under their owning skill/docs surface or are deleted。
+    def test_root_durable_document_surface_matches_claude_md_allowlist(self) -> None:
+        allowed_root_documents = {"CLAUDE.md", "README.md", "AGENTS.md", "LICENSE", "GEMINI.md", "CHANGELOG.md"}
+        allowed_root_markdown = {name for name in allowed_root_documents if name.endswith(".md")}
 
-    def test_contributing_doc_exists_with_stable_anchors(self) -> None:
-        contributing = REPO_ROOT / "CONTRIBUTING.md"
-        self.assertTrue(contributing.exists())
-        text = contributing.read_text(encoding="utf-8")
-        anchors = (
-            "#development-flow",
-            "#issues",
-            "#commits",
-            "#pull-requests",
-            "#skill-changes",
-            "#style-and-format",
-            "#ai-generated-content",
-            "#policy-boundaries",
-        )
+        root_markdown = {path.name for path in REPO_ROOT.glob("*.md")}
+        root_durable_docs = {path.name for path in REPO_ROOT.iterdir() if path.name in allowed_root_documents}
 
-        for anchor in anchors:
-            with self.subTest(anchor=anchor):
-                self.assertIn(anchor, text)
-
-    def test_contributing_doc_links_authoritative_owners(self) -> None:
-        text = self.read_contributing()
-        required_literals = (
-            "CLAUDE.md",
-            "README.md",
-            "skills/codex-refactor-loop/SKILL.md",
-            "#26",
-            "#31",
-            "#32",
-            "#20",
-            "#17",
-            ".version-bump.json",
-            "superpowers:writing-skills",
-        )
-
-        for literal in required_literals:
-            with self.subTest(literal=literal):
-                self.assertIn(literal, text)
-
-    def test_contributing_doc_carries_machine_grep_literals(self) -> None:
-        text = self.read_contributing()
-        required_literals = (
-            "feat(skill):",
-            "fix(skill):",
-            "refactor(skill):",
-            "docs(skill):",
-            "chore:",
-            "⟦AI:AUTO-LOOP⟧",
-            "auto-loop-triage",
-            "refactor-design-needed",
-            "phase9-auto-solve",
-            "frontmatter",
-            "Use when",
-            "REFERENCE.md",
-            "scripts/",
-            "prompts/",
-        )
-
-        for literal in required_literals:
-            with self.subTest(literal=literal):
-                self.assertIn(literal, text)
-
-    def test_contributing_doc_does_not_redefine_other_policy(self) -> None:
-        text = self.read_contributing()
-        forbidden_literals = (
-            "2 approve",
-            "unanimous approve",
-            "consensus-rnd-ci",
-            "contract-tests",
-            "manifest-version-sync",
-            "lint-advisory",
-            "workflow_dispatch",
-            "git tag",
-            "gh release create",
-            "npm publish",
-            "C#",
-            ".NET",
-            "proto",
-            "branch protection command",
-        )
-
-        for literal in forbidden_literals:
-            with self.subTest(literal=literal):
-                self.assertNotIn(literal, text)
+        self.assertEqual(root_markdown - allowed_root_markdown, set())
+        self.assertTrue(root_durable_docs <= allowed_root_documents)
 
 
 class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
