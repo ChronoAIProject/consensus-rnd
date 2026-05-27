@@ -81,7 +81,7 @@ Write `${FIX_OUTPUT_PATH}` with this structure:
 
 ## Recommendation for next round
 - <if approve likely after this round, say "expect unanimous">
-- <if blocked, say "escalate human" + paste the FIX_BLOCKED line>
+- <if blocked, say "controller routes to reflector/meta-layer" + paste the FIX_BLOCKED line>
 ```
 
 ### Step 5 — Emit marker
@@ -89,7 +89,7 @@ Write `${FIX_OUTPUT_PATH}` with this structure:
 End your output with EXACTLY one of:
 
 - `FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>` — successful round, controller will commit + re-dispatch reviewers.
-- `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>` — controller will escalate to human.
+- `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>` — controller routes to reflector/meta-layer.
 
 ## Marker emission allowlist(强制)
 

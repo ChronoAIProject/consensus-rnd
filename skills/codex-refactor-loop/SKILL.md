@@ -252,7 +252,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
-| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策` and post reason banner if not skipped by maintainer-directive. |
+| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策`, passing the full marker source; the helper fails closed without that marker and posts the reason banner only if not skipped by maintainer-directive. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Phase 8 reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Phase 9 depending on reason. |
 | Latest complete Phase 8 reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |

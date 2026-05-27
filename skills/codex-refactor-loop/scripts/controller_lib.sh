@@ -321,13 +321,24 @@ apply_triage_lifecycle_request() {
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 # Apply the maintainer-decision label only after checking maintainer-directive artifacts.
-# Usage: apply_human_label_or_skip <pr-number> <reason-or-topic>
+# Usage: apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>
 apply_human_label_or_skip() {
-  local pr_number="$1" reason="${2:-}"
+  local pr_number="$1" source_marker="${2:-}" reason="${3:-}"
   if [ -z "$pr_number" ]; then
     echo "apply_human_label_or_skip: missing pr_number" >&2
     return 2
   fi
+  if [[ "$source_marker" != META_RESOLVED:escalate-human:* && "${HUMAN_LABEL_SOURCE_MARKER:-}" == META_RESOLVED:escalate-human:* ]]; then
+    [ -n "$reason" ] || reason="$source_marker"
+    source_marker="$HUMAN_LABEL_SOURCE_MARKER"
+  fi
+  case "$source_marker" in
+    META_RESOLVED:escalate-human:*) ;;
+    *)
+      echo "ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source" >&2
+      return 2
+      ;;
+  esac
 
   local directive_dir="${REPO_ROOT}/.refactor-loop/runs/maintainer-directives"
   if [ -d "$directive_dir" ]; then
