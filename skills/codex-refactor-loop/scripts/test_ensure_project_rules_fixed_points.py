@@ -386,6 +386,30 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("--remove-label auto-loop-triage", result.stdout)
         self.assertIn("--add-label auto-loop,phase9-auto-solve,🔍 phase:design-solving,🤖 human:auto-推进,refactor-design-needed", result.stdout)
 
+    def test_apply_triage_lifecycle_request_valid_reject_removes_triage_label(self) -> None:
+        prelude = (
+            'gh() { printf "%s\\n" "$*" >> "$GH_CALLS"; return 0; }\n'
+            'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
+            'cat > "$REPO_ROOT/.refactor-loop/runs/triage-issue-53.md" <<\'REQ\'\n'
+            '## TriageLifecycleRequestV1\nissue_number: 53\nverdict: reject\nproposed_body_path: ""\nlabel_transition: reject-remove-triage\n'
+            'evidence_refs: [CLAUDE.md]\nsentinel_present: true\ncreated_at: 2026-05-27T00:00:00Z\n⟦AI:AUTO-LOOP⟧\n'
+            'REQ\n'
+        )
+
+        result = self.run_controller_lib_harness(
+            'apply_triage_lifecycle_request 53; status=$?; cat "$GH_CALLS"; '
+            'if [ -f "$REPO_ROOT/.refactor-loop/.controller-pending-events.log" ]; then '
+            'cat "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"; '
+            'fi; exit "$status"',
+            prelude=prelude,
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("issue edit 53", result.stdout)
+        self.assertIn("--remove-label auto-loop-triage", result.stdout)
+        self.assertNotIn("--add-label", result.stdout)
+        self.assertNotIn("TRIAGE_LIFECYCLE_PENDING", result.stdout)
+
     def test_triage_lifecycle_helper_rejects_missing_sentinel(self) -> None:
         prelude = (
             'mkdir -p "$REPO_ROOT/.refactor-loop/runs"; '
