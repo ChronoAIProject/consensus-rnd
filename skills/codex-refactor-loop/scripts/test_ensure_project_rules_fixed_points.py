@@ -2128,22 +2128,6 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 self.assertIn("本 skill 的 `prompts/_github-post-rules.md`", (SKILL_ROOT / "prompts" / name).read_text(encoding="utf-8"))
         self.assertIn("本 skill 的 `scripts/comment-monitor.sh`", self.read_rel("skills/codex-refactor-loop/prompts/_github-post-rules.md"))
 
-    def test_spawn_with_banner_cli_hard_fails_as_tombstone(self) -> None:
-        result = subprocess.run(
-            [sys.executable, str(SKILL_ROOT / "scripts" / "spawn_with_banner.py")],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-        self.assertEqual(result.returncode, 2)
-        self.assertEqual(result.stdout, "")
-        self.assertEqual(
-            result.stderr,
-            "FATAL: spawn_with_banner.py is deprecated; use post_banner.py + "
-            "harness-tracked spawn-codex.sh\n",
-        )
-
     def test_spawned_prompts_and_banner_builders_keep_final_independent_sentinel(self) -> None:
         prompt_paths = [p for p in sorted((SKILL_ROOT / "prompts").glob("*.md")) if p.name != "_github-post-rules.md"]
         for path in prompt_paths:
@@ -2278,15 +2262,11 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             with self.subTest(monitor_label=label):
                 self.assertIn(label, monitor_text)
 
-    def test_spawn_with_banner_is_hard_failing_tombstone_not_mainline_surface(self) -> None:
-        tombstone = self.read_rel("skills/codex-refactor-loop/scripts/spawn_with_banner.py")
-
-        self.assertIn("Deprecated detached-spawn tombstone", tombstone)
-        self.assertIn("return 2", tombstone)
-        self.assertNotIn("subprocess.Popen", tombstone)
-        self.assertNotIn("start_new_session", tombstone)
-        self.assertNotIn("SPAWN_CODEX", tombstone)
-
+    # Refactor (iter209/cluster-209-004-tombstone-cleanup):
+    #   Old pattern: Deprecated executable tombstone remains as a checked-in production script and the reference preserves a historical tombstone note.
+    #   New principle: Deprecated wrapper/tombstone files and historical policy stubs are deleted; active docs point directly at the supported replacement (post_banner.py + harness-tracked spawn-codex.sh).
+    def test_deprecated_spawn_with_banner_tombstone_is_not_retained(self) -> None:
+        self.assertFalse((REPO_ROOT / "skills/codex-refactor-loop/scripts/spawn_with_banner.py").exists())
         active_docs = "\n".join(self.read_rel(rel) for rel in (
             "skills/codex-refactor-loop/SKILL.md",
             "skills/codex-refactor-loop/REFERENCE.md",
@@ -2295,6 +2275,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertIn("post_banner.py", active_docs)
         self.assertIn("spawn-codex.sh", active_docs)
         self.assertIn("反模式", active_docs)
+        self.assertNotIn("spawn_with_banner.py", active_docs)
+        self.assertNotIn("Historical tombstone", active_docs)
 
     def test_phase9_language_policy_allowlist_is_narrow(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
@@ -2315,8 +2297,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
         self.assert_absent("github-post-writer", checked)
         reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
-        self.assertIn("Historical tombstone", reference)
-        self.assertIn("intentionally absent", reference)
+        self.assertNotIn("Historical tombstone", reference)
+        self.assertNotIn("prompts/github-post-writer.md", reference)
 
     def test_state_json_is_not_documented_as_phase_source_of_truth(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
