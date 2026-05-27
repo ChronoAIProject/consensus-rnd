@@ -171,7 +171,15 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
         fake = FakeGit(merge_base_adopted=True, release_ahead=3, remote_sha="integration-sha", review_base_sha="base-sha")
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
-        self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
+        prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
+        self.assertTrue(self.pending_events()[0].startswith(prefix))
+        event = json.loads(self.pending_events()[0][len(prefix):])
+        self.assertEqual(event["integration_branch"], "auto-refact-dev")
+        self.assertEqual(event["review_base_branch"], "dev")
+        self.assertEqual(event["integration_sha"], "integration-sha")
+        self.assertEqual(event["review_base_sha"], "base-sha")
+        self.assertEqual(event["ahead_count"], 3)
+        self.assertEqual(event["reason"], "integration-ahead-review-base-without-open-rollup-pr")
         self.assertEqual(self.request_jsons(), [])
 
 
@@ -213,7 +221,7 @@ class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
     def test_skill_phase6_names_detector_and_controller_apply_boundary(self) -> None:
         text = SKILL_MD.read_text(encoding="utf-8")
         self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary", text)
-        self.assertIn("daemon-owned detection/request artifact plus controller-owned git apply", text)
+        self.assertIn("daemon-owned detect-and-emit plus controller-owned git apply", text)
         self.assertIn("IntegrationSyncRequestV1", text)
 
     def test_reference_has_no_active_controller_sync_procedure(self) -> None:

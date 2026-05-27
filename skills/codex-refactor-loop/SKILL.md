@@ -106,7 +106,7 @@ The release lifecycle surface consumes decision-artifact-only output: a schedule
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
 ## Named runtime exception — IntegrationSyncDaemonV1(per #53)
-Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: only in the dedicated integration worktree, sync integration branch via `git fetch`, `git rev-list`, `git rev-parse`, `git merge-base`, `git reset --hard`, `git rebase --rebase-merges`, `git merge --ff-only|--no-ff`, `git push origin HEAD:$INTEGRATION_BRANCH`, and force-with-lease adoption after merged rollup evidence. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct `$REVIEW_BASE_BRANCH` push, no generic lifecycle actor. Implement/fix workers still never commit, push, or open PRs.
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: detect-and-emit only in the dedicated integration worktree. The daemon may fetch refs, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, and emit `IntegrationSyncRequestV1` artifacts. Controller apply helpers consume those artifacts, re-check live state, and own git apply lifecycle. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct branch update, no generic lifecycle actor, and no lifecycle mutation verbs from the daemon. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
 Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes `ManualIssueTriageDecisionV1` artifacts for controller apply instead of mutating labels/body directly.
@@ -207,7 +207,7 @@ The phase index is the local routing map. It intentionally links to heavy detail
 | Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](REFERENCE.md#recovery-playbook) |
 | Phase 4 | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](REFERENCE.md#merge-and-push-details) |
 | Phase 5 | Watch remote CI after push; classify failures and route fix/test-add work immediately. | [remote CI details](REFERENCE.md#remote-ci-details) |
-| Phase 6 | Integration sync is daemon-owned detection/request artifact plus controller-owned git apply. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) |
+| Phase 6 | Integration sync is daemon-owned detect-and-emit plus controller-owned git apply. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) |
 | Phase 7 | Sweep design issues and maintainer comments every wakeup. External issues enter through explicit labels or triage. | [design issue details](REFERENCE.md#design-issue-details) |
 | Phase 8 | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [phase 8 details](REFERENCE.md#phase-8-details) |
 | Phase 9 | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [phase 9 details](REFERENCE.md#phase-9-details) |
@@ -704,7 +704,7 @@ Phase 5 guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Phase 6 guardrails: integration sync is daemon-owned detection/request artifact plus controller-owned git apply. The daemon emits `IntegrationSyncRequestV1` and `DEV_SYNC_REQUEST:<path>`; controller apply helpers re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
+Phase 6 guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits `IntegrationSyncRequestV1` and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume `IntegrationSyncRequestV1` artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
 ## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary
 `IntegrationSyncDaemonV1` owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and `IntegrationSyncRequestV1` artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.

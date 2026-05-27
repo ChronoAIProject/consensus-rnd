@@ -267,6 +267,63 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertNotIn("unexpected open", result.stdout)
 
+    def test_release_rollup_controller_helper_rejects_malformed_json_and_non_json_tail(self) -> None:
+        cases = [
+            ("malformed_json", '{"integration_branch":"auto-refact-dev",'),
+            ("non_json_tail", 'not-json-tail'),
+        ]
+
+        for name, event_json in cases:
+            with self.subTest(case=name):
+                result = self.run_controller_lib_harness(
+                    f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+                    prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+                )
+
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid json", result.stderr)
+                self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_controller_helper_rejects_missing_required_field(self) -> None:
+        event_json = (
+            '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
+            '"integration_sha":"i","ahead_count":1}'
+        )
+
+        result = self.run_controller_lib_harness(
+            f"open_release_rollup_pr_from_pending_event '{event_json}' \"$BODY_FILE\"",
+            prelude='open_pr_with_label() { echo "unexpected open"; return 99; }',
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("missing facts: review_base_sha", result.stderr)
+        self.assertNotIn("unexpected open", result.stdout)
+
+    def test_release_rollup_pending_event_writer_preserves_newline_delimiter(self) -> None:
+        from test_dev_sync_daemon_state_machine import FakeGit, IntegrationSyncDaemonV1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            worktree = root / "wt"
+            worktree.mkdir()
+            daemon = IntegrationSyncDaemonV1(
+                worktree=worktree,
+                main_repo=root,
+                command_runner=FakeGit(merge_base_adopted=True, release_ahead=2, remote_sha="i", review_base_sha="b"),
+                logger=lambda _msg: None,
+                ensure_worktree_fn=lambda: True,
+                merge_detector=lambda _cwd: False,
+                dirty_detector=lambda _cwd: False,
+                resolver_in_flight=lambda: False,
+                resolver_dispatcher=lambda: None,
+                release_rollup_min_commits=1,
+            )
+
+            daemon.tick()
+
+            events = root / ".refactor-loop" / ".controller-pending-events.log"
+            self.assertTrue(events.read_text(encoding="utf-8").endswith("\n"))
+
     def test_release_rollup_controller_helper_rejects_non_integer_ahead_count(self) -> None:
         event_json = (
             '{"integration_branch":"auto-refact-dev","review_base_branch":"dev",'
@@ -419,8 +476,17 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("open_release_rollup_pr_from_pending_event", reference)
         self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
         self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
-        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "integration worktree", "force-with-lease adoption"):
+        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "detect-and-emit", "IntegrationSyncRequestV1"):
             self.assertIn(marker, skill)
+        issue53_section = re.search(
+            r"## Named runtime exception — IntegrationSyncDaemonV1\(per #53\)(.*?)\n## Named runtime exception — observability-comment-writers",
+            skill,
+            re.S,
+        )
+        self.assertIsNotNone(issue53_section)
+        for forbidden in ("git push", "git reset", "git merge", "git rebase", "--force-with-lease", "force-with-lease adoption"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, issue53_section.group(1))
 
         for forbidden in ("$RELEASE_BRANCH", "RELEASE_BRANCH", "ReleaseRollupRequestV1"):
             with self.subTest(forbidden=forbidden):
