@@ -263,6 +263,9 @@ _triage_lifecycle_accept_body() {
   awk '$0=="## Proposed issue body"{in_body=1;next} $0=="## TriageLifecycleRequestV1"{exit} in_body{print}' "$artifact"
 }
 
+# Refactor (iter5/cluster-issue53-codex-direct-git-gh):
+#   Old: triage worker 直 gh issue edit.
+#   New: TriageLifecycleRequestV1 artifact + controller helper apply.
 # Apply a validated TriageLifecycleRequestV1 artifact.
 # Usage: apply_triage_lifecycle_request <issue-number>
 # Only accepts .refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.md, matching issue_number,

@@ -81,23 +81,20 @@ PENDING_EVENTS_FILE = MAIN_REPO / ".refactor-loop" / ".controller-pending-events
 RELEASE_ROLLUP_MIN_COMMITS = int(os.environ.get("RELEASE_ROLLUP_MIN_COMMITS", "1"))
 RELEASE_ROLLUP_COOLDOWN_SECONDS = int(os.environ.get("RELEASE_ROLLUP_COOLDOWN_SECONDS", "21600"))
 
-# IntegrationSyncDaemonV1(per #53) allowlist, authorized by
+# Refactor (iter5/cluster-issue53-codex-direct-git-gh):
+#   Old: documented IntegrationSyncDaemonV1 allowlist as a dead runtime tuple.
+#   New: keep the authorized command surface as source-regression documentation only.
+# IntegrationSyncDaemonV1(per #53) command surface, authorized by
 # .refactor-loop/runs/phase9-issue53-r7-judge.md. This daemon operates only in
-# the dedicated integration worktree and must not become a generic lifecycle
-# actor: no worker-diff commit, no PR create/merge/close/edit, no issue/label
-# lifecycle, no tag/release, and no direct REVIEW_BASE push.
-INTEGRATION_SYNC_DAEMON_V1_GIT_ALLOWLIST = (
-    "git fetch",
-    "git rev-list",
-    "git rev-parse",
-    "git merge-base",
-    "git reset --hard",
-    "git rebase --rebase-merges",
-    "git merge --ff-only",
-    "git merge --no-ff",
-    "git push origin HEAD:$INTEGRATION_BRANCH",
-    "git push --force-with-lease origin HEAD:$INTEGRATION_BRANCH",
-)
+# the dedicated integration worktree. Documented allowed git shapes:
+# git fetch; git rev-list; git rev-parse; git merge-base; git reset --hard;
+# git rebase --rebase-merges; git merge --ff-only; git merge --no-ff;
+# git push origin HEAD:$INTEGRATION_BRANCH;
+# git push --force-with-lease origin HEAD:$INTEGRATION_BRANCH.
+# This is documentation for source-regression tests, not executable policy.
+# The daemon must not become a generic lifecycle actor: no worker-diff commit,
+# no PR create/merge/close/edit, no issue/label lifecycle, no tag/release, and
+# no direct REVIEW_BASE push.
 
 
 def log(msg: str) -> None:

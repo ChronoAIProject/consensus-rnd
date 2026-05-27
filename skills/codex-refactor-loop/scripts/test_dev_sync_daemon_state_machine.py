@@ -881,7 +881,9 @@ class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
         self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", skill)
         self.assertIn(".refactor-loop/runs/phase9-issue53-r7-judge.md", skill)
         self.assertIn("dedicated integration worktree", src)
-        self.assertIn("INTEGRATION_SYNC_DAEMON_V1_GIT_ALLOWLIST", src)
+        self.assertIn("Old: documented IntegrationSyncDaemonV1 allowlist as a dead runtime tuple.", src)
+        self.assertIn("source-regression documentation only", src)
+        self.assertIn("This is documentation for source-regression tests, not executable policy.", src)
         for token in ("git fetch", "git rev-list", "git rev-parse", "git merge-base", "git reset --hard", "git rebase --rebase-merges", "git merge --ff-only", "git merge --no-ff", "git push origin HEAD:$INTEGRATION_BRANCH", "git push --force-with-lease origin HEAD:$INTEGRATION_BRANCH"):
             with self.subTest(token=token):
                 self.assertIn(token, src)
