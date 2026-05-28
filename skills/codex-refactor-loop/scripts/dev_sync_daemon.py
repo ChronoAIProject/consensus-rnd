@@ -8,7 +8,7 @@ daemon 跑在独立 worktree,main repo controller 工作不受 daemon 状态干�
 设计:
 - 独立 worktree:$REPO_ROOT/.worktrees/dev-sync(off auto-refact-dev)
 - 600s 周期 check `git rev-list HEAD..origin/dev`
-- behind>0:emit IntegrationSyncRequestV1 for controller-owned apply
+- behind>0:emit IntegrationSyncRequest for controller-owned apply
 - conflict exists:spawn resolver worker; controller helper applies lifecycle after marker
 - main repo working tree 不被 merge 状态污染
 
@@ -31,7 +31,7 @@ from contextlib import contextmanager
 import fcntl
 import json
 
-from integration_sync_requests import IntegrationSyncRequestV1, write_request_artifact
+from integration_sync_requests import IntegrationSyncRequest, write_request_artifact
 
 
 def git_repo_root() -> Path:
@@ -83,9 +83,9 @@ PENDING_EVENTS_FILE = MAIN_REPO / ".refactor-loop" / ".controller-pending-events
 RELEASE_ROLLUP_MIN_COMMITS = int(os.environ.get("RELEASE_ROLLUP_MIN_COMMITS", "1"))
 RELEASE_ROLLUP_COOLDOWN_SECONDS = int(os.environ.get("RELEASE_ROLLUP_COOLDOWN_SECONDS", "21600"))
 
-# IntegrationSyncDaemonV1(per #53/#70) is a no-lifecycle detector/write-artifact
+# IntegrationSyncDaemon(per #53/#70) is a no-lifecycle detector/write-artifact
 # runtime. It may read refs, compare ancestry, dispatch conflict resolution, write
-# IntegrationSyncRequestV1 artifacts, and append pending events. Controller-owned
+# IntegrationSyncRequest artifacts, and append pending events. Controller-owned
 # helpers hold the lifecycle apply boundary.
 
 
@@ -239,9 +239,9 @@ class RollupDetection:
     adoption: RollupAdoption | None = None
 
 
-# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemonV1 state machine boundary.
-# Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern: daemon-owned lifecycle apply. New principle: daemon detects and emits IntegrationSyncRequestV1; controller owns apply.
-class IntegrationSyncDaemonV1:
+# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemon state machine boundary.
+# Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern: daemon-owned lifecycle apply. New principle: daemon detects and emits IntegrationSyncRequest; controller owns apply.
+class IntegrationSyncDaemon:
     """Narrow detector for integration-branch sync transitions."""
 
     def __init__(
@@ -283,13 +283,13 @@ class IntegrationSyncDaemonV1:
         with self.pending_events_file.open("a", encoding="utf-8") as fh:
             fh.write(f"DEV_SYNC_PENDING:{reason}:{detail}\n")
 
-    def emit_sync_request(self, request: IntegrationSyncRequestV1) -> Path:
+    def emit_sync_request(self, request: IntegrationSyncRequest) -> Path:
         path = write_request_artifact(self.main_repo, request)
         rel = path.relative_to(self.main_repo)
         self.pending_events_file.parent.mkdir(parents=True, exist_ok=True)
         with self.pending_events_file.open("a", encoding="utf-8") as fh:
             fh.write(f"DEV_SYNC_REQUEST:{rel.as_posix()}\n")
-        self.log(f"emitted IntegrationSyncRequestV1 {rel.as_posix()}")
+        self.log(f"emitted IntegrationSyncRequest {rel.as_posix()}")
         return path
 
     def local_ahead_count(self, cwd: Path) -> int:
@@ -426,7 +426,7 @@ class IntegrationSyncDaemonV1:
             self.append_pending_event("local-ahead-request-ambiguous", "missing-head-or-remote")
             return True
         self.emit_sync_request(
-            IntegrationSyncRequestV1(
+            IntegrationSyncRequest(
                 kind="push-local-ahead",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -517,7 +517,7 @@ class IntegrationSyncDaemonV1:
             self.append_pending_event("rollup-adoption-ambiguous", "head-unknown")
             return True
         self.emit_sync_request(
-            IntegrationSyncRequestV1(
+            IntegrationSyncRequest(
                 kind="adopt-merged-rollup",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -550,7 +550,7 @@ class IntegrationSyncDaemonV1:
             self.append_pending_event("forward-sync-request-ambiguous", "missing-head-or-remote")
             return
         self.emit_sync_request(
-            IntegrationSyncRequestV1(
+            IntegrationSyncRequest(
                 kind="forward-sync-review-base",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -595,11 +595,11 @@ class IntegrationSyncDaemonV1:
 
 
 def local_ahead_count(cwd: Path) -> int:
-    return IntegrationSyncDaemonV1().local_ahead_count(cwd)
+    return IntegrationSyncDaemon().local_ahead_count(cwd)
 
 
 def tick() -> None:
-    IntegrationSyncDaemonV1().tick()
+    IntegrationSyncDaemon().tick()
 
 
 def main() -> None:

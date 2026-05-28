@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Narrow IntegrationSyncRequestV1 schema for controller-owned apply."""
+"""Narrow IntegrationSyncRequest schema for controller-owned apply."""
 
 from __future__ import annotations
 
@@ -37,11 +37,11 @@ SHA_RE = re.compile(r"^[0-9a-f]{7,64}$|^[A-Za-z0-9._/-]+$")
 
 
 class IntegrationSyncRequestError(ValueError):
-    """Raised when an IntegrationSyncRequestV1 artifact is malformed."""
+    """Raised when an IntegrationSyncRequest artifact is malformed."""
 
 
 @dataclass(frozen=True)
-class IntegrationSyncRequestV1:
+class IntegrationSyncRequest:
     kind: str
     integration_branch: str
     review_base_branch: str
@@ -50,7 +50,7 @@ class IntegrationSyncRequestV1:
     evidence: dict[str, Any]
     lifecycle_owner: str = "controller"
     lifecycle_authority: bool = False
-    schema: str = "IntegrationSyncRequestV1"
+    schema: str = "IntegrationSyncRequest"
     old_rollup_head: str | None = None
     old_rollup_ahead_count: int | None = None
     pr_number: int | None = None
@@ -84,12 +84,12 @@ def _validate_shaish(value: str, key: str) -> None:
         raise IntegrationSyncRequestError(f"invalid {key}")
 
 
-def validate_request_dict(data: dict[str, Any]) -> IntegrationSyncRequestV1:
+def validate_request_dict(data: dict[str, Any]) -> IntegrationSyncRequest:
     if not isinstance(data, dict):
         raise IntegrationSyncRequestError("request must be an object")
     _reject_command_like_fields(data)
-    if data.get("schema") != "IntegrationSyncRequestV1":
-        raise IntegrationSyncRequestError("schema must be IntegrationSyncRequestV1")
+    if data.get("schema") != "IntegrationSyncRequest":
+        raise IntegrationSyncRequestError("schema must be IntegrationSyncRequest")
     if data.get("lifecycle_owner") != "controller":
         raise IntegrationSyncRequestError("lifecycle_owner must be controller")
     if data.get("lifecycle_authority") is not False:
@@ -128,7 +128,7 @@ def validate_request_dict(data: dict[str, Any]) -> IntegrationSyncRequestV1:
     if kind == "adopt-merged-rollup" and old_rollup_head is None:
         raise IntegrationSyncRequestError("adopt-merged-rollup requires old_rollup_head")
 
-    return IntegrationSyncRequestV1(
+    return IntegrationSyncRequest(
         kind=kind,
         integration_branch=integration_branch,
         review_base_branch=review_base_branch,
@@ -143,7 +143,7 @@ def validate_request_dict(data: dict[str, Any]) -> IntegrationSyncRequestV1:
     )
 
 
-def load_request(path: Path) -> IntegrationSyncRequestV1:
+def load_request(path: Path) -> IntegrationSyncRequest:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
@@ -151,7 +151,7 @@ def load_request(path: Path) -> IntegrationSyncRequestV1:
     return validate_request_dict(data)
 
 
-def write_request_artifact(repo_root: Path, request: IntegrationSyncRequestV1) -> Path:
+def write_request_artifact(repo_root: Path, request: IntegrationSyncRequest) -> Path:
     runs = repo_root / ".refactor-loop" / "runs"
     runs.mkdir(parents=True, exist_ok=True)
     safe_kind = request.kind.replace("-", "_")

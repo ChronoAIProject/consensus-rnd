@@ -505,7 +505,6 @@ Policy:the loop continues until an explicit stop condition or a visible `👤 hu
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
 7. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
 8. Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
-9. Do not rename the skill, manifests, work-unit contract, public markers, branch prefixes, or labels during this split.
 10. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](REFERENCE.md#hard-rules-details).

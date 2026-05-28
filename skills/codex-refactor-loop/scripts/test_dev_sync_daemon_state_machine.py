@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior and source-regression tests for IntegrationSyncDaemonV1."""
+"""Behavior and source-regression tests for IntegrationSyncDaemon."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 os.environ.setdefault("REPO_ROOT", str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dev_sync_daemon import IntegrationSyncDaemonV1
+from dev_sync_daemon import IntegrationSyncDaemon
 from integration_sync_requests import validate_request_dict
 
 SKILL_ROOT = REPO_ROOT / "skills" / "codex-refactor-loop"
@@ -86,7 +86,7 @@ class FakeGit:
         return subprocess.CompletedProcess(cmd, returncode, stdout, "")
 
 
-class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
+class IntegrationSyncDaemonBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
@@ -96,8 +96,8 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def daemon(self, fake: FakeGit, **overrides) -> IntegrationSyncDaemonV1:
-        return IntegrationSyncDaemonV1(
+    def daemon(self, fake: FakeGit, **overrides) -> IntegrationSyncDaemon:
+        return IntegrationSyncDaemon(
             worktree=self.worktree,
             main_repo=self.repo,
             integration="auto-refact-dev",
@@ -186,7 +186,7 @@ class IntegrationSyncDaemonV1BehaviorTests(unittest.TestCase):
 class IntegrationSyncRequestSchemaTests(unittest.TestCase):
     def valid_request(self) -> dict:
         return {
-            "schema": "IntegrationSyncRequestV1",
+            "schema": "IntegrationSyncRequest",
             "kind": "push-local-ahead",
             "integration_branch": "auto-refact-dev",
             "review_base_branch": "dev",

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Controller-owned apply helper for ManualIssueTriageDecisionV1.
+"""Controller-owned apply helper for ManualIssueTriageDecision.
 
 Refactor (iter5/cluster-issue70-controller-owned-apply):
 Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
-New: triage worker emits ManualIssueTriageDecisionV1 JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
+New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
 """
 
 from __future__ import annotations

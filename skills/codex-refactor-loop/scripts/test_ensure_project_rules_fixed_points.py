@@ -315,13 +315,13 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertNotIn("unexpected open", result.stdout)
 
     def test_release_rollup_pending_event_writer_preserves_newline_delimiter(self) -> None:
-        from test_dev_sync_daemon_state_machine import FakeGit, IntegrationSyncDaemonV1
+        from test_dev_sync_daemon_state_machine import FakeGit, IntegrationSyncDaemon
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             worktree = root / "wt"
             worktree.mkdir()
-            daemon = IntegrationSyncDaemonV1(
+            daemon = IntegrationSyncDaemon(
                 worktree=worktree,
                 main_repo=root,
                 command_runner=FakeGit(merge_base_adopted=True, release_ahead=2, remote_sha="i", review_base_sha="b"),
@@ -567,7 +567,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("gh issue view / gh issue comment", post_rules)
         self.assertIn("gh pr view / gh pr comment / gh pr edit --body-file", post_rules)
 
-        for marker in ("ManualIssueTriageDecisionV1", "TRIAGE_DECISION_DONE", "不直接改 GitHub issue body / label"):
+        for marker in ("ManualIssueTriageDecision", "TRIAGE_DECISION_DONE", "不直接改 GitHub issue body / label"):
             self.assertIn(marker, triage_prompt)
         self.assertNotIn("gh issue edit", triage_prompt)
 
@@ -1180,7 +1180,7 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
 class WorkUnitSourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-007-work-unit-contract-schema):
     #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed
-    #   New principle: source-regression coverage keeps WorkUnitV1 v1 containers authoritative and blocks premature work_units_* migration surface
+    #   New principle: source-regression coverage keeps WorkUnit containers authoritative and blocks premature work_units_* migration surface
     # Refactor (iter9/issue79-design-implementation-intake):
     #   Old pattern: implement prompt could only name audit-iter-N as its context source.
     #   New principle: WORK_UNIT_SOURCE_REF plus optional DESIGN_DECISION_PATH selects the authoritative intake artifact without adding a prompt fork.
@@ -1463,7 +1463,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
         controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
 
-        required = ("ManualIssueTriageDecisionV1", "issue_number", "verdict", "body_artifact_path", "comment_artifact_path", "lifecycle_owner", "lifecycle_authority", "TRIAGE_DECISION_DONE")
+        required = ("ManualIssueTriageDecision", "issue_number", "verdict", "body_artifact_path", "comment_artifact_path", "lifecycle_owner", "lifecycle_authority", "TRIAGE_DECISION_DONE")
         for marker in required:
             with self.subTest(marker=marker):
                 self.assertIn(marker, triage_prompt)
@@ -2398,7 +2398,7 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
 
     def test_deleted_triage_monitor_has_no_skill_root_contract(self) -> None:
         self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
-        self.assertIn("ManualIssueTriageDecisionV1", self.read_rel("skills/codex-refactor-loop/prompts/triage-external-issue.md"))
+        self.assertIn("ManualIssueTriageDecision", self.read_rel("skills/codex-refactor-loop/prompts/triage-external-issue.md"))
 
     def test_invalid_specific_skill_root_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

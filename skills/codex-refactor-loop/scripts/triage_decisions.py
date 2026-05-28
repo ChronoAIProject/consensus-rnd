@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ManualIssueTriageDecisionV1 schema for controller-owned apply.
+"""ManualIssueTriageDecision schema for controller-owned apply.
 
 Refactor (iter5/cluster-issue70-controller-owned-apply):
 Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
-New: triage worker emits ManualIssueTriageDecisionV1 JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
+New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
 """
 
 from __future__ import annotations
@@ -28,11 +28,11 @@ COMMAND_LIKE_FIELDS = {"argv", "args", "shell", "command", "commands", "cmd", "c
 
 
 class ManualIssueTriageDecisionError(ValueError):
-    """Raised when a ManualIssueTriageDecisionV1 artifact is malformed."""
+    """Raised when a ManualIssueTriageDecision artifact is malformed."""
 
 
 @dataclass(frozen=True)
-class ManualIssueTriageDecisionV1:
+class ManualIssueTriageDecision:
     issue_number: int
     verdict: str
     body_artifact_path: str
@@ -42,7 +42,7 @@ class ManualIssueTriageDecisionV1:
     sentinel_present: bool
     lifecycle_owner: str = "controller"
     lifecycle_authority: bool = False
-    schema: str = "ManualIssueTriageDecisionV1"
+    schema: str = "ManualIssueTriageDecision"
 
 
 def _reject_command_like_fields(data: dict[str, Any]) -> None:
@@ -63,12 +63,12 @@ def _repo_artifact_path(value: Any, *, allow_empty: bool = False) -> str:
     return value
 
 
-def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None = None) -> ManualIssueTriageDecisionV1:
+def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None = None) -> ManualIssueTriageDecision:
     if not isinstance(data, dict):
         raise ManualIssueTriageDecisionError("decision must be an object")
     _reject_command_like_fields(data)
-    if data.get("schema") != "ManualIssueTriageDecisionV1":
-        raise ManualIssueTriageDecisionError("schema must be ManualIssueTriageDecisionV1")
+    if data.get("schema") != "ManualIssueTriageDecision":
+        raise ManualIssueTriageDecisionError("schema must be ManualIssueTriageDecision")
     if data.get("lifecycle_owner") != "controller":
         raise ManualIssueTriageDecisionError("lifecycle_owner must be controller")
     if data.get("lifecycle_authority") is not False:
@@ -99,7 +99,7 @@ def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None =
             raise ManualIssueTriageDecisionError("reject body_artifact_path must be empty")
     if data.get("sentinel_present") is not True:
         raise ManualIssueTriageDecisionError("sentinel_present must be true")
-    return ManualIssueTriageDecisionV1(
+    return ManualIssueTriageDecision(
         issue_number=issue_number,
         verdict=verdict,
         body_artifact_path=body_artifact_path,
@@ -120,5 +120,5 @@ def extract_json_object(text: str) -> dict[str, Any]:
     return data
 
 
-def load_decision(path: Path, *, expected_issue: int | None = None) -> ManualIssueTriageDecisionV1:
+def load_decision(path: Path, *, expected_issue: int | None = None) -> ManualIssueTriageDecision:
     return validate_decision_dict(extract_json_object(path.read_text(encoding="utf-8")), expected_issue=expected_issue)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Controller-owned apply helper for IntegrationSyncRequestV1 artifacts."""
+"""Controller-owned apply helper for IntegrationSyncRequest artifacts."""
 
 from __future__ import annotations
 

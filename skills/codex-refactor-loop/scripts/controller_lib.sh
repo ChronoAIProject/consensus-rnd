@@ -269,7 +269,7 @@ apply_dev_sync_request_marker() {
 
 # Refactor (iter5/cluster-issue70-controller-owned-apply):
 # Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
-# New: triage worker emits ManualIssueTriageDecisionV1 JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
+# New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
 # Apply a TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path> marker by
 # delegating to the controller-owned helper. This wrapper does not inline
 # triage judgment.
