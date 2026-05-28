@@ -31,8 +31,10 @@ SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 
 # Refactor (iter3/skill-human-label-taxonomy):
-#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+#   Old: four Human labels, including two 🆘 labels, scattered no-gap and
+#   escalation decisions across the codebase.
+#   New principle: exactly two active Human labels; causes move to the reason
+#   surface (#15 structural consensus).
 CANONICAL_HUMAN_LABELS = {"🤖 human:auto-推进", "👤 human:需-maintainer-决策"}  # refactor helper, no behavior change
 NON_AUTO_HUMAN_LABEL = "👤 human:需-maintainer-决策"  # refactor helper, no behavior change
 REMOVED_HUMAN_LABELS = {"🆘 human:卡死", "🆘 human:卡死-需-rework"}  # refactor helper, no behavior change
@@ -119,7 +121,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         progress = SKILL_ROOT / "scripts" / "codex-progress-reporter.sh"
         lines = progress.read_text(encoding="utf-8").splitlines()
         start = next(index for index, line in enumerate(lines) if line.startswith("log_msg()"))
-        end = lines.index("# 主 loop")
+        end = lines.index("# Main loop.")
         with tempfile.TemporaryDirectory() as tmp:
             harness = Path(tmp) / "progress_harness.sh"
             harness.write_text("\n".join(lines[start:end]) + "\n", encoding="utf-8")
@@ -739,8 +741,12 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
 
 class ProjectRulesFixedPointEnsurerTests(unittest.TestCase):
     # Refactor (iter1/host-claude-md-fixed-points):
-    #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-    #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+    #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
+    #   foundational fixed points were present, so the loop did not reliably
+    #   load the base theory.
+    #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently writes
+    #   a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
+    #   (consensus:minimal), without overwriting host-owned content.
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
@@ -967,8 +973,9 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("fail closed", phase0)
 
     # Refactor (iter3/skill-github-post-contract):
-    #   Old: 宽泛 all-prompts direct-post 主张
-    #   New: 两组明确 roster + 可枚举行为测试(#13 structural 共识)
+    #   Old: broad all-prompts direct-post claim.
+    #   New: two explicit rosters plus enumerable behavior tests
+    #   (#13 structural consensus).
     def test_github_post_contract_matches_prompt_roster(self) -> None:
         prompts_root = SKILL_ROOT / "prompts"
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -1041,8 +1048,13 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                     self.assertNotIn(token, text, f"r8 consensus(#79) forbids {token} in {path.name}")
 
     # Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
-    #   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)
-    #   New principle: delete solver 单 terminal vocabulary:delete/collapse/abstain/escalate;无 deferred side-channel、无 issue-create 命令建议;'not now' map 到 abstain/false-positive,lifecycle 决策归 controller/maintainer。
+    #   Old pattern: delete solver forbade defer, then defined Deferrable and
+    #   asked for a tracking issue creation suggestion, creating an internal
+    #   prompt contradiction after gh issue create was banned.
+    #   New principle: delete solver has one terminal vocabulary:
+    #   delete/collapse/abstain/escalate; no deferred side-channel, no
+    #   issue-create command suggestion; "not now" maps to abstain/false-positive,
+    #   and lifecycle decisions belong to controller/maintainer.
     def test_delete_solver_has_no_defer_side_channel_or_issue_create_suggestion(self) -> None:
         solver_delete = (SKILL_ROOT / "prompts" / "solver-delete.md").read_text(encoding="utf-8")
         scan_text = "\n".join(
@@ -1069,7 +1081,9 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
 
 class RootMarkdownClosureSourceRegressionTests(unittest.TestCase):
     # Refactor (iter214/cluster-214-003-root-md-surface-leak):
-    #   Old pattern: Root contains durable Markdown files outside the explicit root .md allowlist(CONTRIBUTING.md / IMPROVEMENT-BACKLOG.md 违反 CLAUDE.md 根目录 .md 收口子句)。
+    #   Old pattern: root contained durable Markdown files outside the explicit
+    #   root .md allowlist (CONTRIBUTING.md / IMPROVEMENT-BACKLOG.md), violating
+    #   the CLAUDE.md root Markdown closure clause.
     #   New principle: Root Markdown remains limited to documented allowlist;extra durable docs move under their owning skill/docs surface or are deleted。
     def test_root_durable_document_surface_matches_claude_md_allowlist(self) -> None:
         allowed_root_documents = {"CLAUDE.md", "README.md", "AGENTS.md", "LICENSE", "GEMINI.md", "CHANGELOG.md"}
@@ -1083,7 +1097,10 @@ class RootMarkdownClosureSourceRegressionTests(unittest.TestCase):
 
 
 class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
-    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
+    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge
+    # gate + contradictory Phase 8 wording. New principle: fixed truth table
+    # reject=0 && approve>=1 -> MERGE; comments are advisory
+    # (#26 minimal option B consensus).
     def read_skill(self) -> str:
         return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
@@ -1593,8 +1610,11 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
 
     def test_operational_tokens_are_stable_and_not_renamed(self) -> None:
         # Refactor (iter2/cluster-009-marker-label-compat-migration):
-        #   Old pattern: marker/label 命名与 refactor 外壳耦合,无显式稳定契约
-        #   New principle: minimal docs+test 固化 marker/label 为稳定 v1 operational tokens(保持现状,不重命名);不引入 OperationalNamePolicyV1(#5 structural 共识)
+        #   Old pattern: marker/label naming was coupled to the refactor shell
+        #   with no explicit stability contract.
+        #   New principle: minimal docs+test lock marker/label as stable v1
+        #   operational tokens, preserving current names and avoiding
+        #   OperationalNamePolicyV1 (#5 structural consensus).
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         combined = "\n".join([reference_text, skill_text])
@@ -1636,8 +1656,10 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
 
 class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
     # Refactor (iter4/concurrency-auto-topup):
-    #   Old pattern: monitor 只 alert,actual<floor 等 LLM controller 下次 wakeup 才派
-    #   New principle: monitor 自动从 dispatch-queue 消费,与 daemon-first 哲学 align。
+    #   Old pattern: monitor only alerted; actual<floor waited for the LLM
+    #   controller's next wakeup to dispatch.
+    #   New principle: monitor automatically consumes dispatch-queue, aligning
+    #   with daemon-first philosophy.
     def test_concurrency_monitor_auto_topup_is_queue_scoped(self) -> None:
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
 
@@ -1714,21 +1736,23 @@ class WorktreeLocationConventionTests(unittest.TestCase):
     def test_dev_sync_daemon_uses_inside_path(self) -> None:
         text = (SKILL_ROOT / "scripts" / "dev_sync_daemon.py").read_text(encoding="utf-8")
 
-        self.assertIn("独立 worktree:$REPO_ROOT/.worktrees/dev-sync", text)
+        self.assertIn("Dedicated worktree: $REPO_ROOT/.worktrees/dev-sync", text)
         self.assertIn('MAIN_REPO / ".worktrees" / "dev-sync"', text)
         self.assertIn("Refactor (iter4/skill-worktree-inside-repo)", text)
         self.assertNotIn('f"{MAIN_REPO}-wt-dev-sync"', text)
 
     def test_peek_sh_skip_list_covers_both_dev_sync_layouts(self):
-        """#50 共识:peek.sh case 必须 skip 历史 sibling 和新 inside dev-sync。
-        防 PR #50 后人改 peek.sh 漏掉一种导致 dev-sync 被误算成 stale worktree 清理。"""
+        """#50 consensus: peek.sh case must skip both historical sibling and
+        new inside dev-sync layouts. Prevents later peek.sh edits after PR #50
+        from missing one layout and misclassifying dev-sync as a stale worktree
+        to clean up."""
         src = (REPO_ROOT / "skills/codex-refactor-loop/scripts/peek.sh").read_text()
-        # 历史 sibling 兼容(已 merge 但未清理的旧 worktree)
+        # Historical sibling compatibility for old worktrees already merged but not cleaned.
         self.assertIn('"$(basename "$REPO_ROOT")-wt-dev-sync"', src,
-            "peek.sh skip list 漏 sibling dev-sync(PR #50 前的历史路径)")
-        # 新 inside 路径
+            "peek.sh skip list misses sibling dev-sync (historical pre-PR #50 path)")
+        # New inside path.
         self.assertIn('"dev-sync"', src,
-            "peek.sh skip list 漏 inside dev-sync(PR #50 后的路径)")
+            "peek.sh skip list misses inside dev-sync (post-PR #50 path)")
 
     def test_no_sibling_worktree_pattern_in_active_scripts(self) -> None:
         allowed = {
@@ -1759,8 +1783,10 @@ class WorktreeLocationConventionTests(unittest.TestCase):
 
 class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
     # Refactor (iter3/skill-human-label-taxonomy):
-    #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-    #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+    #   Old: four Human labels, including two 🆘 labels, scattered no-gap and
+    #   escalation decisions across the codebase.
+    #   New principle: exactly two active Human labels; causes move to the
+    #   reason surface (#15 structural consensus).
     def skill_text(self) -> str:
         return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
@@ -1888,7 +1914,9 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
 
 class HumanLabelSemanticsTests(unittest.TestCase):
-    # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+    # Refactor (iter4/human-label-semantics-guard): Old pattern: label used as
+    # an architect-reject workaround. New principle: strict semantics +
+    # reflector self-check + controller helper guard + source-regression test.
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
@@ -2575,7 +2603,8 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, source)
 
-# Refactor (hygiene/634a608-followup): 删 stranded paragraph tests,对应 CLAUDE.md philosophy-only rewrite,段落已不存在
+# Refactor (hygiene/634a608-followup): delete stranded paragraph tests matching
+# the CLAUDE.md philosophy-only rewrite; the paragraph no longer exists.
 # Refactor (iter3/skill-contract-test-suite):
 #   Old pattern: skill contract regressions were documented in prompts/SKILL text but not enforced by the host TEST_CMD.
 #   New principle: a contiguous source-regression suite makes those contracts fail under the dogfood TEST_CMD without adding a new runner or scanner abstraction.
@@ -2745,8 +2774,13 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     assert_denial_or_controller_owner_context(self, line, token=token)
 
     # Refactor (iter215/cluster-215-controller-process-selftest):
-    #   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
-    #   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
+    #   Old pattern: Controller runbook (REFERENCE.md) still instructed
+    #   ps|grep/pgrep liveness checks, contradicting the SKILL.md canonical CLI
+    #   and CLAUDE.md daemon-counts-authority clause.
+    #   New principle: controller-facing checks must read daemon-maintained
+    #   state / heartbeat / canonical script CLI (restart-daemons.sh / peek.sh /
+    #   concurrency_monitor.py); process probes stay inside daemon/helper
+    #   implementations, not controller runbook sections.
     def test_controller_runbook_uses_daemon_state_not_process_probes_for_liveness(self) -> None:
         reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
         controller_sections = {
@@ -2951,7 +2985,9 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 with self.subTest(path=rel, pattern=pattern):
                     self.assertIsNone(re.search(pattern, text))
 
-    # Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识)
+    # Refactor (iter3/skill-host-language-policy): Old: hard-coded
+    # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and
+    # are injected by host.env (#20 structural consensus).
     def test_host_language_policy_uses_exact_set_a_without_aliases(self) -> None:
         canonical = {
             "HOST_TEST_FILE_GLOBS",

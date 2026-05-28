@@ -50,8 +50,12 @@ class FixedPointError(Exception):
 
 class ProjectRulesFixedPointEnsurer:
     # Refactor (iter1/host-claude-md-fixed-points):
-    #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-    #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+    #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
+    #   foundational fixed points were present, so the loop did not reliably
+    #   load the base theory.
+    #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently writes
+    #   a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
+    #   (consensus:minimal), without overwriting host-owned content.
     def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
         self.target = self._resolve_target(project_rules if project_rules else "CLAUDE.md")
@@ -62,8 +66,12 @@ class ProjectRulesFixedPointEnsurer:
 
     def ensure(self) -> str:
         # Refactor (iter1/host-claude-md-fixed-points):
-        #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+        #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
+        #   foundational fixed points were present, so the loop did not
+        #   reliably load the base theory.
+        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently
+        #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
+        #   (consensus:minimal), without overwriting host-owned content.
         original = self._read_target()
         updated = self._updated_text(original)
         if updated == original:
@@ -101,8 +109,12 @@ class ProjectRulesFixedPointEnsurer:
 
     def _updated_text(self, text: str) -> str:
         # Refactor (iter1/host-claude-md-fixed-points):
-        #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+        #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
+        #   foundational fixed points were present, so the loop did not
+        #   reliably load the base theory.
+        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently
+        #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
+        #   (consensus:minimal), without overwriting host-owned content.
         starts = list(START_RE.finditer(text))
         end_count = text.count(END_MARKER)
         if len(starts) != end_count:

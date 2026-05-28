@@ -3,16 +3,17 @@
 """
 dev_sync_daemon.py — detect integration sync needs and emit controller requests
 
-daemon 跑在独立 worktree,main repo controller 工作不受 daemon 状态干扰。
+The daemon runs in a dedicated worktree so main-repo controller work is not
+polluted by daemon merge state.
 
-设计:
-- 独立 worktree:$REPO_ROOT/.worktrees/dev-sync(off auto-refact-dev)
-- 600s 周期 check `git rev-list HEAD..origin/dev`
+Design:
+- Dedicated worktree: $REPO_ROOT/.worktrees/dev-sync (off auto-refact-dev)
+- Every 600s, check `git rev-list HEAD..origin/dev`
 - behind>0:emit IntegrationSyncRequest for controller-owned apply
 - conflict exists:spawn resolver worker; controller helper applies lifecycle after marker
-- main repo working tree 不被 merge 状态污染
+- main repo working tree is not polluted by merge state
 
-启动:
+Launch:
   nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/dev_sync_daemon.py' \
     >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
   disown
@@ -116,12 +117,13 @@ def singleton_lock():
 def ensure_worktree() -> bool:
     """Ensure the daemon's dedicated worktree exists (detached HEAD off INTEGRATION).
 
-    git 不允许两个 worktree checkout 同 branch,所以 daemon 用 detached HEAD。
-    Controller apply helpers later map detached HEAD back to the integration branch.
+    Git does not allow two worktrees to check out the same branch, so the daemon
+    uses detached HEAD. Controller apply helpers later map detached HEAD back to
+    the integration branch.
     """
     if not WORKTREE.exists():
         log(f"creating worktree {WORKTREE} (detached off origin/{INTEGRATION})")
-        # fetch 先,确保 origin/INTEGRATION 是最新
+        # Fetch first so origin/INTEGRATION is current.
         run(["git", "fetch", "origin", "--quiet"], cwd=MAIN_REPO)
         r = run(["git", "worktree", "add", "--detach", str(WORKTREE),
                  f"origin/{INTEGRATION}"], cwd=MAIN_REPO)
@@ -193,7 +195,7 @@ fixed lifecycle apply。
 """
     prompt_file.write_text(prompt_body)
     log(f"dispatching codex: prompt={prompt_file} log={log_file}")
-    # spawn-codex.sh 在 main repo,但 --cd 指 worktree
+    # spawn-codex.sh lives in the main repo, while --cd points at the worktree.
     subprocess.Popen(
         ["nohup", str(SPAWN_CODEX),
          "--cd", str(WORKTREE),
@@ -239,7 +241,9 @@ class RollupDetection:
     adoption: RollupAdoption | None = None
 
 
-# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemon state machine boundary.
+# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: scattered active
+# controller-owned sync recipe + implicit daemon transition. New principle:
+# named IntegrationSyncDaemon state machine boundary.
 # Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern: daemon-owned lifecycle apply. New principle: daemon detects and emits IntegrationSyncRequest; controller owns apply.
 # Refactor (iter5/issue107-python-identifier-rename): Old pattern: version suffix in daemon class/schema names (IntegrationSyncDaemonV1, IntegrationSyncRequestV1). New principle: naked responsibility names carry stable artifact intent; compatibility/version policy lives in contracts/tests, not identifier suffixes.
 class IntegrationSyncDaemon:

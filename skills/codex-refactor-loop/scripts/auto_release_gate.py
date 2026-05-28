@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # Refactor (iter4/issue56-r2-consensus):
-#   Old pattern: 手动 release pipeline(#32/PR#40 落地),需 maintainer 主动跑
-#   New principle: 自治判稳 + 自决 semver + durable decision/candidate artifacts,
-#     $RELEASE_AUTO_ENABLE 为一次性 opt-in gate; lifecycle bump/commit/push 仍由既有 controller/release pipeline 执行;
-#     拒绝 per-release 强制 emoji ratification(per #56 r2 META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate)
+#   Old pattern: manual release pipeline landed in #32/PR#40 and required the
+#   maintainer to run it proactively.
+#   New principle: autonomous stability judgment + autonomous semver decision +
+#     durable decision/candidate artifacts; $RELEASE_AUTO_ENABLE is a one-time
+#     opt-in gate; lifecycle bump/commit/push still runs through the existing
+#     controller/release pipeline; reject mandatory per-release emoji ratification
+#     (per #56 r2 META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate).
 """One-shot autonomous release stability gate."""
 
 from __future__ import annotations

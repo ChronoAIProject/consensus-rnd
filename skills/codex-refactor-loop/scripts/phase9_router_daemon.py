@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-# Refactor (iter3/skill-daemon-first-refactor): Old pattern: 所有 Phase 9 route 由 LLM controller 手动派(易漏 marker). New principle: narrow allowlist daemon 直接派 SOLVER_DONE triplet/converge/stalled,其余 marker append fallback event(#37 structural B 共识)。
+# Refactor (iter3/skill-daemon-first-refactor): Old pattern: all Phase 9 routes
+# were manually dispatched by the LLM controller, which easily missed markers.
+# New principle: narrow allowlist daemon directly dispatches SOLVER_DONE
+# triplet/converge/stalled routes; all other markers append fallback events
+# (#37 structural B consensus).
 """Narrow Phase 9 deterministic router daemon.
 
 This daemon owns only three Phase 9 direct-dispatch routes:
@@ -42,10 +46,12 @@ KNOWN_PREFIXES = (
     *LIFECYCLE_PREFIXES,
 )
 MARKER_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+")
-# Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: 接受任意 marker payload,
-# 把含 `|` / `\"` / `*` / `r+1` / 反斜杠的 regex 片段当真 marker -> 每个旧 log 灌噪声进
-# pending-events。 New principle: 真实 marker 的 prefix + suffix 段只含 [A-Za-z0-9_./\-]
-# 及有限标点;含其他特殊字符即视为 prompt/regex 回显,拒绝(per 2026-05-26 maintainer-directive)。
+# Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: accepted any
+# marker payload, treating regex fragments containing `|` / `\"` / `*` / `r+1`
+# / backslashes as real markers, flooding pending-events for every old log.
+# New principle: real marker prefix and suffix segments contain only
+# [A-Za-z0-9_./\-] plus limited punctuation; reject other special characters as
+# prompt/regex echoes (per 2026-05-26 maintainer-directive).
 VALID_MARKER_PAYLOAD = re.compile(r"^[A-Z][A-Z0-9_]*:[A-Za-z0-9_./\-]+(?::[A-Za-z0-9_./\-]+)*$")
 
 
@@ -123,9 +129,11 @@ class Phase9Router:
         self.lock_path = self.loop_dir / "phase9-router.lock"
         self.spawn_codex = Path(__file__).resolve().parent / "spawn-codex.sh"
         self.command_runner = command_runner or self._default_runner
-        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: 内存 only -> daemon
-        # 重启即丢失,re-emit 历史 fallback 灌爆 Monitor。 New principle: __init__ 扫已存在
-        # pending-events 中的 phase9-router-fallback 行 seed dedup set,跨重启幂等。
+        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
+        # memory-only dedup was lost on daemon restart, re-emitting historical
+        # fallback events and flooding Monitor. New principle: __init__ scans
+        # existing phase9-router-fallback lines in pending-events to seed the
+        # dedup set, making restarts idempotent.
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
 
     def tick(self) -> None:
@@ -230,9 +238,11 @@ class Phase9Router:
             return True
         if "round-n" in lowered:
             return True
-        # Refactor (iter4/skill-router-fallback-flood-fix): regex/grep alternation 或
-        # template 占位的常见特征:`|` 选择、`\"` 转义引号、`r+1` 占位、`*` 通配。这些行
-        # 几乎一定是 prompt 模板或 grep 命令的 marker 引用,不是真 codex 输出。
+        # Refactor (iter4/skill-router-fallback-flood-fix): common traits of
+        # regex/grep alternation or template placeholders are `|` choices,
+        # `\"` escaped quotes, `r+1` placeholders, and `*` wildcards. These
+        # lines are almost certainly prompt-template or grep-command marker
+        # references, not real codex output.
         if "|" in text and any(prefix in text for prefix in KNOWN_PREFIXES):
             return True
         if "\\\"" in text or '\\"' in text:
@@ -350,11 +360,13 @@ class Phase9Router:
                     ledger.add(key)
 
     def _append_fallbacks(self, markers: list[Marker], ledger: set[str]) -> None:
-        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: dedup 用
-        # (log_path, marker) 二元组,但 marker 文本随 extract 规则微调而变 -> 跨版本/
-        # 跨重启不稳。 New principle: dedup 仅按 log_path —— 一旦某 log 的任意 marker
-        # 已 surface 给 controller,该 log 后续 marker 不再重 emit;controller 若需细节,
-        # 可直接读 log 自取。这一改让 dedup 跨版本稳健。
+        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: dedup
+        # used a (log_path, marker) tuple, but marker text changes with extractor
+        # tweaks, so it was unstable across versions/restarts. New principle:
+        # dedup by log_path only. Once any marker from a log has surfaced to the
+        # controller, later markers from that log are not re-emitted; the
+        # controller can read the log directly if it needs details. This keeps
+        # dedup stable across versions.
         for marker in markers:
             if self._directly_handled(marker, ledger):
                 continue
@@ -528,9 +540,11 @@ class Phase9Router:
         )
 
     # Refactor (iter5/issue-85-stalled-reflector-template):
-    #   Old pattern: generic 3-line fallback reflector prompt(无 template body / 无 solver evidence)
-    #   New principle: 嵌入完整 meta-reflector-stalled.md template + 9 个 solver log path evidence;
-    #                  template 缺失 fail closed(显式 missing-template prompt 含 META_RESOLVED:escalate-human)
+    #   Old pattern: generic 3-line fallback reflector prompt without template
+    #   body or solver evidence.
+    #   New principle: embed the full meta-reflector-stalled.md template plus
+    #   9 solver log-path evidence lines; missing template fails closed with an
+    #   explicit missing-template prompt containing META_RESOLVED:escalate-human.
     def _reflector_prompt(self, marker: Marker) -> str:
         template = self._stalled_reflector_template()
         evidence_lines = "\n".join(self._stalled_evidence_lines(marker.issue, marker.round))

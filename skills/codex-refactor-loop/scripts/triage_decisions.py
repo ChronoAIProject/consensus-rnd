@@ -2,7 +2,8 @@
 """ManualIssueTriageDecision schema for controller-owned apply.
 
 Refactor (iter5/cluster-issue70-controller-owned-apply):
-Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
+Old: triage worker edited GitHub issues directly, and bash parsed the
+TriageLifecycleRequestV1 Markdown artifact inline.
 New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
 
 Refactor (iter5/issue107-python-identifier-rename): Old pattern: version

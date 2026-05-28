@@ -2,10 +2,11 @@
 # controller_lib.sh — bash library for codex-refactor-loop controller actions
 #
 # Controller boilerplate bugs often come from manually repeating post/spawn/merge glue.
-# (post_banner + spawn + commit + push + close issue + cleanup labels)。
-# 这个库统一抽象,消除 bash 变量传值 bug、重复 sed、worktree race。
+# (post_banner + spawn + commit + push + close issue + cleanup labels).
+# This library centralizes those patterns to eliminate bash variable passing
+# bugs, repeated sed usage, and worktree races.
 #
-# Usage(在 controller 里):
+# Usage (inside the controller):
 #   source .claude/skills/codex-refactor-loop/scripts/controller_lib.sh
 #   merge_pr <pr> <issue>   # PR <pr> merge + close <issue> + cleanup labels
 #   safe_worktree iterN cluster-026 origin/auto-refact-dev
@@ -55,8 +56,10 @@ safe_worktree() {
 # Usage: merge_pr <pr-number> [linked-issue]
 merge_pr() {
   # Refactor (iter3/skill-human-label-taxonomy):
-  #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-  #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+  #   Old: four Human labels, including two 🆘 labels, scattered no-gap and
+  #   escalation decisions across the codebase.
+  #   New principle: exactly two active Human labels; causes move to the
+  #   reason surface (#15 structural consensus).
   local pr="$1" linked_issue="${2:-}"
   if [ -z "$pr" ]; then
     echo "merge_pr: missing pr number" >&2
@@ -106,8 +109,9 @@ merge_pr() {
 # Open PR + add auto-loop label atomically + capture PR number into PR_NUM
 # Usage: open_pr_with_label <title> <body-file> [base] [head]
 # Sets PR_NUM env var.
-# head 必须显式传(controller 当前分支可能不是 cluster branch),
-# 防止 gh fallback 到 current branch 导致 head/base 相同。
+# head must be passed explicitly because the controller's current branch may
+# not be the cluster branch; this prevents gh from falling back to the current
+# branch and making head/base identical.
 open_pr_with_label() {
   local title="$1" body_file="$2" base="${3:-$INTEGRATION_BRANCH}" head="${4:-}"
   if [ -z "$head" ]; then
@@ -115,7 +119,8 @@ open_pr_with_label() {
     return 1
   fi
   local pr_url
-  # gh pr create 多行 output (warnings + URL),URL 可能不在 last line;grep first occurrence
+  # gh pr create may emit multiple lines (warnings + URL), and the URL may not
+  # be on the last line; grep the first occurrence.
   pr_url=$(gh pr create "${gh_repo_args[@]}" --base "$base" --head "$head" --title "$title" --body-file "$body_file" 2>&1 | grep -oE "https://github.com/[^/]+/[^/]+/pull/[0-9]+" | head -1)
   PR_NUM=$(echo "$pr_url" | grep -oE "[0-9]+$")
   if [ -z "$PR_NUM" ]; then
@@ -268,7 +273,8 @@ apply_dev_sync_request_marker() {
 }
 
 # Refactor (iter5/cluster-issue70-controller-owned-apply):
-# Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
+# Old: triage worker edited GitHub issues directly, and bash parsed the
+# TriageLifecycleRequestV1 Markdown artifact inline.
 # New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
 # Apply a TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path> marker by
 # delegating to the controller-owned helper. This wrapper does not inline
@@ -289,7 +295,9 @@ apply_triage_decision_marker() {
   REPO_ROOT="$REPO_ROOT" python3 "$skill_root/scripts/apply_triage_decision.py" "$issue" "$verdict" "$REPO_ROOT/$rel_path"
 }
 
-# Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
+# Refactor (iter4/human-label-semantics-guard): Old pattern: label used as an
+# architect-reject workaround. New principle: strict semantics + reflector
+# self-check + controller helper guard + source-regression test.
 # Apply the maintainer-decision label only after checking maintainer-directive artifacts.
 # Usage: apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>
 apply_human_label_or_skip() {
@@ -315,13 +323,13 @@ apply_human_label_or_skip() {
     local target escaped_reason
     target="${pr_number#\#}"
     if grep -RIlE "(^|[^0-9])(PR[ -]?)?#?${target}([^0-9]|$)" "$directive_dir"/*.md >/dev/null 2>&1; then
-      echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
+      echo "skip-label: maintainer-directive already covers this; see .refactor-loop/runs/maintainer-directives/"
       return 1
     fi
     if [ -n "$reason" ]; then
       escaped_reason=$(printf '%s\n' "$reason" | sed 's/[][(){}.^$*+?|\\]/\\&/g')
       if grep -RIlE "(^|[^[:alnum:]_-])${escaped_reason}([^[:alnum:]_-]|$)" "$directive_dir"/*.md >/dev/null 2>&1; then
-        echo "skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/"
+        echo "skip-label: maintainer-directive already covers this; see .refactor-loop/runs/maintainer-directives/"
         return 1
       fi
     fi
@@ -352,8 +360,10 @@ render_template() {
 # Usage: sweep_stale_labels
 sweep_stale_labels() {
   # Refactor (iter3/skill-human-label-taxonomy):
-  #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-  #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+  #   Old: four Human labels, including two 🆘 labels, scattered no-gap and
+  #   escalation decisions across the codebase.
+  #   New principle: exactly two active Human labels; causes move to the
+  #   reason surface (#15 structural consensus).
   # Refactor (iter3/skill-hygiene-scripts):
   #   Old: stale labels were interpolated into a shell-built gh edit string.
   #   New: build a real argv array and append one --remove-label "$label" pair.
@@ -402,7 +412,7 @@ validate_prompt() {
   n=$(grep -c "{{" "$f" 2>/dev/null | tr -d ' \n' || echo "0")
   [ -z "$n" ] && n=0
   if [ "$n" -gt 0 ] 2>/dev/null; then
-    echo "❌ prompt $f 仍有 $n 个未解析 {{var}}:" >&2
+    echo "❌ prompt $f still has $n unresolved {{var}} placeholder(s):" >&2
     grep -n "{{" "$f" | head -5 >&2
     return 1
   fi
@@ -420,13 +430,14 @@ verify_trunk_build() {
     return 2
   fi
   if ! $BUILD_CMD; then
-    echo "❌ trunk build broken after merge — 派 hotfix codex(参考 SKILL Phase 4 hotfix 段)" >&2
+    echo "❌ trunk build broken after merge — dispatch hotfix codex (see SKILL Phase 4 hotfix section)" >&2
     return 2
   fi
-  # 加 architecture_guards 包括 docs lint,防止 merge 后 docs/architecture regression.
+  # Add architecture guards, including docs lint, to prevent post-merge
+  # docs/architecture regressions.
   if [ -n "${CI_GUARDS:-}" ]; then
     if ! $CI_GUARDS > /tmp/_verify_trunk_guards.log 2>&1; then
-      echo "❌ trunk architecture/docs guards 挂(merge 后 lint regression)" >&2
+      echo "❌ trunk architecture/docs guards failed (post-merge lint regression)" >&2
       tail -5 /tmp/_verify_trunk_guards.log >&2
       return 3
     fi
@@ -437,12 +448,15 @@ verify_trunk_build() {
   return 0
 }
 
-# Refactor (iter4/skill-safe-push-helper): Old pattern: controller 每次 commit 后直接 push,
-# 但 dev_sync_daemon 在独立 worktree 同步 origin/dev -> auto-refact-dev 时会先 push,导致
-# main repo HEAD 落后远端;controller 这边 push 撞 non-fast-forward,必须手动 pull --rebase。
-# New principle: 强制走 safe_push,内置 fetch + 必要时 rebase --autostash + 再 push;
-# 同时暴露 safe_sync_main 在 session 入口 / pre-commit 时主动追远端。
-# (2026-05-26 maintainer-directive 等价 Phase 9 共识)
+# Refactor (iter4/skill-safe-push-helper): Old pattern: controller pushed
+# directly after every commit, but dev_sync_daemon could push first while
+# syncing origin/dev -> auto-refact-dev from its dedicated worktree. That left
+# main repo HEAD behind remote, causing controller push to hit non-fast-forward
+# and require manual pull --rebase.
+# New principle: force safe_push, with built-in fetch and rebase --autostash
+# when needed before pushing again. Also expose safe_sync_main so session entry
+# and pre-commit can proactively catch up to remote.
+# (2026-05-26 maintainer-directive equivalent to Phase 9 consensus)
 
 # Usage: safe_push <remote> <branch>
 # Behavior: fetch remote/branch; if local diverges or is behind, rebase --autostash;

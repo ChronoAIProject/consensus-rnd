@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Behavior tests for controller_lib.sh safe_push + safe_sync_main helpers.
 
-Refactor (iter4/skill-safe-push-helper): Old pattern: controller 手动 pull --rebase
-after non-fast-forward push. New principle: safe_push 内置 fetch + 必要时 rebase
---autostash + push;safe_sync_main 在 commit 前主动追远端,避免 rebase path。
+Refactor (iter4/skill-safe-push-helper): Old pattern: controller manually ran
+pull --rebase after non-fast-forward push. New principle: safe_push includes
+fetch and rebase --autostash when needed before push; safe_sync_main
+proactively catches up with remote before commit, avoiding the rebase path.
 """
 
 from __future__ import annotations
