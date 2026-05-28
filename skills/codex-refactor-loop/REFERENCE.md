@@ -686,7 +686,7 @@ For each cluster whose implement finished `ok`:
 
 1. Materialize `prompts/verify.md` → `.refactor-loop/prompts/verify-<cluster-id>.md`. For current
    audit-backed units, export `WORK_UNIT_ID=$CLUSTER_ID`; `WORK_UNIT_ID` is the canonical prompt
-   identity, while `CLUSTER_ID` remains the v1 compatibility alias for markers and artifacts.
+   identity, while `CLUSTER_ID` remains the compatibility alias for markers and artifacts.
 2. Dispatch in the same worktree (verify reads `git diff HEAD`, runs full test/guard suite, gates merge):
 
    ```bash
@@ -2164,7 +2164,7 @@ Audit compatibility:
 Stable operational tokens:
 
 - Current markers, GitHub labels, issue title prefixes, branch prefixes, artifact paths, prompt
-  markers, log markers, and audit section lookups are stable v1 operational names.
+  markers, log markers, and audit section lookups are stable operational names.
 - `cluster-009-marker-label-compat-migration` does not rename, dual-write, or add aliases for
   these names. Keep existing `refactor`, `cluster`, `auto-loop`, and `*_DONE` spellings as the
   public routing surface while `WORK_UNIT_ID=$CLUSTER_ID` is the compatibility bridge.
@@ -2194,7 +2194,7 @@ the work-unit contract before adding it to `clusters_planned`:
 - `kind: audit-cluster`
 - `producer: audit`
 - `source_ref: .refactor-loop/runs/audit-iter-N.md#<cluster-id>`
-- `legacy_cluster_id: <cluster-id>` optional but recommended during v1 compatibility
+- `legacy_cluster_id: <cluster-id>` optional but recommended during compatibility window
 
 Audit-backed units may keep using `<cluster-id>` for branch names, worktree paths, artifact
 filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` remains the compatibility alias.

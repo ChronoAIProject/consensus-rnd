@@ -1573,7 +1573,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
 
         required_markers = (
             "Stable operational tokens",
-            "stable v1 operational names",
+            "stable operational names",
             "[refactor-design]",
             "refactor-design-needed",
             "auto-loop",
