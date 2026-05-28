@@ -1721,6 +1721,25 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, skill_text)
 
+    # Refactor (stale-issue-revival): Old pattern: phase label coverage was
+    # treated as sufficient; the loop never re-checked time-since-last-update.
+    # New principle: 3h staleness boundary forces re-dispatch even when phase
+    # label looks current (2026-05-28 maintainer-directive).
+    def test_skill_concurrency_floor_documents_stale_issue_revival(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for required in (
+            "Stale-issue revival(3h)",
+            "older than **3 hours UTC**",
+            "`updatedAt`",
+            "MUST be re-dispatched to its next-step actor on the next wakeup",
+            "unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet",
+            "`stale_hours=N`",
+            "2026-05-28-stale-issue-3h-revival.md",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, skill_text)
+
     def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 

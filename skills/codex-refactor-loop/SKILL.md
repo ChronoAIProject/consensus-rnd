@@ -359,6 +359,10 @@ The floor is local because it prevents loop stalls.
   - `✅ phase:consensus-reached` with 0 codex → dispatch implement codex
 - Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex matching its phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
 - Concurrent audit dispatched against the rule must be killed (`pkill -f audit-iter-N`) and replaced with the missing existing-issue actors.
+<!-- Refactor (stale-issue-revival): Old pattern: "0 codex on issue" 触发就派,但一旦短暂派完(comment/marker)就放着不动,即便实际 cascade 长期没推进。 New principle: open auto-loop issue/PR `updatedAt > 3h` 即视为 stale,即使当前 phase label 看似合理也要 re-dispatch 下一 actor,把 cascade 重新唤醒。(2026-05-28 maintainer-directive `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`) -->
+- **Stale-issue revival(3h)**:Open `auto-loop` issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
+- Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet.
+- Stale revival posts one banner per re-dispatch noting `stale_hours=N` from `updatedAt`, so the maintainer can see the loop is re-engaging rather than spawning shadow work.
 
 More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-details).
 
