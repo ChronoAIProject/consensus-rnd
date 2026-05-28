@@ -33,8 +33,13 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-140):
-  Old pattern: 见 issue #140 与 design decision
-  New principle: 严格按 .refactor-loop/runs/phase9-issue140-r4-judge.md 的 consensus Implement plan 逐条落地;不超范围;改 SKILL.md 只动相关段(单文件)。
+  Old pattern: host.env.example documented only a subset of host
+  variables, so exported keys could drift from the SKILL.md Host config
+  and Host language policy tables.
+  New principle: keep host.env.example exports equal to the SKILL.md host
+  configuration table key set with source-regression coverage, while
+  reusing the existing host.env/SKILL.md surfaces instead of adding a new
+  schema or runtime contract.
 -->
 These variables are injected by the host project. The skill must not hardcode project facts.
 | Variable | Meaning | Default / example |
