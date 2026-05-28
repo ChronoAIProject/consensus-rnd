@@ -11,6 +11,11 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
 
+DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
+    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
+    r"not allowed|marker/artifact-only|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
+)
+
 MARKER_ONLY_PROMPTS = (
     "audit.md",
     "implement.md",
@@ -83,15 +88,21 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
             self.assertIsNotNone(ban_section_match, filename)
             ban_section = ban_section_match.group(0)
             for token in FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS:
-                for line in body.splitlines():
+                for line in ban_section.splitlines():
                     if token not in line:
                         continue
                     with self.subTest(prompt=filename, token=token, line=line):
-                        self.assertTrue(
-                            line in ban_section
-                            or "## 红线" in body[: body.index(line)]
-                            or "## Marker emission allowlist" in body[: body.index(line)]
-                        )
+                        self.assertRegex(line, DENIAL_OR_CONTROLLER_OWNER_RE)
+                affirmative_lines = [
+                    line
+                    for line in body.splitlines()
+                    if token in line and not DENIAL_OR_CONTROLLER_OWNER_RE.search(line)
+                ]
+                self.assertEqual(
+                    affirmative_lines,
+                    [],
+                    f"{filename} mentions forbidden lifecycle token `{token}` outside denial/controller-owner context",
+                )
 
 
 if __name__ == "__main__":

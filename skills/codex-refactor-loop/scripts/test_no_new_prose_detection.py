@@ -12,6 +12,11 @@ SCRIPT_PATH = Path(__file__)
 REPO_ROOT = SCRIPT_PATH.parents[3]
 BASE_REF = "origin/auto-refact-dev"
 
+# Refactor (issue106/nl-prose-detector-anchors):
+#   Old pattern: source-regression tests used localized prose literals as detector anchors, so
+#   normal wording edits or language cleanup could break machine checks and encourage brittle text pinning.
+#   New principle: detector tests must key on protocol tokens, sentinels, heading ids, and structured
+#   context; this guard prevents newly changed tests from adding back localized prose detector tokens.
 FORBIDDEN_NEW_TEST_TOKENS = (
     "事实源唯一",
     "GitHub 是系统状态唯一显示面",
