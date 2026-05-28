@@ -10,7 +10,7 @@
 # issue/PR state.
 #
 # Refactor (iter326/issue-122):
-#   Old pattern: .refactor-loop/logs/ + runs/ 无限增长,daemon scan 越来越慢,膨胀 .refactor-loop/
+#   Old pattern: .refactor-loop/logs/ and runs/ grew without bounds, slowing daemon scans and bloating .refactor-loop/.
 #   New principle: daemonless 24h log_retention.sh under restart-daemons; direct rm only, no archive/index/new daemon
 #   (Phase 9 r1 consensus:structural)
 
