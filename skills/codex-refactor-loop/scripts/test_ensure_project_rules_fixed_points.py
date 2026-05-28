@@ -2754,8 +2754,30 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
+    # Refactor (iter1/issue-140):
+    #   Old pattern: host env variables drifted between the SKILL.md tables and
+    #   host.env.example without a source-regression equality check.
+    #   New principle: keep the existing host config and language-policy tables
+    #   as the only host-facing variable list, mechanically matched to exports.
+    def skill_host_config_section(self) -> str:
+        return self.read_rel("skills/codex-refactor-loop/SKILL.md").split("## Host 配置(通用化注入点)", 1)[1].split("## Skill Root Contract", 1)[0]
+
+    def host_env_export_keys(self) -> set[str]:
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        return set(re.findall(r"^export ([A-Z0-9_]+)=", host_env, re.MULTILINE))
+
     def rel_paths(self, *patterns: str) -> list[Path]:
         return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
+
+    def active_prompt_and_reference_paths(self) -> list[Path]:
+        paths = sorted((SKILL_ROOT / "prompts").glob("*.md"))
+        reference = SKILL_ROOT / "REFERENCE.md"
+        if reference.exists():
+            paths.append(reference)
+        return paths
+
+    def strip_issue126_self_doc(self, text: str) -> str:
+        return re.sub(r"<!--\nRefactor \(iter1/issue-126\):.*?\n-->\n", "", text, flags=re.DOTALL)
 
     def assert_absent(self, needle: str, paths: list[Path], allowlist: tuple[str, ...] = ()) -> None:
         for path in paths:
@@ -3178,6 +3200,11 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "human:",
             "stale = [",
         )
+        issue126_self_doc_contexts = (
+            "Refactor (iter1/issue-126):",
+            "跨平台 prompt 含 '该项目'/'该项目AI'",
+            "按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus",
+        )
         log_error_context_re = re.compile(
             r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
             r"set_defaults|ArgumentParser|error|warning)\b",
@@ -3210,6 +3237,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                             continue
                     if any(needle in context for needle in allowed_python_string_contexts):
                         continue
+                    if path.name == "test_ensure_project_rules_fixed_points.py" and any(needle in context for needle in issue126_self_doc_contexts):
+                        continue
                     offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
 
         for path in sorted((SKILL_ROOT / "scripts").glob("*.sh")):
@@ -3225,6 +3254,52 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 offenders.append(f"{rel}:{line_no}: {stripped}")
 
         self.assertEqual(offenders, [])
+
+    def test_host_env_example_exports_match_skill_host_tables(self) -> None:
+        section = self.skill_host_config_section()
+        table_vars = set(re.findall(r"`\$([A-Z0-9_]+)`", section))
+        exports = self.host_env_export_keys()
+
+        self.assertEqual(exports, table_vars)
+        self.assertIn("GH_OWNER", exports)
+        self.assertIn("GH_REPO_NAME", exports)
+        compatibility_exports = {"GH_OWNER", "GH_REPO_NAME"}
+        compatibility_lines = [
+            line for line in section.splitlines() if "compatibility" in line and ("GH_OWNER" in line or "GH_REPO_NAME" in line)
+        ]
+        self.assertEqual(compatibility_exports, {name for line in compatibility_lines for name in compatibility_exports if name in line})
+
+    def test_host_env_example_exports_have_requirement_behavior_comments(self) -> None:
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        lines = host_env.splitlines()
+        export_lines = [(idx, line) for idx, line in enumerate(lines) if line.startswith("export ")]
+        self.assertGreaterEqual(len(export_lines), 20)
+
+        behavior_re = re.compile(r"Requirement:|Default:|Empty/noop:|Fail-closed surface:")
+        for idx, line in export_lines:
+            with self.subTest(export=line):
+                preceding = "\n".join(lines[max(0, idx - 3) : idx])
+                self.assertRegex(preceding, behavior_re)
+
+    def test_host_env_contract_stays_on_existing_surfaces(self) -> None:
+        skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        combined = "\n".join([skill, host_env])
+
+        self.assertIn("## Host 配置(通用化注入点)", skill)
+        self.assertIn("### Host language policy", skill)
+        for heading in ("# ─── required", "# ─── defaulted", "# ─── optional-empty-or-noop"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, host_env)
+        self.assertNotIn("HostRuntimeContract", combined)
+        self.assertNotIn("HOST_RUNTIME_CONTRACT", combined)
+        self.assertNotIn("host env schema", combined.lower())
+        self.assertNotIn("Host env schema", combined)
+        self.assertNotIn("export GH_REPO=", host_env)
+        self.assertNotIn("CODEX_REFACTOR_LOOP_SKILL_ROOT", host_env)
+        self.assertFalse((SKILL_ROOT / "scripts" / "host_runtime_contract.py").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "host_env_schema.py").exists())
+        self.assertFalse((SKILL_ROOT / "INSTALL.md").exists())
 
     # Refactor (iter3/skill-host-language-policy): Old: hard-coded
     # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and
@@ -3367,6 +3442,27 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         )
         self.assertIsNone(re.search(r"(?<!HOST_)\bproto\b", prompt_text))
         self.assertIsNone(re.search(r"\.proto\b", prompt_text))
+
+    # Refactor (iter1/issue-126):
+    #   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
+    #   New principle: 按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus 逐条:删除 prompt 硬编码 host 文本,复用现有 host.env surface;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
+    def test_active_prompts_and_reference_do_not_reintroduce_host_placeholders(self) -> None:
+        checked = self.active_prompt_and_reference_paths()
+        combined = "\n".join(self.strip_issue126_self_doc(path.read_text(encoding="utf-8")) for path in checked)
+
+        for literal in ("该项目", "该项目AI"):
+            with self.subTest(literal=literal):
+                self.assertNotIn(literal, combined)
+
+        self.assertIsNone(re.search(r"gh api orgs/[A-Za-z0-9_.-]+/members/\$\{COMMENT_AUTHOR\}", combined))
+        self.assertIsNone(re.search(r"\S+-wt-hotfix-\S*", combined))
+
+        design_reply = self.strip_issue126_self_doc((SKILL_ROOT / "prompts" / "design-issue-reply.md").read_text(encoding="utf-8"))
+        self.assertIn("gh api repos/$GH_REPO_SLUG/collaborators/${COMMENT_AUTHOR}", design_reply)
+        self.assertIn("$MAINTAINER_WHITELIST", design_reply)
+        self.assertIn("not collaborator, not whitelisted", design_reply)
+        self.assertNotIn("not org member", design_reply)
+        self.assertNotIn("CommentAuthorPolicy", (SKILL_ROOT / "scripts" / "comment-monitor.sh").read_text(encoding="utf-8"))
 
 
 class Phase9RouterMarkerTailOnlySourceRegressionTests(unittest.TestCase):

@@ -18,6 +18,11 @@ def read(path: Path) -> str:
 
 
 class AntiStopRestartHelperContractTests(unittest.TestCase):
+    # Refactor (iter1/issue-140):
+    #   Old pattern: restart-helper install wording was not pinned to the
+    #   local cron/launchd-only surface.
+    #   New principle: keep cron, launchd, uninstall, and no-lifecycle wording
+    #   in the anti-stop section without creating a new installer or daemon.
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.helper = read(RESTART_HELPER)
@@ -58,6 +63,14 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "## Anti-stop restart helper cron/launchd install(per #49)",
             1,
         )[1].split("## Named runtime exception", 1)[0]
+        local_required = (
+            "Uninstall note",
+            "cron/launchd-only",
+            "do not replace it with a new watchdog daemon, installer script, or lifecycle actor",
+        )
+        for needle in local_required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, anti_stop_install)
         forbidden = (
             "Host project cron install one-liner",
             "*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh",

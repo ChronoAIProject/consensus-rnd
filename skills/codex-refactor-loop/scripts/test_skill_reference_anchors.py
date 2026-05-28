@@ -231,6 +231,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
+    # Refactor (iter1/issue-140):
+    #   Old pattern: statusline install wording was not pinned to the local
+    #   manual one-liner surface.
+    #   New principle: keep install/uninstall anchors local to the statusline
+    #   section and reject installer-script drift.
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
 
@@ -243,7 +248,8 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         required = (
             "**Producer**",
             "**Consumer**",
-            "**Install**",
+            "**Install one-liner**",
+            "**Uninstall one-liner**",
             "**无新 daemon**",
             "**手动一行,无 installer script**",
             "Named runtime exception",
@@ -267,6 +273,24 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         for token in forbidden:
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
+
+    def test_statusline_install_uninstall_anchor_is_local_and_manual(self) -> None:
+        section = self.skill.split("## Claude Code statusline(per #51 consensus)", 1)[1].split(
+            "## Anti-stop restart helper cron/launchd install(per #49)",
+            1,
+        )[0]
+        required = (
+            "Install one-liner",
+            "Uninstall one-liner",
+            "statusLine",
+            "手动一行,无 installer script",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        scripts_dir = SKILL_ROOT / "scripts"
+        self.assertFalse((scripts_dir / "installer.sh").exists())
+        self.assertFalse((scripts_dir / "install-statusline.sh").exists())
 
     def test_skill_documents_statusline_snapshot_schema(self) -> None:
         self.assertIn("### Statusline snapshot schema", self.skill)
