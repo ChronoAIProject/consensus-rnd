@@ -362,6 +362,9 @@ class AutoReleaseGate:
         return {"passed": streak <= 3 and recent_lines <= 3, "zero_streak": streak, "recent_p0_alerts": recent_lines, "source": "state"}
 
     def recent_pr_merges_min(self, since: datetime, minimum: int) -> dict[str, Any]:
+        # Refactor (iter1/issue-145):
+        #   Old pattern: merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json,导致 auto_release_gate 的 recent_pr_merges_min 信号永红(missing artifact),阻塞发版。
+        #   New principle: 按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus(structural):保留 recent_pr_merges_min 信号;merge_pr 成功后由私有 writer append recent-pr-merges.json(sha/time/pr,滚动窗口),artifact-only,release gate 不新增 standalone telemetry。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New 不用 see-issue placeholder;不超范围。
         raw = load_json(self.recent_merges_path, {})
         count = raw.get("count") if isinstance(raw, dict) else None
         if count is None and minimum <= 0:
@@ -374,7 +377,12 @@ class AutoReleaseGate:
                 "since": isoformat(since),
                 "source": "state",
             }
-        return {"passed": count >= minimum, "count": count, "minimum": minimum, "since": isoformat(since), "source": "state"}
+        merges = raw.get("merges") if isinstance(raw, dict) else None
+        signal: dict[str, Any] = {"passed": count >= minimum, "count": count, "minimum": minimum, "since": isoformat(since), "source": "state"}
+        if isinstance(merges, list):
+            signal["window_hours"] = raw.get("window_hours")
+            signal["updated_at"] = raw.get("updated_at")
+        return signal
 
     def fresh_heartbeats(self) -> dict[str, Any]:
         raw = load_json(self.state_dir / "daemon-heartbeats.json", {})

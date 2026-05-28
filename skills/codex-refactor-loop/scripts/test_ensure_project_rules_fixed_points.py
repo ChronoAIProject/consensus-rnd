@@ -2738,6 +2738,24 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, source)
 
+    def test_recent_merge_projection_boundary(self) -> None:
+        # Refactor (iter1/issue-145):
+        #   Old pattern: merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json,导致 auto_release_gate 的 recent_pr_merges_min 信号永红(missing artifact),阻塞发版。
+        #   New principle: 按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus(structural):保留 recent_pr_merges_min 信号;merge_pr 成功后由私有 writer append recent-pr-merges.json(sha/time/pr,滚动窗口),artifact-only,release gate 不新增 standalone telemetry。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New 不用 see-issue placeholder;不超范围。
+        controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
+        gate_source = self.read_gate_source()
+        skill_text = self.read_skill()
+
+        self.assertIn("record_recent_pr_merge_artifact()", controller_lib)
+        self.assertIn('record_recent_pr_merge_artifact "$pr"', controller_lib)
+        self.assertIn(".refactor-loop/state/recent-pr-merges.json", controller_lib)
+        self.assertIn("recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr`", skill_text)
+        self.assertIn("count/window_hours/updated_at/merges[]", skill_text)
+        self.assertFalse((SKILL_ROOT / "scripts" / "record_release_merge.py").exists())
+        for forbidden in ("git log", "git rev-list", "gh pr view", "gh api"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, gate_source)
+
 # Refactor (hygiene/634a608-followup): delete stranded paragraph tests matching
 # the CLAUDE.md philosophy-only rewrite; the paragraph no longer exists.
 # Refactor (iter3/skill-contract-test-suite):
@@ -3205,6 +3223,11 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "跨平台 prompt 含 '该项目'/'该项目AI'",
             "按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus",
         )
+        issue145_self_doc_contexts = (
+            "Refactor (iter1/issue-145):",
+            "merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json",
+            "按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus",
+        )
         log_error_context_re = re.compile(
             r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
             r"set_defaults|ArgumentParser|error|warning)\b",
@@ -3239,6 +3262,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                         continue
                     if path.name == "test_ensure_project_rules_fixed_points.py" and any(needle in context for needle in issue126_self_doc_contexts):
                         continue
+                    if any(needle in context for needle in issue145_self_doc_contexts):
+                        continue
                     offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
 
         for path in sorted((SKILL_ROOT / "scripts").glob("*.sh")):
@@ -3250,6 +3275,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 if not (stripped.startswith("#") or '"' in stripped or "'" in stripped or "<<EOF" in stripped):
                     continue
                 if any(needle in line for needle in allowed_shell_contexts):
+                    continue
+                if any(needle in line for needle in issue145_self_doc_contexts):
                     continue
                 offenders.append(f"{rel}:{line_no}: {stripped}")
 
