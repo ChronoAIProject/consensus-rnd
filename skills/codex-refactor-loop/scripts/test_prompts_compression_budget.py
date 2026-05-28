@@ -3,7 +3,7 @@ import unittest
 
 PROMPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "prompts"
 SKILL_DIR = PROMPTS_DIR.parent
-LINE_BUDGET = 1280
+LINE_BUDGET = 1250
 REQUIRED_TOKENS_PER_FILE = {
     "solver-minimal.md": ["SOLVER_DONE:minimal:"],
     "solver-structural.md": ["SOLVER_DONE:structural:"],

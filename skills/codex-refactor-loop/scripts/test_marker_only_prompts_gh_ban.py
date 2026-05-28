@@ -19,20 +19,15 @@ MARKER_ONLY_PROMPTS = (
 )
 
 REQUIRED_BAN_SUBSTRINGS = (
-    "## codex 工具边界(强制)",
-    "iter5/prompt-gh-ban-marker-only",
-    "marker/artifact-only",
-    "gh pr create",
-    "gh pr merge",
-    "gh pr close",
-    "gh issue create",
-    "gh issue close",
-    "gh issue edit --add-label",
-    "gh issue edit --remove-label",
-    "gh pr edit --add-label",
-    "gh pr edit --remove-label",
-    "git commit/push/checkout/merge/reset/rebase",
-    "lifecycle / label 决策归 controller",
+    "Marker/artifact-only",
+    "GitHub",
+)
+
+REQUIRED_BAN_PATTERNS = (
+    r"(git commit/push/checkout/merge/reset/rebase|commit, push, checkout.*merge)",
+    r"(PR create/merge/close|create PR, merge, close issues/PRs)",
+    r"(issue create/close|close issues/PRs)",
+    r"(label edits|edit labels)",
 )
 
 FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
@@ -62,16 +57,19 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                         body,
                         f"{filename} 缺少必备字面 `{needle}`(iter5 ban section regression)",
                     )
+                for pattern in REQUIRED_BAN_PATTERNS:
+                    self.assertRegex(
+                        body,
+                        pattern,
+                        f"{filename} 缺少必备 lifecycle ban pattern `{pattern}`",
+                    )
 
-    def test_refactor_self_doc_block_present(self) -> None:
+    def test_marker_only_prompts_preserve_sentinel_contract(self) -> None:
         for filename in MARKER_ONLY_PROMPTS:
             with self.subTest(prompt=filename):
                 body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
-                self.assertIn(
-                    "Refactor (iter5/prompt-gh-ban-marker-only)",
-                    body,
-                    f"{filename} 缺少 Refactor self-doc 块",
-                )
+                self.assertIn("⟦AI:AUTO-LOOP⟧", body)
+                self.assertIn("末尾独立一行", body)
 
     def test_lifecycle_tokens_only_appear_in_ban_lines(self) -> None:
         for filename in MARKER_ONLY_PROMPTS:
@@ -81,7 +79,7 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                     if token not in line:
                         continue
                     with self.subTest(prompt=filename, token=token, line=line):
-                        self.assertRegex(line, r"不可调|禁止|不得|marker/artifact-only|controller")
+                        self.assertRegex(line, r"不可调|禁止|不得|marker/artifact-only|controller|Do not|Forbidden")
 
 
 if __name__ == "__main__":

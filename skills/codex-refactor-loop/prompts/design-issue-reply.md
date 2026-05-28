@@ -12,9 +12,8 @@ Comment body:
 Before analysis, verify the author is a project team member. Pass if any check succeeds:
 
 1. `gh api repos/$GH_REPO_SLUG/collaborators/${COMMENT_AUTHOR}` returns 204.
-2. `gh api orgs/${GH_ORG_SLUG}/members/${COMMENT_AUTHOR}` returns 204.
-3. `${COMMENT_AUTHOR}` is in the maintainer whitelist.
-4. The comment is controller-authored (`## 🤖`, generated marker, or near-duplicate controller text); then skip.
+2. `${COMMENT_AUTHOR}` is in the maintainer whitelist.
+3. The comment is controller-authored (`## 🤖`, generated marker, or near-duplicate controller text); then skip.
 
 If the gate fails, write `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-skipped-$(date +%s).md`, print `DESIGN_REPLY_SKIPPED:${ISSUE_NUMBER}:not-team-member:${COMMENT_AUTHOR}`, and do not post.
 

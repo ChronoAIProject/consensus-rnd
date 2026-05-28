@@ -433,11 +433,11 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         prompt_path = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue85-r3-reflector.md"
         prompt = prompt_path.read_text(encoding="utf-8")
         for token in (
-            "# Role: Meta-reflector - stalled route resolver",
+            "# Meta-Reflector: Stalled Route Resolver",
             "## Priority 0: mandatory no-framing drop",
             "META_RESOLVED:drop:no-actionable-framing-after-N-rounds",
             "Do not route to re-design unless you can cite",
-            "## Marker emission allowlist",
+            "## Marker Emission Allowlist",
             "⟦AI:AUTO-LOOP⟧",
             stalled_marker,
         ):
