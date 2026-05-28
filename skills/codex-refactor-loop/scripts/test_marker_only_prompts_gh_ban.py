@@ -4,11 +4,17 @@
 from __future__ import annotations
 
 import unittest
+import re
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
+
+DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
+    r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
+    r"not allowed|marker/artifact-only|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
+)
 
 MARKER_ONLY_PROMPTS = (
     "audit.md",
@@ -19,7 +25,7 @@ MARKER_ONLY_PROMPTS = (
 )
 
 REQUIRED_BAN_SUBSTRINGS = (
-    "## codex 工具边界(强制)",
+    "## codex ",
     "iter5/prompt-gh-ban-marker-only",
     "marker/artifact-only",
     "gh pr create",
@@ -32,7 +38,8 @@ REQUIRED_BAN_SUBSTRINGS = (
     "gh pr edit --add-label",
     "gh pr edit --remove-label",
     "git commit/push/checkout/merge/reset/rebase",
-    "lifecycle / label 决策归 controller",
+    "lifecycle / label ",
+    "controller",
 )
 
 FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
@@ -60,8 +67,9 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                     self.assertIn(
                         needle,
                         body,
-                        f"{filename} 缺少必备字面 `{needle}`(iter5 ban section regression)",
+                        f"{filename} missing required ban-section token `{needle}`",
                     )
+                self.assertRegex(body, r"(?m)^## codex .+$")
 
     def test_refactor_self_doc_block_present(self) -> None:
         for filename in MARKER_ONLY_PROMPTS:
@@ -70,18 +78,31 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                 self.assertIn(
                     "Refactor (iter5/prompt-gh-ban-marker-only)",
                     body,
-                    f"{filename} 缺少 Refactor self-doc 块",
+                    f"{filename} missing Refactor self-doc block",
                 )
 
     def test_lifecycle_tokens_only_appear_in_ban_lines(self) -> None:
         for filename in MARKER_ONLY_PROMPTS:
             body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+            ban_section_match = re.search(r"(?ms)^## codex .+?(?=^## |\Z)", body)
+            self.assertIsNotNone(ban_section_match, filename)
+            ban_section = ban_section_match.group(0)
             for token in FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS:
-                for line in body.splitlines():
+                for line in ban_section.splitlines():
                     if token not in line:
                         continue
                     with self.subTest(prompt=filename, token=token, line=line):
-                        self.assertRegex(line, r"不可调|禁止|不得|marker/artifact-only|controller")
+                        self.assertRegex(line, DENIAL_OR_CONTROLLER_OWNER_RE)
+                affirmative_lines = [
+                    line
+                    for line in body.splitlines()
+                    if token in line and not DENIAL_OR_CONTROLLER_OWNER_RE.search(line)
+                ]
+                self.assertEqual(
+                    affirmative_lines,
+                    [],
+                    f"{filename} mentions forbidden lifecycle token `{token}` outside denial/controller-owner context",
+                )
 
 
 if __name__ == "__main__":

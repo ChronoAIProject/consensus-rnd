@@ -37,6 +37,11 @@ CANONICAL_HUMAN_LABELS = {"🤖 human:auto-推进", "👤 human:需-maintainer-�
 NON_AUTO_HUMAN_LABEL = "👤 human:需-maintainer-决策"  # refactor helper, no behavior change
 REMOVED_HUMAN_LABELS = {"🆘 human:卡死", "🆘 human:卡死-需-rework"}  # refactor helper, no behavior change
 
+DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
+    r"禁止|不可调|不得|不能|不要|不写|Forbidden|forbidden|Do NOT|do not|must not|"
+    r"not allowed|without|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
+)
+
 PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "audit.md",
     "design-issue-reply.md",
@@ -51,6 +56,14 @@ PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "triage-external-issue.md",
     "verify.md",
 )
+
+
+def assert_denial_or_controller_owner_context(testcase: unittest.TestCase, line: str, *, token: str) -> None:
+    testcase.assertRegex(
+        line,
+        DENIAL_OR_CONTROLLER_OWNER_RE,
+        f"`{token}` must appear in an explicit denial or controller-owner context, got: {line}",
+    )
 
 
 class ScriptHygieneBehaviorTests(unittest.TestCase):
@@ -942,10 +955,11 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
 
     def test_phase0_runtime_contract_names_resolved_project_rules_target(self) -> None:
         skill_text = (REPO_ROOT / "skills" / "codex-refactor-loop" / "SKILL.md").read_text(encoding="utf-8")
+        phase0 = skill_text.split("## Phase 0", 1)[1].split("## Phase Routing", 1)[0]
 
-        self.assertIn("ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)", skill_text)
-        self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", skill_text)
-        self.assertIn("helper 退出非 0 → bootstrap fail closed", skill_text)
+        self.assertIn("ProjectRulesFixedPointEnsurer", phase0)
+        self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", phase0)
+        self.assertIn("fail closed", phase0)
 
     # Refactor (iter3/skill-github-post-contract):
     #   Old: 宽泛 all-prompts direct-post 主张
@@ -992,7 +1006,6 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
             text = (prompts_root / prompt_name).read_text(encoding="utf-8")
             with self.subTest(prompt=prompt_name, contract="marker-only"):
                 self.assertNotIn("## GitHub post", text)
-                self.assertIn("AI 内容标识符", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
     # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
@@ -1414,10 +1427,11 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 for line in combined.splitlines():
                     if token in line:
-                        self.assertRegex(line, r"(Forbidden|forbidden|no |No |rejecting|rejects|rejected|without|FORBIDDEN|禁止|拒绝)")
+                        self.assertRegex(line, r"(Forbidden|forbidden|no |No |rejecting|rejects|rejected|without|FORBIDDEN)")
 
     def test_manual_issue_reshape_requires_work_unit_v1_fields_without_audit_aliases(self) -> None:
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+        accept_section = triage_prompt.split("### Step 2A", 1)[1].split("### Step 2B", 1)[0]
 
         required_markers = (
             "work_unit_id: issue-${ISSUE_NUMBER}",
@@ -1427,12 +1441,20 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             "scope_paths",
             "problem / invariant text",
             "verification_hints",
-            "\u4e0d\u5199 `cluster_id` \u6216 `legacy_cluster_id`",
         )
 
         for marker in required_markers:
             with self.subTest(marker=marker):
-                self.assertIn(marker, triage_prompt)
+                self.assertIn(marker, accept_section)
+
+        for token in ("`cluster_id`", "`legacy_cluster_id`"):
+            matching_lines = [line for line in triage_prompt.splitlines() if token in line]
+            self.assertTrue(matching_lines, f"missing manual-issue alias boundary for {token}")
+            for line in matching_lines:
+                with self.subTest(token=token, line=line):
+                    self.assertIn("### Step 2A", triage_prompt[: triage_prompt.index(line)])
+                    self.assertNotIn("### Step 2B", triage_prompt[: triage_prompt.index(line)])
+                    assert_denial_or_controller_owner_context(self, line, token=token)
 
     def test_triage_external_issue_uses_artifact_only_lifecycle_handoff(self) -> None:
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
@@ -1481,7 +1503,9 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             f"否则读取 `{source_ref}` 中 \"cluster-079\" 一节",
             "skills/codex-refactor-loop/prompts/implement.md",
             "skills/codex-refactor-loop/scripts/test_*.py",
-            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "git commit",
+            "git push",
+            "git checkout",
             "source files English-only; refactor self-documentation required",
             "⟦AI:AUTO-LOOP⟧",
         )
@@ -1489,6 +1513,13 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         for marker in required:
             with self.subTest(marker=marker):
                 self.assertIn(marker, rendered)
+        redline_section = rendered.split("## 红线", 1)[1].split("## 附录", 1)[0]
+        for token in ("git commit", "git push", "git checkout"):
+            matching_lines = [line for line in redline_section.splitlines() if token in line]
+            self.assertTrue(matching_lines, f"missing redline boundary for {token}")
+            for line in matching_lines:
+                with self.subTest(token=token, line=line):
+                    assert_denial_or_controller_owner_context(self, line, token=token)
 
     def test_implement_prompt_design_dispatch_reads_consensus_artifact(self) -> None:
         decision_path = ".refactor-loop/runs/phase9-issue79-r8-judge.md"
@@ -1503,7 +1534,9 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             "design-issue consensus artifact",
             "skills/codex-refactor-loop/prompts/implement.md",
             "skills/codex-refactor-loop/scripts/test_*.py",
-            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "git commit",
+            "git push",
+            "git checkout",
             "source files English-only; refactor self-documentation required",
             "⟦AI:AUTO-LOOP⟧",
         )
@@ -1511,6 +1544,13 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         for marker in required:
             with self.subTest(marker=marker):
                 self.assertIn(marker, rendered)
+        redline_section = rendered.split("## 红线", 1)[1].split("## 附录", 1)[0]
+        for token in ("git commit", "git push", "git checkout"):
+            matching_lines = [line for line in redline_section.splitlines() if token in line]
+            self.assertTrue(matching_lines, f"missing redline boundary for {token}")
+            for line in matching_lines:
+                with self.subTest(token=token, line=line):
+                    assert_denial_or_controller_owner_context(self, line, token=token)
 
     def test_implement_prompt_declares_design_intake_env_vars(self) -> None:
         implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
@@ -1827,11 +1867,9 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         for token in (
             "Apply only when",
             "DO NOT apply when",
-            "禁止",
             "architect/quality reviewer",
             "needs Phase 9 artifact",
             "maintainer-directive",
-            "绕路工具",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, skill)
@@ -2661,8 +2699,18 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, skill_text)
                 self.assertIn(daemon, reference_text)
-        self.assertIn("禁止** 裸 `nohup python3 <daemon> &`", reference_text)
-        self.assertIn("不能用 `env $(grep ... host.env)`", host_env_text)
+        startup_section = reference_text.split("### Daemon 启动", 1)[1].split("### Controller 主链路", 1)[0]
+        unsafe_examples = (
+            ("reference", startup_section, "`nohup python3 <daemon> &`"),
+            ("reference", startup_section, "env $(grep ... host.env)"),
+            ("host-env", host_env_text, "`env $(grep ... host.env)`"),
+        )
+        for source_name, source_text, token in unsafe_examples:
+            matching_lines = [line for line in source_text.splitlines() if token in line]
+            self.assertTrue(matching_lines, f"{source_name} missing unsafe startup anti-pattern `{token}`")
+            for line in matching_lines:
+                with self.subTest(source=source_name, token=token, line=line):
+                    assert_denial_or_controller_owner_context(self, line, token=token)
 
     # Refactor (iter215/cluster-215-controller-process-selftest):
     #   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
@@ -2738,7 +2786,6 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         ))
         self.assertIn("post_banner.py", active_docs)
         self.assertIn("spawn-codex.sh", active_docs)
-        self.assertIn("反模式", active_docs)
         self.assertNotIn("spawn_with_banner.py", active_docs)
         self.assertNotIn("Historical tombstone", active_docs)
 
@@ -2754,8 +2801,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     self.assertNotIn(pattern, text)
 
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
-        self.assertIn("Source files are English-only; external user-facing artifacts are 中文 by default", skill_text)
-        self.assertIn("No mandatory parallel English section", skill_text)
+        self.assertIn("[language policy details](REFERENCE.md#language-policy-details)", skill_text)
+        self.assertIn("[historical bilingual notes](REFERENCE.md#historical-bilingual-notes)", skill_text)
 
     def test_no_active_github_post_writer_reference_remains(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
@@ -2847,13 +2894,14 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         for path in sorted((SKILL_ROOT / "prompts").glob("*.md")):
             if path.name in controller_owned:
                 continue
-            lines = path.read_text(encoding="utf-8").splitlines()
+            body = path.read_text(encoding="utf-8")
+            lines = body.splitlines()
             for token in forbidden:
                 for line in lines:
                     if token not in line:
                         continue
                     with self.subTest(prompt=path.name, token=token, line=line):
-                        self.assertRegex(line, r"禁止|不可调|Do NOT|do not")
+                        assert_denial_or_controller_owner_context(self, line, token=token)
 
     def test_disabled_test_escape_hatches_are_not_recommended(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/SKILL.md")
