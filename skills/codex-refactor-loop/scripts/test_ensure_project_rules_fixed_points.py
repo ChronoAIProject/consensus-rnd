@@ -1274,7 +1274,6 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
         combined = "\n".join([reference_text, skill_text, implement_prompt, verify_prompt, controller_lib])
 
         required_markers = (
-            "work_unit_schema_version",
             "work_unit_id == id == cluster_id == legacy_cluster_id",
             "WORK_UNIT_ID=$CLUSTER_ID",
             "must not fabricate `cluster_id` or",

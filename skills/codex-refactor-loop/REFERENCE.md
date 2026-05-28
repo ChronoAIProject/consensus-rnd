@@ -457,7 +457,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `phase9_router_daemon.py`。随后运行 `bash <skill-root>/scripts/restart-daemons.sh` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `bash <skill-root>/scripts/peek.sh | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派默认 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
@@ -479,8 +479,6 @@ Write initial `state.json`:
 
 ```json
 {
-  "schema_version": 1,
-  "work_unit_schema_version": 1,
   "trunk_branch": "auto-refact-dev",
   "integration_branch": "auto-refact-dev",
   "review_base_branch": "dev",
@@ -527,8 +525,8 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 <a id="phase-routing-details"></a>
 ## Phase 1 — Work-unit production (audit default)
 
-The default v1 work-unit producer is `audit`. Producer normalization is documented in
-[REFERENCE.md](REFERENCE.md): v1 accepts only `producer: audit` and `producer: manual-issue`.
+The default work-unit producer is `audit`. Producer normalization is documented in
+[REFERENCE.md](REFERENCE.md): accepts only `producer: audit` and `producer: manual-issue`.
 `audit` is the raw artifact producer for this phase; `manual-issue` enters through Phase 7
 triage and must already be reshaped before Phase 9.
 
@@ -2253,8 +2251,6 @@ Fields:
 
 ```json
 {
-  "schema_version": 1,
-  "work_unit_schema_version": 1,
   "loop_started_at": "<ISO8601>",
   "trunk_branch": "<branch the loop integrates into; same as integration_branch>",
   "integration_branch": "<branch all clusters land on>",

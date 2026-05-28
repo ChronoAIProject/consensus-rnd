@@ -144,7 +144,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertIn(f"(REFERENCE.md#{anchor})", self.skill)
                 self.assertIn(anchor, self.reference)
         self.assertNotIn('"schema_version": 1', self.skill)
-        self.assertIn('"schema_version": 1', self.reference)
+        self.assertNotIn('"schema_version": 1', self.reference)
+        self.assertNotIn('"work_unit_schema_version": 1', self.reference)
         for emoji_heading in ("📊", "🆘"):
             with self.subTest(emoji_heading=emoji_heading):
                 self.assertNotRegex(self.skill, rf"(?m)^## {emoji_heading} ")
