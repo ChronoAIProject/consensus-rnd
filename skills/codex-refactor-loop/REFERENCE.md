@@ -70,6 +70,8 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 ```
 Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
 **5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration sync detection/request)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
+
+`restart-daemons.sh` also runs daemonless log retention before daemon freshness checks. `log_retention.sh` has no lifecycle authority: it reads `$REPO_ROOT/.refactor-loop/host.env`, targets only `$REPO_ROOT/.refactor-loop/logs/*.log`, and directly removes regular log files older than 24h. It must not create archive/index state, scan or delete `.refactor-loop/runs/` or prompts, call GitHub, run git, spawn codex, or become a daemon. Verification lives in `test_log_retention.py`.
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
@@ -139,10 +141,18 @@ Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always che
 
 Required fields are `cd`, `prompt`, and `log`; `task_id` defaults to the `.dispatch.json` filename stem if omitted, and `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
 
+Dispatch cwd guard:
+- `MUTABLE_DISPATCH_PREFIXES`: `implement-`, `fix-pr`, `remote-ci-fix`, `test-add-`, `verify-`, and `hotfix-`.
+- `MAIN_READONLY_DISPATCH_PREFIXES`: `audit-`, `phase9-issue`, `solver-`, `meta-judge-`, `review-pr`, and `reviewer-pr`.
+- Queued mutable task prefixes must use `cd` under `$REPO_ROOT/.worktrees/<name>/`; `$REPO_ROOT`, relative paths, paths outside `$REPO_ROOT`, and `$REPO_ROOT/.worktrees/` itself fail closed.
+- Main-readonly prefixes are the explicit allowlist that may use `$REPO_ROOT` as `cd`.
+- This is a backward-compatible tightening of the existing dispatch queue protocol: no shared workspace policy, no `workspace_policy.py`, no `WorkUnitWorkspace`, and no required `actor/work_unit_id` migration.
+
 Auto-dispatch semantics:
 - On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.
 - After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
 - The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
+- If a queued mutable task violates the cwd guard, the monitor moves it to `.refactor-loop/dispatch-rejected/<task-id>.json`, adding `rejected_at`, `reject_reason`, `priority`, and `source_dispatch_file`, writes `DISPATCH_REJECTED:<task-id>:<priority>:main-worktree-cd:<reason>`, and continues scanning for the next legal queued item.
 - If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue real work when one of the floor refill routes below is valid.
 - This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
 
@@ -1120,13 +1130,14 @@ The controller's only inline composition allowed for GitHub:
 EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation rationale、design issue body、cross-post 通知、PR description 包括 rollup PR)由**正在跑的那个 codex 自己 post**,**不需要专门的 writer-codex 中介**:
 
 <!--
-# Refactor (iter3/skill-github-post-contract):
-#   Old: 宽泛 all-prompts direct-post 主张
-#   New: 两组明确 roster + 可枚举行为测试(#13 structural 共识)
+Refactor (iter6/issue-118):
+  Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
 -->
 
-- Direct-post prompts: `solver-minimal.md`, `solver-structural.md`, `solver-delete.md`, `meta-judge.md`, `reviewer-architect.md`, `reviewer-quality.md`, `reviewer-tests.md`, `review-fix.md`, `design-issue-reply.md`, `triage-external-issue.md`. Only these prompts must contain a `## GitHub post` section referencing `prompts/_github-post-rules.md`.
-- Marker/artifact-only prompts: `audit.md`, `design-issue-body.md`, `implement.md`, `verify.md`, `remote-ci-fix.md`, `test-add.md`. They keep the AI sentinel plus their marker/body contract, are surfaced by controller / PR / CI status, and must not claim direct posting.
+- A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
+- `SKILL.md` / `REFERENCE.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
+- Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(comment-monitor.sh 据此识别 controller-post 跳 react)
 - 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`

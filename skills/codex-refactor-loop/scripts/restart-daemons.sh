@@ -8,6 +8,11 @@
 # daemons. Monitor bridge is armed separately by controller.
 # This helper has no lifecycle authority and does not alter repository or
 # issue/PR state.
+#
+# Refactor (iter326/issue-122):
+#   Old pattern: .refactor-loop/logs/ and runs/ grew without bounds, slowing daemon scans and bloating .refactor-loop/.
+#   New principle: daemonless 24h log_retention.sh under restart-daemons; direct rm only, no archive/index/new daemon
+#   (Phase 9 r1 consensus:structural)
 
 set -u
 
@@ -186,7 +191,19 @@ start_daemon() {
   log "$name restarted: wrapper_pid=$wrapper_pid heartbeat=$hb_file"
 }
 
+run_log_retention() {
+  local helper="$SKILL_ROOT/scripts/log_retention.sh"
+  if [ ! -f "$helper" ]; then
+    log "log_retention skip: helper missing"
+    return 0
+  fi
+  if ! bash "$helper"; then
+    log "log_retention warning: helper failed; continuing daemon restart"
+  fi
+}
+
 acquire_restart_lock
+run_log_retention
 
 start_daemon "concurrency_monitor" "python3 '$SKILL_ROOT/scripts/concurrency_monitor.py'"
 start_daemon "comment-monitor" "bash '$SKILL_ROOT/scripts/comment-monitor.sh'"

@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +44,7 @@ DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"禁止|不可调|不得|不能|不要|不写|Forbidden|forbidden|Do NOT|do not|must not|"
     r"not allowed|without|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )
+HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "audit.md",
@@ -972,53 +974,103 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", phase0)
         self.assertIn("fail closed", phase0)
 
-    # Refactor (iter3/skill-github-post-contract):
-    #   Old: broad all-prompts direct-post claim.
-    #   New: two explicit rosters plus enumerable behavior tests
-    #   (#13 structural consensus).
-    def test_github_post_contract_matches_prompt_roster(self) -> None:
+    # Refactor (iter6/issue-118):
+    #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+    def test_github_post_contract_is_prompt_self_declared(self) -> None:
         prompts_root = SKILL_ROOT / "prompts"
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        direct_post_prompts = {
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        prompt_paths = sorted(path for path in prompts_root.glob("*.md") if path.name != "_github-post-rules.md")
+
+        self.assertGreater(len(prompt_paths), 0)
+        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+
+        direct_post_prompts = []
+        marker_only_prompts = []
+        for prompt_path in prompt_paths:
+            text = prompt_path.read_text(encoding="utf-8")
+            if re.search(r"(?m)^## GitHub post", text):
+                direct_post_prompts.append(prompt_path)
+            else:
+                marker_only_prompts.append(prompt_path)
+
+        self.assertGreater(len(direct_post_prompts), 0)
+        self.assertGreater(len(marker_only_prompts), 0)
+
+        for prompt_path in direct_post_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="direct-post"):
+                self.assertIn("## GitHub post", text)
+                self.assertIn("prompts/_github-post-rules.md", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertTrue(
+                    "POSTED:" in text or "遵循 `prompts/_github-post-rules.md`" in text,
+                    f"{prompt_path.name} must either spell out post flow or delegate to shared post rules",
+                )
+                for token in ("gh pr create", "gh pr merge", "gh issue create", "gh issue close", "git commit", "git push", "git checkout"):
+                    lines = [
+                        line
+                        for line in text.splitlines()
+                        if token in line and "Old pattern:" not in line
+                    ]
+                    for line in lines:
+                        assert_denial_or_controller_owner_context(self, line, token=token)
+
+        for prompt_path in marker_only_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="marker-only"):
+                self.assertNotIn("## GitHub post", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertNotIn("You DO post to GitHub directly", text)
+                self.assertNotIn("自己调 `gh` post", text)
+                self.assertNotIn("Post 后打印 `POSTED:", text)
+
+        for source_name, source_text in (("SKILL.md", skill_text), ("REFERENCE.md", reference_text)):
+            with self.subTest(source=source_name, contract="no-roster"):
+                self.assertNotIn("Direct-post prompts:", source_text)
+                self.assertNotIn("Marker/artifact-only prompts:", source_text)
+                self.assertIn("prompt body", source_text)
+                self.assertIn("## GitHub post", source_text)
+
+        skill_posting_contract = skill_text.split("## GitHub Posting Contract", 1)[1].split("## Anchor Read Policy", 1)[0]
+        reference_traceability = reference_text.split("### GitHub traceability", 1)[1].split("**@-mention rule:**", 1)[0]
+        former_roster_tokens = (
             "solver-minimal.md",
             "solver-structural.md",
             "solver-delete.md",
             "meta-judge.md",
-            "reviewer-architect.md",
-            "reviewer-quality.md",
             "reviewer-tests.md",
+            "reviewer-quality.md",
+            "reviewer-architect.md",
             "review-fix.md",
             "design-issue-reply.md",
             "triage-external-issue.md",
-        }
-        marker_only_prompts = {
             "audit.md",
-            "design-issue-body.md",
             "implement.md",
-            "meta-reflector-stalled.md",
             "verify.md",
             "remote-ci-fix.md",
             "test-add.md",
-        }
-        prompt_inventory = {path.name for path in prompts_root.glob("*.md")} - {"_github-post-rules.md"}
+        )
+        for source_name, posting_section in (
+            ("SKILL.md GitHub Posting Contract", skill_posting_contract),
+            ("REFERENCE.md GitHub traceability", reference_traceability),
+        ):
+            for token in former_roster_tokens:
+                with self.subTest(source=source_name, forbidden_roster_token=token):
+                    self.assertNotIn(token, posting_section)
 
-        self.assertEqual(prompt_inventory, direct_post_prompts | marker_only_prompts)
-        self.assertFalse(direct_post_prompts & marker_only_prompts)
-        self.assertIn("Direct-post prompts", skill_text)
-        self.assertIn("Marker/artifact-only prompts", skill_text)
-        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+        for forbidden in (
+            SKILL_ROOT / "prompts" / "posting-contract.json",
+            SKILL_ROOT / "scripts" / "prompt_posting_contract.py",
+        ):
+            with self.subTest(forbidden_path=forbidden.name):
+                self.assertFalse(forbidden.exists())
 
-        for prompt_name in sorted(direct_post_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="direct-post"):
-                self.assertIn("## GitHub post", text)
-                self.assertIn("_github-post-rules.md", text)
-
-        for prompt_name in sorted(marker_only_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="marker-only"):
-                self.assertNotIn("## GitHub post", text)
-                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+        for text in (skill_text, reference_text):
+            self.assertNotIn("PromptGitHubPostingContract", text)
+            self.assertNotIn("posting-contract.json", text)
+            self.assertNotIn("prompt_posting_contract.py", text)
 
     # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
     #   Old pattern: implement-from-design could grow a second intake/helper prompt or producer registry abstraction.
@@ -1698,6 +1750,37 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_dispatch_queue_workspace_guard_is_documented_and_enforced(self) -> None:
+        monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        combined = monitor_text + "\n" + reference_text
+
+        for required in (
+            "MUTABLE_DISPATCH_PREFIXES",
+            "MAIN_READONLY_DISPATCH_PREFIXES",
+            "validate_dispatch_cwd",
+            "archive_rejected",
+            ".worktrees",
+            "dispatch-rejected",
+            "DISPATCH_REJECTED",
+            "main-worktree-cd",
+            "no shared workspace policy",
+            "no required `actor/work_unit_id` migration",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+        for forbidden in (
+            "workspace_policy.py",
+            "WorkUnitWorkspace",
+            "ActorWorkspacePolicy",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, monitor_text)
+
     # Refactor (existing-issue-priority): Old pattern: controller dispatched
     # fresh audit whenever floor was deficit, even when open auto-loop issues
     # in design-solving / pr-open / fixing had 0 codex. New principle:
@@ -1974,17 +2057,19 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
 
 class HumanLabelSemanticsTests(unittest.TestCase):
-    # Refactor (iter4/human-label-semantics-guard): Old pattern: label used as
-    # an architect-reject workaround. New principle: strict semantics +
-    # reflector self-check + controller helper guard + source-regression test.
+    # Refactor (iter326/issue-106):
+    #   Old pattern: source-regression tests literally matched Chinese/English prose, so switching languages broke them wholesale
+    #   New principle: no DetectionInvariantV1; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
+    #   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
     def test_skill_md_has_strict_human_label_semantics_section(self) -> None:
         skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
 
-        self.assertIn("## `👤 human:需-maintainer-决策` 严格语义(强制)", skill)
+        self.assertIn('<a id="human-label-strict-semantics"></a>', skill)
         for token in (
+            "👤 human:需-maintainer-决策",
             "Apply only when",
             "DO NOT apply when",
             "architect/quality reviewer",
@@ -3044,6 +3129,103 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             for pattern in recommendation_patterns:
                 with self.subTest(path=rel, pattern=pattern):
                     self.assertIsNone(re.search(pattern, text))
+
+    # Refactor (issue119/python-source-prose-i18n): Old pattern: Python and
+    # shell script comments/docstrings/log text could drift back to Chinese
+    # after a cleanup PR. New principle: source prose stays English while
+    # durable Chinese label literals and generated user-facing artifact bodies
+    # remain allowed.
+    def test_scripts_source_prose_stays_english_with_generated_artifact_allowlist(self) -> None:
+        allowed_python_string_contexts = (
+            "CANONICAL_BODY",
+            "OLD_CANONICAL_BODY",
+            "CANONICAL_HUMAN_LABELS",
+            "NON_AUTO_HUMAN_LABEL",
+            "REMOVED_HUMAN_LABELS",
+            "HUMAN_LABEL",
+            "SECTION_HEADING",
+            "DENIAL_OR_CONTROLLER_OWNER_RE",
+            "prompt_body",
+            "body",
+            "ROLE_NEXT_STEPS",
+            "label",
+            "labels",
+            "required",
+            "needle",
+            "pattern",
+            "forbidden",
+            "required_phrases",
+            "forbidden_patterns",
+            "startup_section",
+            "wakeup",
+            "section",
+            "redline_section",
+            "rendered",
+            "public_copy",
+            "skill",
+            "skill_text",
+            "reference",
+            "reference_text",
+            "directive_text",
+            "host_comment",
+            "expected_stdout",
+            "expected_stderr",
+        )
+        allowed_shell_contexts = (
+            "status_line=",
+            "delete_note=",
+            "<<EOF",
+            "## 📊",
+            "human:",
+            "stale = [",
+        )
+        log_error_context_re = re.compile(
+            r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
+            r"set_defaults|ArgumentParser|error|warning)\b",
+            re.IGNORECASE,
+        )
+        test_source_names = {path.name for path in (SKILL_ROOT / "scripts").glob("test_*.py")}
+        offenders: list[str] = []
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            source_lines = text.splitlines()
+            with path.open("rb") as fh:
+                for token in tokenize.tokenize(fh.readline):
+                    if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                        continue
+                    if not HAN_RE.search(token.string):
+                        continue
+                    context = source_lines[token.start[0] - 1]
+                    if token.type == tokenize.STRING:
+                        is_docstring = (
+                            token.start[1] == 0
+                            or (
+                                token.start[0] > 1
+                                and source_lines[token.start[0] - 2].strip().endswith(":")
+                                and context[: token.start[1]].strip() == ""
+                            )
+                        )
+                        if not is_docstring and (path.name in test_source_names or not log_error_context_re.search(context)):
+                            continue
+                    if any(needle in context for needle in allowed_python_string_contexts):
+                        continue
+                    offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.sh")):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not HAN_RE.search(line):
+                    continue
+                stripped = line.strip()
+                if not (stripped.startswith("#") or '"' in stripped or "'" in stripped or "<<EOF" in stripped):
+                    continue
+                if any(needle in line for needle in allowed_shell_contexts):
+                    continue
+                offenders.append(f"{rel}:{line_no}: {stripped}")
+
+        self.assertEqual(offenders, [])
 
     # Refactor (iter3/skill-host-language-policy): Old: hard-coded
     # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and

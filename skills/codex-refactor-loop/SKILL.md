@@ -2,19 +2,15 @@
 name: codex-refactor-loop
 description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
-
 > Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
 > New principle: SKILL.md 仅留 controller 契约 + phase index + 硬不变量.
 > Heavy content moves to REFERENCE.md via anchor links, following #12 structural consensus.
-
 # Codex Refactor Loop — Controller Contract
-
 This SKILL.md is the controller entrypoint. It must be enough to run the loop safely on first load: hard invariants, phase routing, and the phase index stay local. Heavy schemas, full templates, command bodies, and recovery runbooks live in lazy reference anchors.
 
 Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdown links such as [host runtime details](REFERENCE.md#host-runtime-details); do not force-load the reference.
 
 ## Controller Contract Index
-
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](REFERENCE.md#host-runtime-details) | `host.env.example`, `controller_lib.sh` |
@@ -36,9 +32,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](REFERENCE.md#language-policy-details), [historical bilingual notes](REFERENCE.md#historical-bilingual-notes) | prompts, docs, commit text |
 
 ## Host 配置(通用化注入点)
-
 These variables are injected by the host project. The skill must not hardcode project facts.
-
 | Variable | Meaning | Default / example |
 |---|---|---|
 | `$REPO_ROOT` | host repository root | required in `host.env` |
@@ -54,7 +48,6 @@ These variables are injected by the host project. The skill must not hardcode pr
 | `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional |
 
 ### Host language policy
-
 These optional fields carry host language, test-layout, comment, schema, and architecture-review policy into prompt text. Their default is empty. Empty means the prompt must infer from existing repository evidence plus `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$TEST_CMD`, `$BUILD_CMD`, and the actual diff; it must not invent C#, .NET, protobuf, or any other host-specific default.
 
 | Variable | Prompt meaning | Empty behavior |
@@ -69,7 +62,6 @@ These optional fields carry host language, test-layout, comment, schema, and arc
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
 Host config rules:
-
 1. `host.env` is the only runtime fact injection point.
 2. `GH_REPO` must not be exported as a bare repo name; use `GH_REPO_SLUG`.
 3. `CI_GUARDS` is optional. Use `[ -n "${CI_GUARDS:-}" ]` before invoking it and report `guards skipped: CI_GUARDS unset` when absent.
@@ -78,19 +70,16 @@ Host config rules:
 6. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 
 ## Skill Root Contract
-
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/spawn-codex.sh`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
 ## Named runtime exception — autonomous release gate(per #56)
-
 The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: autonomous release decision after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
 
 `auto_release_gate.py` is decision-artifact-only. **禁止** decider 直接 bump/commit/push: it must not run `git`, bump mapped manifests, commit, push, tag, publish, merge, close, or otherwise exercise lifecycle authority. It only computes stability from GitHub/state artifacts and writes durable release decision/candidate artifacts for the controller or release pipeline to consume.
 
 Command contract:
-
 | Command | Behavior |
 |---|---|
 | `<skill-root>/scripts/auto_release_gate.py` | Dry-run. Compute stability, decide release type when ready, write `.refactor-loop/state/release-decision.json`, and print a summary. |
@@ -146,7 +135,7 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 
 ## Anti-stop restart helper cron/launchd install(per #49)
 
-`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton+heartbeat wrapper(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。
+`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton+heartbeat wrapper(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
 
 Host project cron install one-liner(每 5 min):
 
@@ -170,11 +159,11 @@ launchd host template:
 
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;不 spawn codex / commit / push / merge / label。
+- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`,并顺手运行 `log_retention.sh` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
-- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn。
-- **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 daemon repair;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
+- **Source-regression**: `AntiStopRestartHelperContractTests` + `LogRetentionSourceRegressionTests` 锁定 narrow allowlist、no lifecycle authority、direct rm、no archive/index/new daemon。
 
 授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
@@ -416,7 +405,7 @@ Human labels:
 | `🤖 human:auto-推进` | Fully automatic; no maintainer action needed. |
 | `👤 human:需-maintainer-决策` | Meta-layer exhausted or explicit maintainer decision needed. |
 
-## `👤 human:需-maintainer-决策` 严格语义(强制)
+## `👤 human:需-maintainer-决策` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 
@@ -516,31 +505,7 @@ Details are in [hard rules details](REFERENCE.md#hard-rules-details).
 ## 工作语言规则(源码内英文,源码外中文)
 
 Policy: Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
-
-Chinese by default:
-
-- GitHub issue titles, bodies, and comments.
-- GitHub PR titles, bodies, and comments.
-- Git commit messages written by controller/codex.
-- Push notifications.
-- Escalation/status wording.
-- Docs and TODO markers unless the host document has a stronger local convention.
-
-English-only inside source:
-
-- Comments and docstrings.
-- Log, error, and panic strings.
-- Identifiers, type names, fields, proto/yaml structural keys.
-- Code-built commit-body templates.
-
-Allowed inline English in Chinese artifacts:
-
-- Verbatim quotes from AGENTS/CLAUDE rules.
-- Source error messages.
-- Test names.
-- CLI commands, paths, SHAs, URLs, and labels.
-
-Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.md#historical-bilingual-notes).
+Operational details live in [language policy details](REFERENCE.md#language-policy-details); historical bilingual notes live in [historical bilingual notes](REFERENCE.md#historical-bilingual-notes).
 
 ## Files
 
@@ -567,6 +532,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [scripts/ensure_project_rules_fixed_points.py](scripts/ensure_project_rules_fixed_points.py) — Phase 0 fixed-point helper.
 - [scripts/concurrency_monitor.py](scripts/concurrency_monitor.py) — no-gap sentinel daemon.
 - [scripts/restart-daemons.sh](scripts/restart-daemons.sh) — cron/launchd anti-stop helper for existing daemon wrappers.
+- [scripts/log_retention.sh](scripts/log_retention.sh) — daemonless 24h direct-rm helper for `.refactor-loop/logs/*.log`.
 - [scripts/codex-progress-reporter.sh](scripts/codex-progress-reporter.sh) — progress comment daemon.
 - [scripts/comment-monitor.sh](scripts/comment-monitor.sh) — maintainer comment monitor.
 - [scripts/dev_sync_daemon.py](scripts/dev_sync_daemon.py) — integration sync daemon.
@@ -621,7 +587,7 @@ The local state file is a recovery aid, not the maintainer-facing state surface.
 Authoritative surfaces:
 
 1. GitHub comments and labels tell humans what is happening.
-2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`.
+2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`; `.refactor-loop/logs/*.log` is a 24h short-lived surface, not history.
 3. `.refactor-loop/state.json` is a resumability index and debug ledger, not a phase decision source of truth.
 4. `.refactor-loop/prompts/*` tells future maintainers what was dispatched.
 5. Branches, worktrees, and PRs tell git topology.
@@ -761,37 +727,22 @@ Recovery rules:
 
 ## GitHub Posting Contract
 
-Direct-post prompts:
-
-- `design-issue-body.md`
-- `design-issue-reply.md`
-- `_github-post-rules.md` inclusions where the prompt explicitly posts to GitHub
-
-Marker/artifact-only prompts:
-
-- `audit.md`
-- `implement.md`
-- `verify.md`
-- `remote-ci-fix.md`
-- `review-fix.md`
-- `reviewer-architect.md`
-- `reviewer-tests.md`
-- `reviewer-quality.md`
-- `solver-minimal.md`
-- `solver-structural.md`
-- `solver-delete.md`
-- `meta-judge.md`
-- `test-add.md`
-- `triage-external-issue.md`
+<!--
+Refactor (iter6/issue-118):
+  Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+-->
 
 Posting rules:
 
 1. Controller posts lifecycle banners directly.
-2. Worker prompts post only when their prompt explicitly owns a GitHub reply/body.
+2. A worker prompt is direct-post only when its own body contains `## GitHub post` and references `prompts/_github-post-rules.md`.
 3. Every GitHub body uses the sentinel final line.
 4. Avoid plain-text unverified human names or handles.
-5. Whitelisted mentions come from `$MAINTAINER_WHITELIST`.
-6. Label changes require a banner explaining the reason.
+5. `SKILL.md` and `REFERENCE.md` must not maintain a posting-mode prompt filename roster; inventory tests derive posting mode from prompt bodies.
+6. Direct-post permission is limited to GitHub comments, PR body edits, reactions, and temp files; lifecycle, labels, create/close/merge, push, and release stay controller-owned.
+7. Whitelisted mentions come from `$MAINTAINER_WHITELIST`.
+8. Label changes require a banner explaining the reason.
 
 ## Anchor Read Policy
 

@@ -16,14 +16,6 @@ DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"not allowed|marker/artifact-only|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )
 
-MARKER_ONLY_PROMPTS = (
-    "audit.md",
-    "implement.md",
-    "verify.md",
-    "remote-ci-fix.md",
-    "test-add.md",
-)
-
 REQUIRED_BAN_SUBSTRINGS = (
     "## codex ",
     "iter5/prompt-gh-ban-marker-only",
@@ -55,43 +47,69 @@ FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
     "git rebase",
 )
 
+AFFIRMATIVE_DIRECT_POST_SNIPPETS = (
+    "You DO post to GitHub directly",
+    "自己调 `gh` post",
+    "Post 后打印 `POSTED:",
+)
+
+
+def prompt_paths() -> list[Path]:
+    return sorted(path for path in PROMPTS_DIR.glob("*.md") if path.name != "_github-post-rules.md")
+
+
+def marker_only_prompt_paths() -> list[Path]:
+    return [path for path in prompt_paths() if not re.search(r"(?m)^## GitHub post", path.read_text(encoding="utf-8"))]
+
+
+def prompts_with_marker_only_ban() -> list[Path]:
+    paths = []
+    for path in marker_only_prompt_paths():
+        body = path.read_text(encoding="utf-8")
+        if "## codex " in body or "marker/artifact-only" in body:
+            paths.append(path)
+    return paths
+
 
 class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
-    def test_each_marker_only_prompt_has_complete_ban_section(self) -> None:
-        for filename in MARKER_ONLY_PROMPTS:
-            with self.subTest(prompt=filename):
-                path = PROMPTS_DIR / filename
-                self.assertTrue(path.exists(), f"missing prompt: {filename}")
+    # Refactor (iter6/issue-118):
+    #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+    def test_marker_only_prompts_with_ban_block_have_complete_lifecycle_ban(self) -> None:
+        paths = prompts_with_marker_only_ban()
+        self.assertGreater(len(paths), 0)
+        for path in paths:
+            with self.subTest(prompt=path.name):
                 body = path.read_text(encoding="utf-8")
                 for needle in REQUIRED_BAN_SUBSTRINGS:
                     self.assertIn(
                         needle,
                         body,
-                        f"{filename} missing required ban-section token `{needle}`",
+                        f"{path.name} missing required ban-section token `{needle}`",
                     )
                 self.assertRegex(body, r"(?m)^## codex .+$")
 
     def test_refactor_self_doc_block_present(self) -> None:
-        for filename in MARKER_ONLY_PROMPTS:
-            with self.subTest(prompt=filename):
-                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+        for path in prompts_with_marker_only_ban():
+            with self.subTest(prompt=path.name):
+                body = path.read_text(encoding="utf-8")
                 self.assertIn(
                     "Refactor (iter5/prompt-gh-ban-marker-only)",
                     body,
-                    f"{filename} missing Refactor self-doc block",
+                    f"{path.name} missing Refactor self-doc block",
                 )
 
     def test_lifecycle_tokens_only_appear_in_ban_lines(self) -> None:
-        for filename in MARKER_ONLY_PROMPTS:
-            body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+        for path in prompts_with_marker_only_ban():
+            body = path.read_text(encoding="utf-8")
             ban_section_match = re.search(r"(?ms)^## codex .+?(?=^## |\Z)", body)
-            self.assertIsNotNone(ban_section_match, filename)
+            self.assertIsNotNone(ban_section_match, path.name)
             ban_section = ban_section_match.group(0)
             for token in FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS:
                 for line in ban_section.splitlines():
                     if token not in line:
                         continue
-                    with self.subTest(prompt=filename, token=token, line=line):
+                    with self.subTest(prompt=path.name, token=token, line=line):
                         self.assertRegex(line, DENIAL_OR_CONTROLLER_OWNER_RE)
                 affirmative_lines = [
                     line
@@ -101,8 +119,19 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                 self.assertEqual(
                     affirmative_lines,
                     [],
-                    f"{filename} mentions forbidden lifecycle token `{token}` outside denial/controller-owner context",
+                    f"{path.name} mentions forbidden lifecycle token `{token}` outside denial/controller-owner context",
                 )
+
+    def test_all_marker_only_prompts_forbid_affirmative_direct_post_wording(self) -> None:
+        paths = marker_only_prompt_paths()
+        self.assertGreater(len(paths), 0)
+        for path in paths:
+            body = path.read_text(encoding="utf-8")
+            with self.subTest(prompt=path.name):
+                self.assertNotIn("## GitHub post", body)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", body)
+                for snippet in AFFIRMATIVE_DIRECT_POST_SNIPPETS:
+                    self.assertNotIn(snippet, body)
 
 
 if __name__ == "__main__":
