@@ -349,6 +349,16 @@ The floor is local because it prevents loop stalls.
 - Ordinary audit fallback is valid only before the latest controller-validated audit reaches `AUDIT_DONE:none:0`. Before that fixed point, the guarded fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。
 - After the latest controller-validated audit is `AUDIT_DONE:none:0` and no real queued/actionable work exists, emit `CONCURRENCY_LOW:no-work-after-audit-none` and do not fabricate ordinary audit, profile, planner, or synthetic producer work just to satisfy `$CODEX_FLOOR`.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由 before the validated `AUDIT_DONE:none:0` fixed point; after that fixed point, the correct visible state is `CONCURRENCY_LOW:no-work-after-audit-none`, not fake work.
+<!-- Refactor (existing-issue-priority): Old pattern: controller dispatched fresh audit whenever floor was deficit, even when 已开 issues 还在 design-solving / pr-open 状态 0 codex,审计抢资源、扩大未处理积压。 New principle: existing-issue work takes strict priority over audit fallback;audit fallback only when 所有 open auto-loop issue/PR 已有 in-flight codex 覆盖各自下一步 actionable route。(2026-05-28 maintainer-directive `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`) -->
+- **Existing-issue priority(strict)**:Before ordinary audit fallback, controller MUST first dispatch the next-step actor for **every** open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label:
+  - `🔍 phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet (round = current_round_or_1) for that issue
+  - `👀 phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
+  - `🔧 phase:fixing` with 0 codex → dispatch fix codex for next round
+  - `🛠️ phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
+  - `🚀 phase:pr-open` with 0 codex → dispatch reviewers
+  - `✅ phase:consensus-reached` with 0 codex → dispatch implement codex
+- Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex matching its phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+- Concurrent audit dispatched against the rule must be killed (`pkill -f audit-iter-N`) and replaced with the missing existing-issue actors.
 
 More detail is in [concurrency floor details](REFERENCE.md#concurrency-floor-details).
 

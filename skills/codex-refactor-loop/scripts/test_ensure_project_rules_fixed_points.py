@@ -1698,6 +1698,29 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
+    # Refactor (existing-issue-priority): Old pattern: controller dispatched
+    # fresh audit whenever floor was deficit, even when open auto-loop issues
+    # in design-solving / pr-open / fixing had 0 codex. New principle:
+    # existing-issue work takes strict priority over audit fallback (2026-05-28
+    # maintainer-directive).
+    def test_skill_concurrency_floor_documents_existing_issue_priority(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        for required in (
+            "Existing-issue priority(strict)",
+            "phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet",
+            "phase:reviewing` with 0 codex → dispatch the missing reviewer",
+            "phase:fixing` with 0 codex → dispatch fix codex",
+            "phase:implementing` with 0 codex",
+            "phase:pr-open` with 0 codex → dispatch reviewers",
+            "phase:consensus-reached` with 0 codex → dispatch implement codex",
+            "Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex",
+            "2026-05-28-existing-issue-priority-over-audit.md",
+            "pkill -f audit-iter-N",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, skill_text)
+
     def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
