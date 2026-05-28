@@ -4,6 +4,11 @@
 Refactor (iter5/cluster-issue70-controller-owned-apply):
 Old: triage worker 直 gh issue edit + TriageLifecycleRequestV1 Markdown artifact parsed inline by bash.
 New: triage worker emits ManualIssueTriageDecision JSON artifact + TRIAGE_DECISION_DONE marker; controller-owned apply_triage_decision.py re-reads live labels before lifecycle apply.
+
+Refactor (iter5/issue107-python-identifier-rename): Old pattern: version
+suffix embedded in schema/type names (ManualIssueTriageDecisionV1). New
+principle: naked responsibility names express stable artifact intent;
+compatibility/version policy lives in contracts/tests, not identifier suffixes.
 """
 
 from __future__ import annotations

@@ -241,6 +241,7 @@ class RollupDetection:
 
 # Refactor (iter4/skill-dev-sync-state-machine): Old pattern: 散落 active controller-owned sync recipe + 隐含 daemon transition. New principle: named IntegrationSyncDaemon state machine boundary.
 # Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern: daemon-owned lifecycle apply. New principle: daemon detects and emits IntegrationSyncRequest; controller owns apply.
+# Refactor (iter5/issue107-python-identifier-rename): Old pattern: version suffix in daemon class/schema names (IntegrationSyncDaemonV1, IntegrationSyncRequestV1). New principle: naked responsibility names carry stable artifact intent; compatibility/version policy lives in contracts/tests, not identifier suffixes.
 class IntegrationSyncDaemon:
     """Narrow detector for integration-branch sync transitions."""
 

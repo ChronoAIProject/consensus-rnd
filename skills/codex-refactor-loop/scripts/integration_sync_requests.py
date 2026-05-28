@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Narrow IntegrationSyncRequest schema for controller-owned apply."""
+"""Narrow IntegrationSyncRequest schema for controller-owned apply.
+
+Refactor (iter5/issue107-python-identifier-rename): Old pattern: version
+suffix embedded in Python class/schema names (IntegrationSyncRequestV1).
+New principle: naked responsibility name expresses stable artifact intent;
+compatibility/version policy lives in contracts/tests, not identifier suffixes.
+"""
 
 from __future__ import annotations
 
