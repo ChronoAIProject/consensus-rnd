@@ -36,7 +36,15 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             pass
         self.tmp.cleanup()
 
-    def write_dispatch(self, priority: str, task_id: str, reason: str | None = None, *, include_task_id: bool = True) -> Path:
+    def write_dispatch(
+        self,
+        priority: str,
+        task_id: str,
+        reason: str | None = None,
+        *,
+        include_task_id: bool = True,
+        cd: Path | None = None,
+    ) -> Path:
         priority_dir = self.refactor_loop / "dispatch-queue" / priority
         priority_dir.mkdir(parents=True, exist_ok=True)
         prompt = self.refactor_loop / "prompts" / f"{task_id}.md"
@@ -44,8 +52,10 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         prompt.parent.mkdir(parents=True, exist_ok=True)
         log.parent.mkdir(parents=True, exist_ok=True)
         prompt.write_text("prompt\n", encoding="utf-8")
+        if cd is None:
+            cd = self.repo if task_id.startswith(self.monitor.MAIN_READONLY_DISPATCH_PREFIXES) else self.repo / ".worktrees" / task_id
         payload = {
-            "cd": str(self.repo),
+            "cd": str(cd),
             "prompt": str(prompt),
             "log": str(log),
             "stall": 5400,
@@ -65,6 +75,18 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         return _fake_popen
 
+    def assert_dispatch_rejected(self, task_id: str, reason: str, calls: list[list[str]]) -> None:
+        self.assertEqual(calls, [])
+        self.assertFalse((self.refactor_loop / "dispatch-queue" / "p0" / f"{task_id}.dispatch.json").exists())
+        rejected = self.refactor_loop / "dispatch-rejected" / f"{task_id}.json"
+        self.assertTrue(rejected.exists())
+        payload = json.loads(rejected.read_text(encoding="utf-8"))
+        self.assertEqual(payload["reject_reason"], reason)
+        self.assertEqual(payload["priority"], "p0")
+        self.assertIn("source_dispatch_file", payload)
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(f"DISPATCH_REJECTED:{task_id}:p0:main-worktree-cd:{reason}", events)
+
     def test_monitor_dispatches_from_queue_when_below_floor(self) -> None:
         self.write_dispatch("p1", "fix-pr44-round-3")
         self.write_dispatch("p1", "audit-iter-5")
@@ -78,6 +100,143 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json")), [])
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_mutable_dispatch_to_repo_root(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "repo-root-cd", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_dispatch_missing_cd(self) -> None:
+        path = self.write_dispatch("p0", "fix-pr44-round-3")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        del payload["cd"]
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "missing-cd", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_dispatch_relative_cd(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=Path(".worktrees/fix-pr44-round-3"))
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "relative-cd", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_dispatch_cd_outside_repo(self) -> None:
+        outside_repo = self.repo.parent / "outside-repo"
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=outside_repo)
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "outside-repo", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_mutable_dispatch_inside_repo_but_outside_worktrees(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / "tmp" / "fix-pr44-round-3")
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "outside-worktrees", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejects_mutable_dispatch_to_worktrees_root(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / ".worktrees")
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assert_dispatch_rejected("fix-pr44-round-3", "worktrees-root-cd", calls)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_accepts_mutable_dispatch_inside_worktrees(self) -> None:
+        worktree = self.repo / ".worktrees" / "fix-pr44-round-3"
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=worktree)
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertEqual(fired, ("fix-pr44-round-3", "p0", "fix-pr44-round-3 needed"))
+        self.assertEqual(len(calls), 1)
+        cd_index = calls[0].index("--cd")
+        self.assertEqual(calls[0][cd_index + 1], str(worktree))
+        self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-3.json").exists())
+        self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_allows_main_readonly_dispatch_prefixes(self) -> None:
+        task_ids = ("audit-iter-5", "phase9-issue133-r4-minimal", "review-pr44-tests")
+
+        for task_id in task_ids:
+            with self.subTest(task_id=task_id):
+                self.write_dispatch("p0", task_id, cd=self.repo)
+                calls: list[list[str]] = []
+
+                with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                    fired = self.monitor.dispatch_one_from_queue()
+
+                self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
+                self.assertEqual(len(calls), 1)
+                self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_rejected_dispatch_does_not_block_next_queue_item(self) -> None:
+        self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
+        self.write_dispatch("p0", "fix-pr44-round-4", cd=self.repo / ".worktrees" / "fix-pr44-round-4")
+        calls: list[list[str]] = []
+
+        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertEqual(fired, ("fix-pr44-round-4", "p0", "fix-pr44-round-4 needed"))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.refactor_loop / "dispatch-rejected" / "fix-pr44-round-3.json").exists())
+        self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-4.json").exists())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("DISPATCH_REJECTED:fix-pr44-round-3:p0:main-worktree-cd:repo-root-cd", events)
+        self.assertIn("DISPATCH_FIRED:fix-pr44-round-4:p0:fix-pr44-round-4 needed", events)
 
     def test_monitor_respects_priority_order(self) -> None:
         self.write_dispatch("p2", "p2-task")
