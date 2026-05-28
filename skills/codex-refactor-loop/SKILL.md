@@ -223,7 +223,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
-8. ensure all restart-helper allowlisted daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`.
+8. ensure all 6 daemons / daemon-event bridge surfaces are alive as singletons where applicable: restart-helper allowlist `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`, plus the persistent daemon-event Monitor bridge armed below.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.

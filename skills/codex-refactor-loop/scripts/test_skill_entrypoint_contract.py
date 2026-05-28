@@ -84,7 +84,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "initialize state",
             "integration branch",
             "ensure labels",
-            "ensure all 5 daemons",
+            "ensure all 6 daemons",
             "arm persistent daemon-event Monitor",
             "dispatch producer",
             "confirm a wake source",
