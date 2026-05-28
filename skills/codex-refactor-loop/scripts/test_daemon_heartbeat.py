@@ -46,6 +46,7 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         self.assertEqual([], list((self.repo / ".refactor-loop" / "heartbeats").glob("*.tmp.*")))
 
     def test_shell_lease_atomic_beat_and_chunked_sleep(self) -> None:
+        chunks_file = self.tmp_root / "shell-chunks"
         env = os.environ.copy()
         env.update(
             {
@@ -57,21 +58,26 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         script = f"""
 set -u
 source "{SCRIPT_DIR / "daemon_heartbeat.sh"}"
-sleep() {{ :; }}
+date_values="$REPO_ROOT/.refactor-loop/date-values"
+printf '%s\\n' 100 101 102 103 > "$date_values"
+date() {{
+  local value
+  value="$(sed -n '1p' "$date_values")"
+  sed -n '2,$p' "$date_values" > "$date_values.next"
+  mv "$date_values.next" "$date_values"
+  printf '%s\\n' "$value"
+}}
+sleep() {{ printf '%s\\n' "$1" >> "{chunks_file}"; }}
 daemon_heartbeat_beat
-first="$(cat "$REPO_ROOT/.refactor-loop/heartbeats/shell-daemon.ts")"
 daemon_heartbeat_sleep 3
-last="$(cat "$REPO_ROOT/.refactor-loop/heartbeats/shell-daemon.ts")"
-case "$first:$last" in
-  *[!0-9:]*|"") exit 3 ;;
-esac
 find "$REPO_ROOT/.refactor-loop/heartbeats" -name "*.tmp.*" -print
 """
         result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertEqual("", result.stdout.strip())
         heartbeat = self.repo / ".refactor-loop" / "heartbeats" / "shell-daemon.ts"
-        self.assertTrue(heartbeat.read_text(encoding="utf-8").strip().isdigit())
+        self.assertEqual("1\n1\n1\n", chunks_file.read_text(encoding="utf-8"))
+        self.assertEqual("103", heartbeat.read_text(encoding="utf-8").strip())
 
 
 if __name__ == "__main__":
