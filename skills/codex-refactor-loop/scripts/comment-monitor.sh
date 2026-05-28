@@ -16,6 +16,7 @@
 # State file: .refactor-loop/comment-monitor-state.json (JSON map: comment_id -> "seen")
 
 set -u
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -25,7 +26,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset; source .refactor-loop/host.env or set ALLOW_GIT_ROOT_FALLBACK=1 for interactive use" >&2
   exit 2
 fi
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+source "$SCRIPT_DIR/repo_slug.sh"
+source "$SCRIPT_DIR/daemon_heartbeat.sh"
 REPO="$(resolve_github_repo_slug 1 1)" || exit $?
 if [ -z "${MAINTAINER_WHITELIST:-}" ]; then
   echo "FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed" >&2
@@ -86,6 +88,10 @@ mark_seen() {
 }
 
 while true; do
+  # Refactor (iter1/issue-143):
+  #   Old pattern: wrapper sidecar refreshed heartbeat even if this scan loop hung.
+  #   New principle: shell actor beats after scan/caught nonfatal paths, then lease-sleeps.
+  #   Heartbeat stays same path/epoch; no new daemon or lifecycle authority.
   # Auto-discover targets: open issues with refactor-design-needed label + open PRs with auto-loop label
   targets=$(
     {
@@ -167,5 +173,6 @@ EOF
     done < <(echo "$comments" | jq -c '.')
   done
 
-  sleep "$INTERVAL"
+  daemon_heartbeat_beat
+  daemon_heartbeat_sleep "$INTERVAL"
 done

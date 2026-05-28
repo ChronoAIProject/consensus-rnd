@@ -70,11 +70,16 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 ```
 Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
 **5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration sync detection/request)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
+<!-- Refactor (iter1/issue-143):
+  Old pattern: restart wrapper heartbeat sidecar made hung actor loops look healthy.
+  New principle: daemon actor owns heartbeat lease after tick/caught exception and lease sleep; stale means actor loop stopped renewing.
+  Path/epoch/90s statusline/auto-release consumers stay compatible; no new daemon or lifecycle authority.
+-->
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
 -->
-**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json`;任 heartbeat missing/malformed/stale `>90s` 时调用 `bash <skill-root>/scripts/restart-daemons.sh` 让 helper 内部维护 singleton + restart。`phase9_router_daemon.py` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
+**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json`;任 actor-owned heartbeat missing/malformed/stale `>90s` 时调用 `bash <skill-root>/scripts/restart-daemons.sh` 让 helper 内部维护 singleton + restart。`phase9_router_daemon.py` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
 
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
@@ -946,7 +951,7 @@ python3 <skill-root>/scripts/concurrency_monitor.py --count-only >/dev/null
 bash <skill-root>/scripts/peek.sh | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
-若 heartbeat stale/missing/malformed → 由 `restart-daemons.sh` 按 canonical wrapper 重启。
+若 actor-owned heartbeat stale/missing/malformed → 由 `restart-daemons.sh` 按 canonical singleton wrapper 重启;stale 表示 daemon actor loop 未续租,不是 wrapper sidecar liveness。
 若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查 open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`。该 PR 进入既有 Phase 8 review gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 

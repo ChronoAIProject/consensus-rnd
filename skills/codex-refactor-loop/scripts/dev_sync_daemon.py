@@ -32,6 +32,7 @@ from contextlib import contextmanager
 import fcntl
 import json
 
+from daemon_heartbeat import DaemonHeartbeatLease
 from integration_sync_requests import IntegrationSyncRequest, write_request_artifact
 
 
@@ -612,12 +613,18 @@ def main() -> None:
     if not ensure_worktree():
         log("FATAL: cannot ensure worktree, exiting")
         sys.exit(1)
+    # Refactor (iter1/issue-143):
+    #   Old pattern: restart wrapper sidecar refreshed heartbeat even if this loop hung.
+    #   New principle: actor loop beats after tick/caught exception, then lease-sleeps.
+    #   Singleton lock remains local; no new daemon or lifecycle authority.
+    lease = DaemonHeartbeatLease("dev_sync_daemon", MAIN_REPO)
     while True:
         try:
             tick()
         except Exception as e:
             log(f"EXCEPTION in tick: {e!r}")
-        time.sleep(INTERVAL)
+        lease.beat()
+        lease.sleep_with_lease(INTERVAL)
 
 
 if __name__ == "__main__":

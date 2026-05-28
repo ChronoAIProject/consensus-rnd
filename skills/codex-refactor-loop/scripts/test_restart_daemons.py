@@ -30,9 +30,12 @@ import os
 import signal
 import sys
 from pathlib import Path
+from daemon_heartbeat import DaemonHeartbeatLease
 
 repo = Path(os.environ["REPO_ROOT"])
 name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
+lease = DaemonHeartbeatLease(name, repo)
+lease.beat()
 with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
     fh.write(f"{os.getpid()}\\n")
 fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
@@ -57,6 +60,9 @@ while running:
 
 SHELL_DAEMON = """#!/usr/bin/env bash
 set -u
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+source "$SCRIPT_DIR/daemon_heartbeat.sh"
+daemon_heartbeat_beat
 echo "$$" >> "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.starts"
 if [ -p "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.start-fifo" ]; then
   printf '%s\n' "$$" > "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.start-fifo"
@@ -65,6 +71,66 @@ trap 'exit 0' TERM INT
 while true; do
   read _ < "$REPO_ROOT/.refactor-loop/logs/${RESTART_DAEMON_NAME}.hold"
 done
+"""
+
+
+PYTHON_HANG_DAEMON = """#!/usr/bin/env python3
+import os
+import signal
+import sys
+from pathlib import Path
+from daemon_heartbeat import DaemonHeartbeatLease
+
+repo = Path(os.environ["REPO_ROOT"])
+name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
+DaemonHeartbeatLease(name, repo).beat()
+with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
+    fh.write(f"{os.getpid()}\\n")
+fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
+if fifo.exists():
+    fd = os.open(fifo, os.O_WRONLY)
+    try:
+        os.write(fd, f"{os.getpid()}\\n".encode("utf-8"))
+    finally:
+        os.close(fd)
+signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(0))
+signal.signal(signal.SIGINT, lambda _signum, _frame: sys.exit(0))
+signal.pause()
+"""
+
+
+PYTHON_LONG_SLEEP_DAEMON = """#!/usr/bin/env python3
+import os
+import signal
+import sys
+from pathlib import Path
+from daemon_heartbeat import DaemonHeartbeatLease
+
+repo = Path(os.environ["REPO_ROOT"])
+name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
+lease = DaemonHeartbeatLease(name, repo, heartbeat_interval=1)
+with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
+    fh.write(f"{os.getpid()}\\n")
+start_fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
+if start_fifo.exists():
+    fd = os.open(start_fifo, os.O_WRONLY)
+    try:
+        os.write(fd, f"{os.getpid()}\\n".encode("utf-8"))
+    finally:
+        os.close(fd)
+signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(0))
+signal.signal(signal.SIGINT, lambda _signum, _frame: sys.exit(0))
+lease.beat()
+lease.sleep_with_lease(1)
+lease_fifo = repo / ".refactor-loop" / "logs" / f"{name}.lease-fifo"
+if lease_fifo.exists():
+    fd = os.open(lease_fifo, os.O_WRONLY)
+    try:
+        os.write(fd, b"leased\\n")
+    finally:
+        os.close(fd)
+lease.sleep_with_lease(10)
+signal.pause()
 """
 
 
@@ -84,7 +150,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             os.mkfifo(self.repo / ".refactor-loop" / "logs" / f"{name}.hold")
         (self.skill / "scripts").mkdir(parents=True, exist_ok=True)
         shutil.copy2(HELPER, self.skill / "scripts" / "restart-daemons.sh")
+        shutil.copy2(SCRIPT_DIR / "daemon_heartbeat.py", self.skill / "scripts" / "daemon_heartbeat.py")
+        shutil.copy2(SCRIPT_DIR / "daemon_heartbeat.sh", self.skill / "scripts" / "daemon_heartbeat.sh")
         (self.skill / "scripts" / "restart-daemons.sh").chmod(0o755)
+        (self.skill / "scripts" / "daemon_heartbeat.py").chmod(0o755)
+        (self.skill / "scripts" / "daemon_heartbeat.sh").chmod(0o755)
         (self.repo / ".refactor-loop" / "host.env").write_text(
             "\n".join(
                 (
@@ -167,6 +237,25 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             check=True,
         )
 
+    def _run_helper_with_fresh_seconds(self, fresh_seconds: int) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.pop("REPO_ROOT", None)
+        env.update(
+            {
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": str(fresh_seconds),
+                "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1",
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+            }
+        )
+        return subprocess.run(
+            ["bash", str(self.skill / "scripts" / "restart-daemons.sh")],
+            cwd=self.repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
     def _start_count(self, name: str) -> int:
         starts = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
         if not starts.exists():
@@ -210,6 +299,43 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self._read_start_signal("comment-monitor")
         self.assertEqual(2, self._start_count("comment-monitor"))
+
+    def test_hung_child_stops_renewing_heartbeat_and_is_restarted(self) -> None:
+        self._write_executable(self.skill / "scripts" / "phase9_router_daemon.py", PYTHON_HANG_DAEMON)
+        self._run_helper_with_fresh_seconds(2)
+        old_child_pid = self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(1, self._start_count("phase9_router_daemon"))
+        self._stale_heartbeat("phase9_router_daemon")
+
+        self._run_helper_with_fresh_seconds(2)
+
+        new_child_pid = self._read_start_signal("phase9_router_daemon")
+        self.assertNotEqual(old_child_pid, new_child_pid)
+        self.assertEqual(2, self._start_count("phase9_router_daemon"))
+        self.assertFalse(self._pid_alive(old_child_pid))
+
+    def test_actor_owned_lease_keeps_long_sleep_daemon_fresh(self) -> None:
+        self._write_executable(self.skill / "scripts" / "dev_sync_daemon.py", PYTHON_LONG_SLEEP_DAEMON)
+        os.mkfifo(self.repo / ".refactor-loop" / "logs" / "dev_sync_daemon.lease-fifo")
+        self._run_helper_with_fresh_seconds(2)
+        first_child_pid = self._read_start_signal("dev_sync_daemon")
+        self.assertEqual(1, self._start_count("dev_sync_daemon"))
+        lease_fd = os.open(
+            self.repo / ".refactor-loop" / "logs" / "dev_sync_daemon.lease-fifo",
+            os.O_RDONLY | os.O_NONBLOCK,
+        )
+        try:
+            readable, _, _ = select.select([lease_fd], [], [], 3.0)
+            if not readable:
+                self.fail("timed out waiting for actor-owned lease renewal")
+            self.assertEqual("leased", os.read(lease_fd, 64).decode("utf-8").strip())
+        finally:
+            os.close(lease_fd)
+
+        self._run_helper_with_fresh_seconds(2)
+
+        self.assertEqual(1, self._start_count("dev_sync_daemon"))
+        self.assertTrue(self._pid_alive(first_child_pid))
 
     def test_restarts_when_heartbeat_missing(self) -> None:
         self._run_helper()

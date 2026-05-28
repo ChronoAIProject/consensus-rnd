@@ -42,6 +42,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from daemon_heartbeat import DaemonHeartbeatLease
 from repo_config import github_repo_slug
 
 
@@ -629,12 +630,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     log(f"concurrency_monitor (Python) started: interval={INTERVAL}s")
+    # Refactor (iter1/issue-143):
+    #   Old pattern: restart wrapper sidecar refreshed heartbeat even if this loop hung.
+    #   New principle: actor loop beats after tick/caught exception, then lease-sleeps.
+    #   CLI one-shot/count/list modes do not enter the lease loop.
+    lease = DaemonHeartbeatLease("concurrency_monitor", REPO_ROOT)
     while True:
         try:
             tick()
         except Exception as e:
             log(f"EXCEPTION in tick: {e!r}")
-        time.sleep(INTERVAL)
+        lease.beat()
+        lease.sleep_with_lease(INTERVAL)
 
 
 if __name__ == "__main__":
