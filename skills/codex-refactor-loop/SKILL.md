@@ -5,6 +5,8 @@ description: Use when the user wants an unattended Consensus R&D work-unit loop 
 > Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
 > New principle: SKILL.md 仅留 controller 契约 + phase index + 硬不变量.
 > Maintainer directive merges the former REFERENCE.md back into this single SKILL.md; use intra-file anchor links.
+> Refactor (iter1/issue-141): Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
+> New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 restart-daemons.sh 不无限阻塞。
 # Codex Refactor Loop — Controller Contract
 This SKILL.md is the single controller contract and detailed reference. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
 
@@ -92,6 +94,82 @@ Host config rules:
 
 Detailed path examples and host installation variants stay in the detailed reference section of this `SKILL.md`; the controller-contract section keeps only self-location invariants.
 
+<a id="downstream-install-walkthrough"></a>
+## Downstream install walkthrough
+
+<!--
+Refactor (iter1/issue-141):
+  Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
+  New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 restart-daemons.sh 不无限阻塞。
+-->
+
+This walkthrough is the only downstream install runbook for `codex-refactor-loop`. It documents existing checked-in surfaces only: plugin or copy install, host fact injection through `.refactor-loop/host.env`, user-level cron or launchd calling `restart-daemons.sh`, Claude Code `statusLine` pointing at the read-only `statusline.sh`, and uninstall/rollback.
+
+The skill must not modify a host repository's `.git` config, CI config, or policy files. It must not add `scripts/install.sh`, `scripts/installer.sh`, `scripts/install-host-runtime.py`, `scripts/install-statusline.sh`, or a root `INSTALL.md`. Host facts come only from `.refactor-loop/host.env`; do not add a second host variable list in this skill.
+
+### Install the skill
+
+Use the platform plugin mechanism when available. For direct copy install, copy the checked-in skill directory into the agent's skills directory:
+
+```bash
+mkdir -p ~/.claude/skills
+cp -R skills/codex-refactor-loop ~/.claude/skills/codex-refactor-loop
+```
+
+When the skill is installed by a plugin, use that installed `<skill-root>` path. When it is copied, `<skill-root>` is the copied `codex-refactor-loop` directory.
+
+### Inject host facts
+
+From the host repository root:
+
+```bash
+mkdir -p .refactor-loop
+cp <skill-root>/host.env.example .refactor-loop/host.env
+$EDITOR .refactor-loop/host.env
+```
+
+Fill the required host values in `.refactor-loop/host.env`, including `REPO_ROOT`, `GH_REPO_SLUG`, `BUILD_CMD`, `TEST_CMD`, `SOURCE_GLOBS`, and `MAINTAINER_WHITELIST`. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject.
+
+### Keep existing daemons alive
+
+Install exactly one user-level scheduler. The command must `source .refactor-loop/host.env` before it execs the checked-in helper; this preserves values with spaces and keeps all host facts in the host env file.
+
+Cron example:
+
+```bash
+*/5 * * * * cd /abs/path/to/host-repo && bash -lc 'source .refactor-loop/host.env && exec <skill-root>/scripts/restart-daemons.sh' >> .refactor-loop/logs/restart-cron.log 2>&1
+```
+
+launchd `ProgramArguments` example:
+
+```xml
+<key>ProgramArguments</key>
+<array>
+  <string>/bin/bash</string>
+  <string>-lc</string>
+  <string>cd /abs/path/to/host-repo && source .refactor-loop/host.env && exec &lt;skill-root&gt;/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1</string>
+</array>
+<key>StartInterval</key><integer>300</integer>
+```
+
+The helper remains the existing cron/launchd-only anti-stop surface. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
+
+### Add the Claude Code status line
+
+Set Claude Code `statusLine` manually to the checked-in read-only script:
+
+```json
+{
+  "statusLine": "/abs/path/to/skills/codex-refactor-loop/scripts/statusline.sh"
+}
+```
+
+Use the installed `<skill-root>/scripts/statusline.sh` path. This is not an installer; it does not edit settings for the user.
+
+### Uninstall or rollback
+
+Remove the user-level cron or launchd entry, remove the Claude Code `statusLine` setting, stop any running helper-managed daemon wrappers if needed, and remove the copied skill directory only if it was installed by direct copy. Keep or delete the host repository's `.refactor-loop/host.env` according to the host's own rollback policy.
+
 ## Named runtime exception — autonomous release gate(per #56)
 The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: autonomous release decision after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
 
@@ -139,6 +217,7 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 "statusLine": "/abs/path/to/skills/codex-refactor-loop/scripts/statusline.sh"
 ```
 (host 用安装后的 `<skill-root>/scripts/statusline.sh` 或拷过去的对应路径。)
+完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段只保留 statusline invariant。
 
 **Uninstall one-liner**:删 `statusLine` 字段即可。
 
@@ -158,23 +237,7 @@ New principle: singleton wrapper + actor-owned heartbeat lease; stale means acto
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 actor-loop heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
 
-Host project cron install one-liner(每 5 min, cron/launchd-only):
-
-```bash
-*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1
-```
-
-launchd host template:
-
-```xml
-<key>ProgramArguments</key>
-<array>
-  <string>/bin/bash</string>
-  <string>-lc</string>
-  <string>cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1</string>
-</array>
-<key>StartInterval</key><integer>300</integer>
-```
+完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
 Uninstall note: remove the cron line or unload/delete the launchd plist; do not replace it with a new watchdog daemon, installer script, or lifecycle actor.
 

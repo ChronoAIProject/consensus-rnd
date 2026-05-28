@@ -10,6 +10,8 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
+REPO_ROOT = SCRIPT_PATH.parents[3]
+README_MD = REPO_ROOT / "README.md"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
 
@@ -40,10 +42,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
+        self.readme = read(README_MD)
 
     def test_reference_file_was_merged_into_skill(self) -> None:
         self.assertFalse(REFERENCE_MD.exists())
         self.assertIn("## Detailed reference", self.skill)
+        self.assertEqual(1, self.skill.count('id="downstream-install-walkthrough"'))
+        self.assertIn("## Downstream install walkthrough", self.skill)
 
     def test_all_skill_intra_file_reference_links_resolve(self) -> None:
         links = re.findall(r"\(#([^)#\s]+)\)", self.skill)
@@ -81,6 +86,69 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
+
+    def test_downstream_install_walkthrough_contract(self) -> None:
+        # Refactor (iter1/issue-141):
+        #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
+        #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks required host surfaces.
+        combined_links = "\n".join((self.readme, self.skill))
+        self.assertNotIn("REFERENCE.md#downstream-install-walkthrough", combined_links)
+        self.assertIn("SKILL.md#downstream-install-walkthrough", combined_links)
+        self.assertIn("(#downstream-install-walkthrough)", self.skill)
+        self.assertIn("Downstream install walkthrough", combined_links)
+
+        required = (
+            "host.env.example",
+            ".refactor-loop/host.env",
+            "restart-daemons.sh",
+            "cron",
+            "launchd",
+            "statusLine",
+            "statusline.sh",
+            ".git",
+            "CI",
+            "policy",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+        forbidden_paths = (
+            "scripts/install.sh",
+            "scripts/installer.sh",
+            "scripts/install-host-runtime.py",
+            "scripts/install-statusline.sh",
+            "INSTALL.md",
+        )
+        for forbidden in forbidden_paths:
+            with self.subTest(forbidden=forbidden):
+                self.assertFalse((REPO_ROOT / forbidden).exists(), forbidden)
+
+        walkthrough = self.skill.split("## Downstream install walkthrough", 1)[1].split(
+            "## Named runtime exception",
+            1,
+        )[0]
+        self.assertEqual(1, walkthrough.count("HOST_*"))
+        self.assertNotIn("HOST_TEST_FILE_GLOBS |", walkthrough)
+        self.assertIn("source .refactor-loop/host.env && exec", walkthrough)
+
+        restart_helper = self.skill.split("## Anti-stop restart helper cron/launchd install(per #49)", 1)[1].split(
+            "## Named runtime exception",
+            1,
+        )[0]
+        self.assertIn("cron/launchd-only helper invariant", restart_helper)
+        self.assertNotIn("Host project cron install one-liner", restart_helper)
+        self.assertNotIn("launchd host template", restart_helper)
+        self.assertNotIn("ProgramArguments", restart_helper)
+        self.assertNotIn("restart-cron.log", restart_helper)
+
+        command_bodies = (
+            "source .refactor-loop/host.env && exec <skill-root>/scripts/restart-daemons.sh",
+            "source .refactor-loop/host.env && exec &lt;skill-root&gt;/scripts/restart-daemons.sh",
+        )
+        for body in command_bodies:
+            with self.subTest(body=body):
+                self.assertEqual(1, self.skill.count(body))
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(

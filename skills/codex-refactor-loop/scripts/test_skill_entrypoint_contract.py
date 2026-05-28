@@ -200,9 +200,13 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
 
     def test_skill_uses_intra_file_reference_links_only(self) -> None:
+        # Refactor (iter1/issue-141):
+        #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
+        #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks single-file anchors.
         self.assertNotIn("@REFERENCE.md", self.skill)
         self.assertNotRegex(self.skill, r"\]\(/Users/[^)]+REFERENCE\.md")
         self.assertNotRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+        self.assertEqual(2, self.skill.count("(#downstream-install-walkthrough)"))
         self.assertRegex(self.skill, r"\(#[^)]+\)")
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
