@@ -719,7 +719,7 @@ $BUILD_CMD
 ```
 
 若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):
-- 在 `该项目-wt-hotfix-trunk` worktree 跑 codex 修
+- 在 `$REPO_ROOT/.worktrees/hotfix-trunk` worktree 跑 codex 修
 - 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iterN hotfix 模板)
 - IMPLEMENT_DONE marker + controller commit/push 到 auto-refact-dev 直接
 
