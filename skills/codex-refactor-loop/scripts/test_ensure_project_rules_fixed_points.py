@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +44,7 @@ DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"禁止|不可调|不得|不能|不要|不写|Forbidden|forbidden|Do NOT|do not|must not|"
     r"not allowed|without|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )
+HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "audit.md",
@@ -2984,6 +2986,103 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             for pattern in recommendation_patterns:
                 with self.subTest(path=rel, pattern=pattern):
                     self.assertIsNone(re.search(pattern, text))
+
+    # Refactor (issue119/python-source-prose-i18n): Old pattern: Python and
+    # shell script comments/docstrings/log text could drift back to Chinese
+    # after a cleanup PR. New principle: source prose stays English while
+    # durable Chinese label literals and generated user-facing artifact bodies
+    # remain allowed.
+    def test_scripts_source_prose_stays_english_with_generated_artifact_allowlist(self) -> None:
+        allowed_python_string_contexts = (
+            "CANONICAL_BODY",
+            "OLD_CANONICAL_BODY",
+            "CANONICAL_HUMAN_LABELS",
+            "NON_AUTO_HUMAN_LABEL",
+            "REMOVED_HUMAN_LABELS",
+            "HUMAN_LABEL",
+            "SECTION_HEADING",
+            "DENIAL_OR_CONTROLLER_OWNER_RE",
+            "prompt_body",
+            "body",
+            "ROLE_NEXT_STEPS",
+            "label",
+            "labels",
+            "required",
+            "needle",
+            "pattern",
+            "forbidden",
+            "required_phrases",
+            "forbidden_patterns",
+            "startup_section",
+            "wakeup",
+            "section",
+            "redline_section",
+            "rendered",
+            "public_copy",
+            "skill",
+            "skill_text",
+            "reference",
+            "reference_text",
+            "directive_text",
+            "host_comment",
+            "expected_stdout",
+            "expected_stderr",
+        )
+        allowed_shell_contexts = (
+            "status_line=",
+            "delete_note=",
+            "<<EOF",
+            "## 📊",
+            "human:",
+            "stale = [",
+        )
+        log_error_context_re = re.compile(
+            r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
+            r"set_defaults|ArgumentParser|error|warning)\b",
+            re.IGNORECASE,
+        )
+        test_source_names = {path.name for path in (SKILL_ROOT / "scripts").glob("test_*.py")}
+        offenders: list[str] = []
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            source_lines = text.splitlines()
+            with path.open("rb") as fh:
+                for token in tokenize.tokenize(fh.readline):
+                    if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                        continue
+                    if not HAN_RE.search(token.string):
+                        continue
+                    context = source_lines[token.start[0] - 1]
+                    if token.type == tokenize.STRING:
+                        is_docstring = (
+                            token.start[1] == 0
+                            or (
+                                token.start[0] > 1
+                                and source_lines[token.start[0] - 2].strip().endswith(":")
+                                and context[: token.start[1]].strip() == ""
+                            )
+                        )
+                        if not is_docstring and (path.name in test_source_names or not log_error_context_re.search(context)):
+                            continue
+                    if any(needle in context for needle in allowed_python_string_contexts):
+                        continue
+                    offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.sh")):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not HAN_RE.search(line):
+                    continue
+                stripped = line.strip()
+                if not (stripped.startswith("#") or '"' in stripped or "'" in stripped or "<<EOF" in stripped):
+                    continue
+                if any(needle in line for needle in allowed_shell_contexts):
+                    continue
+                offenders.append(f"{rel}:{line_no}: {stripped}")
+
+        self.assertEqual(offenders, [])
 
     # Refactor (iter3/skill-host-language-policy): Old: hard-coded
     # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and
