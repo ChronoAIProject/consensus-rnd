@@ -1700,6 +1700,66 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
+    # Refactor (existing-issue-priority): Old pattern: controller dispatched
+    # fresh audit whenever floor was deficit, even when open auto-loop issues
+    # in design-solving / pr-open / fixing had 0 codex. New principle:
+    # existing-issue work takes strict priority over audit fallback (2026-05-28
+    # maintainer-directive).
+    def test_skill_concurrency_floor_documents_existing_issue_priority(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        combined = skill_text + "\n" + reference_text
+
+        skill_only = (
+            "Existing-issue priority(strict)",
+            "2026-05-28-existing-issue-priority-over-audit.md",
+            "pkill -f audit-iter-N",
+        )
+        for required in skill_only:
+            with self.subTest(required=required, source="SKILL.md"):
+                self.assertIn(required, skill_text)
+
+        detailed = (
+            "phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet",
+            "phase:reviewing` with 0 codex → dispatch the missing reviewer",
+            "phase:fixing` with 0 codex → dispatch fix codex",
+            "phase:implementing` with 0 codex",
+            "phase:pr-open` with 0 codex → dispatch reviewers",
+            "phase:consensus-reached` with 0 codex → dispatch implement codex",
+            "Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex",
+        )
+        for required in detailed:
+            with self.subTest(required=required, source="SKILL.md or REFERENCE.md"):
+                self.assertIn(required, combined)
+
+    # Refactor (stale-issue-revival): Old pattern: phase label coverage was
+    # treated as sufficient; the loop never re-checked time-since-last-update.
+    # New principle: 3h staleness boundary forces re-dispatch even when phase
+    # label looks current (2026-05-28 maintainer-directive).
+    def test_skill_concurrency_floor_documents_stale_issue_revival(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        combined = skill_text + "\n" + reference_text
+
+        skill_only = (
+            "Stale-issue revival(3h)",
+            "`stale_hours=N`",
+            "2026-05-28-stale-issue-3h-revival.md",
+        )
+        for required in skill_only:
+            with self.subTest(required=required, source="SKILL.md"):
+                self.assertIn(required, skill_text)
+
+        detailed = (
+            "older than **3 hours UTC**",
+            "`updatedAt`",
+            "MUST be re-dispatched to its next-step actor on the next wakeup",
+            "unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet",
+        )
+        for required in detailed:
+            with self.subTest(required=required, source="SKILL.md or REFERENCE.md"):
+                self.assertIn(required, combined)
+
     def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 

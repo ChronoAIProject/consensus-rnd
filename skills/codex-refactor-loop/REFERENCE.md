@@ -1589,6 +1589,25 @@ Concretely, this means:
 - iterN implement / verify / Phase 8 review runs in parallel with iterN rollup PR being reviewed.
 - If iterN rollup PR gets rejected by human, iterN work stays on auto-refact-dev (which now contains iterN + iterN deltas); we re-do iterN rework on top and ship combined.
 
+### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
+
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label:
+
+- `🔍 phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet (round = current_round_or_1) for that issue
+- `👀 phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
+- `🔧 phase:fixing` with 0 codex → dispatch fix codex for next round
+- `🛠️ phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
+- `🚀 phase:pr-open` with 0 codex → dispatch reviewers
+- `✅ phase:consensus-reached` with 0 codex → dispatch implement codex
+
+Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex matching its phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+
+### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
+
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open `auto-loop` issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
+
+Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
+
 ### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 
 <!-- Refactor (iter3/skill-concurrency-floor-enforcement):
