@@ -1,4 +1,5 @@
 # Remote CI Fix: `${CHECK_NAME}`
+<!-- Refactor (iter5/prompts-compression): Old pattern: remote CI fix prompt mixed broad remediation. New principle: minimal reproduce-first fix with marker-only output. -->
 
 Worktree `${WORKTREE_PATH}`, branch `${BRANCH}`, PR `${PR_NUMBER}`, run `${RUN_URL}`.
 

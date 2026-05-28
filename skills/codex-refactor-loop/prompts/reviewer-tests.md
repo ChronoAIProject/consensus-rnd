@@ -1,4 +1,5 @@
 # Tests Reviewer
+<!-- Refactor (iter5/prompts-compression): Old pattern: long test-review checklist. New principle: compact coverage-gate reviewer with explicit reject semantics. -->
 
 Review PR `${PR_NUMBER}` (`${PR_TITLE}`) against `${BASE_BRANCH}` for test coverage and quality. You are independent.
 
@@ -62,6 +63,6 @@ Token prefix preserved for source regression: `REVIEW_DONE:tests:`.
 
 - Open actual test files.
 - A real coverage gap is `reject` even if other reviewers approve.
-- GitHub-facing output follows `prompts/_github-post-rules.md`; print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
+- GitHub-facing output follows `prompts/_github-post-rules.md`; post with `gh pr comment`, then print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
 - Forbidden lifecycle: `git commit/push/checkout`, PR create/merge/close, issue create/close, label edits.
 - All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.

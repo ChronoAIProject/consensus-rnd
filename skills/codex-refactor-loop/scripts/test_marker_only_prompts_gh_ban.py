@@ -8,7 +8,8 @@ from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__)
-PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
+SKILL_ROOT = SCRIPT_PATH.parents[1]
+PROMPTS_DIR = SKILL_ROOT / "prompts"
 
 MARKER_ONLY_PROMPTS = (
     "audit.md",
@@ -41,6 +42,13 @@ FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
     "git merge",
     "git reset",
     "git rebase",
+)
+
+GH_POST_TOKENS = (
+    "gh issue comment",
+    "gh pr comment",
+    "gh api",
+    "-X POST",
 )
 
 
@@ -80,6 +88,43 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                         continue
                     with self.subTest(prompt=filename, token=token, line=line):
                         self.assertRegex(line, r"不可调|禁止|不得|marker/artifact-only|controller|Do not|Forbidden")
+
+    def test_skill_roster_matches_prompt_posting_behavior(self) -> None:
+        skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        direct, marker = self._roster(skill_text)
+        for filename in direct:
+            body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+            with self.subTest(prompt=filename, roster="direct-post"):
+                self.assertTrue(
+                    "gh issue comment" in body or "gh pr comment" in body or ("gh api" in body and "-X POST" in body),
+                    f"{filename} is direct-post but lacks concrete gh post command",
+                )
+        for filename in marker:
+            body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+            with self.subTest(prompt=filename, roster="marker-only"):
+                self.assertNotIn("gh issue comment", body)
+                self.assertNotIn("gh pr comment", body)
+                self.assertFalse("gh api" in body and "-X POST" in body)
+
+    @staticmethod
+    def _roster(skill_text: str) -> tuple[list[str], list[str]]:
+        groups: dict[str, list[str]] = {"direct": [], "marker": []}
+        current: str | None = None
+        for line in skill_text.splitlines():
+            if line == "Direct-post prompts:":
+                current = "direct"
+                continue
+            if line == "Marker/artifact-only prompts:":
+                current = "marker"
+                continue
+            if current and line.startswith("- `"):
+                name = line.split("`", 2)[1]
+                if name.endswith(".md") and name != "_github-post-rules.md":
+                    groups[current].append(name)
+                continue
+            if current and line and not line.startswith("-"):
+                current = None
+        return groups["direct"], groups["marker"]
 
 
 if __name__ == "__main__":

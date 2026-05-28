@@ -1,4 +1,5 @@
 # Fix Codex: Address Reject Demands
+<!-- Refactor (iter5/prompts-compression): Old pattern: verbose fix-worker retry policy. New principle: compact reject-only repair contract with scope-extension marker. -->
 
 PR `${PR_NUMBER}` (`${PR_TITLE}`), round `${FIX_ROUND}` of `${MAX_FIX_ROUNDS}`. Read reviewer outputs; blocking demands come only from `reject` reviewer evidence. Apply fixes so the next Phase 8 review can reach MERGE or MERGE_WITH_COMMENTS.
 
@@ -61,6 +62,6 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - False-positive rejection requires evidence.
 - `${FIX_OUTPUT_PATH}` is mandatory; if empty, emit `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:env-missing-FIX_OUTPUT_PATH`.
 - A demand citing `$PROJECT_RULES` verbatim is presumed valid until disproven.
-- GitHub-facing output follows `prompts/_github-post-rules.md`; print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
+- GitHub-facing output follows `prompts/_github-post-rules.md`; post with `gh pr comment`, then print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
 - Forbidden lifecycle: PR create/merge/close, issue create/close, label edits, `git commit/push/checkout`.
 - All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.

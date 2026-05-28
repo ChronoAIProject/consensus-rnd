@@ -1,49 +1,50 @@
 # ${PROBLEM_TITLE}
+<!-- Refactor (iter5/prompts-compression): Old pattern: English-heavy design issue template. New principle: Chinese GitHub-facing scaffold with host placeholders and evidence details. -->
 
 > GitHub-facing comments / PR bodies are 中文 by default; identifiers / paths / quoted rule text remain verbatim inline; no mandatory parallel English section.
 
 Facts are injected from `source .refactor-loop/host.env`; preserve `${HOST_*}` placeholders.
 
-## Summary
+## 摘要
 
 ${PROBLEM_STATEMENT}
 
-## Concrete Example
+## 具体现象
 
-The marked lines show the current violation.
+以下标记行展示当前违反点。
 
 ```${HOST_CODE_FENCE_LANG}
 ${PROBLEM_EXAMPLE_CODE}
 ```
 
-File: `${PROBLEM_EXAMPLE_FILE_PATH}`
+文件: `${PROBLEM_EXAMPLE_FILE_PATH}`
 
-## Why Design Is Needed
+## 为什么需要设计决策
 
 ${WHY_NEEDS_DESIGN}
 
-## Decision Requested
+## 需要维护者确认
 
-Before adding `auto-loop-resume`, answer:
+添加 `auto-loop-resume` 前,请确认:
 
-- Mode choice: ${DESIGN_QUESTION}
-- Schema impact: if `${HOST_PROTO_POLICY}` is non-empty, answer using that host schema/protocol policy; otherwise state no schema change.
-- Compatibility: persistent state handling, reserved field numbers, aliases, migration, or acceptable reset.
-- Scope split: one cluster or N PRs; if split, provide draft cluster ids.
-- Test surface: behavior that must be tested beyond `verification_hints`.
-- Off-limits: files or areas implement codex must not touch.
+- 模式选择: ${DESIGN_QUESTION}
+- Schema 影响: 若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol policy 回答;否则说明无 schema 变更。
+- 兼容性: persistent state、reserved field numbers、aliases、migration,或可接受 reset。
+- 范围拆分: 一个 cluster 或 N 个 PR;若拆分,请给 draft cluster ids。
+- 测试面: 除 `verification_hints` 外必须覆盖的行为。
+- 禁区: implement codex 不得触碰的文件或区域。
 
-## Auto-Loop Mechanics
+## Auto-Loop 机制
 
-- Controller polls roughly hourly when this is the remaining work.
-- First new comment after issue creation triggers one operator notification; later comments do not.
-- Adding `auto-loop-resume` lets controller append the newest maintainer comment as design input and dispatch implement in an isolated worktree.
-- Closing without `auto-loop-resume` means design rejected and the cluster is marked failed.
+- 当这是剩余工作时,controller 约每小时轮询一次。
+- issue 创建后的第一条新评论会触发一次 operator 通知;后续评论不会重复通知。
+- 添加 `auto-loop-resume` 后,controller 会把最新 maintainer 评论作为 design input 并在隔离 worktree 派发 implement。
+- 未添加 `auto-loop-resume` 就关闭 issue,表示设计被拒绝,该 cluster 标记为 failed。
 
-## Technical Reference
+## 技术参考
 
 <details>
-<summary>Cluster YAML, evidence, and audit boundary</summary>
+<summary>Cluster YAML、证据与 audit 边界</summary>
 
 ### Cluster spec
 

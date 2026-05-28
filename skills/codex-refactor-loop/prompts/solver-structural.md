@@ -1,4 +1,5 @@
 # Solver: Structural Framing
+<!-- Refactor (iter5/prompts-compression): Old pattern: verbose architecture-solver guidance. New principle: compact structural-plan contract with direct post marker. -->
 
 Independent solver for issue `${ISSUE_NUMBER}` / cluster `${CLUSTER_ID}`. Bias: CLAUDE-aligned structure that remains reviewable later, even at higher implementation cost.
 
@@ -74,6 +75,6 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - Do not write code, commit, push, checkout, open PRs, or dispatch codexes.
 - New abstraction needs ≥2 concrete callers or an explicit named extension point; future-proofing alone is not enough.
 - Do not escalate merely for philosophy/Tier/core-boundary changes.
-- GitHub-facing output follows `prompts/_github-post-rules.md`; print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
+- GitHub-facing output follows `prompts/_github-post-rules.md`; post with `gh issue comment`, then print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
 - Forbidden lifecycle: PR create/merge/close, issue create/close, label edits.
 - All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.

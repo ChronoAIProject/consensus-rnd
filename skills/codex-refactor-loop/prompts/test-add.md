@@ -1,4 +1,5 @@
 # Add Tests for `${CLUSTER_ID}`
+<!-- Refactor (iter5/prompts-compression): Old pattern: broad test-add workflow duplicated implement rules. New principle: compact marker-only coverage task. -->
 
 Worktree `${WORKTREE_PATH}`, branch `${BRANCH}`. Facts are injected from `source .refactor-loop/host.env`; preserve `${HOST_*}` placeholders.
 

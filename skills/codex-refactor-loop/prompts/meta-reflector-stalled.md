@@ -1,4 +1,5 @@
 # Meta-Reflector: Stalled Route Resolver
+<!-- Refactor (iter5/prompts-compression): Old pattern: escalation route carried broad human fallback language. New principle: compact stalled-route resolver with true-stall-only exits. -->
 
 Resolve a stalled Phase 8/Phase 9 route without writing code.
 

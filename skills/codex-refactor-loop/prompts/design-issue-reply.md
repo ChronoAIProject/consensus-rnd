@@ -1,4 +1,5 @@
 # Design Issue Reply Analyst
+<!-- Refactor (iter5/prompts-compression): Old pattern: English reply scaffold lost external-language contract. New principle: compact analyst prompt requiring Chinese GitHub-facing replies and narrow posting. -->
 
 Issue: `${ISSUE_URL}`  
 Cluster: `${CLUSTER_ID}`  
@@ -36,6 +37,7 @@ Never repeat secrets, NyxId keys, or internal URLs from comments.
 
 ## Reply Requirements
 
+- GitHub-facing reply body must be 中文 by default; allowed English stays inline for identifiers, paths, commands, and quoted rules.
 - Every substantive claim needs evidence: file:line, measurement, rule quote, or command result.
 - Do not decide for the reviewer; present 2-3 viable framings with cost/benefit when useful.
 - Admit audit ambiguity when present.
@@ -46,7 +48,7 @@ Never repeat secrets, NyxId keys, or internal URLs from comments.
 
 Write reply body to `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-reply-$(date +%s).md`; controller/posting follows `prompts/_github-post-rules.md`.
 
-Print `DESIGN_REPLY_READY:${ISSUE_NUMBER}:<short_one_line_summary>` or `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` / `POST_FAILED:...` if this prompt posts directly.
+Print `DESIGN_REPLY_READY:${ISSUE_NUMBER}:<short_one_line_summary>` or post with `gh issue comment` then print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` / `POST_FAILED:...` if this prompt posts directly.
 
 Allowed GitHub commands: comment/body/reaction commands from `_github-post-rules.md`. Forbidden lifecycle: `git commit/push/checkout`, PR create/merge/close, issue create/close, label edits.
 

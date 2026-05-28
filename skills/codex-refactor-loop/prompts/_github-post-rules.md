@@ -1,4 +1,5 @@
 # GitHub Post Rules
+<!-- Refactor (iter5/prompts-compression): Old pattern: verbose per-prompt posting prose. New principle: one shared GitHub-facing contract with Chinese default, sentinel, and narrow post commands. -->
 
 Use for any GitHub-facing comment or PR body produced by solver, meta-judge, fix, reviewer, triage, analyst, or similar prompt.
 

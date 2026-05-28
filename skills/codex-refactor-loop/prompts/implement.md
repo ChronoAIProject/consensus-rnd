@@ -1,4 +1,5 @@
 # Implement `${WORK_UNIT_ID}`
+<!-- Refactor (iter5/prompts-compression): Old pattern: broad implement checklist mixed design intake. New principle: compact single implementation path with marker-only lifecycle bans. -->
 
 Work in `${WORKTREE_PATH}` on `${BRANCH}`. Cluster alias is `${CLUSTER_ID}`. Facts are injected from `source .refactor-loop/host.env`; preserve `${VAR}` placeholders. `${DESIGN_DECISION_PATH}` non-empty means design-issue pathway; otherwise read `${WORK_UNIT_SOURCE_REF}` cluster `${CLUSTER_ID}`.
 

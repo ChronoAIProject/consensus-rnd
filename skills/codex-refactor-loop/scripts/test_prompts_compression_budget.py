@@ -36,6 +36,11 @@ GITHUB_POST_LANGUAGE_FILES = [
     "design-issue-body.md",
     "design-issue-reply.md",
 ]
+CHINESE_SCAFFOLD_FILES = {
+    "design-issue-body.md": ["## 摘要", "## 需要维护者确认"],
+    "design-issue-reply.md": ["GitHub-facing reply body must be 中文 by default"],
+    "triage-external-issue.md": ["中文 `human_brief`", "中文 GitHub-facing comment artifact"],
+}
 
 
 class PromptsCompressionBudgetTests(unittest.TestCase):
@@ -84,6 +89,17 @@ class PromptsCompressionBudgetTests(unittest.TestCase):
             body = (PROMPTS_DIR / fname).read_text()
             for token in required:
                 self.assertIn(token, body, f"{fname} missing language token {token!r}")
+
+    def test_direct_post_templates_keep_chinese_scaffold(self):
+        for fname, tokens in CHINESE_SCAFFOLD_FILES.items():
+            body = (PROMPTS_DIR / fname).read_text()
+            for token in tokens:
+                self.assertIn(token, body, f"{fname} missing Chinese scaffold token {token!r}")
+
+    def test_compressed_prompts_keep_refactor_self_doc(self):
+        for p in PROMPTS_DIR.glob("*.md"):
+            body = p.read_text()
+            self.assertIn("Refactor (", body, f"{p.name} missing compression self-doc")
 
 
 if __name__ == "__main__":

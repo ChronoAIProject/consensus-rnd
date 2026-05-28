@@ -1,4 +1,5 @@
 # Audit `$REPO_ROOT` for Engineering-Rule Violations
+<!-- Refactor (iter5/prompts-compression): Old pattern: long audit walkthrough duplicated controller policy. New principle: compact marker-only audit contract plus hard bans. -->
 Find violations first, then choose clusters. Write candidates and cluster artifact separately.
 ## Required Reading
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`; every accepted violation must cite a mandatory clause verbatim.

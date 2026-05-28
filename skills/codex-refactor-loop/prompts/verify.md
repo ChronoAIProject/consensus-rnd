@@ -1,4 +1,5 @@
 # Verify `${WORK_UNIT_ID}`
+<!-- Refactor (iter5/prompts-compression): Old pattern: broad verification narrative. New principle: compact marker-only verify contract with pass/rework/block exits. -->
 
 Work in `${WORKTREE_PATH}`. Implementation changes are uncommitted. Cluster alias `${CLUSTER_ID}` names the artifacts.
 

@@ -761,26 +761,26 @@ Recovery rules:
 
 Direct-post prompts:
 
-- `design-issue-body.md`
-- `design-issue-reply.md`
-- `_github-post-rules.md` inclusions where the prompt explicitly posts to GitHub
-
-Marker/artifact-only prompts:
-
-- `audit.md`
-- `implement.md`
-- `verify.md`
-- `remote-ci-fix.md`
-- `review-fix.md`
-- `reviewer-architect.md`
-- `reviewer-tests.md`
-- `reviewer-quality.md`
 - `solver-minimal.md`
 - `solver-structural.md`
 - `solver-delete.md`
 - `meta-judge.md`
-- `test-add.md`
+- `reviewer-architect.md`
+- `reviewer-quality.md`
+- `reviewer-tests.md`
+- `review-fix.md`
+- `design-issue-reply.md`
 - `triage-external-issue.md`
+
+Marker/artifact-only prompts:
+
+- `audit.md`
+- `design-issue-body.md`
+- `implement.md`
+- `meta-reflector-stalled.md`
+- `verify.md`
+- `remote-ci-fix.md`
+- `test-add.md`
 
 Posting rules:
 

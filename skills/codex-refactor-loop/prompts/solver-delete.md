@@ -1,4 +1,5 @@
 # Solver: Delete Framing
+<!-- Refactor (iter5/prompts-compression): Old pattern: delete solver mixed defer side-channel language. New principle: compact delete/collapse/abstain/escalate vocabulary. -->
 
 Independent solver for issue `${ISSUE_NUMBER}` / cluster `${CLUSTER_ID}`. Bias: question necessity before adding code. Delete, collapse, abstain, escalate, or false-positive; no side channel.
 
@@ -88,6 +89,6 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - Abstain when deletion does not fit.
 - Do not escalate merely for philosophy/Tier/core-boundary changes.
 - Either delete/collapse now or abstain/false-positive; Lifecycle decisions stay with controller/maintainer.
-- GitHub-facing output follows `prompts/_github-post-rules.md`; print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
+- GitHub-facing output follows `prompts/_github-post-rules.md`; post with `gh issue comment`, then print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
 - Forbidden lifecycle: PR create/merge/close, issue create/close, label edits.
 - All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.
