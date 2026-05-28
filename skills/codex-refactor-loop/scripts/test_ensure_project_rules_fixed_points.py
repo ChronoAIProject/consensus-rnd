@@ -3228,6 +3228,12 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json",
             "按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus",
         )
+        issue154_self_doc_contexts = (
+            "Refactor (iter1/issue-154):",
+            "auto_release_gate.fresh_heartbeats 读 .refactor-loop/state/daemon-heartbeats.json",
+            "按 .refactor-loop/runs/phase9-issue154-r1-judge.md consensus",
+            "硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New",
+        )
         log_error_context_re = re.compile(
             r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
             r"set_defaults|ArgumentParser|error|warning)\b",
@@ -3262,7 +3268,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                         continue
                     if path.name == "test_ensure_project_rules_fixed_points.py" and any(needle in context for needle in issue126_self_doc_contexts):
                         continue
-                    if any(needle in context for needle in issue145_self_doc_contexts):
+                    if any(needle in context for needle in issue145_self_doc_contexts + issue154_self_doc_contexts):
                         continue
                     offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
 
@@ -3276,7 +3282,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     continue
                 if any(needle in line for needle in allowed_shell_contexts):
                     continue
-                if any(needle in line for needle in issue145_self_doc_contexts):
+                if any(needle in line for needle in issue145_self_doc_contexts + issue154_self_doc_contexts):
                     continue
                 offenders.append(f"{rel}:{line_no}: {stripped}")
 

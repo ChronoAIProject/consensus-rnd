@@ -146,20 +146,30 @@ print("[]")
 
 
 def write_live_state(repo: Path) -> None:
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    now = int(datetime.now(timezone.utc).timestamp())
     state = repo / ".refactor-loop/state"
-    write_json(state / "daemon-heartbeats.json", {name: now for name in (
+    heartbeat_dir = repo / ".refactor-loop/heartbeats"
+    heartbeat_dir.mkdir(parents=True, exist_ok=True)
+    for name in (
         "concurrency_monitor.py",
         "codex-progress-reporter.sh",
         "comment-monitor.sh",
         "dev_sync_daemon.py",
         "phase9_router_daemon.py",
-    )})
+    ):
+        (heartbeat_dir / f"{name}.ts").write_text(f"{now}\n", encoding="utf-8")
     write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
     write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
     write_json(state / "recent-pr-merges.json", {"count": 1})
     write_json(state / "release-commits.json", {"commits": [{"sha": "abc123", "subject": "fix: fixture", "body": ""}]})
     write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 0})
+
+
+def write_heartbeat_files(repo: Path, values: dict[str, int | str]) -> None:
+    heartbeat_dir = repo / ".refactor-loop/heartbeats"
+    heartbeat_dir.mkdir(parents=True, exist_ok=True)
+    for name, value in values.items():
+        (heartbeat_dir / f"{name}.ts").write_text(f"{value}\n", encoding="utf-8")
 
 
 def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subprocess.CompletedProcess[str]:
@@ -512,15 +522,15 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
     def test_fail_closed_when_daemon_heartbeat_stale(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
-            stale = (NOW - timedelta(seconds=91)).isoformat().replace("+00:00", "Z")
-            state = repo / ".refactor-loop/state"
-            write_json(state / "daemon-heartbeats.json", {name: stale for name in (
+            stale = int((NOW - timedelta(seconds=91)).timestamp())
+            write_heartbeat_files(repo, {name: stale for name in (
                 "concurrency_monitor.py",
                 "codex-progress-reporter.sh",
                 "comment-monitor.sh",
                 "dev_sync_daemon.py",
                 "phase9_router_daemon.py",
             )})
+            state = repo / ".refactor-loop/state"
             write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
             write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
             write_json(repo / ".refactor-loop/.concurrency-monitor-state.json", {"zero_streak": 0})
@@ -529,6 +539,65 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertFalse(score.ready)
             self.assertIn("heartbeat_stale", score.signals["fresh_heartbeats"]["reason"])
+
+    def test_fresh_heartbeats_reads_real_heartbeat_files_without_legacy_state_artifact(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            fresh = int(NOW.timestamp())
+            write_heartbeat_files(repo, {name: fresh for name in (
+                "concurrency_monitor.py",
+                "codex-progress-reporter.sh",
+                "comment-monitor.sh",
+                "dev_sync_daemon.py",
+                "phase9_router_daemon.py",
+                "extra-observer",
+            )})
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            signal = gate.fresh_heartbeats()
+
+            self.assertTrue(signal["passed"])
+            self.assertEqual(signal["source"], "heartbeats/*.ts")
+            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 6)
+            self.assertTrue(signal["heartbeats"]["concurrency_monitor.py"])
+
+    def test_fail_closed_when_fewer_than_five_real_heartbeats_are_fresh(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            fresh = int(NOW.timestamp())
+            stale = int((NOW - timedelta(seconds=91)).timestamp())
+            write_heartbeat_files(repo, {
+                "concurrency_monitor.py": fresh,
+                "codex-progress-reporter.sh": fresh,
+                "comment-monitor.sh": fresh,
+                "dev_sync_daemon.py": fresh,
+                "phase9_router_daemon.py": stale,
+            })
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            signal = gate.fresh_heartbeats()
+
+            self.assertFalse(signal["passed"])
+            self.assertIn("heartbeat_stale", signal["reason"])
+            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 4)
+
+    def test_fail_closed_when_real_heartbeat_file_is_malformed(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            fresh = int(NOW.timestamp())
+            write_heartbeat_files(repo, {
+                "concurrency_monitor.py": fresh,
+                "codex-progress-reporter.sh": fresh,
+                "comment-monitor.sh": fresh,
+                "dev_sync_daemon.py": fresh,
+                "phase9_router_daemon.py": "not-an-epoch",
+            })
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            signal = gate.fresh_heartbeats()
+
+            self.assertFalse(signal["passed"])
+            self.assertFalse(signal["heartbeats"]["phase9_router_daemon.py"])
 
     def test_fail_closed_when_phase8_reject_churn_reaches_limit(self) -> None:
         with copy_repo_fixture() as tmp:
