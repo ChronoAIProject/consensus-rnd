@@ -1,84 +1,64 @@
 # ${PROBLEM_TITLE}
 
-<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+> Reply in Chinese. Code identifiers, file paths, errors, and quoted rule text may stay verbatim.
 
-> 请用中文回复。Code identifier、file path、错误消息和条款引用可以保留原文。
+Facts are injected from `source .refactor-loop/host.env`; preserve `${HOST_*}` placeholders.
 
----
-
-## 1. 一段话说清楚
+## Summary
 
 ${PROBLEM_STATEMENT}
 
----
+## Concrete Example
 
-## 2. 具体示例
-
-下面是当前代码里的真实问题模式。标 `← problem` 的行就是触发违反的位置。
+The marked lines show the current violation.
 
 ```${HOST_CODE_FENCE_LANG}
 ${PROBLEM_EXAMPLE_CODE}
 ```
 
-**文件**: `${PROBLEM_EXAMPLE_FILE_PATH}`
+File: `${PROBLEM_EXAMPLE_FILE_PATH}`
 
----
-
-## 3. 为什么需要人来设计
+## Why Design Is Needed
 
 ${WHY_NEEDS_DESIGN}
 
----
+## Decision Requested
 
-## 4. 需要你的回答
+Before adding `auto-loop-resume`, answer:
 
-加 `auto-loop-resume` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
+- Mode choice: ${DESIGN_QUESTION}
+- Schema impact: if `${HOST_PROTO_POLICY}` is non-empty, answer using that host schema/protocol policy; otherwise state no schema change.
+- Compatibility: persistent state handling, reserved field numbers, aliases, migration, or acceptable reset.
+- Scope split: one cluster or N PRs; if split, provide draft cluster ids.
+- Test surface: behavior that must be tested beyond `verification_hints`.
+- Off-limits: files or areas implement codex must not touch.
 
-- [ ] **模式选择**：${DESIGN_QUESTION}
-- [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
-- [ ] **向后兼容**：现有持久态如何处理？（reserved 字段号 / type alias / schema migration / 可接受的重置）
-- [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
-- [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？
-- [ ] **越界禁地**：implement codex **不应**碰的地方？
+## Auto-Loop Mechanics
 
----
+- Controller polls roughly hourly when this is the remaining work.
+- First new comment after issue creation triggers one operator notification; later comments do not.
+- Adding `auto-loop-resume` lets controller append the newest maintainer comment as design input and dispatch implement in an isolated worktree.
+- Closing without `auto-loop-resume` means design rejected and the cluster is marked failed.
 
-## 5. Auto-loop 行为（机制说明，**不影响你回答的内容**）
-
-- Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
-- Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
-- 加 `auto-loop-resume` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
-- 不加 `auto-loop-resume` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 标记 `clusters_failed[design-rejected:closed]`。
-
----
-
-## 6. 技术参考（可折叠）
+## Technical Reference
 
 <details>
-<summary>展开完整 cluster YAML / 证据 / audit 修复边界</summary>
+<summary>Cluster YAML, evidence, and audit boundary</summary>
 
-### Cluster spec (from `.refactor-loop/runs/audit-iter-${ITERATION}.md`)
+### Cluster spec
 
 ${CLUSTER_YAML}
 
-### 证据
+### Evidence
 
 ${CLUSTER_EVIDENCE}
 
-### audit 初步提议
+### Audit fix boundary
 
 ${CLUSTER_FIX_BOUNDARY}
 
 </details>
 
-cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>（auto-loop 运维者）
+cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>
 
----
-
-## AI 内容标识符(强制)
-
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
-
-    ⟦AI:AUTO-LOOP⟧
-
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+⟦AI:AUTO-LOOP⟧
