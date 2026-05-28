@@ -2693,6 +2693,17 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
         assert match is not None
         return match.group(1)
 
+    def release_decision_schema_section(self) -> str:
+        text = self.read_skill()
+        match = re.search(
+            r"<a id=\"release-decision-schema\"></a>\n### Release decision schema(.*?)\n<a id=\"host-runtime-details\"></a>",
+            text,
+            flags=re.S,
+        )
+        self.assertIsNotNone(match)
+        assert match is not None
+        return match.group(1)
+
     def test_skill_documents_autonomous_release_gate_title(self) -> None:
         self.assertIn("## Named runtime exception — autonomous release gate(per #56)", self.read_skill())
 
@@ -2755,6 +2766,19 @@ class AutonomousReleaseGateContractTests(unittest.TestCase):
         for forbidden in ("git log", "git rev-list", "gh pr view", "gh api"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, gate_source)
+
+    def test_release_schema_documents_real_heartbeat_files_not_phantom_state(self) -> None:
+        release_schema = self.release_decision_schema_section()
+        heartbeat_rows = [
+            line for line in release_schema.splitlines()
+            if "| `fresh_heartbeats` |" in line
+        ]
+
+        self.assertEqual(len(heartbeat_rows), 1)
+        heartbeat_row = heartbeat_rows[0]
+        self.assertNotIn(".refactor-loop/state/daemon-heartbeats.json", heartbeat_row)
+        self.assertIn(".refactor-loop/heartbeats/*.ts", heartbeat_row)
+        self.assertRegex(heartbeat_row, r"At least five .* fresh within 90 seconds")
 
 # Refactor (hygiene/634a608-followup): delete stranded paragraph tests matching
 # the CLAUDE.md philosophy-only rewrite; the paragraph no longer exists.
@@ -3228,6 +3252,12 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json",
             "按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus",
         )
+        issue154_self_doc_contexts = (
+            "Refactor (iter1/issue-154):",
+            "auto_release_gate.fresh_heartbeats 读 .refactor-loop/state/daemon-heartbeats.json",
+            "按 .refactor-loop/runs/phase9-issue154-r1-judge.md consensus",
+            "硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New",
+        )
         log_error_context_re = re.compile(
             r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
             r"set_defaults|ArgumentParser|error|warning)\b",
@@ -3262,7 +3292,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                         continue
                     if path.name == "test_ensure_project_rules_fixed_points.py" and any(needle in context for needle in issue126_self_doc_contexts):
                         continue
-                    if any(needle in context for needle in issue145_self_doc_contexts):
+                    if any(needle in context for needle in issue145_self_doc_contexts + issue154_self_doc_contexts):
                         continue
                     offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
 
@@ -3276,7 +3306,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     continue
                 if any(needle in line for needle in allowed_shell_contexts):
                     continue
-                if any(needle in line for needle in issue145_self_doc_contexts):
+                if any(needle in line for needle in issue145_self_doc_contexts + issue154_self_doc_contexts):
                     continue
                 offenders.append(f"{rel}:{line_no}: {stripped}")
 

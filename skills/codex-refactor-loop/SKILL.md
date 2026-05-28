@@ -910,7 +910,7 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
 | `p0_alert_streak_ok` | `.refactor-loop/.concurrency-monitor-state.json` zero streak and recent P0 alert lines are both at most 3 in the last 30 minutes. |
 | `recent_pr_merges_min` | `.refactor-loop/state/recent-pr-merges.json` reports at least `RELEASE_AUTO_MIN_MERGES` commits in the last two hours(default 1). `merge_pr` produces the controller-owned projection after successful `gh pr merge`; schema fields are `count/window_hours/updated_at/merges[]`; the decider only reads this artifact. |
-| `fresh_heartbeats` | At least five entries in `.refactor-loop/state/daemon-heartbeats.json` are fresh within 90 seconds. |
+| `fresh_heartbeats` | At least five `.refactor-loop/heartbeats/*.ts` files are fresh within 90 seconds. |
 | `no_unresolved_human_escalation` | `.refactor-loop/state/meta-resolutions.json` has zero `unresolved_escalate_human` entries. |
 
 Tests or controller-side aggregators may write `.refactor-loop/state/auto-release-signals.json` with either booleans or `{ "passed": bool, ... }` objects for those same keys. When that file exists, it is the deterministic source for the eight gate signals.

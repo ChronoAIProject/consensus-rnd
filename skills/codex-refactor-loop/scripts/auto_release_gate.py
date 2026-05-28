@@ -172,6 +172,10 @@ class AutoReleaseGate:
     def recent_merges_path(self) -> Path:
         return self.state_dir / "recent-pr-merges.json"
 
+    @property
+    def heartbeat_dir(self) -> Path:
+        return self.repo_root / ".refactor-loop" / "heartbeats"
+
     def current_version(self) -> str:
         targets = self.load_manifest_targets()
         versions = {target["version"] for target in targets}
@@ -385,15 +389,26 @@ class AutoReleaseGate:
         return signal
 
     def fresh_heartbeats(self) -> dict[str, Any]:
-        raw = load_json(self.state_dir / "daemon-heartbeats.json", {})
+        # Refactor (iter1/issue-154):
+        #   Old pattern: auto_release_gate.fresh_heartbeats 读 .refactor-loop/state/daemon-heartbeats.json,但无 producer 写该文件(daemon 健康实际在 heartbeats/*.ts 与 statusline-snapshot.json)→ 信号永红,release gate 永不 ready。
+        #   New principle: 按 .refactor-loop/runs/phase9-issue154-r1-judge.md consensus(minimal):fresh_heartbeats 改读真实 .refactor-loop/heartbeats/*.ts(保持 >=5 fresh @ HEARTBEAT_FRESH_SECONDS=90 语义),删除 phantom daemon-heartbeats.json 契约与对它的 test 引用。事实源唯一,不新增并行 telemetry,不加 lifecycle authority。
+        #   硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New。
         now = self.now()
         fresh: dict[str, bool] = {}
-        for name in DAEMON_NAMES:
-            heartbeat = parse_time(raw.get(name)) if isinstance(raw, dict) else None
-            fresh[name] = bool(heartbeat and now - heartbeat <= timedelta(seconds=HEARTBEAT_FRESH_SECONDS))
+        if self.heartbeat_dir.is_dir():
+            for heartbeat_file in sorted(self.heartbeat_dir.glob("*.ts")):
+                try:
+                    raw = heartbeat_file.read_text(encoding="utf-8").strip()
+                    heartbeat = datetime.fromtimestamp(int(raw), tz=timezone.utc)
+                except (OSError, ValueError, OverflowError):
+                    heartbeat = None
+                fresh[heartbeat_file.stem] = bool(
+                    heartbeat
+                    and timedelta(0) <= now - heartbeat <= timedelta(seconds=HEARTBEAT_FRESH_SECONDS)
+                )
         passed = sum(1 for ok in fresh.values() if ok) >= 5
         reason = None if passed else "heartbeat_stale"
-        return {"passed": passed, "reason": reason, "heartbeats": fresh, "source": "state"}
+        return {"passed": passed, "reason": reason, "heartbeats": fresh, "source": "heartbeats/*.ts"}
 
     def no_unresolved_human_escalation(self) -> dict[str, Any]:
         raw = load_json(self.state_dir / "meta-resolutions.json", {})
