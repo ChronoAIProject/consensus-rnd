@@ -160,6 +160,25 @@ class Phase9Router:
     #   alongside `EXIT=0`. Scan only the last MARKER_TAIL_LINES of each log.
     #   Body-position prompt-body echoes never reach the marker parser.
     MARKER_TAIL_LINES = 30
+    TAIL_READ_BYTES = 8192  # Refactor (iter5/issue122-phase9-tail-perf): bound tail read to ~8KB so per-tick scan stays O(num_logs), not O(total log bytes).
+
+    @staticmethod
+    def _read_tail_lines(path: Path, num_lines: int) -> list[str]:
+        # Refactor (iter5/issue122-phase9-tail-perf): Old: read full log via
+        # read_text() then splitlines()[-N:]. New: seek to file end and read
+        # only the last TAIL_READ_BYTES, decode, return tail num_lines. Keeps
+        # per-tick CPU bounded as logs/ grows.
+        try:
+            with path.open("rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - Phase9Router.TAIL_READ_BYTES))
+                blob = fh.read()
+        except OSError:
+            return []
+        text = blob.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        return lines[-num_lines:] if len(lines) > num_lines else lines
 
     def _collect_markers(self) -> list[Marker]:
         markers: list[Marker] = []
@@ -169,11 +188,7 @@ class Phase9Router:
             identity = self._identity_from_path(log_path)
             if identity is None:
                 continue
-            try:
-                lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-            except OSError:
-                continue
-            tail = lines[-self.MARKER_TAIL_LINES :] if len(lines) > self.MARKER_TAIL_LINES else lines
+            tail = self._read_tail_lines(log_path, self.MARKER_TAIL_LINES)
             for line in tail:
                 marker = self._extract_marker(line)
                 if marker is None:
@@ -259,11 +274,12 @@ class Phase9Router:
         return parse_phase9_log_identity(path.name)
 
     def _is_clean_exit(self, path: Path) -> bool:
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
+        # Refactor (iter5/issue122-phase9-tail-perf): tail-only read via
+        # _read_tail_lines bounds CPU as logs/ grows.
+        tail = self._read_tail_lines(path, 5)
+        if not tail:
             return False
-        return any(re.match(r"^EXIT=0$", line) for line in lines[-5:])
+        return any(re.match(r"^EXIT=0$", line) for line in tail)
 
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         by_issue_round: dict[tuple[str, int], dict[str, Marker]] = {}
@@ -394,13 +410,11 @@ class Phase9Router:
         # Refactor (iter5/skill-marker-tail-only-scope): same tail-only invariant
         # as _collect_markers — _stalled_predicate_holds must not trust body-
         # position SOLVER_DONE echoes when classifying convergence verdicts.
+        # Refactor (iter5/issue122-phase9-tail-perf): tail-only read via
+        # _read_tail_lines bounds CPU as logs/ grows.
         if not path.exists():
             return []
-        try:
-            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return []
-        tail = lines[-self.MARKER_TAIL_LINES :] if len(lines) > self.MARKER_TAIL_LINES else lines
+        tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
         markers: list[str] = []
         for line in tail:
             marker = self._extract_marker(line)
