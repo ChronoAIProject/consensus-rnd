@@ -35,6 +35,9 @@ def reference_anchors(reference: str) -> set[str]:
 
 
 class SkillReferenceAnchorTests(unittest.TestCase):
+    # Refactor (iter1/issue-139):
+    #   Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
+    #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.reference = read(REFERENCE_MD)
@@ -96,6 +99,30 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotIn(
             "不产生 harness task-notification,不是 wake 源",
             self.reference,
+        )
+
+    def test_reference_requires_session_monitor_and_fallback_only_wakes(self) -> None:
+        required = (
+            "每个 controller session **必须先维护** active daemon-event Monitor bridge",
+            "后两者不是 Monitor substitute",
+            "ScheduleWakeup 是 task-notification 丢失或长时间无完成通知时的 turn-level **fallback**",
+            "不是 daemon-event immediate lane,也不是 session-level Monitor substitute",
+            "turn 结束前必须先确认 daemon-event Monitor bridge active",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.reference)
+
+        forbidden = (
+            "每个 turn 结束**必须**有已确认的下次唤醒源:active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup 返回 `scheduled`",
+            "turn 结束前心里要有一个**已确认的下次唤醒源**(daemon-event Monitor bridge active, task-notification 在飞, 或 ScheduleWakeup 已注册)",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, self.reference)
+        self.assertNotRegex(
+            self.reference,
+            r"active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup",
         )
 
     def test_no_checked_in_daemon_event_monitor_helper(self) -> None:

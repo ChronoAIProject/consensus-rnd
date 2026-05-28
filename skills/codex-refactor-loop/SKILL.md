@@ -21,8 +21,10 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](REFERENCE.md#status-and-escalation-templates) | `post_banner.py`, GitHub labels |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Phase 9 allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `phase9_router_daemon.py` handle only its allowlisted deterministic routes. | [controller contract details](REFERENCE.md#controller-contract-details) | `spawn-codex.sh`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](REFERENCE.md#sentinel-and-comment-filters) | prompts, `comment-monitor.sh` |
-<!-- Refactor (iter3/skill-monitor-wake-source): Old pattern: 2-lane wake source(harness task-notification + ScheduleWakeup). New principle: 3-lane wake source adds daemon-event Monitor lane(daemon writes event file -> mounted persistent Monitor bridge -> controller wakes immediately; daemon alone is not a wake source). -->
-| Wake source | Each turn must end with a confirmed future wake source. | Confirm one of three lanes before ending: active daemon-event Monitor bridge, in-flight codex task-notification, or confirmed ScheduleWakeup. | [wake source rules](REFERENCE.md#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup |
+<!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
+  New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
+-->
+| Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](REFERENCE.md#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. | Read and write existing containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](REFERENCE.md#work-unit-contract), [state schema](REFERENCE.md#state-schema) | `.refactor-loop/state.json` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](REFERENCE.md#phase-routing-details) | logs, prompts |
@@ -178,13 +180,13 @@ launchd host template:
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
 `peek.sh` is a status lens, not routing authority; route actions still come from Phase Routing, clean-exit sweep, and the Phase 9 router daemon.
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-3. Before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn, read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+3. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 4. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 5. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
 6. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
@@ -192,7 +194,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 8. Post GitHub banner and sync labels for each state transition.
 9. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
 10. Spawn the next codexes with harness background tasks if actionable work exists.
-11. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
+11. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
 12. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
 
 ## Phase Index
@@ -201,7 +203,7 @@ The phase index is the local routing map. It intentionally links to heavy detail
 
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
-| Phase 0 | First wakeup bootstrap. Must complete before normal routing. | [Phase 0 details](REFERENCE.md#phase-0-details) |
+| Phase 0 | Session bootstrap. Must complete before normal routing. | [Phase 0 details](REFERENCE.md#phase-0-details) |
 | Phase 1 | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](REFERENCE.md#work-unit-contract), [batching heuristics](REFERENCE.md#batching-heuristics) |
 | Phase 2 | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](REFERENCE.md#phase-routing-details) |
 | Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](REFERENCE.md#recovery-playbook) |
@@ -212,9 +214,9 @@ The phase index is the local routing map. It intentionally links to heavy detail
 | Phase 8 | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [phase 8 details](REFERENCE.md#phase-8-details) |
 | Phase 9 | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [phase 9 details](REFERENCE.md#phase-9-details) |
 
-## Phase 0 — Bootstrap (first wakeup only)
+## Phase 0 — Bootstrap (session bootstrap)
 
-Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes.
+Phase 0 is mandatory and ordered for each controller session bootstrap. Do not spawn normal actors before it completes.
 
 1. `source .refactor-loop/host.env` from `$REPO_ROOT`; if it is absent, unreadable, or lacks required values, fail closed.
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
@@ -227,7 +229,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
-12. confirm a wake source before ending: daemon-event Monitor bridge active, background task notification in flight, or ScheduleWakeup returned scheduled.
+12. confirm the daemon-event Monitor bridge is still active before ending; task-notification and ScheduleWakeup are only turn-level completion/fallback signals, not Monitor substitutes.
 
 Phase 0 anti-patterns stay local because they are safety gates:
 
