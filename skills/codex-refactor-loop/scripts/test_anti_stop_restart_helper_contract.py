@@ -41,15 +41,33 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(needle, self.skill)
 
     def test_skill_documents_cron_launchd_install(self) -> None:
+        # Refactor (iter1/issue-141):
+        #   Old pattern: the anti-stop section duplicated cron/launchd command bodies beside the install walkthrough.
+        #   New principle: the anti-stop section keeps only the helper invariant and points scheduler install details to the single walkthrough.
         required = (
             "cron/launchd install",
-            "*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1",
+            "完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough)",
+            "cron/launchd-only helper invariant",
             "launchd",
-            "StartInterval",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+        anti_stop_install = self.skill.split(
+            "## Anti-stop restart helper cron/launchd install(per #49)",
+            1,
+        )[1].split("## Named runtime exception", 1)[0]
+        forbidden = (
+            "Host project cron install one-liner",
+            "*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh",
+            "launchd host template",
+            "ProgramArguments",
+            "StartInterval",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, anti_stop_install)
 
     def test_skill_references_issue49_r3_judge_artifact(self) -> None:
         self.assertIn(

@@ -130,6 +130,25 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         )[0]
         self.assertEqual(1, walkthrough.count("HOST_*"))
         self.assertNotIn("HOST_TEST_FILE_GLOBS |", walkthrough)
+        self.assertIn("source .refactor-loop/host.env && exec", walkthrough)
+
+        restart_helper = self.skill.split("## Anti-stop restart helper cron/launchd install(per #49)", 1)[1].split(
+            "## Named runtime exception",
+            1,
+        )[0]
+        self.assertIn("cron/launchd-only helper invariant", restart_helper)
+        self.assertNotIn("Host project cron install one-liner", restart_helper)
+        self.assertNotIn("launchd host template", restart_helper)
+        self.assertNotIn("ProgramArguments", restart_helper)
+        self.assertNotIn("restart-cron.log", restart_helper)
+
+        command_bodies = (
+            "source .refactor-loop/host.env && exec <skill-root>/scripts/restart-daemons.sh",
+            "source .refactor-loop/host.env && exec &lt;skill-root&gt;/scripts/restart-daemons.sh",
+        )
+        for body in command_bodies:
+            with self.subTest(body=body):
+                self.assertEqual(1, self.skill.count(body))
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(

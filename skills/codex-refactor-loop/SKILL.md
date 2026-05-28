@@ -221,24 +221,6 @@ Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLA
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
-Host project cron install one-liner(每 5 min):
-
-```bash
-*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1
-```
-
-launchd host template:
-
-```xml
-<key>ProgramArguments</key>
-<array>
-  <string>/bin/bash</string>
-  <string>-lc</string>
-  <string>cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1</string>
-</array>
-<key>StartInterval</key><integer>300</integer>
-```
-
 ## Named runtime exception — anti-stop restart helper(per #49)
 
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
