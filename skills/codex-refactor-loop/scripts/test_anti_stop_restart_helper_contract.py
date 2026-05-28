@@ -26,7 +26,9 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         required = (
             "## Named runtime exception — anti-stop restart helper(per #49)",
             "Narrow allowlist",
-            "singleton+heartbeat wrapper lifecycle",
+            "singleton wrapper + actor-owned heartbeat lease",
+            "actor-loop progress lease",
+            "wrapper sidecar liveness",
             "No lifecycle authority",
             "STALE_CONTROLLER",
             "Host-agnostic",
@@ -96,6 +98,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "HEARTBEAT_FRESH_SECONDS",
             ".refactor-loop/locks/${name}.pid",
             ".refactor-loop/heartbeats/${name}.ts",
+            "RESTART_DAEMON_HEARTBEAT_FILE",
+            "RESTART_DAEMON_HEARTBEAT_INTERVAL",
             "kill -0",
             "mkdir \"$RESTART_LOCK_DIR\"",
         )
@@ -152,6 +156,18 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(token, self.helper)
                 self.assertIn(token, self.skill)
         self.assertIn("phase9_router_daemon.py' --daemon --repo-root", self.helper)
+
+    def test_restart_helper_has_no_sidecar_heartbeat_writer(self) -> None:
+        forbidden = (
+            "hb_pid",
+            "while true; do\n        hb_tmp",
+            "date -u +%s > \"$hb_tmp\"",
+            "sleep \"$hb_interval\"",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.helper)
+        self.assertIn("actor-owned heartbeat lease", self.skill)
 
 
 if __name__ == "__main__":

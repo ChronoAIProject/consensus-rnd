@@ -49,7 +49,11 @@ class LogRetentionBehaviorTests(unittest.TestCase):
         skill = self.tmp_root / "skill"
         (skill / "scripts").mkdir(parents=True)
         shutil.copy2(RESTART_HELPER, skill / "scripts" / "restart-daemons.sh")
+        shutil.copy2(SCRIPT_DIR / "daemon_heartbeat.py", skill / "scripts" / "daemon_heartbeat.py")
+        shutil.copy2(SCRIPT_DIR / "daemon_heartbeat.sh", skill / "scripts" / "daemon_heartbeat.sh")
         (skill / "scripts" / "restart-daemons.sh").chmod(0o755)
+        (skill / "scripts" / "daemon_heartbeat.py").chmod(0o755)
+        (skill / "scripts" / "daemon_heartbeat.sh").chmod(0o755)
         if retention_script is not None:
             (skill / "scripts" / "log_retention.sh").write_text(retention_script, encoding="utf-8")
             (skill / "scripts" / "log_retention.sh").chmod(0o755)
@@ -60,6 +64,9 @@ class LogRetentionBehaviorTests(unittest.TestCase):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
         daemon = (
             "#!/usr/bin/env bash\n"
+            "SCRIPT_DIR=\"$(cd \"$(dirname \"${BASH_SOURCE[0]}\")\" && pwd -P)\"\n"
+            "source \"$SCRIPT_DIR/daemon_heartbeat.sh\"\n"
+            "daemon_heartbeat_beat\n"
             "printf '%s\\n' \"$RESTART_DAEMON_NAME\" >> \"$REPO_ROOT/.refactor-loop/logs/order.log\"\n"
             "trap 'exit 0' TERM INT\n"
             "while true; do sleep 60; done\n"
@@ -72,6 +79,8 @@ class LogRetentionBehaviorTests(unittest.TestCase):
             "import os\n"
             "import signal\n"
             "from pathlib import Path\n"
+            "from daemon_heartbeat import DaemonHeartbeatLease\n"
+            "DaemonHeartbeatLease(os.environ['RESTART_DAEMON_NAME'], os.environ['REPO_ROOT']).beat()\n"
             "Path(os.environ['REPO_ROOT'], '.refactor-loop/logs/order.log').open('a').write(os.environ['RESTART_DAEMON_NAME'] + '\\n')\n"
             "signal.pause()\n"
         )

@@ -14,6 +14,7 @@
 
 set -u  # Avoid -e/pipefail: daemon must survive occasional subshell non-zero exits.
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -24,7 +25,8 @@ if [ -z "${REPO_ROOT:-}" ]; then
   exit 2
 fi
 cd "$REPO_ROOT"
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+source "$SCRIPT_DIR/repo_slug.sh"
+source "$SCRIPT_DIR/daemon_heartbeat.sh"
 REPO="$(resolve_github_repo_slug 1 1)" || exit $?
 
 INTERVAL="${INTERVAL:-600}"
@@ -302,6 +304,10 @@ fi
 
 # Main loop.
 while true; do
+  # Refactor (iter1/issue-143):
+  #   Old pattern: wrapper sidecar refreshed heartbeat even if this scan loop hung.
+  #   New principle: shell actor beats after log scan, then lease-sleeps through long idle intervals.
+  #   Heartbeat stays same path/epoch; no new daemon or lifecycle authority.
   log_msg "tick"
   for log in "$LOG_DIR"/*.log; do
     [ -f "$log" ] || continue
@@ -314,5 +320,6 @@ while true; do
     esac
     post_or_update "$base" "$log"
   done
-  sleep "$INTERVAL"
+  daemon_heartbeat_beat
+  daemon_heartbeat_sleep "$INTERVAL"
 done

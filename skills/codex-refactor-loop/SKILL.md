@@ -133,7 +133,10 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 
 ## Anti-stop restart helper cron/launchd install(per #49)
 
-`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton+heartbeat wrapper(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
+<!-- Refactor (iter1/issue-143): Old pattern: restart-daemons.sh wrapper sidecar wrote heartbeat while daemon loop hangs.
+New principle: singleton wrapper + actor-owned heartbeat lease; stale means actor loop stopped renewing.
+Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
+`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 actor-loop heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
 
 Host project cron install one-liner(每 5 min):
 
@@ -157,11 +160,11 @@ launchd host template:
 
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`,并顺手运行 `log_retention.sh` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;并顺手运行 `log_retention.sh` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
-- **Behavior tests**: `test_restart_daemons.py` 覆盖 daemon repair;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
-- **Source-regression**: `AntiStopRestartHelperContractTests` + `LogRetentionSourceRegressionTests` 锁定 narrow allowlist、no lifecycle authority、direct rm、no archive/index/new daemon。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
+- **Source-regression**: `AntiStopRestartHelperContractTests` + `LogRetentionSourceRegressionTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + actor-owned heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens、no wrapper sidecar heartbeat writer、direct rm、no archive/index/new daemon。
 
 授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
