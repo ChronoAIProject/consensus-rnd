@@ -18,6 +18,11 @@ def read(path: Path) -> str:
 
 
 class AntiStopRestartHelperContractTests(unittest.TestCase):
+    # Refactor (iter1/issue-140):
+    #   Old pattern: restart-helper install wording was not pinned to the
+    #   local cron/launchd-only surface.
+    #   New principle: keep cron, launchd, uninstall, and no-lifecycle wording
+    #   in the anti-stop section without creating a new installer or daemon.
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.helper = read(RESTART_HELPER)
@@ -50,6 +55,33 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+    def test_restart_helper_install_uninstall_anchor_is_local_cron_launchd_only(self) -> None:
+        section = self.skill.split(
+            "## Anti-stop restart helper cron/launchd install(per #49)",
+            1,
+        )[1].split("## Wakeup Skeleton", 1)[0]
+        required = (
+            "cron install one-liner",
+            "launchd host template",
+            "Uninstall note",
+            "cron/launchd-only",
+            "No lifecycle authority",
+            "不新增 watchdog daemon",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        forbidden = (
+            "installer.sh",
+            "install-restart",
+            "gh pr create",
+            "gh issue create",
+            "git push",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, section)
 
     def test_skill_references_issue49_r3_judge_artifact(self) -> None:
         self.assertIn(

@@ -32,20 +32,38 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
 ## Host 配置(通用化注入点)
+<!-- Refactor (iter1/issue-140):
+  Old pattern: host.env.example documented only a subset of host
+  variables, so exported keys could drift from the SKILL.md Host config
+  and Host language policy tables.
+  New principle: keep host.env.example exports equal to the SKILL.md host
+  configuration table key set with source-regression coverage, while
+  reusing the existing host.env/SKILL.md surfaces instead of adding a new
+  schema or runtime contract.
+-->
 These variables are injected by the host project. The skill must not hardcode project facts.
 | Variable | Meaning | Default / example |
 |---|---|---|
 | `$REPO_ROOT` | host repository root | required in `host.env` |
+| `$GH_REPO_SLUG` | GitHub `OWNER/REPO` slug | required for `gh --repo` |
+| `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional compatibility exports |
+| `$BUILD_CMD` | build command | host-specific |
+| `$TEST_CMD` | test command | host-specific |
 | `$INTEGRATION_BRANCH` | integration branch | `auto-refact-dev` |
 | `$REVIEW_BASE_BRANCH` | review base branch | `dev` |
 | `$PROJECT_RULES` | project rules file and Phase 0 fixed-point target | `CLAUDE.md` |
-| `$BUILD_CMD` | build command | host-specific |
-| `$TEST_CMD` | test command | host-specific |
+| `$RELEASE_AUTO_ENABLE` | host opt-in for autonomous release decision artifacts | `false`; noop unless `true` |
+| `$RELEASE_AUTO_MIN_MERGES` | minimum recent merges for the release gate stability signal | `1` |
+| `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | minimum hours since the last release decision | `2` |
+| `$RELEASE_ROLLUP_MIN_COMMITS` | minimum integration-ahead commits before release-rollup pending event | `1` |
+| `$RELEASE_ROLLUP_COOLDOWN_SECONDS` | duplicate pending-event cooldown for the same integration SHA | `21600` |
 | `$CI_GUARDS` | optional CI guard script | host-specific; guard only when non-empty |
+| `$CODEX_FLOOR` | host-scoped codex concurrency floor | default `5`; hard lower bound `2` |
+| `$DEGRADATION_WATCH_INTERVAL_SECONDS` | optional skill degradation runtime hook interval | `1800`; `0` disables runtime hook |
+| `$DEGRADATION_WATCH_TIMEOUT_SECONDS` | skill degradation checker timeout | `30` |
+| `$DEGRADATION_ALERT_TAIL_LINES` | alert tail lines included for degradation failures | `10` |
 | `$SOURCE_GLOBS` | source globs for review diffs | host-specific |
-| `$MAINTAINER_WHITELIST` | handles allowed for explicit maintainer decisions | host-specific |
-| `$GH_REPO_SLUG` | GitHub `OWNER/REPO` slug | required for `gh --repo` |
-| `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional |
+| `$MAINTAINER_WHITELIST` | handles allowed for comment-monitor/direct-mention maintainer decisions | optional for hosts without that surface; fail-closed requirement when comment-monitor/direct-mention is enabled |
 
 ### Host language policy
 These optional fields carry host language, test-layout, comment, schema, and architecture-review policy into prompt text. Their default is empty. Empty means the prompt must infer from existing repository evidence plus `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$TEST_CMD`, `$BUILD_CMD`, and the actual diff; it must not invent C#, .NET, protobuf, or any other host-specific default.
@@ -114,7 +132,7 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 **Producer**:`concurrency_monitor.py` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。Snapshot 包含 `daemons` map(扫 `.refactor-loop/heartbeats/*.ts` 动态发现,每条记 `age_seconds` + `stale`,stale 阈值 90s)+ 汇总 `daemons_healthy` / `daemons_total`。
 **Consumer**:`statusline.sh` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`。
 
-**Install**(host project,**手动一行,无 installer script**):
+**Install one-liner**(host project,**手动一行,无 installer script**):
 
 ```json
 // ~/.claude/settings.json
@@ -122,7 +140,7 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 ```
 (host 用安装后的 `<skill-root>/scripts/statusline.sh` 或拷过去的对应路径。)
 
-**Uninstall**:删 `statusLine` 字段即可。
+**Uninstall one-liner**:删 `statusLine` 字段即可。
 
 **Named runtime exception(per #51 consensus)**:
 - **Narrow allowlist**:concurrency_monitor 写 snapshot + 顺手 stat `heartbeats/*.ts` 汇总 daemon 健康;不引入新 daemon、不持 lifecycle authority、不读 prompt body。
@@ -140,7 +158,7 @@ New principle: singleton wrapper + actor-owned heartbeat lease; stale means acto
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 actor-loop heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
 
-Host project cron install one-liner(每 5 min):
+Host project cron install one-liner(每 5 min, cron/launchd-only):
 
 ```bash
 */5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1
@@ -157,6 +175,8 @@ launchd host template:
 </array>
 <key>StartInterval</key><integer>300</integer>
 ```
+
+Uninstall note: remove the cron line or unload/delete the launchd plist; do not replace it with a new watchdog daemon, installer script, or lifecycle actor.
 
 ## Named runtime exception — anti-stop restart helper(per #49)
 
