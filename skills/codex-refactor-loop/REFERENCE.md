@@ -1115,13 +1115,14 @@ The controller's only inline composition allowed for GitHub:
 EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation rationale、design issue body、cross-post 通知、PR description 包括 rollup PR)由**正在跑的那个 codex 自己 post**,**不需要专门的 writer-codex 中介**:
 
 <!--
-# Refactor (iter3/skill-github-post-contract):
-#   Old: 宽泛 all-prompts direct-post 主张
-#   New: 两组明确 roster + 可枚举行为测试(#13 structural 共识)
+Refactor (iter6/issue-118):
+  Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
 -->
 
-- Direct-post prompts: `solver-minimal.md`, `solver-structural.md`, `solver-delete.md`, `meta-judge.md`, `reviewer-architect.md`, `reviewer-quality.md`, `reviewer-tests.md`, `review-fix.md`, `design-issue-reply.md`, `triage-external-issue.md`. Only these prompts must contain a `## GitHub post` section referencing `prompts/_github-post-rules.md`.
-- Marker/artifact-only prompts: `audit.md`, `design-issue-body.md`, `implement.md`, `verify.md`, `remote-ci-fix.md`, `test-add.md`. They keep the AI sentinel plus their marker/body contract, are surfaced by controller / PR / CI status, and must not claim direct posting.
+- A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
+- `SKILL.md` / `REFERENCE.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
+- Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(comment-monitor.sh 据此识别 controller-post 跳 react)
 - 中文 only / TL;DR ≤ 6 行 / raw artifact 折叠 `<details>` / 若 situation 给 `original_authors:` 加 `📢 cc`
 - codex 自己抓 gh 输出的 URL,打 `POSTED:<role>:<N>:<URL>:<headline>` 或 `POST_FAILED:...`

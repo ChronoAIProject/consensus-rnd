@@ -88,9 +88,15 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Hard rules
 
+<!--
+Refactor (iter6/issue-118):
+  Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
+-->
+
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).(controller posts).
+- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - You do NOT dispatch other codexes.
 - "Minimal" means smallest code change; it does NOT mean "ignore architectural correctness". If the minimum is still wrong, abstain.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is the minimum viable fix and is written as a concrete plan.
