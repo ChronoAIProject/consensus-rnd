@@ -1751,8 +1751,8 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_dispatch_queue_workspace_guard_is_documented_and_enforced(self) -> None:
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
@@ -2058,7 +2058,7 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
 class HumanLabelSemanticsTests(unittest.TestCase):
     # Refactor (iter326/issue-106):
-    #   Old pattern: source-regression test 字面拦 Chinese/English prose,中英切换会全面失效
+    #   Old pattern: source-regression tests literally matched Chinese/English prose, so switching languages broke them wholesale
     #   New principle: no DetectionInvariantV1; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
     #   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
     def read_rel(self, rel: str) -> str:

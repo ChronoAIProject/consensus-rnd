@@ -102,8 +102,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_to_repo_root(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
         calls: list[list[str]] = []
@@ -115,8 +115,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "repo-root-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_missing_cd(self) -> None:
         path = self.write_dispatch("p0", "fix-pr44-round-3")
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -131,8 +131,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "missing-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_relative_cd(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=Path(".worktrees/fix-pr44-round-3"))
         calls: list[list[str]] = []
@@ -144,8 +144,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "relative-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_cd_outside_repo(self) -> None:
         outside_repo = self.repo.parent / "outside-repo"
         self.write_dispatch("p0", "fix-pr44-round-3", cd=outside_repo)
@@ -158,8 +158,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "outside-repo", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_inside_repo_but_outside_worktrees(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / "tmp" / "fix-pr44-round-3")
         calls: list[list[str]] = []
@@ -171,8 +171,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "outside-worktrees", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_to_worktrees_root(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / ".worktrees")
         calls: list[list[str]] = []
@@ -184,8 +184,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assert_dispatch_rejected("fix-pr44-round-3", "worktrees-root-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_accepts_mutable_dispatch_inside_worktrees(self) -> None:
         worktree = self.repo / ".worktrees" / "fix-pr44-round-3"
         self.write_dispatch("p0", "fix-pr44-round-3", cd=worktree)
@@ -202,8 +202,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_allows_main_readonly_dispatch_prefixes(self) -> None:
         task_ids = ("audit-iter-5", "phase9-issue133-r4-minimal", "review-pr44-tests")
 
@@ -220,8 +220,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejected_dispatch_does_not_block_next_queue_item(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
         self.write_dispatch("p0", "fix-pr44-round-4", cd=self.repo / ".worktrees" / "fix-pr44-round-4")
