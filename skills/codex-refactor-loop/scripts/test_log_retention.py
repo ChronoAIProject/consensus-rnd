@@ -45,6 +45,60 @@ class LogRetentionBehaviorTests(unittest.TestCase):
         os.utime(path, (ts, ts))
         return path
 
+    def _prepare_restart_skill(self, retention_script: str | None) -> Path:
+        skill = self.tmp_root / "skill"
+        (skill / "scripts").mkdir(parents=True)
+        shutil.copy2(RESTART_HELPER, skill / "scripts" / "restart-daemons.sh")
+        (skill / "scripts" / "restart-daemons.sh").chmod(0o755)
+        if retention_script is not None:
+            (skill / "scripts" / "log_retention.sh").write_text(retention_script, encoding="utf-8")
+            (skill / "scripts" / "log_retention.sh").chmod(0o755)
+        for rel in (
+            ".refactor-loop/locks",
+            ".refactor-loop/heartbeats",
+        ):
+            (self.repo / rel).mkdir(parents=True, exist_ok=True)
+        daemon = (
+            "#!/usr/bin/env bash\n"
+            "printf '%s\\n' \"$RESTART_DAEMON_NAME\" >> \"$REPO_ROOT/.refactor-loop/logs/order.log\"\n"
+            "trap 'exit 0' TERM INT\n"
+            "while true; do sleep 60; done\n"
+        )
+        for script in ("comment-monitor.sh", "codex-progress-reporter.sh"):
+            (skill / "scripts" / script).write_text(daemon, encoding="utf-8")
+            (skill / "scripts" / script).chmod(0o755)
+        py_daemon = (
+            "#!/usr/bin/env python3\n"
+            "import os\n"
+            "import signal\n"
+            "from pathlib import Path\n"
+            "Path(os.environ['REPO_ROOT'], '.refactor-loop/logs/order.log').open('a').write(os.environ['RESTART_DAEMON_NAME'] + '\\n')\n"
+            "signal.pause()\n"
+        )
+        for script in ("concurrency_monitor.py", "dev_sync_daemon.py", "phase9_router_daemon.py"):
+            (skill / "scripts" / script).write_text(py_daemon, encoding="utf-8")
+            (skill / "scripts" / script).chmod(0o755)
+        return skill
+
+    def _run_restart_helper(self, skill: Path) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                ["bash", str(skill / "scripts" / "restart-daemons.sh")],
+                cwd=self.repo,
+                env={**os.environ, "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1"},
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        finally:
+            for pid_file in (self.repo / ".refactor-loop" / "locks").glob("*.pid"):
+                raw = pid_file.read_text(encoding="utf-8").strip()
+                if raw.isdigit():
+                    try:
+                        os.kill(int(raw), signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+
     def _run_helper(self, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         run_env = os.environ.copy()
         run_env.pop("REPO_ROOT", None)
@@ -102,65 +156,92 @@ class LogRetentionBehaviorTests(unittest.TestCase):
         self.assertNotEqual(0, result.returncode)
         self.assertIn("REPO_ROOT is unset", result.stderr)
 
+    def test_refuses_bad_repo_root(self) -> None:
+        isolated = self.tmp_root / "isolated"
+        isolated.mkdir()
+
+        result = self._run_helper(
+            cwd=isolated,
+            env={"REPO_ROOT": str(self.tmp_root / "missing-repo")},
+        )
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("REPO_ROOT is not a readable directory", result.stderr)
+
+    def test_missing_log_directory_is_noop(self) -> None:
+        shutil.rmtree(self.logs)
+
+        result = self._run_helper()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("deleted=0", result.stdout)
+        self.assertIn("kept=0", result.stdout)
+        self.assertIn("missing=true", result.stdout)
+
+    def test_keeps_symlink_and_non_regular_log_paths(self) -> None:
+        old_target = self._write_file(".refactor-loop/logs/target.log", "target\n", 25)
+        symlink_log = self.logs / "linked.log"
+        symlink_log.symlink_to(old_target)
+        fifo_log = self.logs / "pipe.log"
+        os.mkfifo(fifo_log)
+
+        result = self._run_helper()
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(symlink_log.is_symlink())
+        self.assertTrue(fifo_log.exists())
+        self.assertFalse(old_target.exists())
+        self.assertIn("kept=2", result.stdout)
+
+    def test_keeps_log_when_mtime_is_unparseable(self) -> None:
+        old_log = self._write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
+        fake_bin = self.tmp_root / "fake-bin"
+        fake_bin.mkdir()
+        fake_stat = fake_bin / "stat"
+        fake_stat.write_text("#!/usr/bin/env bash\nprintf 'not-a-number\\n'\n", encoding="utf-8")
+        fake_stat.chmod(0o755)
+
+        result = self._run_helper(env={"PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}"})
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(old_log.exists())
+        self.assertIn("deleted=0", result.stdout)
+        self.assertIn("kept=1", result.stdout)
+
     def test_restart_daemons_runs_retention_before_daemon_start(self) -> None:
-        skill = self.tmp_root / "skill"
-        (skill / "scripts").mkdir(parents=True)
-        shutil.copy2(RESTART_HELPER, skill / "scripts" / "restart-daemons.sh")
-        (skill / "scripts" / "restart-daemons.sh").chmod(0o755)
-        (skill / "scripts" / "log_retention.sh").write_text(
+        skill = self._prepare_restart_skill(
             "#!/usr/bin/env bash\n"
             "printf 'retention\\n' >> \"$REPO_ROOT/.refactor-loop/logs/order.log\"\n",
-            encoding="utf-8",
         )
-        (skill / "scripts" / "log_retention.sh").chmod(0o755)
-        for rel in (
-            ".refactor-loop/locks",
-            ".refactor-loop/heartbeats",
-        ):
-            (self.repo / rel).mkdir(parents=True, exist_ok=True)
-        daemon = (
-            "#!/usr/bin/env bash\n"
-            "printf '%s\\n' \"$RESTART_DAEMON_NAME\" >> \"$REPO_ROOT/.refactor-loop/logs/order.log\"\n"
-            "trap 'exit 0' TERM INT\n"
-            "while true; do sleep 60; done\n"
-        )
-        for script in ("comment-monitor.sh", "codex-progress-reporter.sh"):
-            (skill / "scripts" / script).write_text(daemon, encoding="utf-8")
-            (skill / "scripts" / script).chmod(0o755)
-        py_daemon = (
-            "#!/usr/bin/env python3\n"
-            "import os\n"
-            "import signal\n"
-            "from pathlib import Path\n"
-            "Path(os.environ['REPO_ROOT'], '.refactor-loop/logs/order.log').open('a').write(os.environ['RESTART_DAEMON_NAME'] + '\\n')\n"
-            "signal.pause()\n"
-        )
-        for script in ("concurrency_monitor.py", "dev_sync_daemon.py", "phase9_router_daemon.py"):
-            (skill / "scripts" / script).write_text(py_daemon, encoding="utf-8")
-            (skill / "scripts" / script).chmod(0o755)
-
-        try:
-            result = subprocess.run(
-                ["bash", str(skill / "scripts" / "restart-daemons.sh")],
-                cwd=self.repo,
-                env={**os.environ, "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1"},
-                text=True,
-                capture_output=True,
-                timeout=10,
-            )
-        finally:
-            for pid_file in (self.repo / ".refactor-loop" / "locks").glob("*.pid"):
-                raw = pid_file.read_text(encoding="utf-8").strip()
-                if raw.isdigit():
-                    try:
-                        os.kill(int(raw), signal.SIGTERM)
-                    except ProcessLookupError:
-                        pass
+        result = self._run_restart_helper(skill)
 
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         order = (self.logs / "order.log").read_text(encoding="utf-8").splitlines()
         self.assertGreaterEqual(len(order), 2, order)
         self.assertEqual("retention", order[0])
+
+    def test_restart_daemons_continues_when_retention_helper_is_missing(self) -> None:
+        skill = self._prepare_restart_skill(None)
+
+        result = self._run_restart_helper(skill)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        order = (self.logs / "order.log").read_text(encoding="utf-8").splitlines()
+        self.assertIn("concurrency_monitor", order)
+        self.assertIn("log_retention skip: helper missing", result.stdout)
+
+    def test_restart_daemons_continues_when_retention_helper_fails(self) -> None:
+        skill = self._prepare_restart_skill(
+            "#!/usr/bin/env python3\n"
+            "raise SystemExit(42)\n"
+        )
+
+        result = self._run_restart_helper(skill)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        order = (self.logs / "order.log").read_text(encoding="utf-8").splitlines()
+        self.assertIn("concurrency_monitor", order)
+        self.assertIn("log_retention warning: helper failed; continuing daemon restart", result.stdout)
 
 
 class LogRetentionSourceRegressionTests(unittest.TestCase):
