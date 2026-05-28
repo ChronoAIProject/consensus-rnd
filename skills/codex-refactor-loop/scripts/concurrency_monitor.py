@@ -86,8 +86,11 @@ HEARTBEAT_STALE_SECONDS = 90
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
 DISPATCH_QUEUE = REPO_ROOT / ".refactor-loop" / "dispatch-queue"
 DISPATCH_DISPATCHED = REPO_ROOT / ".refactor-loop" / "dispatch-dispatched"
+DISPATCH_REJECTED = REPO_ROOT / ".refactor-loop" / "dispatch-rejected"
 SPAWN_CODEX = Path(__file__).resolve().parent / "spawn-codex.sh"
 PRIORITIES = ("p0", "p1", "p2")
+MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
+MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
 
 # Phase label -> expected codex count per active issue/PR.
 PHASE_EXPECTED = {
@@ -438,13 +441,6 @@ def dispatch_queue_empty() -> bool:
     return not dispatch_queue_files()
 
 
-def next_dispatch_file() -> tuple[str, Path] | None:
-    files = dispatch_queue_files()
-    if not files:
-        return None
-    return files[0]
-
-
 def archive_dispatched(path: Path, payload: dict, task_id: str) -> Path:
     DISPATCH_DISPATCHED.mkdir(parents=True, exist_ok=True)
     payload["dispatch_at"] = utc_ts()
@@ -453,6 +449,60 @@ def archive_dispatched(path: Path, payload: dict, task_id: str) -> Path:
     if archive.exists():
         stamp = payload["dispatch_at"].replace(":", "").replace("-", "")
         archive = DISPATCH_DISPATCHED / f"{task_id}-{stamp}.json"
+    archive.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.unlink()
+    return archive
+
+
+# Refactor (iter6/issue-133):
+#   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
+def validate_dispatch_cwd(payload: dict, task_id: str) -> tuple[bool, str]:
+    cd_raw = payload.get("cd")
+    if not cd_raw:
+        return False, "missing-cd"
+    cd = Path(str(cd_raw))
+    if not cd.is_absolute():
+        return False, "relative-cd"
+
+    repo_root = REPO_ROOT.resolve()
+    worktrees_root = (REPO_ROOT / ".worktrees").resolve()
+    cd_resolved = cd.resolve()
+
+    try:
+        cd_resolved.relative_to(repo_root)
+    except ValueError:
+        return False, "outside-repo"
+
+    if task_id.startswith(MAIN_READONLY_DISPATCH_PREFIXES):
+        return True, "main-readonly-prefix"
+
+    # Unknown prefixes are treated as mutable by default: fail closed unless
+    # the queued dispatch runs inside this repo's isolated worktrees root.
+    if cd_resolved == repo_root:
+        return False, "repo-root-cd"
+    try:
+        cd_resolved.relative_to(worktrees_root)
+    except ValueError:
+        return False, "outside-worktrees"
+    if cd_resolved == worktrees_root:
+        return False, "worktrees-root-cd"
+    return True, "worktrees-cd"
+
+
+# Refactor (iter6/issue-133):
+#   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
+def archive_rejected(path: Path, payload: dict, task_id: str, priority: str, reason: str) -> Path:
+    DISPATCH_REJECTED.mkdir(parents=True, exist_ok=True)
+    payload["rejected_at"] = utc_ts()
+    payload["reject_reason"] = reason
+    payload["priority"] = priority
+    payload["source_dispatch_file"] = str(path)
+    archive = DISPATCH_REJECTED / f"{task_id}.json"
+    if archive.exists():
+        stamp = payload["rejected_at"].replace(":", "").replace("-", "")
+        archive = DISPATCH_REJECTED / f"{task_id}-{stamp}.json"
     archive.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     path.unlink()
     return archive
@@ -478,24 +528,29 @@ def launch_dispatch(payload: dict) -> None:
     )
 
 
-# Refactor (iter4/concurrency-auto-topup):
-#   Old pattern: controller-only dispatch; monitor could report deficits but did not consume queued work.
-#   New principle: monitor may fire one queued dispatch from the narrow dispatch-queue allowlist and archive it.
+# Refactor (iter6/issue-133):
+#   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
 def dispatch_one_from_queue() -> tuple[str, str, str] | None:
-    next_file = next_dispatch_file()
-    if next_file is None:
-        return None
-    priority, path = next_file
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
-    reason = str(payload.get("reason", ""))
-    payload["task_id"] = task_id
-    payload["priority"] = priority
-    launch_dispatch(payload)
-    archive_dispatched(path, payload, task_id)
-    write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
-    log(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
-    return task_id, priority, reason
+    for priority, path in dispatch_queue_files():
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
+        reason = str(payload.get("reason", ""))
+        payload["task_id"] = task_id
+        payload["priority"] = priority
+        ok, reject_reason = validate_dispatch_cwd(payload, task_id)
+        if not ok:
+            archive_rejected(path, payload, task_id, priority, reject_reason)
+            event = f"DISPATCH_REJECTED:{task_id}:{priority}:main-worktree-cd:{reject_reason}"
+            write_pending_event(event)
+            log(event)
+            continue
+        launch_dispatch(payload)
+        archive_dispatched(path, payload, task_id)
+        write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
+        log(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
+        return task_id, priority, reason
+    return None
 
 
 # Refactor (iter4/concurrency-auto-topup):

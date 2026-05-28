@@ -57,7 +57,6 @@ FORBIDDEN_SURFACE_PATTERNS = (
 
 CHECKED_SURFACE_FILES = (
     SKILL_RELATIVE / "SKILL.md",
-    SKILL_RELATIVE / "REFERENCE.md",
     SKILL_RELATIVE / "host.env.example",
     SCRIPT_RELATIVE / "auto_release_gate.py",
     SCRIPT_RELATIVE / "concurrency_monitor.py",
@@ -99,7 +98,7 @@ REQUIRED_SKILL_MARKERS = (
     "auto-" + "fix API",
 )
 
-REQUIRED_REFERENCE_MARKERS = (
+REQUIRED_DETAILED_REFERENCE_MARKERS = (
     "skill degradation watch(per #66)",
     JUDGE_ARTIFACT,
     ALERT_LOG,
@@ -229,8 +228,8 @@ class SkillDriftChecker:
 
     def reference_contract_present(self) -> list[Finding]:
         return self.require_markers(
-            SKILL_RELATIVE / "REFERENCE.md",
-            REQUIRED_REFERENCE_MARKERS,
+            SKILL_RELATIVE / "SKILL.md",
+            REQUIRED_DETAILED_REFERENCE_MARKERS,
             "reference-contract",
         )
 

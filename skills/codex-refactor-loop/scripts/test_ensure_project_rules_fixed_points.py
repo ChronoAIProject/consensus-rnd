@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tokenize
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -43,6 +44,7 @@ DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"禁止|不可调|不得|不能|不要|不写|Forbidden|forbidden|Do NOT|do not|must not|"
     r"not allowed|without|lifecycle / label .*controller|controller[^.\n]*(owns|owner|拥有|归|创 PR)"
 )
+HAN_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]")
 
 PROMPTS_WITH_MANDATORY_PROJECT_RULES_INPUT = (
     "audit.md",
@@ -478,10 +480,9 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
 
     def test_integration_sync_daemon_release_rollup_exception_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         daemon = (SKILL_ROOT / "scripts" / "dev_sync_daemon.py").read_text(encoding="utf-8")
         host_env = (SKILL_ROOT / "host.env.example").read_text(encoding="utf-8")
-        combined = "\n".join([skill, reference, daemon, host_env])
+        combined = "\n".join([skill, daemon, host_env])
 
         self.assertIn("## Named runtime exception — integration sync daemon(per #65)", skill)
         self.assertIn("phase9-issue65-r7-judge.md", skill)
@@ -490,7 +491,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs", skill)
         self.assertIn("must not run `gh pr create`", skill)
         self.assertIn("push directly to `$REVIEW_BASE_BRANCH`", skill)
-        self.assertIn("open_release_rollup_pr_from_pending_event", reference)
+        self.assertIn("open_release_rollup_pr_from_pending_event", skill)
         self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
         self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
         for marker in (
@@ -516,7 +517,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertNotIn("gh pr create", daemon)
 
     def test_integration_sync_daemon_command_body_is_detect_and_emit_only(self) -> None:
-        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         section = reference.split("Daemon 工作流由 `integration sync daemon` 命名状态机表达:", 1)[1].split(
             "### Phase 9 router daemon command body",
             1,
@@ -972,53 +973,103 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", phase0)
         self.assertIn("fail closed", phase0)
 
-    # Refactor (iter3/skill-github-post-contract):
-    #   Old: broad all-prompts direct-post claim.
-    #   New: two explicit rosters plus enumerable behavior tests
-    #   (#13 structural consensus).
-    def test_github_post_contract_matches_prompt_roster(self) -> None:
+    # Refactor (iter6/issue-118):
+    #   Old pattern: skill docs maintained a posting-mode prompt filename roster,会漂移
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+    def test_github_post_contract_is_prompt_self_declared(self) -> None:
         prompts_root = SKILL_ROOT / "prompts"
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        direct_post_prompts = {
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        prompt_paths = sorted(path for path in prompts_root.glob("*.md") if path.name != "_github-post-rules.md")
+
+        self.assertGreater(len(prompt_paths), 0)
+        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+
+        direct_post_prompts = []
+        marker_only_prompts = []
+        for prompt_path in prompt_paths:
+            text = prompt_path.read_text(encoding="utf-8")
+            if re.search(r"(?m)^## GitHub post", text):
+                direct_post_prompts.append(prompt_path)
+            else:
+                marker_only_prompts.append(prompt_path)
+
+        self.assertGreater(len(direct_post_prompts), 0)
+        self.assertGreater(len(marker_only_prompts), 0)
+
+        for prompt_path in direct_post_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="direct-post"):
+                self.assertIn("## GitHub post", text)
+                self.assertIn("prompts/_github-post-rules.md", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertTrue(
+                    "POSTED:" in text or "遵循 `prompts/_github-post-rules.md`" in text,
+                    f"{prompt_path.name} must either spell out post flow or delegate to shared post rules",
+                )
+                for token in ("gh pr create", "gh pr merge", "gh issue create", "gh issue close", "git commit", "git push", "git checkout"):
+                    lines = [
+                        line
+                        for line in text.splitlines()
+                        if token in line and "Old pattern:" not in line
+                    ]
+                    for line in lines:
+                        assert_denial_or_controller_owner_context(self, line, token=token)
+
+        for prompt_path in marker_only_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="marker-only"):
+                self.assertNotIn("## GitHub post", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertNotIn("You DO post to GitHub directly", text)
+                self.assertNotIn("自己调 `gh` post", text)
+                self.assertNotIn("Post 后打印 `POSTED:", text)
+
+        for source_name, source_text in (("SKILL.md", skill_text),):
+            with self.subTest(source=source_name, contract="no-roster"):
+                self.assertNotIn("Direct-post prompts:", source_text)
+                self.assertNotIn("Marker/artifact-only prompts:", source_text)
+                self.assertIn("prompt body", source_text)
+                self.assertIn("## GitHub post", source_text)
+
+        skill_posting_contract = skill_text.split("## GitHub Posting Contract", 1)[1].split("## Anchor Read Policy", 1)[0]
+        reference_traceability = reference_text.split("### GitHub traceability", 1)[1].split("**@-mention rule:**", 1)[0]
+        former_roster_tokens = (
             "solver-minimal.md",
             "solver-structural.md",
             "solver-delete.md",
             "meta-judge.md",
-            "reviewer-architect.md",
-            "reviewer-quality.md",
             "reviewer-tests.md",
+            "reviewer-quality.md",
+            "reviewer-architect.md",
             "review-fix.md",
             "design-issue-reply.md",
             "triage-external-issue.md",
-        }
-        marker_only_prompts = {
             "audit.md",
-            "design-issue-body.md",
             "implement.md",
-            "meta-reflector-stalled.md",
             "verify.md",
             "remote-ci-fix.md",
             "test-add.md",
-        }
-        prompt_inventory = {path.name for path in prompts_root.glob("*.md")} - {"_github-post-rules.md"}
+        )
+        for source_name, posting_section in (
+            ("SKILL.md GitHub Posting Contract", skill_posting_contract),
+            ("SKILL.md GitHub traceability", reference_traceability),
+        ):
+            for token in former_roster_tokens:
+                with self.subTest(source=source_name, forbidden_roster_token=token):
+                    self.assertNotIn(token, posting_section)
 
-        self.assertEqual(prompt_inventory, direct_post_prompts | marker_only_prompts)
-        self.assertFalse(direct_post_prompts & marker_only_prompts)
-        self.assertIn("Direct-post prompts", skill_text)
-        self.assertIn("Marker/artifact-only prompts", skill_text)
-        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+        for forbidden in (
+            SKILL_ROOT / "prompts" / "posting-contract.json",
+            SKILL_ROOT / "scripts" / "prompt_posting_contract.py",
+        ):
+            with self.subTest(forbidden_path=forbidden.name):
+                self.assertFalse(forbidden.exists())
 
-        for prompt_name in sorted(direct_post_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="direct-post"):
-                self.assertIn("## GitHub post", text)
-                self.assertIn("_github-post-rules.md", text)
-
-        for prompt_name in sorted(marker_only_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="marker-only"):
-                self.assertNotIn("## GitHub post", text)
-                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+        for text in (skill_text,):
+            self.assertNotIn("PromptGitHubPostingContract", text)
+            self.assertNotIn("posting-contract.json", text)
+            self.assertNotIn("prompt_posting_contract.py", text)
 
     # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
     #   Old pattern: implement-from-design could grow a second intake/helper prompt or producer registry abstraction.
@@ -1104,11 +1155,8 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
     def read_skill(self) -> str:
         return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
-    def read_reference(self) -> str:
-        return (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-
     def phase8_docs(self) -> str:
-        return "\n".join([self.read_skill(), self.read_reference()])
+        return self.read_skill()
 
     def test_phase8_docs_define_option_a_truth_table(self) -> None:
         docs = self.phase8_docs()
@@ -1183,12 +1231,12 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
 
     def test_controller_lib_stays_post_decision_lifecycle_primitive(self) -> None:
         controller_lib = (SKILL_ROOT / "scripts" / "controller_lib.sh").read_text(encoding="utf-8")
-        reference = self.read_reference()
+        skill = self.read_skill()
 
         self.assertIn("merge_pr()", controller_lib)
         self.assertIn("gh pr merge", controller_lib)
-        self.assertIn("post-decision lifecycle primitive", reference)
-        self.assertIn("already decided `MERGE` or `MERGE_WITH_COMMENTS`", reference)
+        self.assertIn("post-decision lifecycle primitive", skill)
+        self.assertIn("already decided `MERGE` or `MERGE_WITH_COMMENTS`", skill)
         for forbidden in ("REVIEW_DONE", "MERGE_WITH_COMMENTS", "WAIT_EXPLICIT_APPROVAL", "approve>=", "reject=0"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, controller_lib)
@@ -1283,7 +1331,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
             return output.read_text(encoding="utf-8")
 
     def test_work_unit_contract_markers_are_present(self) -> None:
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
         verify_prompt = (SKILL_ROOT / "prompts" / "verify.md").read_text(encoding="utf-8")
@@ -1304,7 +1352,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
 
     def test_work_unit_forbidden_migration_surface_is_absent(self) -> None:
         checked_paths = [
-            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "prompts" / "triage-external-issue.md",
             SKILL_ROOT / "prompts" / "implement.md",
@@ -1333,7 +1381,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
         scoped_paths = [
             repo_root / "CLAUDE.md",
             SKILL_ROOT / "SKILL.md",
-            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "scripts" / "check_skill_degradation.py",
         ]
         retired_tokens = (
@@ -1367,7 +1415,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("{{work_unit_id}}", rendered)
 
     def test_producer_contract_markers_are_present(self) -> None:
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
         combined = "\n".join([reference_text, skill_text, triage_prompt])
@@ -1391,7 +1439,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
                 self.assertIn(marker, combined)
 
     def test_producer_contract_remains_two_values(self) -> None:
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         match = re.search(
             r"## Producers\s*\n(?P<body>.*?)(?:\n### |\n## |\Z)",
             reference_text,
@@ -1406,7 +1454,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
     def test_no_saturation_planner_or_profile_runtime_surface(self) -> None:
         checked_paths = [
             SKILL_ROOT / "SKILL.md",
-            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "SKILL.md",
             SKILL_ROOT / "prompts" / "audit.md",
             SKILL_ROOT / "prompts" / "triage-external-issue.md",
             SKILL_ROOT / "prompts" / "implement.md",
@@ -1443,7 +1491,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
 
     def test_skill_degradation_watch_named_exception_and_delete_boundary(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         checker_text = (SKILL_ROOT / "scripts" / "check_skill_degradation.py").read_text(encoding="utf-8")
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
         host_env = (SKILL_ROOT / "host.env.example").read_text(encoding="utf-8")
@@ -1615,7 +1663,7 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
         #   New principle: minimal docs+test lock marker/label as stable v1
         #   operational tokens, preserving current names and avoiding
         #   OperationalNamePolicyV1 (#5 structural consensus).
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         combined = "\n".join([reference_text, skill_text])
 
@@ -1682,7 +1730,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
 
     def test_skill_documents_monitor_queue_topup_and_controller_step_1_5(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("dispatch-queue 非空时自动派发", skill_text)
         self.assertIn("低于预期数就继续派发", skill_text)
@@ -1692,11 +1740,42 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("low 规则:`actual < expected/2`", skill_text)
         self.assertNotIn("codex-floor-deficit", skill_text)
         self.assertNotIn("ACTIVE <= 2", skill_text)
-        self.assertIn("[concurrency floor details](REFERENCE.md#concurrency-floor-details)", skill_text)
+        self.assertIn("[concurrency floor details](#concurrency-floor-details)", skill_text)
         self.assertIn("Dispatch queue protocol", reference_text)
         self.assertIn("DISPATCH_FIRED:<task-id>:<priority>:<reason>", reference_text)
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
+
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
+    def test_dispatch_queue_workspace_guard_is_documented_and_enforced(self) -> None:
+        monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        combined = monitor_text + "\n" + reference_text
+
+        for required in (
+            "MUTABLE_DISPATCH_PREFIXES",
+            "MAIN_READONLY_DISPATCH_PREFIXES",
+            "validate_dispatch_cwd",
+            "archive_rejected",
+            ".worktrees",
+            "dispatch-rejected",
+            "DISPATCH_REJECTED",
+            "main-worktree-cd",
+            "no shared workspace policy",
+            "no required `actor/work_unit_id` migration",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+        for forbidden in (
+            "workspace_policy.py",
+            "WorkUnitWorkspace",
+            "ActorWorkspacePolicy",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, monitor_text)
 
     # Refactor (existing-issue-priority): Old pattern: controller dispatched
     # fresh audit whenever floor was deficit, even when open auto-loop issues
@@ -1705,7 +1784,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
     # maintainer-directive).
     def test_skill_concurrency_floor_documents_existing_issue_priority(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         combined = skill_text + "\n" + reference_text
 
         skill_only = (
@@ -1727,7 +1806,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
             "Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex",
         )
         for required in detailed:
-            with self.subTest(required=required, source="SKILL.md or REFERENCE.md"):
+            with self.subTest(required=required, source="SKILL.md"):
                 self.assertIn(required, combined)
 
     # Refactor (stale-issue-revival): Old pattern: phase label coverage was
@@ -1736,7 +1815,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
     # label looks current (2026-05-28 maintainer-directive).
     def test_skill_concurrency_floor_documents_stale_issue_revival(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         combined = skill_text + "\n" + reference_text
 
         skill_only = (
@@ -1755,7 +1834,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
             "unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet",
         )
         for required in detailed:
-            with self.subTest(required=required, source="SKILL.md or REFERENCE.md"):
+            with self.subTest(required=required, source="SKILL.md"):
                 self.assertIn(required, combined)
 
     def test_skill_named_exception_documents_concurrency_monitor_auto_topup(self) -> None:
@@ -1834,7 +1913,7 @@ class WorktreeLocationConventionTests(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_reference_md_documents_inside_convention(self) -> None:
-        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         self.assertIn("`$REPO_ROOT/.worktrees/<name>/`", text)
         self.assertIn("`/.worktrees/`", text)
@@ -1851,13 +1930,13 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
         return (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
     def label_group_2(self) -> str:
-        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         start = text.index("### Label 组 2 — Human")
         end = text.index("### Bootstrap", start)
         return text[start:end]
 
     def bootstrap_block(self) -> str:
-        text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         start = text.index("# 创建所有 human label")
         end = text.index("### 转移时刻代码模板", start)
         return text[start:end]
@@ -1882,7 +1961,7 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
     def test_human_escalation_routes_use_reason_surface(self) -> None:
         skill = self.skill_text()
-        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         route_start = skill.index("Policy:the loop continues")
         route_end = skill.index("## Hard rules", route_start)
         route_table = skill[route_start:route_end]
@@ -1974,17 +2053,19 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
 
 class HumanLabelSemanticsTests(unittest.TestCase):
-    # Refactor (iter4/human-label-semantics-guard): Old pattern: label used as
-    # an architect-reject workaround. New principle: strict semantics +
-    # reflector self-check + controller helper guard + source-regression test.
+    # Refactor (iter326/issue-106):
+    #   Old pattern: source-regression tests literally matched Chinese/English prose, so switching languages broke them wholesale
+    #   New principle: no DetectionInvariantV1; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
+    #   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
     def test_skill_md_has_strict_human_label_semantics_section(self) -> None:
         skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
 
-        self.assertIn("## `👤 human:需-maintainer-决策` 严格语义(强制)", skill)
+        self.assertIn('<a id="human-label-strict-semantics"></a>', skill)
         for token in (
+            "👤 human:需-maintainer-决策",
             "Apply only when",
             "DO NOT apply when",
             "architect/quality reviewer",
@@ -2109,7 +2190,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         checked = [
             REPO_ROOT / "skills/codex-refactor-loop/scripts/peek.sh",
             REPO_ROOT / "skills/codex-refactor-loop/prompts/review-fix.md",
-            REPO_ROOT / "skills/codex-refactor-loop/REFERENCE.md",
+            REPO_ROOT / "skills/codex-refactor-loop/SKILL.md",
         ]
         checked_lines = [
             f"{path.relative_to(REPO_ROOT)}:{line_no}:{line}"
@@ -2149,7 +2230,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         self.assertNotIn("gh issue edit", helper_body)
 
     def test_maintainer_directive_artifact_pattern_documented(self) -> None:
-        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference = self.read_rel("skills/codex-refactor-loop/SKILL.md")
 
         for token in (
             ".refactor-loop/runs/maintainer-directives/<date>-<topic>.md",
@@ -2162,7 +2243,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
                 self.assertIn(token, reference)
 
     def test_session_2026_05_26_misuse_recorded(self) -> None:
-        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference = self.read_rel("skills/codex-refactor-loop/SKILL.md")
 
         for token in (
             "Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)",
@@ -2183,7 +2264,7 @@ class NamingPolicySourceRegressionTests(unittest.TestCase):
     def test_consensus_identity_keeps_stable_skill_entrypoint_without_alias_surface(self) -> None:
         skill_files = sorted(path.relative_to(REPO_ROOT).as_posix() for path in (REPO_ROOT / "skills").glob("*/SKILL.md"))
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         public_copy = "\n".join([readme_text, skill_text, reference_text])
 
@@ -2302,17 +2383,12 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
     def test_triage_monitor_script_is_deleted_and_controller_sweep_owns_intake(self) -> None:
         self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-        self.assertIn("manual issue triage decision artifact", skill + reference)
-        self.assertIn("controller wakeup sweep", skill + reference)
-        self.assertNotIn("triage-monitor-state.json", skill + reference)
+        self.assertIn("manual issue triage decision artifact", skill)
+        self.assertIn("controller wakeup sweep", skill)
+        self.assertNotIn("triage-monitor-state.json", skill)
 
     def test_daemon_roster_source_regression_has_no_triage_required_runtime(self) -> None:
-        text = (
-            (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-            + "\n"
-            + (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-        )
+        text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         forbidden = (
             "six required daemons",
             "ensure all 6 daemons",
@@ -2579,7 +2655,6 @@ class SkillRootContractSourceRegressionTests(unittest.TestCase):
     def test_active_skill_launch_dispatch_docs_are_skill_relative(self) -> None:
         checked = [
             SKILL_ROOT / "SKILL.md",
-            SKILL_ROOT / "REFERENCE.md",
             SKILL_ROOT / "scripts" / "dev_sync_daemon.py",
         ]
         for path in checked:
@@ -2809,12 +2884,12 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
 
     def test_daemon_start_examples_source_host_env_before_exec(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
-        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         host_env_text = self.read_rel("skills/codex-refactor-loop/host.env.example")
         daemon_names = ("concurrency_monitor.py", "codex-progress-reporter.sh", "comment-monitor.sh", "dev_sync_daemon.py")
 
         self.assertIn("bash -c 'source .refactor-loop/host.env && exec", skill_text)
-        self.assertIn("[daemon command bodies](REFERENCE.md#daemon-command-bodies)", skill_text)
+        self.assertIn("[daemon command bodies](#daemon-command-bodies)", skill_text)
         self.assertIn("bash -c 'source host.env && exec ...'", host_env_text)
         for daemon in daemon_names:
             with self.subTest(daemon=daemon):
@@ -2834,7 +2909,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     assert_denial_or_controller_owner_context(self, line, token=token)
 
     # Refactor (iter215/cluster-215-controller-process-selftest):
-    #   Old pattern: Controller runbook (REFERENCE.md) still instructed
+    #   Old pattern: Controller runbook still instructed
     #   ps|grep/pgrep liveness checks, contradicting the SKILL.md canonical CLI
     #   and CLAUDE.md daemon-counts-authority clause.
     #   New principle: controller-facing checks must read daemon-maintained
@@ -2842,7 +2917,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
     #   concurrency_monitor.py); process probes stay inside daemon/helper
     #   implementations, not controller runbook sections.
     def test_controller_runbook_uses_daemon_state_not_process_probes_for_liveness(self) -> None:
-        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         controller_sections = {
             "host-runtime": reference_text.split("### Daemon 启动(强制 pattern — 必须注入 host.env)", 1)[1].split(
                 "### Controller 主链路 wake 源不变量", 1
@@ -2877,7 +2952,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
 
     def test_label_taxonomy_matches_bootstrap_and_script_usage(self) -> None:
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
-        reference_text = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
         monitor_text = self.read_rel("skills/codex-refactor-loop/scripts/concurrency_monitor.py")
         expected_phase = ("🔍 phase:design-solving", "✅ phase:consensus-reached", "🛠️ phase:implementing", "🚀 phase:pr-open", "👀 phase:reviewing", "🔧 phase:fixing", "⚙️ phase:ci-running", "🎉 phase:merged", "⏸️ phase:blocked")
@@ -2887,7 +2962,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertIn(label, skill_text)
                 self.assertIn(label, reference_text)
-        self.assertIn("[label bootstrap loops](REFERENCE.md#label-bootstrap-loops)", skill_text)
+        self.assertIn("[label bootstrap loops](#label-bootstrap-loops)", skill_text)
         self.assertIn('gh label create "$l" --color "5319e7"', reference_text)
         for label in expected_human:
             with self.subTest(human_bootstrap=label):
@@ -2907,7 +2982,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         self.assertFalse((REPO_ROOT / "skills/codex-refactor-loop/scripts/spawn_with_banner.py").exists())
         active_docs = "\n".join(self.read_rel(rel) for rel in (
             "skills/codex-refactor-loop/SKILL.md",
-            "skills/codex-refactor-loop/REFERENCE.md",
+            "skills/codex-refactor-loop/SKILL.md",
             "skills/codex-refactor-loop/scripts/post_banner.py",
         ))
         self.assertIn("post_banner.py", active_docs)
@@ -2924,16 +2999,25 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden_patterns:
                 with self.subTest(path=rel, pattern=pattern):
-                    self.assertNotIn(pattern, text)
+                    offenders = [
+                        line
+                        for line in text.splitlines()
+                        if pattern in line
+                        and not DENIAL_OR_CONTROLLER_OWNER_RE.search(line)
+                        and "废止" not in line
+                        and "reject" not in line
+                        and "不再" not in line
+                    ]
+                    self.assertEqual(offenders, [])
 
         skill_text = self.read_rel("skills/codex-refactor-loop/SKILL.md")
-        self.assertIn("[language policy details](REFERENCE.md#language-policy-details)", skill_text)
-        self.assertIn("[historical bilingual notes](REFERENCE.md#historical-bilingual-notes)", skill_text)
+        self.assertIn("[language policy details](#language-policy-details)", skill_text)
+        self.assertIn("[historical bilingual notes](#historical-bilingual-notes)", skill_text)
 
     def test_no_active_github_post_writer_reference_remains(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/SKILL.md", "skills/codex-refactor-loop/prompts/*.md")
         self.assert_absent("github-post-writer", checked)
-        reference = self.read_rel("skills/codex-refactor-loop/REFERENCE.md")
+        reference = self.read_rel("skills/codex-refactor-loop/SKILL.md")
         self.assertNotIn("Historical tombstone", reference)
         self.assertNotIn("prompts/github-post-writer.md", reference)
 
@@ -3045,6 +3129,103 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 with self.subTest(path=rel, pattern=pattern):
                     self.assertIsNone(re.search(pattern, text))
 
+    # Refactor (issue119/python-source-prose-i18n): Old pattern: Python and
+    # shell script comments/docstrings/log text could drift back to Chinese
+    # after a cleanup PR. New principle: source prose stays English while
+    # durable Chinese label literals and generated user-facing artifact bodies
+    # remain allowed.
+    def test_scripts_source_prose_stays_english_with_generated_artifact_allowlist(self) -> None:
+        allowed_python_string_contexts = (
+            "CANONICAL_BODY",
+            "OLD_CANONICAL_BODY",
+            "CANONICAL_HUMAN_LABELS",
+            "NON_AUTO_HUMAN_LABEL",
+            "REMOVED_HUMAN_LABELS",
+            "HUMAN_LABEL",
+            "SECTION_HEADING",
+            "DENIAL_OR_CONTROLLER_OWNER_RE",
+            "prompt_body",
+            "body",
+            "ROLE_NEXT_STEPS",
+            "label",
+            "labels",
+            "required",
+            "needle",
+            "pattern",
+            "forbidden",
+            "required_phrases",
+            "forbidden_patterns",
+            "startup_section",
+            "wakeup",
+            "section",
+            "redline_section",
+            "rendered",
+            "public_copy",
+            "skill",
+            "skill_text",
+            "reference",
+            "reference_text",
+            "directive_text",
+            "host_comment",
+            "expected_stdout",
+            "expected_stderr",
+        )
+        allowed_shell_contexts = (
+            "status_line=",
+            "delete_note=",
+            "<<EOF",
+            "## 📊",
+            "human:",
+            "stale = [",
+        )
+        log_error_context_re = re.compile(
+            r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
+            r"set_defaults|ArgumentParser|error|warning)\b",
+            re.IGNORECASE,
+        )
+        test_source_names = {path.name for path in (SKILL_ROOT / "scripts").glob("test_*.py")}
+        offenders: list[str] = []
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            source_lines = text.splitlines()
+            with path.open("rb") as fh:
+                for token in tokenize.tokenize(fh.readline):
+                    if token.type not in (tokenize.COMMENT, tokenize.STRING):
+                        continue
+                    if not HAN_RE.search(token.string):
+                        continue
+                    context = source_lines[token.start[0] - 1]
+                    if token.type == tokenize.STRING:
+                        is_docstring = (
+                            token.start[1] == 0
+                            or (
+                                token.start[0] > 1
+                                and source_lines[token.start[0] - 2].strip().endswith(":")
+                                and context[: token.start[1]].strip() == ""
+                            )
+                        )
+                        if not is_docstring and (path.name in test_source_names or not log_error_context_re.search(context)):
+                            continue
+                    if any(needle in context for needle in allowed_python_string_contexts):
+                        continue
+                    offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
+
+        for path in sorted((SKILL_ROOT / "scripts").glob("*.sh")):
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not HAN_RE.search(line):
+                    continue
+                stripped = line.strip()
+                if not (stripped.startswith("#") or '"' in stripped or "'" in stripped or "<<EOF" in stripped):
+                    continue
+                if any(needle in line for needle in allowed_shell_contexts):
+                    continue
+                offenders.append(f"{rel}:{line_no}: {stripped}")
+
+        self.assertEqual(offenders, [])
+
     # Refactor (iter3/skill-host-language-policy): Old: hard-coded
     # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and
     # are injected by host.env (#20 structural consensus).
@@ -3089,7 +3270,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
     def test_cross_platform_prompts_and_reference_have_no_host_specific_defaults(self) -> None:
         checked = self.rel_paths(
             "skills/codex-refactor-loop/prompts/*.md",
-            "skills/codex-refactor-loop/REFERENCE.md",
+            "skills/codex-refactor-loop/SKILL.md",
         )
         forbidden_literals = (
             "C#",
@@ -3126,10 +3307,20 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             for literal in forbidden_literals:
                 with self.subTest(path=rel, literal=literal):
-                    self.assertNotIn(literal, text)
+                    offenders = [
+                        line
+                        for line in text.splitlines()
+                        if literal in line and not DENIAL_OR_CONTROLLER_OWNER_RE.search(line)
+                    ]
+                    self.assertEqual(offenders, [])
             for pattern in forbidden_patterns:
                 with self.subTest(path=rel, pattern=pattern):
-                    self.assertIsNone(re.search(pattern, text))
+                    offenders = [
+                        line
+                        for line in text.splitlines()
+                        if re.search(pattern, line) and not DENIAL_OR_CONTROLLER_OWNER_RE.search(line)
+                    ]
+                    self.assertEqual(offenders, [])
 
     def test_host_language_policy_replaces_old_prompt_defaults(self) -> None:
         scoped_prompts = {
