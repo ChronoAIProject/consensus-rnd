@@ -7,7 +7,7 @@
 # forbidden runtime/surface set explicit.
 """Static degradation checks for the codex-refactor-loop skill.
 
-SkillDegradationWatchV1 is intentionally a single read-only checker. It has no
+The skill degradation watch is intentionally a single read-only checker. It has no
 daemon lifecycle, no source mutation path, no GitHub lifecycle authority, and no
 worker dispatch API. Runtime monitoring is owned by concurrency_monitor.py,
 which may call this file and report failures as local alerts only.
@@ -83,7 +83,7 @@ DOC_FORBIDDEN_CONTEXT = (
 )
 
 REQUIRED_SKILL_MARKERS = (
-    "## Named runtime exception — SkillDegradationWatchV1(per #66)",
+    "## Named runtime exception — skill degradation watch(per #66)",
     JUDGE_ARTIFACT,
     "run `check_skill_degradation.py`",
     "write `.refactor-loop/.degradation-alert.log`",
@@ -100,7 +100,7 @@ REQUIRED_SKILL_MARKERS = (
 )
 
 REQUIRED_REFERENCE_MARKERS = (
-    "SkillDegradationWatchV1(per #66)",
+    "skill degradation watch(per #66)",
     JUDGE_ARTIFACT,
     ALERT_LOG,
     PENDING_EVENTS,

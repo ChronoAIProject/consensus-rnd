@@ -133,7 +133,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_heavy_reference_material_is_not_in_entrypoint(self) -> None:
         reference_only_anchors = (
-            "workunitv1-contract",
+            "work-unit-contract",
             "batching-heuristics",
             "recovery-playbook",
             "label-bootstrap-loops",
@@ -161,7 +161,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
-        self.assertIn("do not introduce WorkUnitV2, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
+        self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
 
 if __name__ == "__main__":

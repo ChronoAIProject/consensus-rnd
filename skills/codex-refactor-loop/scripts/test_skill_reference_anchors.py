@@ -53,7 +53,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "controller-contract-details",
             "host-runtime-details",
             "status-and-escalation-templates",
-            "workunitv1-contract",
+            "work-unit-contract",
             "state-schema",
             "batching-heuristics",
             "recovery-playbook",

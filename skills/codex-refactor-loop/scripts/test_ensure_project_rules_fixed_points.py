@@ -474,14 +474,14 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("sync-helper", result.stdout)
         self.assertIn(".refactor-loop/runs/integration-sync-request-x.json", result.stdout)
 
-    def test_integration_sync_daemon_v1_release_rollup_exception_contract(self) -> None:
+    def test_integration_sync_daemon_release_rollup_exception_contract(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         daemon = (SKILL_ROOT / "scripts" / "dev_sync_daemon.py").read_text(encoding="utf-8")
         host_env = (SKILL_ROOT / "host.env.example").read_text(encoding="utf-8")
         combined = "\n".join([skill, reference, daemon, host_env])
 
-        self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1(per #65)", skill)
+        self.assertIn("## Named runtime exception — integration sync daemon(per #65)", skill)
         self.assertIn("phase9-issue65-r7-judge.md", skill)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed", combined)
         self.assertIn("release-rollup detection and existing-format pending-event emission only", skill)
@@ -491,10 +491,15 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         self.assertIn("open_release_rollup_pr_from_pending_event", reference)
         self.assertIn("RELEASE_ROLLUP_MIN_COMMITS", host_env)
         self.assertIn("RELEASE_ROLLUP_COOLDOWN_SECONDS", host_env)
-        for marker in ("## Named runtime exception — IntegrationSyncDaemonV1(per #53)", "phase9-issue53-r7-judge.md", "detect-and-emit", "IntegrationSyncRequestV1"):
+        for marker in (
+            "## Named runtime exception — integration sync daemon(per #53)",
+            "phase9-issue53-r7-judge.md",
+            "detect-and-emit",
+            "integration sync request artifacts",
+        ):
             self.assertIn(marker, skill)
         issue53_section = re.search(
-            r"## Named runtime exception — IntegrationSyncDaemonV1\(per #53\)(.*?)\n## Named runtime exception — observability-comment-writers",
+            r"## Named runtime exception — integration sync daemon\(per #53\)(.*?)\n## Named runtime exception — observability-comment-writers",
             skill,
             re.S,
         )
@@ -510,7 +515,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
 
     def test_integration_sync_daemon_command_body_is_detect_and_emit_only(self) -> None:
         reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-        section = reference.split("Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:", 1)[1].split(
+        section = reference.split("Daemon 工作流由 `integration sync daemon` 命名状态机表达:", 1)[1].split(
             "### Phase 9 router daemon command body",
             1,
         )[0]
@@ -520,7 +525,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
             "`ADOPT_MERGED_ROLLUP`",
             "`RESET_TO_REMOTE`",
             "`FORWARD_SYNC`",
-            "`IntegrationSyncRequestV1`",
+            "integration sync request artifact",
             "`DEV_SYNC_REQUEST:<path>`",
             "controller helper",
         ):
@@ -549,7 +554,7 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
             with self.subTest(path=path.name):
                 self.assertIn("no lifecycle authority by default", text)
                 self.assertIn("#53 唯一 carveout", text)
-                self.assertIn("IntegrationSyncDaemonV1", text)
+                self.assertIn("integration sync daemon", text)
                 self.assertIn("Implement/fix worker 仍不得 commit、push、open PR", text)
 
         for forbidden in (
@@ -1172,7 +1177,7 @@ class Phase8MergePolicySourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(forbidden, controller_lib)
 
 
-class WorkUnitV1SourceRegressionTests(unittest.TestCase):
+class WorkUnitSourceRegressionTests(unittest.TestCase):
     # Refactor (iter2/cluster-007-work-unit-contract-schema):
     #   Old pattern: work-unit state contract existed only as prose, so migration/envelope terms could re-enter the skill unnoticed
     #   New principle: source-regression coverage keeps WorkUnitV1 v1 containers authoritative and blocks premature work_units_* migration surface
@@ -1260,7 +1265,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             return output.read_text(encoding="utf-8")
 
-    def test_work_unit_v1_contract_markers_are_present(self) -> None:
+    def test_work_unit_contract_markers_are_present(self) -> None:
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         implement_prompt = (SKILL_ROOT / "prompts" / "implement.md").read_text(encoding="utf-8")
@@ -1269,7 +1274,6 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         combined = "\n".join([reference_text, skill_text, implement_prompt, verify_prompt, controller_lib])
 
         required_markers = (
-            "WorkUnitV1",
             "work_unit_schema_version",
             "work_unit_id == id == cluster_id == legacy_cluster_id",
             "WORK_UNIT_ID=$CLUSTER_ID",
@@ -1282,7 +1286,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, combined)
 
-    def test_work_unit_v1_forbidden_migration_surface_is_absent(self) -> None:
+    def test_work_unit_forbidden_migration_surface_is_absent(self) -> None:
         checked_paths = [
             SKILL_ROOT / "REFERENCE.md",
             SKILL_ROOT / "SKILL.md",
@@ -1317,14 +1321,14 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         self.assertIn("primary=cluster-007", rendered)
         self.assertNotIn("{{work_unit_id}}", rendered)
 
-    def test_v1_producer_contract_markers_are_present(self) -> None:
+    def test_producer_contract_markers_are_present(self) -> None:
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
         combined = "\n".join([reference_text, skill_text, triage_prompt])
 
         required_markers = (
-            "Producers in v1",
+            "## Producers",
             "- `audit`",
             "- `manual-issue`",
             "kind: audit-cluster",
@@ -1341,14 +1345,14 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, combined)
 
-    def test_v1_producer_contract_remains_two_values(self) -> None:
+    def test_producer_contract_remains_two_values(self) -> None:
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         match = re.search(
-            r"## Producers in v1\s*\n(?P<body>.*?)(?:\n### |\n## |\Z)",
+            r"## Producers\s*\n(?P<body>.*?)(?:\n### |\n## |\Z)",
             reference_text,
             flags=re.DOTALL,
         )
-        self.assertIsNotNone(match, "Producers in v1 section missing")
+        self.assertIsNotNone(match, "Producers section missing")
         producers = re.findall(r"^- `([^`]+)`$", match.group("body"), flags=re.MULTILINE)
 
         self.assertEqual(producers, ["audit", "manual-issue"])
@@ -1392,7 +1396,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
                         if token in line:
                             self.assertRegex(line, r"\b(do not|must not)\b")
 
-    def test_skill_degradation_watch_v1_named_exception_and_delete_boundary(self) -> None:
+    def test_skill_degradation_watch_named_exception_and_delete_boundary(self) -> None:
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         checker_text = (SKILL_ROOT / "scripts" / "check_skill_degradation.py").read_text(encoding="utf-8")
@@ -1401,7 +1405,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         combined = "\n".join([skill_text, reference_text, checker_text, monitor_text, host_env])
 
         required_markers = (
-            "## Named runtime exception — SkillDegradationWatchV1(per #66)",
+            "## Named runtime exception — skill degradation watch(per #66)",
             ".refactor-loop/runs/phase9-issue66-r8-judge.md",
             "check_skill_degradation.py --static",
             ".refactor-loop/.degradation-alert.log",
@@ -1486,7 +1490,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
     def test_audit_prompt_remains_raw_artifact_contract(self) -> None:
         audit_prompt = (SKILL_ROOT / "prompts" / "audit.md").read_text(encoding="utf-8")
 
-        for marker in ("producer: audit", "WorkUnitV1", "manual-issue"):
+        for marker in ("producer: audit", "work-unit contract", "manual-issue"):
             with self.subTest(marker=marker):
                 self.assertNotIn(marker, audit_prompt)
 
@@ -1559,7 +1563,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             with self.subTest(marker=marker):
                 self.assertIn(marker, implement_prompt)
 
-    def test_v1_operational_tokens_are_stable_and_not_renamed(self) -> None:
+    def test_operational_tokens_are_stable_and_not_renamed(self) -> None:
         # Refactor (iter2/cluster-009-marker-label-compat-migration):
         #   Old pattern: marker/label 命名与 refactor 外壳耦合,无显式稳定契约
         #   New principle: minimal docs+test 固化 marker/label 为稳定 v1 operational tokens(保持现状,不重命名);不引入 OperationalNamePolicyV1(#5 structural 共识)
@@ -1568,7 +1572,7 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         combined = "\n".join([reference_text, skill_text])
 
         required_markers = (
-            "Stable v1 operational tokens",
+            "Stable operational tokens",
             "stable v1 operational names",
             "[refactor-design]",
             "refactor-design-needed",
@@ -2183,7 +2187,7 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
         self.assertFalse((SKILL_ROOT / "scripts" / "triage-monitor.sh").exists())
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
         reference = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
-        self.assertIn("ManualIssueTriageDecisionV1", skill + reference)
+        self.assertIn("manual issue triage decision artifact", skill + reference)
         self.assertIn("controller wakeup sweep", skill + reference)
         self.assertNotIn("triage-monitor-state.json", skill + reference)
 

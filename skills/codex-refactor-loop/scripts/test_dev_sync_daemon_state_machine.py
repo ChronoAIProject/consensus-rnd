@@ -217,18 +217,18 @@ class IntegrationSyncRequestSchemaTests(unittest.TestCase):
             validate_request_dict(data)
 
 
-class IntegrationSyncDaemonV1SourceRegressionTests(unittest.TestCase):
+class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
     def test_skill_phase6_names_detector_and_controller_apply_boundary(self) -> None:
         text = SKILL_MD.read_text(encoding="utf-8")
-        self.assertIn("## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary", text)
+        self.assertIn("## Named runtime exception — integration sync daemon phase-6 controller boundary", text)
         self.assertIn("daemon-owned detect-and-emit plus controller-owned git apply", text)
-        self.assertIn("IntegrationSyncRequestV1", text)
+        self.assertIn("integration sync request artifacts", text)
 
     def test_reference_has_no_active_controller_sync_procedure(self) -> None:
         text = REFERENCE_MD.read_text(encoding="utf-8")
         self.assertNotIn("### Sync procedure", text)
         self.assertNotIn("### Sync cadence", text)
-        self.assertIn("IntegrationSyncRequestV1", text)
+        self.assertIn("integration sync request artifact", text)
 
     def test_dev_sync_daemon_has_no_git_lifecycle_mutation_tokens(self) -> None:
         src = DEV_SYNC.read_text(encoding="utf-8")

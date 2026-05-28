@@ -70,7 +70,7 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             skill = repo / "skills/codex-refactor-loop/SKILL.md"
             skill.write_text(
                 skill.read_text(encoding="utf-8").replace(
-                    "## Named runtime exception — SkillDegradationWatchV1(per #66)",
+                    "## Named runtime exception — skill degradation watch(per #66)",
                     "## Removed heading",
                 ),
                 encoding="utf-8",
@@ -79,7 +79,7 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 
         self.assertTrue(any(f.check == "skill-named-exception" for f in findings))
-        self.assertTrue(any("SkillDegradationWatchV1" in f.message for f in findings))
+        self.assertTrue(any("skill degradation watch" in f.message for f in findings))
 
     def test_checker_detects_forbidden_runtime_file(self) -> None:
         with copy_minimal_repo() as tmp:
