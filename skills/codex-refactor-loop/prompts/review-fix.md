@@ -43,7 +43,7 @@ Categorize each demand into one of:
 For each fix:
 - Open the file fully (not just the hunk) to make a context-aware change.
 - Preserve refactor self-doc comment style: when fixing a refactored type/method, the `// Refactor (iterN/cluster-XXX):` block must remain (or be added if missing).
-- New test files: name `*Tests.cs`, single behavior per test, no `sleep/delay`, no `[Skip]`, no mock-only assertions.
+- New test files: follow existing host test naming conventions, single behavior per test, no `sleep/delay`, no `[Skip]`, no mock-only assertions.
 - New non-test code stays minimal and reuses existing patterns.
 
 ### Step 3 — Local verification

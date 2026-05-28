@@ -56,7 +56,7 @@ If a solver emits `escalate:no-plan:<reason>`, treat it like an `abstain` with s
 
 Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
-- **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / proto / migration, including any philosophy/CLAUDE.md/SPEC/Tier edits): **CONSENSUS REACHED** → go to Step 4.
+- **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / schema / migration, including any philosophy/CLAUDE.md/SPEC/Tier edits): **CONSENSUS REACHED** → go to Step 4.
 - **Mixed propose/abstain/escalate:no-plan (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous**; go to Step 4 convergence OR escalate based on Step 4 logic.
 - **3/3 propose but framings disagree** (different files / different abstractions / different cost profiles): split — go to Step 4 convergence.
 - **3/3 abstain**: cluster is not solvable as scoped yet; converge with a narrower question unless the stall trigger already applies.
