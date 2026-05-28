@@ -36,7 +36,7 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
 
     def valid_request(self) -> dict:
         return {
-            "schema": "IntegrationSyncRequestV1",
+            "schema": "IntegrationSyncRequest",
             "kind": "push-local-ahead",
             "integration_branch": "auto-refact-dev",
             "review_base_branch": "dev",
@@ -253,7 +253,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
 
     def write_decision(self, **updates) -> None:
         data = {
-            "schema": "ManualIssueTriageDecisionV1",
+            "schema": "ManualIssueTriageDecision",
             "issue_number": 53,
             "verdict": "reject",
             "body_artifact_path": "",
