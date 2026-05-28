@@ -1,6 +1,6 @@
 # 任务：验证 ${WORK_UNIT_ID} 的实施改动
 
-<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+<!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。
 当前 v1 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；既有实施摘要、artifact 文件名和 marker 仍使用该 alias。

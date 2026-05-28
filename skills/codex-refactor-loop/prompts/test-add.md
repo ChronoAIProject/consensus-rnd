@@ -1,6 +1,6 @@
 # 任务：补测试覆盖重构引入的未覆盖代码 — ${CLUSTER_ID}
 
-<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+<!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}`。
 

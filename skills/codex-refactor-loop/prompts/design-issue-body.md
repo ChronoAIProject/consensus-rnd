@@ -1,6 +1,6 @@
 # ${PROBLEM_TITLE}
 
-<!-- Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识) -->
+<!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 > 请用中文回复。Code identifier、file path、错误消息和条款引用可以保留原文。
 
@@ -36,7 +36,7 @@ ${WHY_NEEDS_DESIGN}
 
 - [ ] **模式选择**：${DESIGN_QUESTION}
 - [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
-- [ ] **向后兼容**：现有持久态如何处理？（reserved 字段号 / type alias / schema migration / 可接受的重置）
+- [ ] **向后兼容**：现有持久态如何处理？（reserved identifier / compatibility alias / schema migration / 可接受的重置）
 - [ ] **Scope 拆分**：保留单 cluster 还是拆 N 个 PR？拆则给出 cluster id 草案。
 - [ ] **测试面**：除了下方 cluster spec 里 `verification_hints` 之外，**必须**被测试的行为？
 - [ ] **越界禁地**：implement codex **不应**碰的地方？

@@ -3026,6 +3026,51 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             with self.subTest(alias=alias):
                 self.assertNotIn(alias, combined)
 
+    def test_cross_platform_prompts_and_reference_have_no_host_specific_defaults(self) -> None:
+        checked = self.rel_paths(
+            "skills/codex-refactor-loop/prompts/*.md",
+            "skills/codex-refactor-loop/REFERENCE.md",
+        )
+        forbidden_literals = (
+            "C#",
+            ".NET",
+            "protobuf",
+            "Protobuf",
+            "proto changes",
+            "proto /",
+            ".proto",
+            "Tier-N",
+            "SPEC-N",
+            "cargo",
+            "Rust",
+            ".csproj",
+            ".fsproj",
+            "test/**/*.cs",
+            "*Tests.cs",
+            "<TypeName>Tests.cs",
+            "```csharp",
+            "Directory.Packages.props",
+            "NuGet",
+            "如改 proto，必须本地重生成",
+            "if the diff touches `.proto`",
+            "Pure DTO / record proto fields exempt",
+        )
+        forbidden_patterns = (
+            r"\bTier [0-9]+\b",
+            r"\bSPEC-[0-9]+\b",
+            r"(?<!HOST_)\bproto\b",
+        )
+
+        for path in checked:
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            text = path.read_text(encoding="utf-8")
+            for literal in forbidden_literals:
+                with self.subTest(path=rel, literal=literal):
+                    self.assertNotIn(literal, text)
+            for pattern in forbidden_patterns:
+                with self.subTest(path=rel, pattern=pattern):
+                    self.assertIsNone(re.search(pattern, text))
+
     def test_host_language_policy_replaces_old_prompt_defaults(self) -> None:
         scoped_prompts = {
             "test-add.md": ("HOST_TEST_FILE_GLOBS", "HOST_TEST_NAMING_RULE", "HOST_COMMENT_RULE", "HOST_CODE_FENCE_LANG"),
@@ -3049,7 +3094,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "if the diff touches `.proto`",
             "Pure DTO / record proto fields exempt",
         )
-        host_comment = "Refactor (iter3/skill-host-language-policy): Old: 写死 C#/.NET/proto 默认  New: 6 个 HOST_* 可选空默认,host.env 注入(#20 structural 共识)"
+        host_comment = "Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus)"
 
         for prompt_name, required_names in scoped_prompts.items():
             text = (SKILL_ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")

@@ -55,8 +55,8 @@ verdict: propose | abstain | escalate
 - Files: <list with intended action per file>
 - LOC delta: ~+N / -M
 - Tests to add: <list with what behavior each asserts>
-- proto changes (if any): <field name + number + .proto file>
-- Philosophy/PROJECT_RULES/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- Schema/protocol changes (if any): <identifier + compatibility impact + schema/protocol file>
+- Governance/ruleset changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Runtime cost: <latency estimate, allocation estimate>
 
 ## Risks

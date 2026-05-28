@@ -49,7 +49,7 @@ verdict: propose | abstain | escalate
 - Files: <list with intended action per file>
 - LOC delta: ~+N / -M
 - Tests to add/modify: <list>
-- Philosophy/PROJECT_RULES/SPEC/Tier change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- Governance/ruleset change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Migration path: <single-step; "no migration needed" is also valid>
 
 ## Risks

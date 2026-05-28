@@ -63,7 +63,7 @@ Narrow allowlist: run `check_skill_degradation.py`, write `.refactor-loop/.degra
 
 ### Daemon 启动(强制 pattern — 必须注入 host.env)
 
-**禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD="cargo build --workspace"` 含空格 → `env` 把 `build` 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
+**禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD` 含空格时 `env` 会把后续 token 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
 ```bash
 nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/<daemon>.py' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
@@ -160,9 +160,9 @@ codex 常把 prompt 里的 marker 模板原样回显到 log(如 prompt 写 `SOLV
 
 `gh` CLI 把 **`GH_REPO`** 当 `--repo` 默认值且要求 `OWNER/REPO` 格式。host.env 禁止导出 `GH_REPO=<repo-name>`。统一用 `GH_REPO_SLUG=OWNER/REPO`,脚本兼容 `GH_OWNER/GH_REPO_NAME`,所有脚本内 `gh issue/pr ...` 必带 `--repo "$GH_REPO_SLUG"`,所有 `gh api repos/...` 必用 `repos/$GH_REPO_SLUG/...`。旧 host 若只有 `GH_OWNER/GH_REPO` 且 `GH_REPO` 是 repo 名,脚本会拼成 slug,但新配置不再使用裸 `GH_REPO`。
 
-### Rust 测试节奏(host 适配)
+### Host 测试节奏(host 适配)
 
-`cargo test` 必带 `--test-threads=1`(permit 池 / cwd 等共享 fs 状态,并行会 race 出假失败);测试读源码文件用 `CARGO_MANIFEST_DIR` 锚定路径,勿用相对路径(被其它测试 chdir 污染)。
+测试命令由 host.env 的 `$TEST_CMD` 注入。若 host 测试共享 permit 池、cwd 或其他 filesystem 状态,必须在 host 项目的 `$PROJECT_RULES` / `$CI_GUARDS` 中声明串行化或稳定性约束;skill prompt 不推断具体测试框架或语言默认值。
 
 <a id="sentinel-and-comment-filters"></a>
 ## ⭐ 核心原则:GitHub 是系统状态唯一显示面(强制)
@@ -582,7 +582,7 @@ the work-unit fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `prod
   and `verification_hints`. It must not fabricate `cluster_id` or `legacy_cluster_id`.
 
 - Two clusters that touch the same `$BUILD_CMD 目标/工程文件` or share a file path go in different batches.
-- Two clusters that touch the same proto file → different batches.
+- Two clusters that touch the same schema/protocol file → different batches.
 
 ### requires_design clusters → open GitHub issue, do NOT auto-implement
 
@@ -595,7 +595,7 @@ For every cluster with `requires_design: true`:
      --label "refactor-design-needed,auto-loop" \
      --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
    ```
-   The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (proto schema? new contract? backward-compat strategy? whether to split into multiple PRs?).
+   The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record in state.json:
    ```json
    "design_pending": [
@@ -1429,7 +1429,7 @@ fi
 4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
 5. 不允许跳过 3 solver round 直接 implement(哪怕 maintainer 觉得方向很明显)
 
-理由:maintainer 直觉常常对,但 concrete 落地的细节(新 actor 边界 / proto 字段 / 命名 / 迁移路径)需要 3 个独立角度验证,避免单 codex 把 "明显方向" 误读成 "明显方案"。consensus 这步就是 catch 误读用的。
+理由:maintainer 直觉常常对,但 concrete 落地的细节(新 actor 边界 / schema 字段 / 命名 / 迁移路径)需要 3 个独立角度验证,避免单 codex 把 "明显方向" 误读成 "明显方案"。consensus 这步就是 catch 误读用的。
 
 ### Maintainer-reply-resets-the-round (mandatory)
 
@@ -2091,8 +2091,8 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 | **代码内 doc comment / xmldoc / 其他注释** | **英文** |
 | **代码内 log / error / panic 字符串** | **英文** |
 | **代码内构造的 commit-body 模板字符串** | **英文** |
-| 代码 identifier / 类名 / 方法名 / 字段 | 英文(原 .NET / 项目惯例) |
-| proto / yaml 结构 | 英文 |
+| 代码 identifier / 类名 / 方法名 / 字段 | 英文(遵循 host / 项目惯例) |
+| schema / data 结构 | 英文 |
 | CLI 命令 / 文件路径 / SHA / URL | 英文 |
 | CLAUDE/AGENTS 条款 verbatim 引用 / error message / test name / 第三方英文 quote | 引用原文,不翻译 |
 
@@ -2368,7 +2368,7 @@ Goal: parallel safety. Two clusters can be in the same batch **only if** all fou
 
 1. `scope_paths` file overlap = 0.
 2. They touch different `$BUILD_CMD 目标/工程文件` files (compile-time isolation).
-3. They touch different proto files.
+3. They touch different schema/protocol files.
 4. Their `dependencies:` lists don't reference each other.
 
 Greedy bin-packing:
