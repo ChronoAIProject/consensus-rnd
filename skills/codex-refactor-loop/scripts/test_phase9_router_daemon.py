@@ -165,6 +165,44 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
 
+    def test_phase9_router_solver_triplet_accepts_non_ascii_summary(self) -> None:
+        # Refactor (iter1/issue-149):
+        #   Old pattern: phase9_router_daemon marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
+        #   New principle: 按 .refactor-loop/runs/phase9-issue149-r2-judge.md consensus(structural):route-specific marker-grammar parser fix,正确解析所有 route marker(含中文 body),不引入 Phase9RoundProjection 抽象。使 router 对所有 glob 可见的 3/3 SOLVER_DONE triplet 与 converge 可靠 dispatch。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New;不超范围。
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue149-r1-{role}.log",
+                f"SOLVER_DONE:{role}:propose:中文摘要-继续收敛",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue149-r1-judge.log", " ".join(self.commands[0]))
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["149-1-judge"])
+
+    def test_phase9_router_controller_dispatched_triplet_across_ticks(self) -> None:
+        for role in ("minimal", "structural"):
+            self.write_log(
+                f"phase9-issue149-r2-{role}.log",
+                f"SOLVER_DONE:{role}:propose:中文摘要-等待第三路",
+            )
+
+        self.router.tick()
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+        self.write_log(
+            "phase9-issue149-r2-delete.log",
+            "SOLVER_DONE:delete:propose:中文摘要-第三路完成",
+        )
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue149-r2-judge.log", " ".join(self.commands[0]))
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["149-2-judge"])
+
     def test_phase9_router_accepts_solver_issue_logs_for_triplet(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
@@ -236,6 +274,24 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
+        )
+
+    def test_phase9_router_converge_accepts_non_ascii_reason(self) -> None:
+        self.write_log(
+            "phase9-issue149-r2-judge.log",
+            "META_JUDGE_DONE:converge:round-3:中文收敛问题-继续三路判断",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue149-r3-minimal.log", logs)
+        self.assertIn("phase9-issue149-r3-structural.log", logs)
+        self.assertIn("phase9-issue149-r3-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["149-3-delete", "149-3-minimal", "149-3-structural"],
         )
 
     def test_phase9_router_accepts_meta_judge_issue_log_for_converge(self) -> None:
@@ -567,6 +623,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_rejects_junk_markers_with_regex_special_chars(self) -> None:
         """Markers containing pipe/quote/backslash/template chars are prompt/regex echoes, not real markers."""
+        self.write_log("phase9-issue41-r1-judge.log", "META_JUDGE_DONE:converge:round-2:中文收敛问题-合法")
         junk_lines = [
             'grep "META_JUDGE_DONE:converge:r+1" log',
             'pattern META_JUDGE_DONE:converge:round-2:With|round-3|Choose|minimal\\""',
@@ -581,7 +638,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         events = self.pending_events()
-        self.assertEqual(self.commands, [])
+        self.assertEqual(len(self.commands), 3)
+        self.assertTrue(all("phase9-issue41-r2-" in " ".join(command) for command in self.commands))
         for forbidden_token in ("r+1", "round-3|Choose", "no-op;", "stalled:*", "CANONICAL_HUMAN_LABELS"):
             with self.subTest(forbidden_token=forbidden_token):
                 self.assertNotIn(
@@ -610,6 +668,17 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                     src,
                     f"phase9_router_daemon.py must not introduce forbidden boundary token: {forbidden}",
                 )
+
+    def test_phase9_router_marker_grammar_is_route_specific_not_ascii_payload_gate(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+
+        self.assertIn("class Phase9MarkerGrammar", src)
+        self.assertIn("def parse_marker_candidate", src)
+        self.assertIn("def parse_converge_round", src)
+        self.assertIn("def is_stalled_marker", src)
+        self.assertNotIn("class Phase9RoundProjection", src)
+        self.assertNotIn("Phase9RoundProjection(", src)
+        self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
 
     def test_main_once_dispatches_via_temp_repo_root(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
