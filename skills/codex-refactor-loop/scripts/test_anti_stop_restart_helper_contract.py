@@ -150,6 +150,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         for token in required:
             with self.subTest(token=token):
                 self.assertIn(token, self.helper)
+                self.assertIn(token, self.skill)
+        self.assertIn("phase9_router_daemon.py' --daemon --repo-root", self.helper)
 
 
 if __name__ == "__main__":

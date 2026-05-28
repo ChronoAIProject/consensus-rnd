@@ -291,6 +291,52 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(1, self._start_count("phase9_router_daemon"))
         self.assertEqual(1, self._start_count("concurrency_monitor"))
 
+    def test_restart_daemons_starts_phase9_router_daemon(self) -> None:
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+
+        self._run_helper()
+        self.assertEqual(1, self._start_count("phase9_router_daemon"))
+
+        self._stale_heartbeat("phase9_router_daemon")
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(2, self._start_count("phase9_router_daemon"))
+
+        (self.repo / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts").unlink()
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(3, self._start_count("phase9_router_daemon"))
+
+        (self.repo / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts").write_text(
+            "not-a-timestamp\n",
+            encoding="utf-8",
+        )
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(4, self._start_count("phase9_router_daemon"))
+
+        old_pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid")
+        self.assertIsNotNone(old_pid)
+        assert old_pid is not None
+        self._kill_process(old_pid)
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+        self.assertEqual(5, self._start_count("phase9_router_daemon"))
+
+        old_pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid")
+        self.assertIsNotNone(old_pid)
+        assert old_pid is not None
+        self._stale_heartbeat("phase9_router_daemon")
+        self._run_helper()
+        self._read_start_signal("phase9_router_daemon")
+        new_pid = self._read_pid(self.repo / ".refactor-loop" / "locks" / "phase9_router_daemon.pid")
+        self.assertIsNotNone(new_pid)
+        self.assertNotEqual(old_pid, new_pid)
+        self.assertFalse(self._pid_alive(old_pid))
+        self.assertTrue(self._pid_alive(new_pid))
+        self.assertEqual(6, self._start_count("phase9_router_daemon"))
+
 
 if __name__ == "__main__":
     unittest.main()

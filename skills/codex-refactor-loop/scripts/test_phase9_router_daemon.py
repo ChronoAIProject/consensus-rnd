@@ -12,7 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from phase9_router_daemon import Phase9Router, main
+from phase9_router_daemon import Phase9Router, main, parse_phase9_log_identity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -143,6 +143,46 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
 
+    def test_phase9_router_accepts_solver_issue_logs_for_triplet(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"solver-issue100-r4-{role}.log",
+                f"SOLVER_DONE:{role}:propose:summary",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        joined = " ".join(self.commands[0])
+        self.assertIn("phase9-issue100-r4-judge.log", joined)
+        self.assertNotIn("solver-issue100-r4-judge.log", joined)
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["100-4-judge"])
+
+    def test_phase9_log_identity_rejects_unowned_filename_dialects(self) -> None:
+        accepted = {
+            "phase9-issue100-r3-minimal.log": ("100", 3, "minimal", "phase9"),
+            "phase9-issue100-r3-judge.log": ("100", 3, "judge", "phase9"),
+            "solver-issue100-r3-delete.log": ("100", 3, "delete", "solver"),
+            "meta-judge-issue100-r3.log": ("100", 3, "judge", "meta-judge"),
+        }
+        for name, expected in accepted.items():
+            with self.subTest(name=name):
+                identity = parse_phase9_log_identity(name)
+                self.assertIsNotNone(identity)
+                assert identity is not None
+                self.assertEqual((identity.issue, identity.round, identity.actor, identity.dialect), expected)
+
+        rejected = (
+            "solver-issue100-r3-judge.log",
+            "meta-judge-issue100-r3-minimal.log",
+            "issue100-r3-minimal.log",
+            "phase9-issue100-r3-architect.log",
+            "phase9_issue100_r3_minimal.log",
+        )
+        for name in rejected:
+            with self.subTest(name=name):
+                self.assertIsNone(parse_phase9_log_identity(name))
+
     def test_phase9_router_converge_dispatches_next_round_solvers(self) -> None:
         self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
 
@@ -156,6 +196,21 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
+        )
+
+    def test_phase9_router_accepts_meta_judge_issue_log_for_converge(self) -> None:
+        self.write_log("meta-judge-issue100-r2.log", "META_JUDGE_DONE:converge:round-3:need-more")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue100-r3-minimal.log", logs)
+        self.assertIn("phase9-issue100-r3-structural.log", logs)
+        self.assertIn("phase9-issue100-r3-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["100-3-delete", "100-3-minimal", "100-3-structural"],
         )
 
     def test_phase9_router_marker_tail_only_ignores_body_echo(self) -> None:
@@ -326,6 +381,26 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(reflector_commands), 1)
         self.assertEqual(len(self.commands), 1)
         self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_accepts_meta_judge_issue_log_for_stalled(self) -> None:
+        for round_no in (1, 2, 3):
+            for role in ("minimal", "structural", "delete"):
+                self.write_log(
+                    f"solver-issue100-r{round_no}-{role}.log",
+                    f"SOLVER_DONE:{role}:unchanged:summary",
+                )
+        self.write_ledger_key("100-1-judge")
+        self.write_ledger_key("100-2-judge")
+        self.write_log("meta-judge-issue100-r3.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+
+        self.router.tick()
+
+        reflector_commands = [
+            command for command in self.commands if "phase9-issue100-r3-reflector.log" in " ".join(command)
+        ]
+        self.assertEqual(len(reflector_commands), 1)
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("100-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
     def test_stalled_reflector_prompt_uses_full_template_and_evidence(self) -> None:
         for round_no in (1, 2, 3):
