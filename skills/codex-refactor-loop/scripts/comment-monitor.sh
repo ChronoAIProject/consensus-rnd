@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # .claude/skills/codex-refactor-loop/scripts/comment-monitor.sh
 #
-# 独立运行的 comment monitor:
-# - 自己跑 gh api 查 design issue / PR 新评论
-# - 检测到 team-member 新评论 → 自己加 👀 react(不等 controller)
-# - 同时 emit `new-team-comment: <issue> <author> <comment-id>` 到 stdout
-#   (controller 通过 Monitor tool 包它,把 stdout 行变成 task-notification)
-# - 跑 forever,除非外部 kill
+# Standalone comment monitor:
+# - Runs gh api itself to find new design issue / PR comments.
+# - Adds an 👀 reaction immediately when detecting a team-member comment,
+#   without waiting for the controller.
+# - Emits `new-team-comment: <issue> <author> <comment-id>` to stdout.
+#   The controller wraps this with the Monitor tool, converting stdout lines
+#   into task notifications.
+# - Runs forever unless externally killed.
 #
-# 用法(controller 通过 Monitor tool 包):
+# Usage (controller wraps it through the Monitor tool):
 #   Monitor(persistent: true, command: ".claude/skills/codex-refactor-loop/scripts/comment-monitor.sh")
 #
-# state 文件:.refactor-loop/comment-monitor-state.json (JSON map: comment_id → "seen")
+# State file: .refactor-loop/comment-monitor-state.json (JSON map: comment_id -> "seen")
 
 set -u
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
     REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
@@ -23,20 +26,9 @@ if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset; source .refactor-loop/host.env or set ALLOW_GIT_ROOT_FALLBACK=1 for interactive use" >&2
   exit 2
 fi
-REPO="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${REPO:-}" ] && ! [[ "$REPO" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$REPO'" >&2
-  exit 2
-fi
-if [ -n "${REPO:-}" ]; then
-  :
-else
-  REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || true)"
-fi
-if [ -z "${REPO:-}" ]; then
-  echo "FATAL: GH_REPO_SLUG is unset and gh repo view failed" >&2
-  exit 2
-fi
+source "$SCRIPT_DIR/repo_slug.sh"
+source "$SCRIPT_DIR/daemon_heartbeat.sh"
+REPO="$(resolve_github_repo_slug 1 1)" || exit $?
 if [ -z "${MAINTAINER_WHITELIST:-}" ]; then
   echo "FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed" >&2
   exit 2
@@ -57,25 +49,28 @@ is_team_member() {
 }
 
 # Skip controller / writer-codex own posts. body first line check.
-# 包括:
+# Includes:
 # - "## 🤖" (codex artifact)
 # - "## 📊" (controller status banner per SKILL.md status-banner)
-# - "## 📢 cc" (cc 原作者)
+# - "## 📢 cc" (cc original author)
 # - "## 📎" (attachment / raw)
 # - "## ✅" (consensus reached / merged)
 # - "## 🎉" (celebration)
 # - "## 🔄" (rebase / round dispatched)
-# - "## Phase " (writer-codex 标题如 "## Phase 9 r2 已收敛..." / "## Phase 8 ...")
-# - "## Studio " / "## Workflow " / "## iterN" (writer-codex 通常用 cluster 主题做标题)
-# - "Generated with Claude Code" 后缀
-# - 任何 body 内含 "POSTED:phase" 标记的(writer-codex 自身 marker 不会出现在 body,但若误传则 skip)
+# - "## Phase " (writer-codex titles such as "## Phase 9 r2 converged..." / "## Phase 8 ...")
+# - "## Studio " / "## Workflow " / "## iterN" (writer-codex usually titles by cluster topic)
+# - "Generated with Claude Code" suffix
+# - Any body containing a "POSTED:phase" marker; writer-codex's own marker should
+#   not appear in the body, but skip it if it is accidentally passed through.
 is_controller_post() {
-  # 主判定:sentinel ⟦AI:AUTO-LOOP⟧ 在 body 任意位置 → AI post(per SKILL "AI 内容标识符")
+  # Primary check: sentinel ⟦AI:AUTO-LOOP⟧ anywhere in body means AI post
+  # (per SKILL "AI content identifier").
   case "$2" in
     *"⟦AI:AUTO-LOOP⟧"*) return 0 ;;
     *"Generated with Claude Code"*) return 0 ;;
   esac
-  # Legacy emoji-prefix(过渡期老评论无 sentinel)— 任何 ## + emoji + ... 第一行
+  # Legacy emoji prefix for transitional old comments without sentinel:
+  # any first line starting with ## + emoji + ...
   case "$1" in
     "## 🤖"*|"## 📊"*|"## 📢"*|"## 📎"*|"## ✅"*|"## 🆘"*|"## 🎉"*|"## 🔄"*|"## ⏸️"*|"## 🔍"*|"## 🛠️"*|"## 🚀"*|"## 👀"*|"## 🔧"*|"## ⚙️"*|"## Phase "*|"## Studio "*|"## Workflow "*|"## iter"*) return 0 ;;
     *) return 1 ;;
@@ -93,6 +88,10 @@ mark_seen() {
 }
 
 while true; do
+  # Refactor (iter1/issue-143):
+  #   Old pattern: wrapper sidecar refreshed heartbeat even if this scan loop hung.
+  #   New principle: shell actor beats after scan/caught nonfatal paths, then lease-sleeps.
+  #   Heartbeat stays same path/epoch; no new daemon or lifecycle authority.
   # Auto-discover targets: open issues with refactor-design-needed label + open PRs with auto-loop label
   targets=$(
     {
@@ -129,16 +128,18 @@ while true; do
         continue
       fi
 
-      # Team member new comment → 立刻 eyes react
+      # Team member new comment: react with eyes immediately.
       react_out=$(gh api "repos/$REPO/issues/comments/$id/reactions" -X POST -f content=eyes 2>&1)
       react_ok=$?
       if [ $react_ok -eq 0 ]; then
         echo "new-team-comment: $n $author $id eyes-reacted-at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        # 通知 controller 缩 wakeup:append 到 pending events file
-        # controller per-wakeup 第一步读此文件,有新 entry → 下次 wakeup 缩到 600s
+        # Notify controller to shorten wakeup by appending to the pending events file.
+        # Controller reads this file first on each wakeup; a new entry shortens
+        # the next wakeup to 600s.
         echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) new-team-comment $n $author $id" \
           >> "$REPO_ROOT/.refactor-loop/.controller-pending-events.log"
-        # 立刻 post status 卡片让 maintainer 看到 daemon 已识别 + controller 在路上
+        # Immediately post a status card so maintainers can see the daemon
+        # recognized the comment and the controller is on the way.
         body_excerpt=$(echo "$body" | head -1 | head -c 80)
         tmp_banner=$(mktemp)
         cat > "$tmp_banner" <<EOF
@@ -172,5 +173,6 @@ EOF
     done < <(echo "$comments" | jq -c '.')
   done
 
-  sleep "$INTERVAL"
+  daemon_heartbeat_beat
+  daemon_heartbeat_sleep "$INTERVAL"
 done

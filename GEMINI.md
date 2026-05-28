@@ -4,6 +4,6 @@
 
 当前 skills：
 
-- `codex-refactor-loop` — 无人值守三阶段（audit → implement → verify）共识重构循环，codex CLI 驱动，GitHub 为状态唯一显示面。当用户想要对照 host 规则文档做全自主并行重构时使用。
+- `codex-refactor-loop` — Consensus R&D work-unit 循环的稳定 skill 入口，codex CLI 驱动，GitHub 为状态唯一显示面；audit/refactor 保留为兼容 intake。当用户想要对照 host 规则文档做全自主多角度共识研发时使用。
 
 当任务匹配某 skill 的触发条件时，先读对应 `skills/<name>/SKILL.md` 再行动。仓库结构与维护约定见 `CLAUDE.md`。

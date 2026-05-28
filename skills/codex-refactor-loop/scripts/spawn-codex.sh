@@ -77,6 +77,16 @@ if ! [[ "$STALL" =~ ^[0-9]+$ ]] || (( STALL <= 0 )); then
 fi
 
 mkdir -p "$(dirname "$LOG")"
+# Refactor (iter3/skill-hygiene-scripts):
+#   Old: the wrapper truncated --log before checking reuse or in-flight state.
+#   New principle: unfinished existing logs are refused before truncation.
+#   This preserves SPAWN/EXIT marker evidence for controller recovery.
+if [[ -e "$LOG" ]]; then
+  if ! tail -5 "$LOG" 2>/dev/null | grep -q '^EXIT='; then
+    echo "refusing to reuse unfinished log without EXIT=: $LOG" >&2
+    exit 3
+  fi
+fi
 : > "$LOG"
 
 # Debug banner — caller / `tail` sees exact paths immediately.

@@ -1,58 +1,61 @@
 #!/usr/bin/env bash
-# peek.sh — controller wakeup 快速 sweep
+# peek.sh — quick controller wakeup sweep
 #
-# controller 每 wakeup 第一动作应该用这个 script 一眼看全状态,
-# 避免人工 grep / parse 出错(pr1_num empty bug 那种)。
+# Controller should run this script first on every wakeup to see the full state
+# at a glance and avoid manual grep/parse mistakes such as the pr1_num empty bug.
 #
-# 输出:
-#   1. 活跃 codex 数 + 每个的 log 名(harness-tracked vs detached 分别标)
-#   2. 完成 markers + 推荐下一步路由(per skill route table)
-#   3. 每个 open auto-loop PR 的 CI + reviewer 状态
-#   4. monitor zero_streak 最大值(过去 10 tick)
+# Output:
+#   1. Active codex count + each log name (harness-tracked vs detached tagged separately)
+#   2. Open auto-loop PR CI + reviewer status
+#   3. Monitor zero_streak max over the last 10 ticks
+#   4. Phase 9 router ledger + pending events as facts only
 #
 # Usage: bash .claude/skills/codex-refactor-loop/scripts/peek.sh
 #
 # ⟦AI:AUTO-LOOP⟧
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
 if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset and git rev-parse --show-toplevel failed" >&2
   exit 2
 fi
+export REPO_ROOT
 cd "$REPO_ROOT"
-GH_REPO_SLUG="${GH_REPO_SLUG:-${GH_OWNER:+$GH_OWNER/}${GH_REPO_NAME:-${GH_REPO:-}}}"
-if [ -n "${GH_REPO_SLUG:-}" ] && ! [[ "$GH_REPO_SLUG" == */* ]]; then
-  echo "FATAL: GH_REPO_SLUG must be OWNER/REPO; got '$GH_REPO_SLUG'" >&2
-  exit 2
-fi
-gh_repo_args=()
-[ -n "${GH_REPO_SLUG:-}" ] && gh_repo_args=(--repo "$GH_REPO_SLUG")
+source "$SCRIPT_DIR/repo_slug.sh"
+set_gh_repo_args 0 0 || exit $?
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {
-  ps -eo command= | awk '/spawn-codex[.]sh/ && /[.]refactor-loop\/(logs|prompts)\// { print }'
+  python3 "$SKILL_ROOT/scripts/concurrency_monitor.py" --list-codex
 }
 
-MARKER_RE="AUDIT_DONE|AUDIT_INCOMPLETE|IMPLEMENT_DONE|IMPLEMENT_BLOCKED|FIX_DONE|FIX_BLOCKED|REVIEW_DONE|SOLVER_DONE|META_JUDGE_DONE|META_RESOLVED|TEST_ADD_DONE"
-extract_terminal_marker() {
-  local f="$1"
-  awk '/^EXIT=/{exit} {print}' "$f" 2>/dev/null |
-    grep -E "(${MARKER_RE}):" |
-    sed -E 's/^[+[:space:]]+//; s/^.*(AUDIT_DONE:|AUDIT_INCOMPLETE:|IMPLEMENT_DONE:|IMPLEMENT_BLOCKED:|FIX_DONE:|FIX_BLOCKED:|REVIEW_DONE:|SOLVER_DONE:|META_JUDGE_DONE:|META_RESOLVED:|TEST_ADD_DONE:)/\1/' |
-    grep -vE '<reason>|<id>|<status>|<category>|<framing>|round-N|cluster-XXX' |
-    tail -1 |
-    head -c 100
+count_loop_codex() {
+  python3 "$SKILL_ROOT/scripts/concurrency_monitor.py" --count-only
+}
+
+REVIEW_MARKER_TAIL_LINES=30
+extract_review_verdict_tail() {
+  local log_path="$1"
+  local pr_num="$2"
+  local role="$3"
+  tail -n "$REVIEW_MARKER_TAIL_LINES" "$log_path" 2>/dev/null |
+    grep -E "REVIEW_DONE:${pr_num}:${role}:(approve|comment|reject)" |
+    sed -E "s/^.*REVIEW_DONE:${pr_num}:${role}:(approve|comment|reject).*$/\1/" |
+    tail -1
 }
 
 echo "═══════════════ peek $(date -u +%H:%M:%SZ) ═══════════════"
 
-# 0. CRITICAL: maintainer 评论(non-AI 即非 sentinel)
-# 规则:
-#   (a) 最近 12h 任何 issue/PR 的 maintainer 评论 — 显示
-#   (b) stuck-label issue 的 LATEST maintainer 评论 — 无论多久都显示(避免漏读)
+# 0. CRITICAL: maintainer comments (non-AI means no sentinel)
+# Rules:
+#   (a) Show any issue/PR maintainer comment from the last 12h.
+#   (b) Show the latest maintainer comment on stuck-label issues regardless of
+#       age to avoid missed reads.
 echo ""
-echo "▍🚨 maintainer 评论(read first — 漏读 = controller bug):"
+echo "▍🚨 maintainer comments (read first — missed read = controller bug):"
 {
   gh issue list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'i{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
   gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number 2>/dev/null | python3 -c "import json,sys; [print(f'p{x[\"number\"]}') for x in json.load(sys.stdin)]" 2>/dev/null
@@ -87,7 +90,7 @@ try:
     ts = datetime.fromisoformat(ts_str).replace(tzinfo=timezone.utc)
 except: sys.exit(0)
 delta_h = (datetime.now(timezone.utc) - ts).total_seconds() / 3600
-# 12h cutoff OR no AI reply since(无回应必显示,无论多久)
+# 12h cutoff OR no AI reply since; always show unanswered comments regardless of age.
 if delta_h > 12 and has_ai_reply: sys.exit(0)
 flag = '⏰ no-AI-reply' if not has_ai_reply else ''
 author = (last.get('author', {}) or {}).get('login', '?')
@@ -97,51 +100,27 @@ print(f'  {flag} [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
 done
 
 # 1. Active codex
-n=$(list_loop_codex | wc -l | tr -d ' ')
+n=$(count_loop_codex)
 echo ""
-echo "▍活跃 codex: ${n}"
+echo "▍Active codex: ${n}"
 if [ "$n" -gt 0 ]; then
   list_loop_codex | sed -E 's/.*--log [^ ]*\/([^ ]+)\.log.*/  • \1/' | sort
 fi
 
-# 2. Recently finished markers (last 60 min) + routing hint
+# Refactor (iter5/issue-87-peek-status-lens):
+# Old pattern: generic marker projector plus 60-minute route-hint table in peek output.
+# New principle: observability-only status lens reads Phase 9 ledger/pending events as facts,
+# while merge readiness remains tail-only REVIEW_DONE consensus below.
+# 2. Phase 9 router ledger and pending events. Facts only; routing authority
+# remains Phase Routing, clean-exit log-tail sweep, and phase9_router_daemon.py.
 echo ""
-echo "▍最近 60 min 完成 codex(marker → 推荐下一步):"
-find .refactor-loop/logs -name "*.log" -mmin -60 -type f 2>/dev/null | while read f; do
-  base=$(basename "$f" .log)
-  # Skip in-progress (no EXIT line)
-  exit_line=$(grep "^EXIT=" "$f" 2>/dev/null | tail -1)
-  [ -z "$exit_line" ] && continue
-  marker=$(extract_terminal_marker "$f")
-  [ -z "$marker" ] && continue
-  # Routing hint
-  hint=""
-  case "$marker" in
-    IMPLEMENT_DONE:*:ok*)    hint="→ commit/push + open PR + 3 reviewer r1" ;;
-    IMPLEMENT_DONE:*:partial|IMPLEMENT_DONE:*:blocked) hint="→ inspect + re-prompt or escalate" ;;
-    IMPLEMENT_BLOCKED:*)     hint="→ inspect blocker + meta-reflect" ;;
-    FIX_DONE:*)              hint="→ commit/push + 3 reviewer r+1" ;;
-    FIX_BLOCKED:*)           hint="→ meta-reflect" ;;
-    REVIEW_DONE:*:approve)   hint="→ wait other 2 reviewers,then merge if all approve / mixed: ≥2 approve + 0 reject = merge" ;;
-    REVIEW_DONE:*:comment)   hint="→ advisory; wait other reviewers" ;;
-    REVIEW_DONE:*:reject)    hint="→ wait other 2 reviewers,then fix r+1" ;;
-    SOLVER_DONE:*)           hint="→ wait other 2 solvers,then meta-judge" ;;
-    META_JUDGE_DONE:consensus:*) hint="→ implement codex (worktree + spawn)" ;;
-    META_JUDGE_DONE:converge:*)  hint="→ re-spawn 3 solver with convergence question" ;;
-    META_JUDGE_DONE:escalate:philosophy:*) hint="→ label escalate-human + ASCII problem banner" ;;
-    META_JUDGE_DONE:escalate:*)  hint="→ reflector codex" ;;
-    META_RESOLVED:retry-fix:*)   hint="→ implement codex(or fix r+1 if PR exists)" ;;
-    META_RESOLVED:re-design:*)   hint="→ close PR + Phase 9 fresh round" ;;
-    META_RESOLVED:re-cluster:*)  hint="→ close PR + audit re-split" ;;
-    META_RESOLVED:drop:*)        hint="→ close PR + close issue wontfix" ;;
-    META_RESOLVED:escalate-human:*) hint="→ label 🆘 + push notify" ;;
-    AUDIT_DONE:*)            hint="→ 验证 cluster evidence + 开 design issues + 派 implement" ;;
-    AUDIT_INCOMPLETE:*)      hint="→ re-dispatch audit with missing pieces" ;;
-    TEST_ADD_DONE:*)         hint="→ commit/push 等 CI" ;;
-  esac
-  echo "  • ${base}: ${marker}"
-  [ -n "$hint" ] && echo "    ${hint}"
-done
+echo "▍Phase 9 router / pending events:"
+echo "  ledger tail:"
+tail -10 .refactor-loop/phase9-router-ledger.jsonl 2>/dev/null | sed 's/^/    /' || true
+echo "  pending events tail:"
+tail -10 .refactor-loop/.controller-pending-events.log 2>/dev/null | sed 's/^/    /' || true
+echo "  Skill degradation alerts:"
+tail -n "${DEGRADATION_ALERT_TAIL_LINES:-10}" .refactor-loop/.degradation-alert.log 2>/dev/null | sed 's/^/    /' || true
 
 # 3. Open auto-loop PRs + state
 echo ""
@@ -159,15 +138,18 @@ done
 
 # 4. Monitor recent zero_streak max
 echo ""
-echo "▍Monitor zero_streak (过去 10 tick):"
+echo "▍Monitor zero_streak (last 10 ticks):"
 tail -10 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | \
-  grep -oE "zero_streak=[0-9]+" | sort -t= -k2 -rn | head -1 | sed 's/^/  最大: /'
+  grep -oE "zero_streak=[0-9]+" | sort -t= -k2 -rn | head -1 | sed 's/^/  max: /'
 zero_now=$(tail -1 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | grep -oE "zero_streak=[0-9]+" | head -1)
-[ -n "$zero_now" ] && echo "  当前: ${zero_now}"
+[ -n "$zero_now" ] && echo "  current: ${zero_now}"
 
 # 5. Mergeable PRs (per reviewer consensus + CI green)
+# Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge
+# gate + contradictory Phase 8 wording. New principle: fixed truth table
+# reject=0 && approve>=1 -> MERGE; comments are advisory (#26 minimal option B consensus).
 echo ""
-echo "▍可合并 PR(controller 应立即 merge):"
+echo "▍Mergeable PRs (controller should merge immediately):"
 gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,title --jq '.[].number' 2>/dev/null | while read pr_num; do
   [ -z "$pr_num" ] && continue
   # CI must have 0 fail + 0 pending
@@ -187,52 +169,55 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,t
   for role in architect tests quality; do
     f=".refactor-loop/logs/review-pr${pr_num}-${role}-r${max_round}.log"
     [ -f "$f" ] || continue
-    v=$(extract_terminal_marker "$f" | sed -E 's/.*:([a-z]+)\s*$/\1/')
+    v=$(extract_review_verdict_tail "$f" "$pr_num" "$role")
     case "$v" in
       approve) approve=$((approve+1)) ;;
       comment) comment=$((comment+1)) ;;
       reject)  reject=$((reject+1)) ;;
     esac
   done
-  # Merge rule: 0 reject AND >= 2 approve (mixed comment OK)
-  if [ "$reject" = "0" ] && [ "$approve" -ge 2 ]; then
-    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  # Merge rule: latest complete required round, 0 reject AND >= 1 approve (mixed comment OK)
+  if [ "$reject" = "0" ] && [ "$approve" -ge 1 ]; then
+    echo "  ✅ PR #${pr_num} [${state}] r${max_round}: MERGE_READY approve=${approve} comment=${comment} reject=0 — gh pr merge ${pr_num} --admin --squash --delete-branch"
+  elif [ "$reject" = "0" ] && [ "$approve" = "0" ] && [ "$comment" -ge 1 ]; then
+    echo "  ⏸ PR #${pr_num} [${state}] r${max_round}: WAIT_EXPLICIT_APPROVAL approve=0 comment=${comment} reject=0 — do not merge"
   fi
 done
 
 # 5b. Stale-label detection on CLOSED issues/PRs
 echo ""
-echo "▍Stale labels(已 CLOSED 但还挂 in-flight phase 标签):"
+echo "▍Stale labels (CLOSED but still carrying in-flight phase labels):"
 gh issue list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
   [ -z "$num" ] || [ -z "$labels" ] && continue
-  echo "  ⚠️ closed issue #${num} 仍挂: ${labels}  → controller 应清理 + 加 🎉 phase:merged"
+  echo "  ⚠️ closed issue #${num} still has: ${labels}  → controller should clean up + add 🎉 phase:merged"
 done
 gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘") or startswith("🚀"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
   [ -z "$num" ] || [ -z "$labels" ] && continue
-  echo "  ⚠️ closed PR #${num} 仍挂: ${labels}"
+  echo "  ⚠️ closed PR #${num} still has: ${labels}"
 done
 
-# 5c. Linkage check:open issues phase:implementing 但没对应 in-flight PR / open PRs 没对应 design issue
+# 5c. Linkage check: open issues in phase:implementing without matching
+# in-flight PR / open PRs without matching design issue.
 echo ""
-echo "▍Issue/PR linkage 不一致:"
+echo "▍Issue/PR linkage mismatch:"
 gh issue list "${gh_repo_args[@]}" --label "🛠️ phase:implementing" --state open --json number,title --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null | while IFS='|' read -r num title; do
   [ -z "$num" ] && continue
-  # 找 closes #num 的 open PR
+  # Find open PRs that close #num.
   pr_count=$(gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --search "in:body Closes #${num}" --json number --jq 'length' 2>/dev/null || echo 0)
   if [ "$pr_count" = "0" ]; then
-    # 还要找 closed PR 是否已 merge
+    # Also check whether a closed PR was merged.
     merged_pr=$(gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state merged --search "in:body Closes #${num}" --json number --jq '.[0].number' 2>/dev/null)
     if [ -z "$merged_pr" ] || [ "$merged_pr" = "null" ]; then
-      echo "  ⚠️ issue #${num} [🛠️ implementing] 无对应 in-flight 或 merged PR(implement codex 失败/未派?)"
+      echo "  ⚠️ issue #${num} [🛠️ implementing] has no matching in-flight or merged PR (implement codex failed/not dispatched?)"
     else
-      echo "  ⚠️ issue #${num} [🛠️ implementing] PR #${merged_pr} 已 merged 但 issue 未关 — controller 应 gh issue close"
+      echo "  ⚠️ issue #${num} [🛠️ implementing] PR #${merged_pr} is merged but issue is still open — controller should gh issue close"
     fi
   fi
 done
 
-# 5d. Spawn drop detection: 3 solver artifact 完整但对应 judge log 没有
+# 5d. Spawn drop detection: 3 solver artifacts complete but matching judge log absent.
 echo ""
-echo "▍Spawn drop(solver 完成 N 但 judge 漏派):"
+echo "▍Spawn drop (N solvers complete but judge was not dispatched):"
 for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
   [ -f "$f" ] || continue
   base=$(basename "$f" -minimal.md)
@@ -245,20 +230,20 @@ for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
   if [ -f "$s_str" ] && [ -f "$s_del" ] && [ ! -f "$judge_log" ]; then
     issue_state=$(gh issue view "$issue" "${gh_repo_args[@]}" --json state --jq '.state' 2>/dev/null)
     [ "$issue_state" = "OPEN" ] || continue  # only flag if issue still open
-    echo "  ⚠️ issue #${issue} r${round} 3 solver done 但 judge log 不存在(需重派 judge)"
+    echo "  ⚠️ issue #${issue} r${round} 3 solvers done but judge log absent (redispatch judge)"
   fi
 done
 
 # 6. Drift detection: phase:* label set but no log file being actively written for that issue/PR
 echo ""
-echo "▍Drift(label vs codex 不一致):"
+echo "▍Drift (label vs codex mismatch):"
 active_logs_file=$(mktemp)
-# 用 log 文件最近活跃来判断:no EXIT= 末行 + mtime < 10 min = codex 在跑
+# Use recent log activity to infer running codex: no EXIT= tail and mtime < 10 min.
 for f in .refactor-loop/logs/*.log; do
   [ -f "$f" ] || continue
-  # mtime > 10 min: 没在更新
+  # mtime > 10 min: not updating.
   [ -n "$(find "$f" -mmin -10)" ] || continue
-  # 已有 EXIT=:已完成
+  # EXIT= present: already complete.
   if grep -q "^EXIT=" "$f" 2>/dev/null; then continue; fi
   basename "$f" .log >> "$active_logs_file"
 done
@@ -269,7 +254,7 @@ check_drift() {
     *) return ;;
   esac
   if ! grep -qE "(pr${num}|issue${num})" "$active_logs_file" 2>/dev/null; then
-    echo "  ⚠️ ${kind} #${num} label=${phase} 但 0 codex referencing"
+    echo "  ⚠️ ${kind} #${num} label=${phase} but 0 codex referencing it"
   fi
 }
 gh issue list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀"))) | first)"' 2>/dev/null | while IFS='|' read -r num phase; do
@@ -281,28 +266,28 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,l
   check_drift pr "$num" "$phase"
 done
 
-# 7. Stale worktree(branch 已 merged 但 worktree 还在)
+# 7. Stale worktree (branch was merged but worktree remains)
 echo ""
-echo "▍Stale worktree(branch 已 merged 应清理):"
+echo "▍Stale worktree (branch merged and should be cleaned):"
 git worktree list --porcelain | grep "^worktree " | sed 's/^worktree //' | while read wt; do
   base=$(basename "$wt")
   # skip main + dev-sync
   case "$base" in
-    "$(basename "$REPO_ROOT")" | "$(basename "$REPO_ROOT")-wt-dev-sync") continue ;;
+    "$(basename "$REPO_ROOT")" | "$(basename "$REPO_ROOT")-wt-dev-sync" | "dev-sync") continue ;;
   esac
   # If worktree branch is in remote merged-to-master list, mark stale
   branch=$(git -C "$wt" branch --show-current 2>/dev/null)
   if [ -n "$branch" ]; then
     # branch exists on remote? if not, stale
     if ! git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-      echo "  ⚠️ $wt  branch=$branch(remote 已不存在 — git worktree remove $wt --force && git branch -D $branch)"
+      echo "  ⚠️ $wt  branch=$branch(remote no longer exists — git worktree remove $wt --force && git branch -D $branch)"
     fi
   fi
 done
 
-# 8. Stuck-too-long(issue/PR 有 stuck label 且 last non-AI comment > 6h)
+# 8. Stuck too long (issue/PR has stuck label and last non-AI comment > 6h)
 echo ""
-echo "▍Stuck too long(>6h 无 maintainer 回复;考虑 4h reflector 重判):"
+echo "▍Stuck too long (>6h without maintainer reply; consider 4h reflector re-evaluation):"
 gh issue list "${gh_repo_args[@]}" --label "auto-loop-stuck" --state open --json number,title 2>/dev/null | GH_REPO_SLUG_FOR_PEEK="${GH_REPO_SLUG:-}" python3 -c "
 import json, sys, subprocess
 from datetime import datetime, timezone

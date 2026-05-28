@@ -1,0 +1,106 @@
+name: release
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview the release without creating a tag or GitHub Release"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  checks: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/github-script@v7
+        name: Verify required release checks
+        with:
+          script: |
+            const required = ["contract-tests", "manifest-version-sync", "skill-degradation"];
+            const { owner, repo } = context.repo;
+            const ref = context.sha;
+            const { data } = await github.rest.checks.listForRef({ owner, repo, ref });
+            const byName = new Map(data.check_runs.map((check) => [check.name, check]));
+            for (const name of required) {
+              const check = byName.get(name);
+              if (!check || check.conclusion !== "success") {
+                core.setFailed(`required check ${name} is missing or not successful`);
+                return;
+              }
+            }
+
+      - id: manifest
+        name: Read committed manifest version
+        run: |
+          version="$(python3 .github/scripts/bump_version.py --check --read-version)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - id: mode
+        name: Resolve release mode
+        run: |
+          dry_run="${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}"
+          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
+
+      - id: tag
+        name: Check tag state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          tag="v${VERSION}"
+          if gh release view "$tag" >/dev/null 2>&1 || git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+            echo "Release ${tag} already exists; no-op."
+            exit 0
+          fi
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Enforce semver monotonicity
+        if: steps.tag.outputs.exists != 'true'
+        env:
+          VERSION: ${{ steps.manifest.outputs.version }}
+        run: |
+          latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 | sed 's/^v//')"
+          python3 - "$latest" "$VERSION" <<'PY'
+          import sys
+          def parts(value):
+              return tuple(int(part) for part in value.split("."))
+          latest, current = sys.argv[1], sys.argv[2]
+          if latest and parts(current) <= parts(latest):
+              raise SystemExit(f"version {current} is not newer than latest tag {latest}")
+          PY
+
+      - name: Preview release notes
+        if: steps.tag.outputs.exists != 'true'
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          previous="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
+          if [ -n "$previous" ]; then
+            git log --oneline "${previous}..HEAD"
+          else
+            git log --oneline
+          fi
+          echo "Prepared release notes for ${TAG}"
+
+      - name: Create tag and GitHub Release
+        if: steps.tag.outputs.exists != 'true' && steps.mode.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes
