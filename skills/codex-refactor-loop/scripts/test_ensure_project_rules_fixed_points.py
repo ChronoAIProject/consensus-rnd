@@ -14,6 +14,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from ensure_project_rules_fixed_points import (
     CANONICAL_BODY,
     CANONICAL_HASH,
@@ -2147,15 +2149,16 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
         self.assertIn("controller wakeup sweep", skill + reference)
         self.assertNotIn("triage-monitor-state.json", skill + reference)
 
-    def test_daemon_roster_source_regression_has_no_six_daemon_or_triage_required_runtime(self) -> None:
+    def test_daemon_roster_source_regression_has_no_triage_required_runtime(self) -> None:
         text = (
             (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
             + "\n"
             + (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
         )
         forbidden = (
-            "6 daemon",
             "six required daemons",
+            "ensure all 6 daemons",
+            "6-daemon",
             "required-runtime triage-monitor",
             "triage-monitor required-runtime",
             "triage-monitor.sh required",

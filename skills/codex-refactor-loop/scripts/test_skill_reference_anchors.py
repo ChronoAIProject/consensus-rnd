@@ -106,11 +106,32 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     def test_reference_documents_phase9_router_daemon_boundary(self) -> None:
         self.assertIn("phase9_router_daemon.py --daemon --repo-root", self.reference)
         self.assertIn("Allowlist(唯一 direct spawn authority)", self.reference)
+        self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.reference)
+        self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.reference)
+        self.assertIn("meta-judge-issue<N>-r<R>.log", self.reference)
+        self.assertIn("issue/round 来自 filename identity", self.reference)
+        self.assertIn("public marker payload remains role-local", self.reference)
+        self.assertIn("daemon-owned output logs remain `phase9-issue...`", self.reference)
         self.assertIn("clean `^EXIT=0`", self.reference)
         self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.reference)
         self.assertIn(".controller-pending-events.log", self.reference)
         self.assertIn("no lifecycle authority", self.reference)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.reference)
+
+    def test_phase9_router_filename_identity_source_regression(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "phase9_router_daemon.py").read_text(encoding="utf-8")
+        helper = (SKILL_ROOT / "scripts" / "restart-daemons.sh").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, self.reference, router, helper))
+        for token in ("phase9-issue", "solver-issue", "meta-judge-issue"):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+                self.assertIn(token, self.reference)
+        self.assertIn("parse_phase9_log_identity", router)
+        self.assertIn("Refactor (issue-100/router-filename-identity)", router)
+        self.assertIn("SOLVER_DONE:<role>:", combined)
+        self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
+        self.assertIn("phase9_router_daemon.py", helper)
+        self.assertIn('--daemon --repo-root \\"\\$REPO_ROOT\\"', helper)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):

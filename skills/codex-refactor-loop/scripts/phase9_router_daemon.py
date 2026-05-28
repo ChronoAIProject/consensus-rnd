@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, TextIO
+from typing import Callable, Iterable, Literal, cast
 
 
 ROLES = ("minimal", "structural", "delete")
@@ -56,6 +56,53 @@ class Marker:
     issue: str
     round: int
     role: str | None = None
+
+
+@dataclass(frozen=True)
+class Phase9LogIdentity:
+    issue: str
+    round: int
+    actor: Literal["minimal", "structural", "delete", "judge", "reflector"]
+    dialect: Literal["phase9", "solver", "meta-judge"]
+
+
+PHASE9_LOG_RE = re.compile(
+    r"^phase9-issue(?P<issue>\d+)-r(?P<round>\d+)-"
+    r"(?P<actor>minimal|structural|delete|judge|reflector)\.log$"
+)
+SOLVER_LOG_RE = re.compile(
+    r"^solver-issue(?P<issue>\d+)-r(?P<round>\d+)-"
+    r"(?P<actor>minimal|structural|delete)\.log$"
+)
+META_JUDGE_LOG_RE = re.compile(r"^meta-judge-issue(?P<issue>\d+)-r(?P<round>\d+)\.log$")
+
+
+def parse_phase9_log_identity(name: str) -> Phase9LogIdentity | None:
+    match = PHASE9_LOG_RE.match(name)
+    if match:
+        return Phase9LogIdentity(
+            issue=match.group("issue"),
+            round=int(match.group("round")),
+            actor=cast(Literal["minimal", "structural", "delete", "judge", "reflector"], match.group("actor")),
+            dialect="phase9",
+        )
+    match = SOLVER_LOG_RE.match(name)
+    if match:
+        return Phase9LogIdentity(
+            issue=match.group("issue"),
+            round=int(match.group("round")),
+            actor=cast(Literal["minimal", "structural", "delete"], match.group("actor")),
+            dialect="solver",
+        )
+    match = META_JUDGE_LOG_RE.match(name)
+    if match:
+        return Phase9LogIdentity(
+            issue=match.group("issue"),
+            round=int(match.group("round")),
+            actor="judge",
+            dialect="meta-judge",
+        )
+    return None
 
 
 class Phase9Router:
@@ -119,8 +166,8 @@ class Phase9Router:
         for log_path in sorted(self.logs_dir.glob("*.log")):
             if not self._is_clean_exit(log_path):
                 continue
-            issue, round_no, role_hint = self._identity_from_path(log_path)
-            if issue is None or round_no is None:
+            identity = self._identity_from_path(log_path)
+            if identity is None:
                 continue
             try:
                 lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -131,12 +178,12 @@ class Phase9Router:
                 marker = self._extract_marker(line)
                 if marker is None:
                     continue
-                role = role_hint
+                role: str | None = identity.actor
                 if marker.startswith("SOLVER_DONE:"):
                     role = marker.split(":", 2)[1]
                     if role not in ROLES:
                         continue
-                markers.append(Marker(marker, log_path, issue, round_no, role))
+                markers.append(Marker(marker, log_path, identity.issue, identity.round, role))
         return markers
 
     def _extract_marker(self, line: str) -> str | None:
@@ -204,15 +251,12 @@ class Phase9Router:
                 seen.add(f"fallback:{log_path}")
         return seen
 
-    def _identity_from_path(self, path: Path) -> tuple[str | None, int | None, str | None]:
-        match = re.search(
-            r"phase9[-_]?issue(?P<issue>\d+)[-_]r(?:ound-)?(?P<round>\d+)(?:[-_](?P<role>minimal|structural|delete|judge|reflector))?",
-            path.name,
-        )
-        if not match:
-            return None, None, None
-        role = match.group("role")
-        return match.group("issue"), int(match.group("round")), role
+    def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
+        # Refactor (issue-100/router-filename-identity): Old pattern: one loose regex
+        # accepted non-owned Phase 9-ish names. New principle: router-private filename
+        # identity allowlist accepts only phase9-issue, solver-issue, and meta-judge-issue
+        # dialects; public markers remain role-local.
+        return parse_phase9_log_identity(path.name)
 
     def _is_clean_exit(self, path: Path) -> bool:
         try:
@@ -233,7 +277,7 @@ class Phase9Router:
                 continue
             key = self._key(issue, round_no, "judge")
             log_path = self._log_path(issue, round_no, "judge")
-            if key in ledger or self._in_flight(log_path):
+            if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, "judge"):
                 continue
             prompt = self._write_prompt(issue, round_no, "judge", self._meta_judge_prompt(issue, round_no, role_markers.values()))
             if self._spawn(prompt, log_path):
@@ -331,12 +375,16 @@ class Phase9Router:
         for r in range(round_no - 2, round_no + 1):
             verdicts: set[str] = set()
             for role in ROLES:
-                path = self._log_path(issue, r, role)
-                if not self._is_clean_exit(path):
+                role_verdicts: set[str] = set()
+                for path in self._solver_history_log_paths(issue, r, role):
+                    if not self._is_clean_exit(path):
+                        continue
+                    for marker in self._collect_markers_from_path(path):
+                        if marker.startswith(f"SOLVER_DONE:{role}:"):
+                            role_verdicts.add(self._solver_verdict_text(marker))
+                if not role_verdicts:
                     return False
-                for marker in self._collect_markers_from_path(path):
-                    if marker.startswith(f"SOLVER_DONE:{role}:"):
-                        verdicts.add(self._solver_verdict_text(marker))
+                verdicts.update(role_verdicts)
             if not verdicts:
                 return False
             recent.append(verdicts)
@@ -376,6 +424,14 @@ class Phase9Router:
             if "spawn-codex.sh" in line and target in line and " -c " not in line:
                 return True
         return False
+
+    def _equivalent_actor_log_exists(self, issue: str, round_no: int, actor: str) -> bool:
+        paths = [self._log_path(issue, round_no, actor)]
+        if actor in ROLES:
+            paths.append(self.logs_dir / f"solver-issue{issue}-r{round_no}-{actor}.log")
+        if actor == "judge":
+            paths.append(self.logs_dir / f"meta-judge-issue{issue}-r{round_no}.log")
+        return any(path.exists() for path in paths)
 
     def _read_ledger(self) -> set[str]:
         keys: set[str] = set()
@@ -486,11 +542,18 @@ class Phase9Router:
         lines = []
         for r in range(round_no - 2, round_no + 1):
             for role in ROLES:
-                lines.append(f"- r{r} {role}: {self._log_path(issue, r, role)}")
+                paths = " or ".join(str(path) for path in self._solver_history_log_paths(issue, r, role))
+                lines.append(f"- r{r} {role}: {paths}")
         return lines
 
     def _log_path(self, issue: str, round_no: int, actor: str) -> Path:
         return self.logs_dir / f"phase9-issue{issue}-r{round_no}-{actor}.log"
+
+    def _solver_history_log_paths(self, issue: str, round_no: int, role: str) -> tuple[Path, Path]:
+        return (
+            self._log_path(issue, round_no, role),
+            self.logs_dir / f"solver-issue{issue}-r{round_no}-{role}.log",
+        )
 
     def _key(self, issue: str, round_no: int, actor: str) -> str:
         return f"{issue}-{round_no}-{actor}"

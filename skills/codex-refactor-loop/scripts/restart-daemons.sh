@@ -4,7 +4,8 @@
 #   New principle: checked-in helper, $REPO_ROOT-relative, idempotent + heartbeat-fresh skip, cron/launchd runnable;
 #     controller wakeup checks stale daemon heartbeats and invokes this helper(per #49 r3 META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert).
 #
-# Maintains singleton + heartbeat wrappers for the five long-running daemons.
+# Maintains singleton + heartbeat wrappers for the five restart-helper-managed
+# daemons. Monitor bridge is armed separately by controller.
 # This helper has no lifecycle authority and does not alter repository or
 # issue/PR state.
 
@@ -191,4 +192,4 @@ start_daemon "concurrency_monitor" "python3 '$SKILL_ROOT/scripts/concurrency_mon
 start_daemon "comment-monitor" "bash '$SKILL_ROOT/scripts/comment-monitor.sh'"
 start_daemon "codex-progress-reporter" "INTERVAL=600 bash '$SKILL_ROOT/scripts/codex-progress-reporter.sh'"
 start_daemon "dev_sync_daemon" "python3 '$SKILL_ROOT/scripts/dev_sync_daemon.py'"
-start_daemon "phase9_router_daemon" "python3 '$SKILL_ROOT/scripts/phase9_router_daemon.py'"
+start_daemon "phase9_router_daemon" "python3 '$SKILL_ROOT/scripts/phase9_router_daemon.py' --daemon --repo-root \"\$REPO_ROOT\""
