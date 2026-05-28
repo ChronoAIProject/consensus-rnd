@@ -972,53 +972,103 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         self.assertIn("$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}", phase0)
         self.assertIn("fail closed", phase0)
 
-    # Refactor (iter3/skill-github-post-contract):
-    #   Old: broad all-prompts direct-post claim.
-    #   New: two explicit rosters plus enumerable behavior tests
-    #   (#13 structural consensus).
-    def test_github_post_contract_matches_prompt_roster(self) -> None:
+    # Refactor (iter6/issue-118):
+    #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+    def test_github_post_contract_is_prompt_self_declared(self) -> None:
         prompts_root = SKILL_ROOT / "prompts"
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
-        direct_post_prompts = {
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        prompt_paths = sorted(path for path in prompts_root.glob("*.md") if path.name != "_github-post-rules.md")
+
+        self.assertGreater(len(prompt_paths), 0)
+        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+
+        direct_post_prompts = []
+        marker_only_prompts = []
+        for prompt_path in prompt_paths:
+            text = prompt_path.read_text(encoding="utf-8")
+            if re.search(r"(?m)^## GitHub post", text):
+                direct_post_prompts.append(prompt_path)
+            else:
+                marker_only_prompts.append(prompt_path)
+
+        self.assertGreater(len(direct_post_prompts), 0)
+        self.assertGreater(len(marker_only_prompts), 0)
+
+        for prompt_path in direct_post_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="direct-post"):
+                self.assertIn("## GitHub post", text)
+                self.assertIn("prompts/_github-post-rules.md", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertTrue(
+                    "POSTED:" in text or "遵循 `prompts/_github-post-rules.md`" in text,
+                    f"{prompt_path.name} must either spell out post flow or delegate to shared post rules",
+                )
+                for token in ("gh pr create", "gh pr merge", "gh issue create", "gh issue close", "git commit", "git push", "git checkout"):
+                    lines = [
+                        line
+                        for line in text.splitlines()
+                        if token in line and "Old pattern:" not in line
+                    ]
+                    for line in lines:
+                        assert_denial_or_controller_owner_context(self, line, token=token)
+
+        for prompt_path in marker_only_prompts:
+            text = prompt_path.read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_path.name, contract="marker-only"):
+                self.assertNotIn("## GitHub post", text)
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+                self.assertNotIn("You DO post to GitHub directly", text)
+                self.assertNotIn("自己调 `gh` post", text)
+                self.assertNotIn("Post 后打印 `POSTED:", text)
+
+        for source_name, source_text in (("SKILL.md", skill_text), ("REFERENCE.md", reference_text)):
+            with self.subTest(source=source_name, contract="no-roster"):
+                self.assertNotIn("Direct-post prompts:", source_text)
+                self.assertNotIn("Marker/artifact-only prompts:", source_text)
+                self.assertIn("prompt body", source_text)
+                self.assertIn("## GitHub post", source_text)
+
+        skill_posting_contract = skill_text.split("## GitHub Posting Contract", 1)[1].split("## Anchor Read Policy", 1)[0]
+        reference_traceability = reference_text.split("### GitHub traceability", 1)[1].split("**@-mention rule:**", 1)[0]
+        former_roster_tokens = (
             "solver-minimal.md",
             "solver-structural.md",
             "solver-delete.md",
             "meta-judge.md",
-            "reviewer-architect.md",
-            "reviewer-quality.md",
             "reviewer-tests.md",
+            "reviewer-quality.md",
+            "reviewer-architect.md",
             "review-fix.md",
             "design-issue-reply.md",
             "triage-external-issue.md",
-        }
-        marker_only_prompts = {
             "audit.md",
-            "design-issue-body.md",
             "implement.md",
-            "meta-reflector-stalled.md",
             "verify.md",
             "remote-ci-fix.md",
             "test-add.md",
-        }
-        prompt_inventory = {path.name for path in prompts_root.glob("*.md")} - {"_github-post-rules.md"}
+        )
+        for source_name, posting_section in (
+            ("SKILL.md GitHub Posting Contract", skill_posting_contract),
+            ("REFERENCE.md GitHub traceability", reference_traceability),
+        ):
+            for token in former_roster_tokens:
+                with self.subTest(source=source_name, forbidden_roster_token=token):
+                    self.assertNotIn(token, posting_section)
 
-        self.assertEqual(prompt_inventory, direct_post_prompts | marker_only_prompts)
-        self.assertFalse(direct_post_prompts & marker_only_prompts)
-        self.assertIn("Direct-post prompts", skill_text)
-        self.assertIn("Marker/artifact-only prompts", skill_text)
-        self.assertNotIn("所有 prompts 末尾都有 `## GitHub post (强制)`", skill_text)
+        for forbidden in (
+            SKILL_ROOT / "prompts" / "posting-contract.json",
+            SKILL_ROOT / "scripts" / "prompt_posting_contract.py",
+        ):
+            with self.subTest(forbidden_path=forbidden.name):
+                self.assertFalse(forbidden.exists())
 
-        for prompt_name in sorted(direct_post_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="direct-post"):
-                self.assertIn("## GitHub post", text)
-                self.assertIn("_github-post-rules.md", text)
-
-        for prompt_name in sorted(marker_only_prompts):
-            text = (prompts_root / prompt_name).read_text(encoding="utf-8")
-            with self.subTest(prompt=prompt_name, contract="marker-only"):
-                self.assertNotIn("## GitHub post", text)
-                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
+        for text in (skill_text, reference_text):
+            self.assertNotIn("PromptGitHubPostingContract", text)
+            self.assertNotIn("posting-contract.json", text)
+            self.assertNotIn("prompt_posting_contract.py", text)
 
     # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
     #   Old pattern: implement-from-design could grow a second intake/helper prompt or producer registry abstraction.

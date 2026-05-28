@@ -759,37 +759,22 @@ Recovery rules:
 
 ## GitHub Posting Contract
 
-Direct-post prompts:
-
-- `design-issue-body.md`
-- `design-issue-reply.md`
-- `_github-post-rules.md` inclusions where the prompt explicitly posts to GitHub
-
-Marker/artifact-only prompts:
-
-- `audit.md`
-- `implement.md`
-- `verify.md`
-- `remote-ci-fix.md`
-- `review-fix.md`
-- `reviewer-architect.md`
-- `reviewer-tests.md`
-- `reviewer-quality.md`
-- `solver-minimal.md`
-- `solver-structural.md`
-- `solver-delete.md`
-- `meta-judge.md`
-- `test-add.md`
-- `triage-external-issue.md`
+<!--
+Refactor (iter6/issue-118):
+  Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+-->
 
 Posting rules:
 
 1. Controller posts lifecycle banners directly.
-2. Worker prompts post only when their prompt explicitly owns a GitHub reply/body.
+2. A worker prompt is direct-post only when its own body contains `## GitHub post` and references `prompts/_github-post-rules.md`.
 3. Every GitHub body uses the sentinel final line.
 4. Avoid plain-text unverified human names or handles.
-5. Whitelisted mentions come from `$MAINTAINER_WHITELIST`.
-6. Label changes require a banner explaining the reason.
+5. `SKILL.md` and `REFERENCE.md` must not maintain a posting-mode prompt filename roster; inventory tests derive posting mode from prompt bodies.
+6. Direct-post permission is limited to GitHub comments, PR body edits, reactions, and temp files; lifecycle, labels, create/close/merge, push, and release stay controller-owned.
+7. Whitelisted mentions come from `$MAINTAINER_WHITELIST`.
+8. Label changes require a banner explaining the reason.
 
 ## Anchor Read Policy
 
