@@ -2754,6 +2754,18 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
+    # Refactor (iter1/issue-140):
+    #   Old pattern: host env variables drifted between the SKILL.md tables and
+    #   host.env.example without a source-regression equality check.
+    #   New principle: keep the existing host config and language-policy tables
+    #   as the only host-facing variable list, mechanically matched to exports.
+    def skill_host_config_section(self) -> str:
+        return self.read_rel("skills/codex-refactor-loop/SKILL.md").split("## Host 配置(通用化注入点)", 1)[1].split("## Skill Root Contract", 1)[0]
+
+    def host_env_export_keys(self) -> set[str]:
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        return set(re.findall(r"^export ([A-Z0-9_]+)=", host_env, re.MULTILINE))
+
     def rel_paths(self, *patterns: str) -> list[Path]:
         return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
 
@@ -3225,6 +3237,52 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 offenders.append(f"{rel}:{line_no}: {stripped}")
 
         self.assertEqual(offenders, [])
+
+    def test_host_env_example_exports_match_skill_host_tables(self) -> None:
+        section = self.skill_host_config_section()
+        table_vars = set(re.findall(r"`\$([A-Z0-9_]+)`", section))
+        exports = self.host_env_export_keys()
+
+        self.assertEqual(exports, table_vars)
+        self.assertIn("GH_OWNER", exports)
+        self.assertIn("GH_REPO_NAME", exports)
+        compatibility_exports = {"GH_OWNER", "GH_REPO_NAME"}
+        compatibility_lines = [
+            line for line in section.splitlines() if "compatibility" in line and ("GH_OWNER" in line or "GH_REPO_NAME" in line)
+        ]
+        self.assertEqual(compatibility_exports, {name for line in compatibility_lines for name in compatibility_exports if name in line})
+
+    def test_host_env_example_exports_have_requirement_behavior_comments(self) -> None:
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        lines = host_env.splitlines()
+        export_lines = [(idx, line) for idx, line in enumerate(lines) if line.startswith("export ")]
+        self.assertGreaterEqual(len(export_lines), 20)
+
+        behavior_re = re.compile(r"Requirement:|Default:|Empty/noop:|Fail-closed surface:")
+        for idx, line in export_lines:
+            with self.subTest(export=line):
+                preceding = "\n".join(lines[max(0, idx - 3) : idx])
+                self.assertRegex(preceding, behavior_re)
+
+    def test_host_env_contract_stays_on_existing_surfaces(self) -> None:
+        skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
+        host_env = self.read_rel("skills/codex-refactor-loop/host.env.example")
+        combined = "\n".join([skill, host_env])
+
+        self.assertIn("## Host 配置(通用化注入点)", skill)
+        self.assertIn("### Host language policy", skill)
+        for heading in ("# ─── required", "# ─── defaulted", "# ─── optional-empty-or-noop"):
+            with self.subTest(heading=heading):
+                self.assertIn(heading, host_env)
+        self.assertNotIn("HostRuntimeContract", combined)
+        self.assertNotIn("HOST_RUNTIME_CONTRACT", combined)
+        self.assertNotIn("host env schema", combined.lower())
+        self.assertNotIn("Host env schema", combined)
+        self.assertNotIn("export GH_REPO=", host_env)
+        self.assertNotIn("CODEX_REFACTOR_LOOP_SKILL_ROOT", host_env)
+        self.assertFalse((SKILL_ROOT / "scripts" / "host_runtime_contract.py").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "host_env_schema.py").exists())
+        self.assertFalse((SKILL_ROOT / "INSTALL.md").exists())
 
     # Refactor (iter3/skill-host-language-policy): Old: hard-coded
     # C#/.NET/proto defaults. New: 6 optional HOST_* values default empty and
