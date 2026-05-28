@@ -101,6 +101,9 @@ signal.pause()
 
 
 class RestartDaemonsBehaviorTests(unittest.TestCase):
+    # Refactor (iter1/issue-141):
+    #   Old pattern: downstream install steps without an installer mentioned scheduler setup but did not mechanically prove restart-daemons.sh bounded one tick.
+    #   New principle: Downstream install walkthrough names cron/launchd setup, while this bounded scheduler behavior test proves one helper tick exits.
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="restart-daemons-test-"))
         self.repo = self.tmp_root / "repo"
@@ -283,6 +286,34 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self._run_helper()
 
         self.assertEqual(1, self._start_count("concurrency_monitor"))
+
+    def test_documented_scheduler_command_sources_host_env_before_exec(self) -> None:
+        env = os.environ.copy()
+        env.pop("REPO_ROOT", None)
+        env.update(
+            {
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
+                "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1",
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+            }
+        )
+        command = (
+            f"source .refactor-loop/host.env && "
+            f"exec {self.skill / 'scripts' / 'restart-daemons.sh'}"
+        )
+
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=self.repo,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+
+        self._read_start_signal("concurrency_monitor")
+        self.assertEqual(1, self._start_count("concurrency_monitor"))
+        self.assertIn("concurrency_monitor restarted", result.stdout)
 
     def test_restarts_when_heartbeat_stale(self) -> None:
         self._run_helper()

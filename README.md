@@ -65,6 +65,18 @@
 
 把 `skills/<name>/` 拷进 agent 的个人 skills 目录(如 Claude Code 的 `~/.claude/skills/`)即可。
 
+### 下游 host quickstart
+
+<!--
+Refactor (iter1/issue-141):
+  Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
+  New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 restart-daemons.sh 不无限阻塞。
+-->
+
+`codex-refactor-loop` 的 host 安装顺序集中在
+[`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough)。
+按该 walkthrough 安装 skill、复制并填写 `.refactor-loop/host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;README 不复制命令矩阵。
+
 ## 泛化路线(待迭代)
 
 第一块是直接移植,仍带"重构"外壳与少量 host 主张。后续迭代方向:
