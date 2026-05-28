@@ -1698,6 +1698,37 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
+    # Refactor (iter6/issue-133):
+    #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 DESIGN_DECISION_PATH
+    def test_dispatch_queue_workspace_guard_is_documented_and_enforced(self) -> None:
+        monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
+        reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
+        combined = monitor_text + "\n" + reference_text
+
+        for required in (
+            "MUTABLE_DISPATCH_PREFIXES",
+            "MAIN_READONLY_DISPATCH_PREFIXES",
+            "validate_dispatch_cwd",
+            "archive_rejected",
+            ".worktrees",
+            "dispatch-rejected",
+            "DISPATCH_REJECTED",
+            "main-worktree-cd",
+            "no shared workspace policy",
+            "no required `actor/work_unit_id` migration",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+        for forbidden in (
+            "workspace_policy.py",
+            "WorkUnitWorkspace",
+            "ActorWorkspacePolicy",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, monitor_text)
+
     # Refactor (existing-issue-priority): Old pattern: controller dispatched
     # fresh audit whenever floor was deficit, even when open auto-loop issues
     # in design-solving / pr-open / fixing had 0 codex. New principle:

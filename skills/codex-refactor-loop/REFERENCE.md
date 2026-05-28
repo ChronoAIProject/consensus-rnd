@@ -134,10 +134,18 @@ Allowed priority directories are `p0/`, `p1/`, and `p2/`; the monitor always che
 
 Required fields are `cd`, `prompt`, and `log`; `task_id` defaults to the `.dispatch.json` filename stem if omitted, and `stall` defaults to `5400` if omitted. Paths must be absolute so floor counting can still scope by `$REPO_ROOT`.
 
+Dispatch cwd guard:
+- `MUTABLE_DISPATCH_PREFIXES`: `implement-`, `fix-pr`, `remote-ci-fix`, `test-add-`, `verify-`, and `hotfix-`.
+- `MAIN_READONLY_DISPATCH_PREFIXES`: `audit-`, `phase9-issue`, `solver-`, `meta-judge-`, `review-pr`, and `reviewer-pr`.
+- Queued mutable task prefixes must use `cd` under `$REPO_ROOT/.worktrees/<name>/`; `$REPO_ROOT`, relative paths, paths outside `$REPO_ROOT`, and `$REPO_ROOT/.worktrees/` itself fail closed.
+- Main-readonly prefixes are the explicit allowlist that may use `$REPO_ROOT` as `cd`.
+- This is a backward-compatible tightening of the existing dispatch queue protocol: no shared workspace policy, no `workspace_policy.py`, no `WorkUnitWorkspace`, and no required `actor/work_unit_id` migration.
+
 Auto-dispatch semantics:
 - On each tick, if `actual < CODEX_FLOOR` and the queue is non-empty, the monitor launches at most `CODEX_FLOOR - actual` tasks via `<skill-root>/scripts/spawn-codex.sh --cd <cd> --prompt <prompt> --log <log> --stall <stall>`.
 - After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
 - The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
+- If a queued mutable task violates the cwd guard, the monitor moves it to `.refactor-loop/dispatch-rejected/<task-id>.json`, adding `rejected_at`, `reject_reason`, `priority`, and `source_dispatch_file`, writes `DISPATCH_REJECTED:<task-id>:<priority>:main-worktree-cd:<reason>`, and continues scanning for the next legal queued item.
 - If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue real work when one of the floor refill routes below is valid.
 - This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
 
