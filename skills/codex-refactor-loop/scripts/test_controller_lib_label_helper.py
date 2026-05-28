@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -275,6 +276,27 @@ exit 0
     def recent_merges(self) -> dict[str, object]:
         return json.loads((self.root / ".refactor-loop/state/recent-pr-merges.json").read_text(encoding="utf-8"))
 
+    def write_recent_merges(self, entries: list[dict[str, object]]) -> None:
+        path = self.root / ".refactor-loop/state/recent-pr-merges.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "count": len(entries),
+                    "window_hours": 2,
+                    "updated_at": self.iso_utc(datetime.now(timezone.utc)),
+                    "merges": entries,
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    @staticmethod
+    def iso_utc(value: datetime) -> str:
+        return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
     def test_merge_pr_records_recent_merge_after_success(self) -> None:
         result = self.run_merge_pr("55")
 
@@ -294,6 +316,76 @@ exit 0
         joined_calls = "\n".join(calls)
         self.assertIn("issue close 145 --repo test-owner/test-repo --reason completed --comment", joined_calls)
         self.assertIn("Auto-merged via PR #55", joined_calls)
+
+    def test_merge_pr_prunes_expired_dedupes_current_and_counts_window(self) -> None:
+        now = datetime.now(timezone.utc)
+        self.write_recent_merges(
+            [
+                {
+                    "pr": 41,
+                    "sha": "expired456",
+                    "merged_at": self.iso_utc(now - timedelta(hours=3)),
+                    "base_ref": "auto-refact-dev",
+                    "head_ref": "refactor/old",
+                },
+                {
+                    "pr": 42,
+                    "sha": "recent789",
+                    "merged_at": self.iso_utc(now - timedelta(minutes=5)),
+                    "base_ref": "auto-refact-dev",
+                    "head_ref": "refactor/recent",
+                },
+                {
+                    "pr": 55,
+                    "sha": "abc123",
+                    "merged_at": self.iso_utc(now - timedelta(minutes=1)),
+                    "base_ref": "auto-refact-dev",
+                    "head_ref": "refactor/issue145-duplicate",
+                },
+            ]
+        )
+
+        result = self.run_merge_pr("55", "145")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        artifact = self.recent_merges()
+        self.assertEqual(artifact["count"], 2)
+        self.assertEqual(artifact["window_hours"], 2)
+        merges = artifact["merges"]
+        self.assertIsInstance(merges, list)
+        assert isinstance(merges, list)
+        self.assertEqual(
+            [(entry["pr"], entry["sha"]) for entry in merges],
+            [(42, "recent789"), (55, "abc123")],
+        )
+        self.assertEqual(merges[-1]["merged_at"], "2026-05-29T01:02:03Z")
+
+    def test_merge_pr_dedupes_existing_same_pr_and_sha(self) -> None:
+        self.write_recent_merges(
+            [
+                {
+                    "pr": 55,
+                    "sha": "abc123",
+                    "merged_at": self.iso_utc(datetime.now(timezone.utc) - timedelta(minutes=10)),
+                    "base_ref": "auto-refact-dev",
+                    "head_ref": "refactor/previous-duplicate",
+                }
+            ]
+        )
+
+        result = self.run_merge_pr("55", "145")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        artifact = self.recent_merges()
+        self.assertEqual(artifact["count"], 1)
+        merges = artifact["merges"]
+        self.assertIsInstance(merges, list)
+        assert isinstance(merges, list)
+        self.assertEqual(len(merges), 1)
+        self.assertEqual(merges[0]["pr"], 55)
+        self.assertEqual(merges[0]["sha"], "abc123")
+        self.assertEqual(merges[0]["merged_at"], "2026-05-29T01:02:03Z")
+        self.assertEqual(merges[0]["head_ref"], "refactor/issue145")
 
     def test_merge_pr_does_not_record_or_cleanup_when_merge_fails(self) -> None:
         self._write_fake_gh(merge_exit=1, fact_json="{}")
