@@ -48,13 +48,51 @@ KNOWN_PREFIXES = (
     *LIFECYCLE_PREFIXES,
 )
 MARKER_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+")
-# Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: accepted any
-# marker payload, treating regex fragments containing `|` / `\"` / `*` / `r+1`
-# / backslashes as real markers, flooding pending-events for every old log.
-# New principle: real marker prefix and suffix segments contain only
-# [A-Za-z0-9_./\-] plus limited punctuation; reject other special characters as
-# prompt/regex echoes (per 2026-05-26 maintainer-directive).
-VALID_MARKER_PAYLOAD = re.compile(r"^[A-Z][A-Z0-9_]*:[A-Za-z0-9_./\-]+(?::[A-Za-z0-9_./\-]+)*$")
+
+
+class Phase9MarkerGrammar:
+    # Refactor (iter1/issue-149): refactor helper, no behavior change outside existing routes.
+    #   Old pattern: phase9_router_daemon marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
+    #   New principle: 按 .refactor-loop/runs/phase9-issue149-r2-judge.md consensus(structural):route-specific marker-grammar parser fix,正确解析所有 route marker(含中文 body),不引入 Phase9RoundProjection 抽象。使 router 对所有 glob 可见的 3/3 SOLVER_DONE triplet 与 converge 可靠 dispatch。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New;不超范围。
+    ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
+    VERDICT_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
+    CONVERGE_RE = re.compile(r"^META_JUDGE_DONE:converge:round-(\d+)(?::.*)?$")
+
+    @classmethod
+    def parse_marker_candidate(cls, text: str) -> str | None:
+        if cls.is_solver_done(text) or cls.parse_converge_round(text) is not None or cls.is_stalled_marker(text):
+            return text
+        if cls._is_lifecycle_or_unknown_marker(text):
+            return text
+        return None
+
+    @classmethod
+    def is_solver_done(cls, marker: str) -> bool:
+        parts = marker.split(":", 3)
+        return (
+            len(parts) >= 3
+            and parts[0] == "SOLVER_DONE"
+            and parts[1] in ROLES
+            and bool(cls.VERDICT_TOKEN.match(parts[2]))
+        )
+
+    @classmethod
+    def parse_converge_round(cls, marker: str) -> int | None:
+        match = cls.CONVERGE_RE.match(marker)
+        return int(match.group(1)) if match else None
+
+    @classmethod
+    def is_stalled_marker(cls, marker: str) -> bool:
+        return marker.startswith("META_JUDGE_DONE:escalate:stalled:")
+
+    @classmethod
+    def _is_lifecycle_or_unknown_marker(cls, marker: str) -> bool:
+        parts = marker.split(":")
+        if len(parts) < 2:
+            return False
+        if not re.match(r"^[A-Z][A-Z0-9_]*(?:_DONE|_RESOLVED|_BLOCKED)?$", parts[0]):
+            return False
+        return all(cls.ROUTE_TOKEN.match(part) for part in parts[1:])
 
 
 @dataclass(frozen=True)
@@ -212,6 +250,9 @@ class Phase9Router:
         return markers
 
     def _extract_marker(self, line: str) -> str | None:
+        # Refactor (iter1/issue-149):
+        #   Old pattern: phase9_router_daemon marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
+        #   New principle: 按 .refactor-loop/runs/phase9-issue149-r2-judge.md consensus(structural):route-specific marker-grammar parser fix,正确解析所有 route marker(含中文 body),不引入 Phase9RoundProjection 抽象。使 router 对所有 glob 可见的 3/3 SOLVER_DONE triplet 与 converge 可靠 dispatch。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New;不超范围。
         stripped = line.strip().strip("`")
         if self._is_placeholder_or_echo(stripped):
             return None
@@ -228,9 +269,7 @@ class Phase9Router:
                 candidate = match.group(0).rstrip("`.,);:|\"\\")
         if candidate is None:
             return None
-        if not VALID_MARKER_PAYLOAD.match(candidate):
-            return None
-        return candidate
+        return Phase9MarkerGrammar.parse_marker_candidate(candidate)
 
     def _is_placeholder_or_echo(self, text: str) -> bool:
         if "<" in text and ">" in text:
@@ -395,8 +434,7 @@ class Phase9Router:
         return False
 
     def _round_from_converge(self, marker: str) -> int | None:
-        match = re.match(r"META_JUDGE_DONE:converge:round-(\d+):", marker)
-        return int(match.group(1)) if match else None
+        return Phase9MarkerGrammar.parse_converge_round(marker)
 
     def _stalled_predicate_holds(self, issue: str, round_no: int) -> bool:
         if round_no < 3:
