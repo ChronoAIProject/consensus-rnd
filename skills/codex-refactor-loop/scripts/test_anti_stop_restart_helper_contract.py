@@ -11,6 +11,7 @@ SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 RESTART_HELPER = SKILL_ROOT / "scripts" / "restart-daemons.sh"
+RESTART_HELPER_TEST = SKILL_ROOT / "scripts" / "test_restart_daemons.py"
 
 
 def read(path: Path) -> str:
@@ -23,9 +24,14 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
     #   local cron/launchd-only surface.
     #   New principle: keep cron, launchd, uninstall, and no-lifecycle wording
     #   in the anti-stop section without creating a new installer or daemon.
+    # Refactor (iter1/issue-138):
+    #   Old pattern: test cleanup could gain production process probes silently.
+    #   New principle: source-regression pins tmp-root cleanup to tests only and
+    #   keeps process probes/process groups out of restart-daemons.sh.
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.helper = read(RESTART_HELPER)
+        self.helper_test = read(RESTART_HELPER_TEST)
 
     def test_skill_contains_named_exception_contract(self) -> None:
         required = (
@@ -199,6 +205,36 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, self.helper)
         self.assertIn("actor-owned heartbeat lease", self.skill)
+
+    def test_restart_helper_test_cleanup_is_test_only_tmp_root_scoped(self) -> None:
+        self.assertIn("Refactor (iter1/issue-138)", self.helper_test)
+        required = (
+            "test_cleanup_daemons_reaps_tmp_root_wrappers_and_children",
+            "start_new_session=True",
+            "os.killpg",
+            "pidfd_open",
+            "KQ_FILTER_PROC",
+            "ps\", \"-axo\", \"pid=,pgid=,command=\"",
+            "tmp_roots = {str(self.tmp_root), str(self.tmp_root.resolve())}",
+            "not any(root in command for root in tmp_roots)",
+            "self.assertEqual({}, self._tmp_root_processes())",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.helper_test)
+        self.assertNotIn("time.sleep(", self.helper_test)
+
+    def test_restart_helper_has_no_production_process_probe_or_group_contract(self) -> None:
+        forbidden = (
+            "ps ",
+            "ps\t",
+            "pgrep",
+            "setsid",
+            "killpg",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.helper)
 
 
 if __name__ == "__main__":

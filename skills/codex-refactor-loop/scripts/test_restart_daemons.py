@@ -101,6 +101,11 @@ signal.pause()
 
 
 class RestartDaemonsBehaviorTests(unittest.TestCase):
+    # Refactor (iter1/issue-138):
+    #   Old pattern: tearDown killed only tracked wrapper pids and missed detached
+    #   daemon descendants, leaving persistent test processes.
+    #   New principle: test-only cleanup reaps wrapper groups and tmp-root
+    #   descendants, then asserts no tmp-root process remains.
     # Refactor (iter1/issue-141):
     #   Old pattern: downstream install steps without an installer mentioned scheduler setup but did not mechanically prove restart-daemons.sh bounded one tick.
     #   New principle: Downstream install walkthrough names cron/launchd setup, while this bounded scheduler behavior test proves one helper tick exits.
@@ -112,6 +117,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.fake_bin.mkdir()
         self.fake_epoch_file = self.tmp_root / "fake-date-epoch"
         self.fake_epoch_file.write_text(f"{int(time.time())}\n", encoding="utf-8")
+        self.helper_process_groups: set[int] = set()
         self._write_executable(
             self.fake_bin / "date",
             "#!/usr/bin/env bash\n"
@@ -163,12 +169,20 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def _cleanup_daemons(self) -> None:
         lock_dir = self.repo / ".refactor-loop" / "locks"
-        if not lock_dir.exists():
-            return
-        for pid_file in lock_dir.glob("*.pid"):
-            pid = self._read_pid(pid_file)
-            if pid is not None:
-                self._kill_process(pid)
+        if lock_dir.exists():
+            for pid_file in lock_dir.glob("*.pid"):
+                pid = self._read_pid(pid_file)
+                if pid is not None:
+                    self._terminate_process(pid)
+                try:
+                    pid_file.unlink()
+                except FileNotFoundError:
+                    pass
+
+        for process_group in tuple(self.helper_process_groups):
+            self._terminate_process_group(process_group)
+        self._sweep_tmp_root_processes()
+        self.assertEqual({}, self._tmp_root_processes())
 
     def _read_pid(self, pid_file: Path) -> int | None:
         try:
@@ -180,16 +194,127 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         return int(raw)
 
     def _kill_process(self, pid: int) -> None:
+        self._terminate_process(pid)
+
+    def _terminate_process(self, pid: int, timeout: float = 2.0) -> None:
         try:
             os.kill(pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         except PermissionError:
             return
+        self._wait_for_pid_exit(pid, timeout)
+        if not self._pid_alive(pid):
+            return
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        self._wait_for_pid_exit(pid, timeout)
+
+    def _terminate_process_group(self, process_group: int, timeout: float = 2.0) -> None:
+        try:
+            os.killpg(process_group, signal.SIGTERM)
+        except ProcessLookupError:
+            self.helper_process_groups.discard(process_group)
+            return
+        except PermissionError:
+            return
+        self._wait_for_process_group_exit(process_group, timeout)
+        if not self._tmp_root_processes(process_group=process_group):
+            self.helper_process_groups.discard(process_group)
+            return
+        try:
+            os.killpg(process_group, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        self._wait_for_process_group_exit(process_group, timeout)
+        if not self._tmp_root_processes(process_group=process_group):
+            self.helper_process_groups.discard(process_group)
+
+    def _sweep_tmp_root_processes(self) -> None:
+        for proc in self._tmp_root_processes().values():
+            self._terminate_process(proc["pid"])
+        for proc in self._tmp_root_processes().values():
+            self._terminate_process(proc["pid"], timeout=0.5)
+
+    def _wait_for_pid_exit(self, pid: int, timeout: float) -> None:
+        if not self._pid_alive(pid):
+            return
+        if self._wait_for_pidfd_exit(pid, timeout) or self._wait_for_kqueue_exit(pid, timeout):
+            return
+        if not self._pid_alive(pid):
+            return
+        self.fail(f"platform lacks deterministic pid-exit awaiter for pid={pid}")
+
+    def _wait_for_process_group_exit(self, process_group: int, timeout: float) -> None:
+        for proc in tuple(self._tmp_root_processes(process_group=process_group).values()):
+            self._wait_for_pid_exit(proc["pid"], timeout)
+
+    def _wait_for_pidfd_exit(self, pid: int, timeout: float) -> bool:
+        pidfd_open = getattr(os, "pidfd_open", None)
+        if pidfd_open is None:
+            return False
+        try:
+            fd = pidfd_open(pid)
+        except OSError:
+            return not self._pid_alive(pid)
+        try:
+            readable, _, _ = select.select([fd], [], [], timeout)
+            return bool(readable) or not self._pid_alive(pid)
+        finally:
+            os.close(fd)
+
+    def _wait_for_kqueue_exit(self, pid: int, timeout: float) -> bool:
+        if not hasattr(select, "kqueue"):
+            return False
+        try:
+            kqueue = select.kqueue()
+        except OSError:
+            return False
+        try:
+            event = select.kevent(
+                pid,
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                fflags=select.KQ_NOTE_EXIT,
+            )
+            events = kqueue.control([event], 1, timeout)
+            return bool(events) or not self._pid_alive(pid)
+        except OSError:
+            return not self._pid_alive(pid)
+        finally:
+            kqueue.close()
+
+    def _tmp_root_processes(self, *, process_group: int | None = None) -> dict[int, dict[str, int | str]]:
+        current_pid = os.getpid()
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,pgid=,command="],
+            text=True,
+            capture_output=True,
+            check=True,
+        )
+        processes: dict[int, dict[str, int | str]] = {}
+        tmp_roots = {str(self.tmp_root), str(self.tmp_root.resolve())}
+        for line in result.stdout.splitlines():
+            parts = line.strip().split(maxsplit=2)
+            if len(parts) != 3:
+                continue
+            raw_pid, raw_process_group, command = parts
+            if not raw_pid.isdigit() or not raw_process_group.isdigit():
+                continue
+            pid = int(raw_pid)
+            proc_group = int(raw_process_group)
+            if pid == current_pid or not any(root in command for root in tmp_roots):
+                continue
+            if process_group is not None and proc_group != process_group:
+                continue
+            processes[pid] = {
+                "pid": pid,
+                "process_group": proc_group,
+                "command": command,
+            }
+        return processes
 
     def _pid_alive(self, pid: int) -> bool:
         try:
@@ -201,22 +326,12 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         return True
 
     def _run_helper(self) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env.pop("REPO_ROOT", None)
-        env.update(
+        return self._run_helper_with_env(
             {
                 "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": "30",
                 "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1",
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
             }
-        )
-        return subprocess.run(
-            ["bash", str(self.skill / "scripts" / "restart-daemons.sh")],
-            cwd=self.repo,
-            env=env,
-            text=True,
-            capture_output=True,
-            check=True,
         )
 
     def _run_helper_with_fresh_seconds(self, fresh_seconds: int) -> subprocess.CompletedProcess[str]:
@@ -244,14 +359,34 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         env = os.environ.copy()
         env.pop("REPO_ROOT", None)
         env.update(updates)
-        return subprocess.run(
+        process = subprocess.Popen(
             ["bash", str(self.skill / "scripts" / "restart-daemons.sh")],
             cwd=self.repo,
             env=env,
             text=True,
-            capture_output=True,
-            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
         )
+        self.helper_process_groups.add(process.pid)
+        stdout, stderr = process.communicate()
+        completed = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        if process.returncode != 0:
+            raise subprocess.CalledProcessError(process.returncode, process.args, stdout, stderr)
+        return completed
+
+    def _start_helper_process(self, env: dict[str, str]) -> subprocess.Popen[str]:
+        process = subprocess.Popen(
+            ["bash", str(self.skill / "scripts" / "restart-daemons.sh")],
+            cwd=self.repo,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.helper_process_groups.add(process.pid)
+        return process
 
     def _start_count(self, name: str) -> int:
         starts = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -409,10 +544,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
             }
         )
-        command = ["bash", str(self.skill / "scripts" / "restart-daemons.sh")]
 
-        first = subprocess.Popen(command, cwd=self.repo, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        second = subprocess.Popen(command, cwd=self.repo, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        first = self._start_helper_process(env)
+        second = self._start_helper_process(env)
         first_stdout, first_stderr = first.communicate(timeout=10)
         second_stdout, second_stderr = second.communicate(timeout=10)
         self.assertEqual(0, first.returncode, first_stdout + first_stderr)
@@ -421,6 +555,15 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self._read_start_signal("phase9_router_daemon")
         self.assertEqual(1, self._start_count("phase9_router_daemon"))
         self.assertEqual(1, self._start_count("concurrency_monitor"))
+
+    def test_cleanup_daemons_reaps_tmp_root_wrappers_and_children(self) -> None:
+        self._run_helper()
+        self._read_start_signal("concurrency_monitor")
+        self.assertTrue(self._tmp_root_processes())
+
+        self._cleanup_daemons()
+
+        self.assertEqual({}, self._tmp_root_processes())
 
     def test_restart_daemons_starts_phase9_router_daemon(self) -> None:
         self._run_helper()
