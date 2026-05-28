@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-post_banner.py — 只 post GitHub status banner,不 spawn codex
+post_banner.py — only post a GitHub status banner; do not spawn codex.
 
-自定义 detached Popen spawn 会让 harness 看不见 codex,导致 codex done 后
-controller 不知道,monitor 60s 报警但 controller 没有即时处理。
+Custom detached Popen spawning hides codex from the harness. Then the
+controller does not know when codex is done; the monitor alerts after 60s, but
+the controller has no immediate handling path.
 
 Refactor (iter209/cluster-209-004-tombstone-cleanup):
   Old pattern: Deprecated executable tombstone remains as a checked-in production script and the reference preserves a historical tombstone note.
   New principle: Deprecated wrapper/tombstone files and historical policy stubs are deleted; active docs point directly at the supported replacement (post_banner.py + harness-tracked spawn-codex.sh).
 
-新架构:**两步**
-1. 此脚本(blocking,几秒)post banner 到 issue/PR
-2. 调用方用 Bash `run_in_background: true` 跑 `spawn-codex.sh` — harness 跟踪 →
-   codex exit 时 harness fire <task-notification> → controller 立即唤醒
+New architecture: two steps.
+1. This blocking script posts a banner to the issue/PR in a few seconds.
+2. Caller runs `spawn-codex.sh` from Bash with `run_in_background: true`, so the
+   harness tracks it. When codex exits, the harness fires <task-notification>
+   and wakes the controller immediately.
 
 Usage:
   python3 .claude/skills/codex-refactor-loop/scripts/post_banner.py \\
@@ -20,8 +22,8 @@ Usage:
     --banner-role <role> --banner-detail "..." \\
     --log <log-path> --cd <worktree> --stall <s>
 
-返回:
-- exit 0 if banner posted,stderr 打印 BANNER_POSTED: <kind> #<issue-or-pr> <url>
+Return:
+- exit 0 if banner posted, printing BANNER_POSTED: <kind> #<issue-or-pr> <url> to stderr
 - exit 1 if banner failed
 
 ⟦AI:AUTO-LOOP⟧
@@ -39,7 +41,9 @@ from repo_config import github_repo_slug
 ROLE_NEXT_STEPS = {
     "test-add": "1. test-add 完成 marker `TEST_ADD_DONE:...`  2. controller 自动 commit + push  3. codecov 重测",
     "fix": "1. fix r<N> 完成 marker `FIX_DONE:...`  2. controller commit + push  3. 派 reviewer r<N+1>",
-    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识)
+    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge
+    # gate + contradictory Phase 8 wording. New principle: fixed truth table
+    # reject=0 && approve>=1 -> MERGE; comments are advisory (#26 minimal option B consensus).
     "reviewer": "1. 三 reviewer 完成 verdict marker  2. controller 计算 consensus  3. reject=0 + approve>=1 -> merge; all-comment -> wait explicit approval; reject -> fix",
     "implement": "1. implement 完成 marker `IMPLEMENT_DONE:<cluster>:<status>`  2. controller commit + push  3. open PR + 派 reviewer r1",
     "solver": "1. 三 solver `SOLVER_DONE:...`  2. controller 派 meta-judge r<N>  3. consensus → implement / converge → fresh round",

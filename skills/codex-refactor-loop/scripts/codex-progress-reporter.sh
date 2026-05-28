@@ -1,16 +1,18 @@
 #!/bin/bash
 # codex-progress-reporter.sh
-# 每 600s 扫 .refactor-loop/logs/*.log; 对未结束 (无 EXIT=0) 的 log 提取 tail; edit-in-place
-# 一条 progress comment 到关联 issue/PR. 首次创建, 后续 update 同一 comment id.
-# 不会膨胀评论数. 成功完成时(检测到 EXIT=0) 自动删除进展评论并停止追该 log.
+# Every 600s, scan .refactor-loop/logs/*.log; for unfinished logs
+# (no EXIT=0), extract the tail and edit one progress comment in place on the
+# linked issue/PR. Create the comment on first sight and update the same
+# comment id afterward. This does not inflate comment count. On successful
+# completion (EXIT=0), delete the progress comment and stop tracking that log.
 #
 # State: .refactor-loop/codex-progress-state.json
 #   { "<log-basename>": { "target": "<issue-or-pr>", "kind": "issue|pr", "comment_id": <id>, "last_md5": "<sha>", "finished": "false|true|failed" } }
 #
-# 启动: bash .claude/skills/codex-refactor-loop/scripts/codex-progress-reporter.sh &
-# 停止: kill <pid>
+# Start: bash .claude/skills/codex-refactor-loop/scripts/codex-progress-reporter.sh &
+# Stop: kill <pid>
 
-set -u  # 不用 -e/pipefail — daemon 必须存活,subshell 偶发 non-zero 不应导致整个 daemon 死
+set -u  # Avoid -e/pipefail: daemon must survive occasional subshell non-zero exits.
 
 if [ -z "${REPO_ROOT:-}" ]; then
   if [ "${ALLOW_GIT_ROOT_FALLBACK:-0}" = "1" ]; then
@@ -37,18 +39,18 @@ mkdir -p "$STATE_DIR"
 log_msg() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*" >&2; }
 
 # parse log basename → target number (issue or PR)
-# 优先从对应 prompt 文件 grep "#NNN"; 次选从 log 文件名 pattern 提取
+# Prefer grep "#NNN" from the corresponding prompt; fall back to filename pattern.
 parse_target() {
   local base=$1
   local n=""
-  # review-pr*/fix-pr*/phase9-issue* 等文件名本身带权威 target → 优先文件名
+  # review-pr*/fix-pr*/phase9-issue* filenames carry authoritative targets.
   case "$base" in
     review-pr*) n=$(echo "$base" | sed -nE 's/^review-pr([0-9]+).*/\1/p') ;;
     fix-pr*) n=$(echo "$base" | sed -nE 's/^fix-pr([0-9]+).*/\1/p') ;;
     phase9-issue*) n=$(echo "$base" | sed -nE 's/^phase9-issue([0-9]+).*/\1/p') ;;
   esac
   if [ -z "$n" ]; then
-    # implement-/verify- 等 cluster log 没有 PR 号 → 从 prompt body 取最后 #NNN
+    # implement-/verify- cluster logs lack PR numbers; take the last #NNN from prompt body.
     # meta-cluster prompts may mention multiple issue numbers; primary is the last one.
     local prompt="$PROMPTS_DIR/$base.md"
     if [ -f "$prompt" ]; then
@@ -70,8 +72,9 @@ parse_kind() {
 
 # Refactor (iter4/issue17-hygiene): Old pattern: binary in_flight/done handling treated failed codex exits as done and deleted the progress comment. New principle: tri-state in_flight/exit_ok/exit_failed keeps failed comments and state.finished=failed visible to maintainers.
 exit_status() {
-  # 只看末 5 行 — wrapper 在结束时 append "EXIT=<code>\nDONE_AT=..." 作为最后两行
-  # 不能 grep 全 log,因为 codex 中途可能 echo / cat 含 "EXIT=" 的内容造成误判
+  # Only inspect the last 5 lines: wrapper appends "EXIT=<code>\nDONE_AT=..."
+  # as the last two lines. Do not grep the full log because codex may echo/cat
+  # content containing "EXIT=" mid-run, causing false positives.
   local line code
   line=$(tail -5 "$1" 2>/dev/null | grep -E "^EXIT=[0-9]+$" | tail -1 || true)
   if [ -z "$line" ]; then
@@ -90,7 +93,8 @@ is_finished() {
   [ "$(exit_status "$1")" = "exit_ok" ]
 }
 
-# zombie: 30 min 未写,但无 EXIT marker → 进程很可能死了,不该再当 in-flight 持续 post
+# zombie: no writes for 30 minutes and no EXIT marker; process likely died and
+# should not keep posting as in-flight.
 is_zombie() {
   local log=$1
   if is_finished "$log"; then return 1; fi
@@ -101,7 +105,7 @@ is_zombie() {
 }
 
 extract_tail() {
-  # 取 last 25 行, 跳过 EXIT/DONE_AT marker (不影响)
+  # Take the last 25 lines, skipping EXIT/DONE_AT markers.
   tail -30 "$1" | head -25
 }
 
@@ -195,7 +199,7 @@ post_or_update() {
     return
   fi
 
-  # 已 terminal 且上次已记录同一 terminal state → skip
+  # Already terminal and previous state recorded the same terminal state: skip.
   # Refactor (issue-69/orphan-delete-retry): exception — if finished=true but state still
   # carries a real comment_id (cid != 0 / "deleted" / "gone"), the prior delete attempt did
   # not confirm. Fall through so the delete branch retries this tick instead of leaving an
@@ -210,10 +214,10 @@ post_or_update() {
     return
   fi
 
-  # 状态从 in-flight → finished: 删 comment + 从 state 移除
+  # State changed from in-flight to finished: delete comment and remove from state.
   # Refactor (issue-69/orphan-delete-retry): Old pattern: marked finished=true regardless of
   # delete result, so any transient DELETE failure (rate-limit / network) orphaned the comment
-  # forever (30 spam comments on issue #69 实证). New principle: only mark finished=true after
+  # forever (empirically seen as 30 spam comments on issue #69). New principle: only mark finished=true after
   # confirmed delete OR confirmed 404; otherwise leave state untouched so next tick retries.
   if [ "$finished" = "true" ] && [ -n "$cid" ] && [ "$cid" != "null" ] && [ "$cid" != "0" ]; then
     if gh api -X DELETE "repos/$REPO/issues/comments/$cid" >/dev/null 2>&1; then
@@ -238,7 +242,7 @@ post_or_update() {
   body=$(build_body "$base" "$log" "$finished")
   cur_md5=$(printf '%s' "$body" | hash_body)
 
-  # 内容没变化且没 finish 切换 → skip
+  # Body unchanged and no finished-state transition: skip.
   if [ "$cur_md5" = "$prev_md5" ] && [ "$finished" = "$prev_finished" ]; then
     return
   fi
@@ -248,13 +252,15 @@ post_or_update() {
   echo "$body" > "$body_file"
 
   if [ "$cid" = "null" ] || [ -z "$cid" ]; then
-    # 首次见到:GitHub 必须反映实际状态。
-    # 短 codex 在 reporter tick 间 spawn+complete,首次见到时已 finished — 之前 silent skip
-    # 导致 GitHub 上看不到任何 codex 痕迹(maintainer 不知道有事发生)。
-    # 修法:首见 finished log → post 一张简短"✅ 已完成"banner(不删,留下 GitHub 痕迹)。
-    # Controller 后续 sweep 处理 marker 时再覆盖 / append 新 banner。
+    # First sight: GitHub must reflect the actual state.
+    # Short codex runs can spawn and complete between reporter ticks, so first
+    # sight may already be finished. Previously that silently skipped posting,
+    # leaving no GitHub trace for maintainers.
+    # Fix: first-sight finished log posts a short completed banner that remains
+    # as a GitHub trace. Controller sweeps later replace/append a new banner
+    # when processing markers.
     local url
-    # parse_kind fallback:先 try $kind,fail 再 try 另一个(防 issue 被当 pr)
+    # parse_kind fallback: try $kind first, then the other kind to handle issue/pr mismatch.
     if [ "$kind" = "pr" ]; then
       url=$(gh pr comment "$target" --repo "$REPO" --body-file "$body_file" 2>/dev/null | tail -1)
       [ -z "$url" ] && {
@@ -277,7 +283,7 @@ post_or_update() {
       log_msg "FAIL to create comment for $base → $kind #$target"
     fi
   else
-    # edit 现有 comment
+    # Edit existing comment.
     if gh api -X PATCH "repos/$REPO/issues/comments/$cid" -F body=@"$body_file" >/dev/null 2>&1; then
       state_set "$base" "$target" "$kind" "$cid" "$cur_md5" "$finished"
       log_msg "edited progress comment for $base (cid=$cid, finished=$finished)"
@@ -294,13 +300,14 @@ if [ "${TEST_NO_LOOP:-0}" = "1" ]; then
   return 0 2>/dev/null || exit 0
 fi
 
-# 主 loop
+# Main loop.
 while true; do
   log_msg "tick"
   for log in "$LOG_DIR"/*.log; do
     [ -f "$log" ] || continue
     base=$(basename "$log" .log)
-    # 跳过 audit log(audit 完成后才能进 phase 2,不挂 issue);可以选 post 到 dashboard
+    # Skip audit logs: audit enters phase 2 only after completion and has no issue.
+    # It could optionally post to a dashboard.
     case "$base" in
       audit-iter-*) continue ;;
       remote-ci-*) continue ;;

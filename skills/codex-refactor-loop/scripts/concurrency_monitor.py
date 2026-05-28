@@ -1,29 +1,31 @@
 #!/usr/bin/env python3
 """
-concurrency_monitor.py — 监控 active work 是否出现 0 codex gap
+concurrency_monitor.py — monitor active work for zero-codex gaps.
 
-。
-
-设计:
-- 周期 60s tick
-- 从 GitHub 推算 期望并发数(每个 active phase issue/PR contribute 1)
+Design:
+- Tick every 60 seconds.
+- Infer expected concurrency from GitHub, with each active phase issue/PR
+  contributing one unit.
   - 🔍 design-solving       → 1 solver-round OR 1 judge OR 1 reflector
   - 🔧 fixing               → 1 fix codex
-  - 👀 reviewing            → 3 reviewer(每 r1 round)
+  - 👀 reviewing            → 3 reviewers per r1 round
   - 🛠️ implementing         → 1 implement codex
-  - ⚙️ ci-running           → 0(等 CI,无需 codex)
-  - 🚀 pr-open(待派 reviewer) → 0~3
+  - ⚙️ ci-running           → 0 (waiting for CI, no codex required)
+  - 🚀 pr-open              → 0~3 while waiting to dispatch reviewers
 - Compare with loop-owned spawn-codex wrapper processes.
-- 监控 no-gap:P0 `expected > 0 and actual == 0` 立即告警
-- 当 actual < CODEX_FLOOR 且 dispatch-queue 非空时,自动消费队列补到 floor
+- Monitor no-gap P0: alert immediately when `expected > 0 and actual == 0`.
+- When actual < CODEX_FLOOR and dispatch-queue is non-empty, automatically
+  consume queued work up to the floor.
 
-主动介入修复:
-1. 写告警到 `.refactor-loop/.concurrency-alert.log`(append + timestamp + 详情)
-2. 写到 `.refactor-loop/.controller-pending-events.log`(controller 下次 wakeup 处理)
-3. log 详细 expected breakdown(哪些 issue/PR 缺 codex)
-4. 从 `.refactor-loop/dispatch-queue/<priority>/` 自动派发 queued codex,并归档 audit trail
+Active repair:
+1. Append alerts with timestamp and details to `.refactor-loop/.concurrency-alert.log`.
+2. Append controller events to `.refactor-loop/.controller-pending-events.log`
+   for the next wakeup.
+3. Log a detailed expected breakdown showing which issues/PRs lack codex.
+4. Automatically dispatch queued codex from `.refactor-loop/dispatch-queue/<priority>/`
+   and archive an audit trail.
 
-启动:
+Launch:
   nohup python3 .claude/skills/codex-refactor-loop/scripts/concurrency_monitor.py \\
     >> .refactor-loop/logs/concurrency-monitor.log 2>&1 &
   disown
@@ -63,7 +65,7 @@ def git_repo_root() -> Path:
     return Path(r.stdout.strip())
 
 
-INTERVAL = int(os.environ.get("INTERVAL", "60"))  # 
+INTERVAL = int(os.environ.get("INTERVAL", "60"))
 REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"
@@ -78,13 +80,13 @@ DISPATCH_DISPATCHED = REPO_ROOT / ".refactor-loop" / "dispatch-dispatched"
 SPAWN_CODEX = Path(__file__).resolve().parent / "spawn-codex.sh"
 PRIORITIES = ("p0", "p1", "p2")
 
-# phase label → 期望 codex 数(per active issue/PR)
+# Phase label -> expected codex count per active issue/PR.
 PHASE_EXPECTED = {
-    "🔍 phase:design-solving": 1,  # 至少 1 codex(solver round / judge / reflector)
+    "🔍 phase:design-solving": 1,  # At least 1 codex (solver round / judge / reflector).
     "🔧 phase:fixing": 1,
-    "👀 phase:reviewing": 1,        # 至少 1 reviewer
+    "👀 phase:reviewing": 1,        # At least 1 reviewer.
     "🛠️ phase:implementing": 1,
-    # 下列 phase 不期望 codex:
+    # The following phases do not expect codex.
     "⚙️ phase:ci-running": 0,
     "🚀 phase:pr-open": 0,
     "✅ phase:consensus-reached": 0,
@@ -296,13 +298,15 @@ def list_auto_loop_issues() -> list[dict]:
 def compute_expected(items: list[dict]) -> tuple[int, list[dict]]:
     """Return (total_expected, breakdown)."""
     # Refactor (iter3/skill-human-label-taxonomy):
-    #   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-    #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
+    #   Old: four Human labels, including two 🆘 labels, scattered no-gap and
+    #   escalation decisions across the codebase.
+    #   New principle: exactly two active Human labels; causes move to the
+    #   reason surface (#15 structural consensus).
     breakdown = []
     total = 0
     for it in items:
         if it["human"] == "👤 human:需-maintainer-决策":
-            # 等人介入,不期望 codex
+            # Waiting for human intervention; no codex expected.
             continue
         n = PHASE_EXPECTED.get(it["phase"], 0)
         if n > 0:
@@ -317,7 +321,7 @@ def write_alert(msg: str, detail: dict) -> None:
     line = f"[{ts}] {msg} | detail={json.dumps(detail, ensure_ascii=False)}"
     with ALERT_LOG.open("a") as f:
         f.write(line + "\n")
-    # 通知 controller(events log)
+    # Notify the controller via the events log.
     with PENDING_EVENTS.open("a") as f:
         f.write(f"{ts} concurrency-alert {msg}\n")
 
@@ -507,9 +511,11 @@ def top_up_from_dispatch_queue(actual: int, floor: int) -> int:
 #   New principle: no-gap alerting continues into deficit detection so queued work can be fired in the same tick.
 def tick() -> None:
     # Refactor (iter4/issue51-r3-consensus):
-    #   Old pattern: 无 ambient visibility;maintainer 需手动跑 peek.sh
-    #   New principle: concurrency_monitor tick 原子写 statusline-snapshot.json,statusline.sh consumer < 200ms 读;
-    #     无新 daemon,无 checked-in installer(per #51 r3 META_JUDGE_DONE:consensus:C-minimal-statusline-via-concurrency_monitor-snapshot)
+    #   Old pattern: no ambient visibility; maintainer had to run peek.sh manually.
+    #   New principle: concurrency_monitor tick atomically writes
+    #   statusline-snapshot.json, and statusline.sh reads it in < 200ms;
+    #   no new daemon and no checked-in installer
+    #   (per #51 r3 META_JUDGE_DONE:consensus:C-minimal-statusline-via-concurrency_monitor-snapshot).
     state = load_state()
     zero_streak = int(state.get("zero_streak", 0))
     maybe_run_skill_degradation_watch(state)
@@ -574,10 +580,12 @@ def tick() -> None:
     save_state(state)
 
 
-# Refactor (iter4/skill-count-cli-canonical): Old pattern: 仅 daemon 模式,无 one-shot CLI
-# -> controller 想知道当前 codex 数只能手 ps | grep,容易跟 count_in_flight_codex 算法漂移
-# (per 2026-05-26 maintainer-directive)。 New principle: 暴露 --count-only / --list-codex
-# 让任何 caller 直接复用 canonical 算法。Daemon 主循环仍是默认行为。
+# Refactor (iter4/skill-count-cli-canonical): Old pattern: daemon-only mode,
+# with no one-shot CLI, so controllers that needed the current codex count had
+# to run ps | grep manually and could drift from the count_in_flight_codex
+# algorithm (per 2026-05-26 maintainer-directive). New principle: expose
+# --count-only / --list-codex so any caller can reuse the canonical algorithm
+# directly. The daemon main loop remains the default behavior.
 def list_in_flight_codex_lines() -> list[str]:
     repo = str(REPO_ROOT)
     lines: list[str] = []

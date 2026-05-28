@@ -248,10 +248,12 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         payload = json.loads(archive.read_text(encoding="utf-8"))
         self.assertEqual(payload["task_id"], "filename-task")
 
-    # Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep
-    # spawn-codex.sh 重新实现 count_in_flight_codex 逻辑 -> 容易跟 daemon 算法漂移。
-    # New principle: 暴露 `--count-only` / `--list-codex` 让 controller 直接复用 daemon
-    # 自带的 canonical 算法(per 2026-05-26 maintainer-directive)。
+    # Refactor (iter4/skill-count-cli-canonical): Old pattern: controller ran
+    # ps | grep manually and spawn-codex.sh reimplemented count_in_flight_codex,
+    # making drift from the daemon algorithm likely.
+    # New principle: expose `--count-only` / `--list-codex` so the controller
+    # can directly reuse the daemon's canonical algorithm
+    # (per 2026-05-26 maintainer-directive).
     def test_count_only_cli_prints_canonical_in_flight_codex_count(self) -> None:
         import io
         fake_ps = (
