@@ -24,7 +24,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 <!-- Refactor (iter3/skill-monitor-wake-source): Old pattern: 2-lane wake source(harness task-notification + ScheduleWakeup). New principle: 3-lane wake source adds daemon-event Monitor lane(daemon writes event file -> mounted persistent Monitor bridge -> controller wakes immediately; daemon alone is not a wake source). -->
 | Wake source | Each turn must end with a confirmed future wake source. | Confirm one of three lanes before ending: active daemon-event Monitor bridge, in-flight codex task-notification, or confirmed ScheduleWakeup. | [wake source rules](REFERENCE.md#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup |
 | First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](REFERENCE.md#daemon-command-bodies) | scripts, `host.env` |
-| Work unit state | WorkUnitV1 is stable v1; do not rename, migrate, or wrap it. | Read and write existing v1 containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [WorkUnitV1](REFERENCE.md#workunitv1-contract), [state schema](REFERENCE.md#state-schema) | `.refactor-loop/state.json` |
+| Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. | Read and write existing containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](REFERENCE.md#work-unit-contract), [state schema](REFERENCE.md#state-schema) | `.refactor-loop/state.json` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](REFERENCE.md#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Phase 9 multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [phase 9 details](REFERENCE.md#phase-9-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `spawn-codex.sh` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](REFERENCE.md#concurrency-floor-details) | `concurrency_monitor.py`, `peek.sh` |
@@ -105,17 +105,17 @@ The release lifecycle surface consumes decision-artifact-only output: a schedule
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
-## Named runtime exception — IntegrationSyncDaemonV1(per #53)
-Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: detect-and-emit only in the dedicated integration worktree. The daemon may fetch refs, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, and emit `IntegrationSyncRequestV1` artifacts. Controller apply helpers consume those artifacts, re-check live state, and own git apply lifecycle. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct branch update, no generic lifecycle actor, and no lifecycle mutation verbs from the daemon. Implement/fix workers still never commit, push, or open PRs.
+## Named runtime exception — integration sync daemon(per #53)
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: detect-and-emit only in the dedicated integration worktree. The daemon may fetch refs, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, and emit integration sync request artifacts. Controller apply helpers consume those artifacts, re-check live state, and own git apply lifecycle. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct branch update, no generic lifecycle actor, and no lifecycle mutation verbs from the daemon. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
-Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes `ManualIssueTriageDecisionV1` artifacts for controller apply instead of mutating labels/body directly.
+Authorization source: `.refactor-loop/runs/phase9-issue53-r7-judge.md`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
 
-## Named runtime exception — IntegrationSyncDaemonV1(per #65)
+## Named runtime exception — integration sync daemon(per #65)
 The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorizes the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
 **No lifecycle authority**: the daemon must not run `gh pr create`; it must not create PRs, edit PRs, label PRs, close PRs, approve PRs, merge PRs, or push directly to `$REVIEW_BASE_BRANCH`. Controller pending-event sweep re-checks open head/base PRs, writes the Chinese PR body, and calls `open_release_rollup_pr_from_pending_event`, which delegates to `open_pr_with_label`. Behavior/source-regression tests cover event emission, suppression, cooldown, and forbidden daemon lifecycle tokens.
 
-## Named runtime exception — SkillDegradationWatchV1(per #66) — Authorization source: `.refactor-loop/runs/phase9-issue66-r8-judge.md`. Single-file checker/gates: `check_skill_degradation.py`; CI required `skill-degradation` runs `<skill-root>/scripts/check_skill_degradation.py --static`; `auto_release_gate.py` requires it beside `contract-tests` and `manifest-version-sync`. **Narrow allowlist**: run `check_skill_degradation.py`; write `.refactor-loop/.degradation-alert.log`; append existing-format pending events to `.refactor-loop/.controller-pending-events.log`; expose read-only `peek.sh` status. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Runtime hook: `concurrency_monitor.py` may run the checker on `$DEGRADATION_WATCH_INTERVAL_SECONDS`; failures alert-only, passing writes nothing, and the hook must not mutate source, run git, call GitHub lifecycle APIs, spawn codex, create a daemon, or change WorkUnit/event schema; details: [skill degradation watch details](REFERENCE.md#skill-degradation-watch-details).
+## Named runtime exception — skill degradation watch(per #66) — Authorization source: `.refactor-loop/runs/phase9-issue66-r8-judge.md`. Single-file checker/gates: `check_skill_degradation.py`; CI required `skill-degradation` runs `<skill-root>/scripts/check_skill_degradation.py --static`; `auto_release_gate.py` requires it beside `contract-tests` and `manifest-version-sync`. **Narrow allowlist**: run `check_skill_degradation.py`; write `.refactor-loop/.degradation-alert.log`; append existing-format pending events to `.refactor-loop/.controller-pending-events.log`; expose read-only `peek.sh` status. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Runtime hook: `concurrency_monitor.py` may run the checker on `$DEGRADATION_WATCH_INTERVAL_SECONDS`; failures alert-only, passing writes nothing, and the hook must not mutate source, run git, call GitHub lifecycle APIs, spawn codex, create a daemon, or change WorkUnit/event schema; details: [skill degradation watch details](REFERENCE.md#skill-degradation-watch-details).
 
 ## Claude Code statusline(per #51 consensus)
 `skills/codex-refactor-loop/scripts/statusline.sh` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
@@ -202,7 +202,7 @@ The phase index is the local routing map. It intentionally links to heavy detail
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
 | Phase 0 | First wakeup bootstrap. Must complete before normal routing. | [Phase 0 details](REFERENCE.md#phase-0-details) |
-| Phase 1 | Produce WorkUnitV1 items. Audit remains the default compatibility producer; manual issue intake is separate. | [WorkUnitV1](REFERENCE.md#workunitv1-contract), [batching heuristics](REFERENCE.md#batching-heuristics) |
+| Phase 1 | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](REFERENCE.md#work-unit-contract), [batching heuristics](REFERENCE.md#batching-heuristics) |
 | Phase 2 | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](REFERENCE.md#phase-routing-details) |
 | Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](REFERENCE.md#recovery-playbook) |
 | Phase 4 | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](REFERENCE.md#merge-and-push-details) |
@@ -220,7 +220,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
 3. Run `ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)` against `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 4. If the helper exits non-zero, helper 退出非 0 → bootstrap fail closed; post the failure and stop before actors.
-5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
+5. initialize state in `.refactor-loop/state.json` if missing, using the existing work-unit containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
 8. ensure all 5 restart-helper-managed daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`. The persistent daemon-event Monitor bridge is armed separately in step 9.
@@ -325,7 +325,7 @@ Controller non-duties:
 - Do not run reviewer, solver, implementer, or verifier reasoning inline when a codex role exists.
 - Do not fabricate consensus without Phase 9.
 - Do not hide status in local files only.
-- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Phase 9-authorized phase9_router_daemon.py private ledger plus existing-format pending-event append for narrow deterministic Phase 9 dispatch; do not introduce WorkUnitV2, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
+- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Phase 9-authorized phase9_router_daemon.py private ledger plus existing-format pending-event append for narrow deterministic Phase 9 dispatch; do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
 
 ## Concurrency Floor
 
@@ -505,7 +505,7 @@ Policy:the loop continues until an explicit stop condition or a visible `👤 hu
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
 7. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
 8. Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
-9. Do not rename the skill, manifests, WorkUnitV1, public markers, branch prefixes, or labels during this split.
+9. Do not rename the skill, manifests, work-unit contract, public markers, branch prefixes, or labels during this split.
 10. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](REFERENCE.md#hard-rules-details).
@@ -625,15 +625,14 @@ Authoritative surfaces:
 
 State rules:
 
-1. Keep `schema_version: 1` and `work_unit_schema_version: 1`.
-2. Use existing containers: `clusters_planned`, `clusters_active`, `clusters_done`, `clusters_failed`, `design_pending`, `remote_ci`.
-3. Do not add a state-v2 migration for this split.
-4. Do not add queue aliases, envelope wrappers, or normalizer helpers.
-5. For audit-backed work, keep `work_unit_id == id == cluster_id` during v1 compatibility.
-6. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
-7. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
-8. Public v1 operational names remain stable: `cluster`, `refactor`, `auto-loop`, `*_DONE`, branch prefixes, marker names, and label names.
-9. Full schema and examples live in [state schema](REFERENCE.md#state-schema).
+1. Use existing containers: `clusters_planned`, `clusters_active`, `clusters_done`, `clusters_failed`, `design_pending`, `remote_ci`.
+2. Do not add a state migration for this split.
+3. Do not add queue aliases, envelope wrappers, or normalizer helpers.
+4. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
+5. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
+6. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
+7. Public operational names remain stable: `cluster`, `refactor`, `auto-loop`, `*_DONE`, branch prefixes, marker names, and label names.
+8. Full schema and examples live in [state schema](REFERENCE.md#state-schema).
 
 State write timing:
 
@@ -646,11 +645,11 @@ State write timing:
 
 ## Producer Contract
 
-The controller recognizes two v1 producers:
+The controller recognizes two producers:
 
 | Producer | Intake | Controller behavior |
 |---|---|---|
-| `audit` | Default compatibility audit/refactor intake. | Run audit prompt, project accepted clusters into WorkUnitV1, batch by dependencies/risk. |
+| `audit` | Default compatibility audit/refactor intake. | Run audit prompt, project accepted clusters into work-unit items, batch by dependencies/risk. |
 | `manual-issue` | Explicit GitHub issue intake via labels/triage. | Normalize problem and verification hints into a design issue, then use Phase 9. |
 
 Producer rules:
@@ -660,7 +659,7 @@ Producer rules:
 3. `requires_design` audit clusters open GitHub issues and do not auto-implement until Phase 9 consensus.
 4. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
 5. Batching should prefer independent, low-risk work and preserve dependency ordering.
-6. Detailed producer fields and batching heuristics live in [WorkUnitV1](REFERENCE.md#workunitv1-contract) and [batching heuristics](REFERENCE.md#batching-heuristics).
+6. Detailed producer fields and batching heuristics live in [work-unit contract](REFERENCE.md#work-unit-contract) and [batching heuristics](REFERENCE.md#batching-heuristics).
 
 ## Phase Guardrails
 
@@ -668,7 +667,7 @@ Phase 1 guardrails:
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
 2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`.
-3. Convert accepted units into WorkUnitV1 before dispatch.
+3. Convert accepted units into work-unit items before dispatch.
 4. Clean stale worktrees before audit pollution can affect decisions.
 5. For `requires_design`, open or update GitHub design issues and label them `🔍 phase:design-solving` plus `🤖 human:auto-推进`.
 
@@ -704,17 +703,17 @@ Phase 5 guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Phase 6 guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits `IntegrationSyncRequestV1` and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume `IntegrationSyncRequestV1` artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
+Phase 6 guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits integration sync request artifacts and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume those artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 
-## Named runtime exception — IntegrationSyncDaemonV1 phase-6 controller boundary
-`IntegrationSyncDaemonV1` owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and `IntegrationSyncRequestV1` artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.
+## Named runtime exception — integration sync daemon phase-6 controller boundary
+The integration sync daemon owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and integration sync request artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.
 
 Phase 7 guardrails:
 
 1. Sweep design issues every wakeup.
 2. Maintainer replies that materially change framing reset the Phase 9 round.
 3. Bot comments and AI sentinel comments do not count as maintainer input.
-4. External issues require explicit opt-in labels; controller wakeup sweep dispatches triage and applies `ManualIssueTriageDecisionV1` artifacts.
+4. External issues require explicit opt-in labels; controller wakeup sweep dispatches triage and applies manual issue triage decision artifacts.
 5. Do not auto-implement from a free-form issue without Phase 9 consensus.
 
 Phase 8 guardrails:
@@ -798,7 +797,7 @@ The entrypoint is intentionally enough for controller routing. Open reference an
 When to read an anchor:
 
 1. Before writing a full status or escalation banner, read [status and escalation templates](REFERENCE.md#status-and-escalation-templates).
-2. Before editing state shape or producer normalization, read [WorkUnitV1](REFERENCE.md#workunitv1-contract) and [state schema](REFERENCE.md#state-schema).
+2. Before editing state shape or producer normalization, read [work-unit contract](REFERENCE.md#work-unit-contract) and [state schema](REFERENCE.md#state-schema).
 3. Before starting or repairing daemons, read [daemon command bodies](REFERENCE.md#daemon-command-bodies).
 4. Before changing label bootstrap or transition helpers, read [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
 5. Before handling repeated failure, stuck CI, merge conflicts, or stale worktrees, read [recovery playbook](REFERENCE.md#recovery-playbook).

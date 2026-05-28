@@ -52,7 +52,7 @@ dogfood 运行中固化的操作经验。host 注入的配置集中放 `$REPO_RO
 
 <a id="skill-degradation-watch-details"></a>
 ### Skill degradation watch details
-`SkillDegradationWatchV1(per #66)` is authorized by `.refactor-loop/runs/phase9-issue66-r8-judge.md` and is intentionally delete-framed: no standalone watchdog, no seventh daemon, no `DegradationCheck` protocol, no plugin registry, no new event envelope, no auto-clean, no auto-fix, no GitHub lifecycle mutation, and no codex dispatch path.
+The skill degradation watch(per #66) is authorized by `.refactor-loop/runs/phase9-issue66-r8-judge.md` and is intentionally delete-framed: no standalone watchdog, no seventh daemon, no `DegradationCheck` protocol, no plugin registry, no new event envelope, no auto-clean, no auto-fix, no GitHub lifecycle mutation, and no codex dispatch path.
 Static checker: `python3 skills/codex-refactor-loop/scripts/check_skill_degradation.py --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `auto_release_gate.py:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`, mirrored by `release.yml`. The checker is read-only and returns nonzero on missing named exception text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or missing runtime hook markers.
 Runtime hook: existing `concurrency_monitor.py`, no standalone daemon. `$DEGRADATION_WATCH_INTERVAL_SECONDS` controls throttle; unset or `0` disables and `host.env.example` opts in with `1800`. `$DEGRADATION_WATCH_TIMEOUT_SECONDS` defaults to `30`. Passing writes nothing; failing writes `.refactor-loop/.degradation-alert.log` and appends an existing-format pending event to `.refactor-loop/.controller-pending-events.log`.
 Alert formats: pending event `<UTC> skill-degradation-alert returncode=N log=.refactor-loop/.degradation-alert.log` or `<UTC> skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log`; alert log `[UTC] skill-degradation-alert <summary> | detail=<json>` with `returncode`, `stdout_tail`, `stderr_tail`, or `error`. `DEGRADATION_ALERT_TAIL_LINES` controls `peek.sh` display count for `.refactor-loop/.degradation-alert.log`, default `10`.
@@ -68,7 +68,7 @@ Narrow allowlist: run `check_skill_degradation.py`, write `.refactor-loop/.degra
 nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/<daemon>.py' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
-Integration sync requests use `IntegrationSyncRequestV1`; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
+Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
 **5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration sync detection/request)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
@@ -457,7 +457,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `concurrency_monitor.py` / `codex-progress-reporter.sh` / `comment-monitor.sh` / `dev_sync_daemon.py` / `phase9_router_daemon.py`。随后运行 `bash <skill-root>/scripts/restart-daemons.sh` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `bash <skill-root>/scripts/peek.sh | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 v1 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派默认 work-unit producer**(Phase 1,默认 audit,`spawn-codex.sh` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
@@ -479,8 +479,6 @@ Write initial `state.json`:
 
 ```json
 {
-  "schema_version": 1,
-  "work_unit_schema_version": 1,
   "trunk_branch": "auto-refact-dev",
   "integration_branch": "auto-refact-dev",
   "review_base_branch": "dev",
@@ -495,12 +493,11 @@ Write initial `state.json`:
 }
 ```
 
-`work_unit_schema_version: 1` means `clusters_planned`, `clusters_active`, `clusters_done`, and
-`clusters_failed` are the authoritative v1 queue containers, but each item is a WorkUnitV1 record
-as specified in [REFERENCE.md](REFERENCE.md). If an existing state file lacks
-`work_unit_schema_version`, read it as v1 legacy state: derive `work_unit_id` from each item's
-`id`, treat audit clusters as `kind="audit-cluster"` and `producer="audit"`, and continue without
-migration.
+`clusters_planned`, `clusters_active`, `clusters_done`, and `clusters_failed` are the
+authoritative queue containers, but each item is a work-unit contract record as specified in
+[REFERENCE.md](REFERENCE.md). If an existing state file lacks the work-unit schema marker, read it
+as legacy state: derive `work_unit_id` from each item's `id`, treat audit clusters as
+`kind="audit-cluster"` and `producer="audit"`, and continue without migration.
 
 **Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
 
@@ -528,8 +525,8 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 <a id="phase-routing-details"></a>
 ## Phase 1 — Work-unit production (audit default)
 
-The default v1 work-unit producer is `audit`. Producer normalization is documented in
-[REFERENCE.md](REFERENCE.md): v1 accepts only `producer: audit` and `producer: manual-issue`.
+The default work-unit producer is `audit`. Producer normalization is documented in
+[REFERENCE.md](REFERENCE.md): accepts only `producer: audit` and `producer: manual-issue`.
 `audit` is the raw artifact producer for this phase; `manual-issue` enters through Phase 7
 triage and must already be reshaped before Phase 9.
 
@@ -563,23 +560,23 @@ When task notification fires → **controller validation** before accepting the 
 Anti-anchoring: **do not** include phrases like "prefer 0", "loop saturated", "healthy signal" in the audit prompt body. These bias codex toward terminating instead of digging. Use the mechanical thresholds in `prompts/audit.md` as the only stop criteria.
 
 After validation: read `audit-iter-N.md`; the controller projects each accepted audit cluster into
-the WorkUnitV1 fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `producer`,
-`source_ref`, and v1 audit compatibility aliases), populate `clusters_planned`, split into batches
+the work-unit fields documented in `REFERENCE.md` (`work_unit_id`, `kind`, `producer`,
+`source_ref`, and audit compatibility aliases), populate `clusters_planned`, split into batches
 (max `max_parallel_clusters` per batch) by
 **file/project disjointness**:
 
 - Current audit-backed units set `work_unit_id == id == cluster_id == legacy_cluster_id`,
   `kind="audit-cluster"`, `producer="audit"`, and `source_ref="audit-iter-N.md#<cluster-id>"`.
 - Preserve existing cluster fields for audit section lookup, markers, artifact filenames, branch
-  names, and GitHub issue routing during v1 compatibility.
-- Stable v1 operational tokens are public routing tokens, not names to migrate in this contract:
+  names, and GitHub issue routing during compatibility.
+- Stable operational tokens are public routing tokens, not names to migrate in this contract:
   `[refactor-design]`, `refactor-design-needed`, `auto-loop`, `phase9-auto-solve`,
   `auto-loop-resume`, `refactor/iterN-<cluster-id>`, `.refactor-loop/.../<cluster-id>`,
   `IMPLEMENT_DONE:${CLUSTER_ID}`, `VERIFY_DONE:${CLUSTER_ID}`, `SOLVER_DONE`, and
   `META_JUDGE_DONE`.
 - Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
-  a named operational-policy abstraction for v1 compatibility.
-- Phase 7 `manual-issue` intake may write WorkUnitV1 items into `clusters_planned` only after the
+  a named operational-policy abstraction for compatibility.
+- Phase 7 `manual-issue` intake may write work-unit contract items into `clusters_planned` only after the
   accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
   `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
   and `verification_hints`. It must not fabricate `cluster_id` or `legacy_cluster_id`.
@@ -669,7 +666,7 @@ For each cluster in the current batch:
 
 3. Dispatch via `spawn-codex.sh --cd <worktree>` with `--stall 5400` (5400s no-output stall window).
 
-4. Update `clusters_active` with the WorkUnitV1 identity/provenance fields plus `bg_task` id.
+4. Update `clusters_active` with the work-unit identity/provenance fields plus `bg_task` id.
 
 After all parallel dispatches, schedule wakeup 1800s safety net. **End turn.**
 
@@ -687,7 +684,7 @@ For each cluster whose implement finished `ok`:
 
 1. Materialize `prompts/verify.md` → `.refactor-loop/prompts/verify-<cluster-id>.md`. For current
    audit-backed units, export `WORK_UNIT_ID=$CLUSTER_ID`; `WORK_UNIT_ID` is the canonical prompt
-   identity, while `CLUSTER_ID` remains the v1 compatibility alias for markers and artifacts.
+   identity, while `CLUSTER_ID` remains the compatibility alias for markers and artifacts.
 2. Dispatch in the same worktree (verify reads `git diff HEAD`, runs full test/guard suite, gates merge):
 
    ```bash
@@ -919,14 +916,14 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 disown
 ```
 
-Daemon 工作流由 `IntegrationSyncDaemonV1` 命名状态机表达:
+Daemon 工作流由 `integration sync daemon` 命名状态机表达:
 1. `FETCH`: fetch origin in the daemon worktree.
 2. `CHECK_MERGE`: if a merge is in progress, observe or dispatch exactly one resolver codex. Resolver codexes resolve files and run `git merge --continue`; they never push, reset, or abort.
 3. `CHECK_DIRTY`: dirty non-merge worktrees skip without reset.
-4. `PRESERVE_LOCAL_AHEAD`: before any controller-side alignment, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for the controller apply helper. This preserves resolver continuation commits without daemon-side git lifecycle authority.
-5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side adoption. The controller helper re-checks ancestry and live SHAs before applying.
-6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side remote alignment.
-7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, emit an `IntegrationSyncRequestV1` artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side forward sync. The controller helper owns branch update mechanics and re-checks live state before applying.
+4. `PRESERVE_LOCAL_AHEAD`: before any controller-side alignment, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for the controller apply helper. This preserves resolver continuation commits without daemon-side git lifecycle authority.
+5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side adoption. The controller helper re-checks ancestry and live SHAs before applying.
+6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side remote alignment.
+7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side forward sync. The controller helper owns branch update mechanics and re-checks live state before applying.
 8. `DETECT_RELEASE_ROLLUP_NEEDED`: if `origin/$INTEGRATION_BRANCH` is ahead of `origin/$REVIEW_BASE_BRANCH` by at least `RELEASE_ROLLUP_MIN_COMMITS` and no open `$INTEGRATION_BRANCH -> $REVIEW_BASE_BRANCH` PR exists, append `DEV_SYNC_PENDING:release-rollup-needed:<json>` with branch names, SHAs, ahead count, timestamp, and reason. Cooldown only suppresses duplicate same-SHA events; it grants no lifecycle authority.
 Ambiguous rollup metadata, failed request emission, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
@@ -937,8 +934,8 @@ Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
 - `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
-Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, WorkUnitV2, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `restart-daemons.sh` 的 5-daemon restart-helper-managed 面一致,包含 Phase 9 router; persistent daemon-event Monitor bridge 单独由 controller arm。
-Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `spawn-codex.sh --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, WorkUnitV2, public marker aliases, or lifecycle authority.
+Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `restart-daemons.sh` 的 5-daemon restart-helper-managed 面一致,包含 Phase 9 router; persistent daemon-event Monitor bridge 单独由 controller arm。
+Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records `{key, marker, log_path, dispatched_at}`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `spawn-codex.sh --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
 dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **phase9_router_daemon.py** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
@@ -964,7 +961,7 @@ If a maintainer must repair the daemon worktree manually, stop the singleton `de
 
 ### Post-rollup adoption invariant
 
-After a rollup PR has merged into `review_base_branch`, `IntegrationSyncDaemonV1` must make `integration_branch` contain that merged review-base head before new forward sync work. Any post-rollup integration commits are replayed only after the proven old rollup head; if the old head or expected remote SHA cannot be proven, the daemon writes a pending event and does not force-push.
+After a rollup PR has merged into `review_base_branch`, `integration sync daemon` must make `integration_branch` contain that merged review-base head before new forward sync work. Any post-rollup integration commits are replayed only after the proven old rollup head; if the old head or expected remote SHA cannot be proven, the daemon writes a pending event and does not force-push.
 
 ### Why this matters
 
@@ -999,8 +996,8 @@ Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-sol
 
 maintainer 只加 1 label:`auto-loop-triage`
 
-This path is the v1 `manual-issue` producer. The triage codex accepts only concrete repository
-work units suitable for consensus, reshapes the issue into a WorkUnitV1-backed design issue, and
+This path is the `manual-issue` producer. The triage codex accepts only concrete repository
+work units suitable for consensus, reshapes the issue into a work-unit-backed design issue, and
 then label-routes it to Phase 9. Accepted manual issues must contain `work_unit_id: issue-<N>`,
 `kind: manual-work-unit`, `producer: manual-issue`, `source_ref: gh-issue-<N>`, `scope_paths`,
 problem/invariant text, and `verification_hints`; they must not include fabricated `cluster_id` or
@@ -1008,7 +1005,7 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 
 **Daemon 自包含**:
 
-Controller wakeup sweep handles external `auto-loop-triage` issue intake; `triage-monitor.sh` is deleted. Triage workers emit `ManualIssueTriageDecisionV1` plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
+Controller wakeup sweep handles external `auto-loop-triage` issue intake; `triage-monitor.sh` is deleted. Triage workers emit a manual issue triage decision artifact plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
 
 
 ## Phase 8 details
@@ -1214,7 +1211,7 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ## Phase 9 — Multi-solver design consensus (sole authorization gate)
 
-Runs when a `state.design_pending[i]` WorkUnitV1 item needs a concrete implementation decision.
+Runs when a `state.design_pending[i]` work-unit item needs a concrete implementation decision.
 Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Phase 9 can frame the decision as
 work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
 solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
@@ -2119,17 +2116,17 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 `$REPO_ROOT 的架构/词汇文档(若有)` 与 `docs/adr/*.md` 在仓库内的文档仍按 [$REPO_ROOT 的架构/词汇文档(若有)architecture-vocabulary.md]($REPO_ROOT 的架构/词汇文档(若有)architecture-vocabulary.md) 既有惯例(混排,不归本规则管辖)。CLAUDE.md / AGENTS.md 仍是中英混排,不动。
 
-<a id="workunitv1-contract"></a>
+<a id="work-unit-contract"></a>
 
-## WorkUnitV1 contract
+## Work-unit contract
 
-`WorkUnitV1` is the v1 queue item contract stored inside the existing `clusters_planned`,
+The work-unit contract is the queue item contract stored inside the existing `clusters_planned`,
 `clusters_active`, `clusters_done`, and `clusters_failed` containers. The container names are
-historical but authoritative for state schema v1; do not add migrated queue containers, envelope
-wrappers, a normalizer helper, or a state-v2 migration for this contract.
+historical but authoritative; do not add migrated queue containers, envelope wrappers, a normalizer
+helper, or a state migration for this contract.
 
 Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
-remains the stable installed skill entrypoint. In v1, `refactor` is a valid development/work-unit
+remains the stable installed skill entrypoint. `refactor` is a valid development/work-unit
 metaphor and compatibility intake, not a requirement to rename the skill, add an alias, or create a
 new identity contract.
 
@@ -2155,39 +2152,39 @@ Audit compatibility:
 - For current audit-backed units, `work_unit_id == id == cluster_id == legacy_cluster_id`.
 - For non-audit units, `work_unit_id` is not required to start with `cluster-`; omit
   `legacy_cluster_id` and do not fabricate `cluster_id`.
-- Old state without `work_unit_schema_version` is read as v1 legacy state. Derive
+- Old state without the work-unit schema marker is read as legacy state. Derive
   `work_unit_id` from each queue item's `id`, treat items as `kind="audit-cluster"` and
   `producer="audit"`, and use the audit section as `source_ref` when known.
 - Prompt dispatch for current audit-backed units exports `WORK_UNIT_ID=$CLUSTER_ID`. Existing
   markers, artifact names, branch names, and audit section lookups may continue to use
-  `CLUSTER_ID` during v1 compatibility.
+  `CLUSTER_ID` during compatibility.
 
-Stable v1 operational tokens:
+Stable operational tokens:
 
 - Current markers, GitHub labels, issue title prefixes, branch prefixes, artifact paths, prompt
-  markers, log markers, and audit section lookups are stable v1 operational names.
+  markers, log markers, and audit section lookups are stable operational names.
 - `cluster-009-marker-label-compat-migration` does not rename, dual-write, or add aliases for
   these names. Keep existing `refactor`, `cluster`, `auto-loop`, and `*_DONE` spellings as the
-  v1 public routing surface while `WORK_UNIT_ID=$CLUSTER_ID` is the compatibility bridge.
+  public routing surface while `WORK_UNIT_ID=$CLUSTER_ID` is the compatibility bridge.
 
-## Producers in v1
+## Producers
 
-`WorkUnitV1` separates the queue item contract from the source that produced the item. The v1
-controller recognizes exactly these producer values:
+The work-unit contract separates the queue item contract from the source that produced the item.
+The controller recognizes exactly these producer values:
 
 - `audit`
 - `manual-issue`
 
 This is a documented normalization boundary, not a new producer framework. Do not add new
 producer abstractions, registry helpers, envelope wrappers, or migrated work-unit state containers
-for v1.
+for this contract.
 
 ### `audit` producer
 
 `audit` remains the default producer. It reads the raw artifact contract from
 `prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
 The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
-`WorkUnitV1` before adding it to `clusters_planned`:
+the work-unit contract before adding it to `clusters_planned`:
 
 - `work_unit_id: <cluster-id>`
 - `id: <cluster-id>`
@@ -2195,15 +2192,15 @@ The controller leaves `prompts/audit.md` unchanged and projects each accepted au
 - `kind: audit-cluster`
 - `producer: audit`
 - `source_ref: .refactor-loop/runs/audit-iter-N.md#<cluster-id>`
-- `legacy_cluster_id: <cluster-id>` optional but recommended during v1 compatibility
+- `legacy_cluster_id: <cluster-id>` optional but recommended during compatibility window
 
 Audit-backed units may keep using `<cluster-id>` for branch names, worktree paths, artifact
-filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` remains the v1 alias.
+filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` remains the compatibility alias.
 
 ### `manual-issue` producer
 
 `manual-issue` is the Phase 7 `auto-loop-triage` intake path for maintainer-selected GitHub
-issues. Accepted issues must be reshaped into a `WorkUnitV1`-backed design issue before Phase 9
+issues. Accepted issues must be reshaped into a work-unit-backed design issue before Phase 9
 solver dispatch:
 
 - `work_unit_id: issue-<N>`
@@ -2254,8 +2251,6 @@ Fields:
 
 ```json
 {
-  "schema_version": 1,
-  "work_unit_schema_version": 1,
   "loop_started_at": "<ISO8601>",
   "trunk_branch": "<branch the loop integrates into; same as integration_branch>",
   "integration_branch": "<branch all clusters land on>",
