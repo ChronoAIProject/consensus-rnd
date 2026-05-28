@@ -58,6 +58,28 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 f"SOLVER_DONE:{role}:{verdict}:summary",
             )
 
+    def test_phase9_router_tail_read_bounds_io_to_last_kb(self) -> None:
+        # Refactor (iter5/issue122-phase9-tail-perf): direct behavior test for
+        # _read_tail_lines. Build a log far larger than TAIL_READ_BYTES, write
+        # the verdict marker only in the last few lines, and verify the helper
+        # returns those tail lines without paging the entire body.
+        path = self.repo / ".refactor-loop" / "logs" / "big.log"
+        body_size = Phase9Router.TAIL_READ_BYTES * 8
+        filler = "noise-line-padding-text\n" * (body_size // len("noise-line-padding-text\n"))
+        tail_lines = ["MARK_PENULTIMATE", "SOLVER_DONE:minimal:approve:summary", "EXIT=0", ""]
+        path.write_text(filler + "\n".join(tail_lines), encoding="utf-8")
+
+        result = self.router._read_tail_lines(path, 4)
+
+        self.assertEqual(result[-3:], ["MARK_PENULTIMATE", "SOLVER_DONE:minimal:approve:summary", "EXIT=0"])
+        self.assertTrue(self.router._is_clean_exit(path))
+
+    def test_phase9_router_tail_read_handles_short_file(self) -> None:
+        path = self.repo / ".refactor-loop" / "logs" / "short.log"
+        path.write_text("only-one-line\nEXIT=0\n", encoding="utf-8")
+        result = self.router._read_tail_lines(path, 5)
+        self.assertEqual(result, ["only-one-line", "EXIT=0"])
+
     def test_phase9_router_clean_exit_gating_requires_tail_exit_zero(self) -> None:
         self.write_log("phase9-issue37-r4-minimal.log", "SOLVER_DONE:minimal:ok:x")
         self.write_log("phase9-issue37-r4-structural.log", "SOLVER_DONE:structural:ok:x")
