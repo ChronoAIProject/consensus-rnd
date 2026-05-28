@@ -144,7 +144,7 @@ The r7 judge artifact `.refactor-loop/runs/phase9-issue65-r7-judge.md` authorize
 
 ## Anti-stop restart helper cron/launchd install(per #49)
 
-`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton+heartbeat wrapper(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。
+`skills/codex-refactor-loop/scripts/restart-daemons.sh` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton+heartbeat wrapper(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`),若 wrapper alive 且 heartbeat fresh(`<90s`)则 skip;否则重启对应 wrapper。每次 helper tick 先调用 `log_retention.sh`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
 
 Host project cron install one-liner(每 5 min):
 
@@ -168,11 +168,11 @@ launchd host template:
 
 `skills/codex-refactor-loop/scripts/restart-daemons.sh` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;不 spawn codex / commit / push / merge / label。
+- **Narrow allowlist**: helper 只 maintain singleton+heartbeat wrapper lifecycle for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`,并顺手运行 `log_retention.sh` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
-- **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn。
-- **Source-regression**: `AntiStopRestartHelperContractTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 r3 judge artifact path、helper singleton check + heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens。
+- **Behavior tests**: `test_restart_daemons.py` 覆盖 daemon repair;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
+- **Source-regression**: `AntiStopRestartHelperContractTests` + `LogRetentionSourceRegressionTests` 锁定 narrow allowlist、no lifecycle authority、direct rm、no archive/index/new daemon。
 
 授权来源:`.refactor-loop/runs/phase9-issue49-r3-judge.md`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
@@ -514,31 +514,7 @@ Details are in [hard rules details](REFERENCE.md#hard-rules-details).
 ## 工作语言规则(源码内英文,源码外中文)
 
 Policy: Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
-
-Chinese by default:
-
-- GitHub issue titles, bodies, and comments.
-- GitHub PR titles, bodies, and comments.
-- Git commit messages written by controller/codex.
-- Push notifications.
-- Escalation/status wording.
-- Docs and TODO markers unless the host document has a stronger local convention.
-
-English-only inside source:
-
-- Comments and docstrings.
-- Log, error, and panic strings.
-- Identifiers, type names, fields, proto/yaml structural keys.
-- Code-built commit-body templates.
-
-Allowed inline English in Chinese artifacts:
-
-- Verbatim quotes from AGENTS/CLAUDE rules.
-- Source error messages.
-- Test names.
-- CLI commands, paths, SHAs, URLs, and labels.
-
-Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.md#historical-bilingual-notes).
+Operational details live in [language policy details](REFERENCE.md#language-policy-details); historical bilingual notes live in [historical bilingual notes](REFERENCE.md#historical-bilingual-notes).
 
 ## Files
 
@@ -565,6 +541,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [scripts/ensure_project_rules_fixed_points.py](scripts/ensure_project_rules_fixed_points.py) — Phase 0 fixed-point helper.
 - [scripts/concurrency_monitor.py](scripts/concurrency_monitor.py) — no-gap sentinel daemon.
 - [scripts/restart-daemons.sh](scripts/restart-daemons.sh) — cron/launchd anti-stop helper for existing daemon wrappers.
+- [scripts/log_retention.sh](scripts/log_retention.sh) — daemonless 24h direct-rm helper for `.refactor-loop/logs/*.log`.
 - [scripts/codex-progress-reporter.sh](scripts/codex-progress-reporter.sh) — progress comment daemon.
 - [scripts/comment-monitor.sh](scripts/comment-monitor.sh) — maintainer comment monitor.
 - [scripts/dev_sync_daemon.py](scripts/dev_sync_daemon.py) — integration sync daemon.
@@ -619,7 +596,7 @@ The local state file is a recovery aid, not the maintainer-facing state surface.
 Authoritative surfaces:
 
 1. GitHub comments and labels tell humans what is happening.
-2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`.
+2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`; `.refactor-loop/logs/*.log` is a 24h short-lived surface, not history.
 3. `.refactor-loop/state.json` is a resumability index and debug ledger, not a phase decision source of truth.
 4. `.refactor-loop/prompts/*` tells future maintainers what was dispatched.
 5. Branches, worktrees, and PRs tell git topology.

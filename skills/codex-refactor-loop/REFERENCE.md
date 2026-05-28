@@ -70,6 +70,8 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
 ```
 Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `<skill-root>/scripts/apply_integration_sync_request.py` after live-state validation.
 **5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`concurrency_monitor.py`(60s codex 并发)、`codex-progress-reporter.sh`(600s 进度回贴)、`comment-monitor.sh`(30s maintainer 评论 eyes-react)、`dev_sync_daemon.py`(600s integration sync detection/request)、`phase9_router_daemon.py`(30s narrow Phase 9 deterministic routing)。
+
+`restart-daemons.sh` also runs daemonless log retention before daemon freshness checks. `log_retention.sh` has no lifecycle authority: it reads `$REPO_ROOT/.refactor-loop/host.env`, targets only `$REPO_ROOT/.refactor-loop/logs/*.log`, and directly removes regular log files older than 24h. It must not create archive/index state, scan or delete `.refactor-loop/runs/` or prompts, call GitHub, run git, spawn codex, or become a daemon. Verification lives in `test_log_retention.py`.
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
   Old pattern: Controller runbook(REFERENCE.md)still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(restart-daemons.sh / peek.sh / concurrency_monitor.py);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
