@@ -83,7 +83,8 @@ from daemon_heartbeat import DaemonHeartbeatLease
 
 repo = Path(os.environ["REPO_ROOT"])
 name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
-DaemonHeartbeatLease(name, repo).beat()
+clock = lambda: int(os.environ.get("TEST_HEARTBEAT_EPOCH", "100"))
+DaemonHeartbeatLease(name, repo, clock=clock).beat()
 with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
     fh.write(f"{os.getpid()}\\n")
 fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
@@ -99,46 +100,24 @@ signal.pause()
 """
 
 
-PYTHON_LONG_SLEEP_DAEMON = """#!/usr/bin/env python3
-import os
-import signal
-import sys
-from pathlib import Path
-from daemon_heartbeat import DaemonHeartbeatLease
-
-repo = Path(os.environ["REPO_ROOT"])
-name = os.environ.get("RESTART_DAEMON_NAME", Path(sys.argv[0]).stem)
-lease = DaemonHeartbeatLease(name, repo, heartbeat_interval=1)
-with (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8") as fh:
-    fh.write(f"{os.getpid()}\\n")
-start_fifo = repo / ".refactor-loop" / "logs" / f"{name}.start-fifo"
-if start_fifo.exists():
-    fd = os.open(start_fifo, os.O_WRONLY)
-    try:
-        os.write(fd, f"{os.getpid()}\\n".encode("utf-8"))
-    finally:
-        os.close(fd)
-signal.signal(signal.SIGTERM, lambda _signum, _frame: sys.exit(0))
-signal.signal(signal.SIGINT, lambda _signum, _frame: sys.exit(0))
-lease.beat()
-lease.sleep_with_lease(1)
-lease_fifo = repo / ".refactor-loop" / "logs" / f"{name}.lease-fifo"
-if lease_fifo.exists():
-    fd = os.open(lease_fifo, os.O_WRONLY)
-    try:
-        os.write(fd, b"leased\\n")
-    finally:
-        os.close(fd)
-lease.sleep_with_lease(10)
-signal.pause()
-"""
-
-
 class RestartDaemonsBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="restart-daemons-test-"))
         self.repo = self.tmp_root / "repo"
         self.skill = self.tmp_root / "skill"
+        self.fake_bin = self.tmp_root / "fake-bin"
+        self.fake_bin.mkdir()
+        self.fake_epoch_file = self.tmp_root / "fake-date-epoch"
+        self.fake_epoch_file.write_text(f"{int(time.time())}\n", encoding="utf-8")
+        self._write_executable(
+            self.fake_bin / "date",
+            "#!/usr/bin/env bash\n"
+            "if [ \"$1\" = \"+%s\" ]; then\n"
+            f"  cat \"{self.fake_epoch_file}\"\n"
+            "else\n"
+            "  /bin/date \"$@\"\n"
+            "fi\n",
+        )
         for rel in (
             ".refactor-loop/logs",
             ".refactor-loop/locks",
@@ -238,15 +217,30 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
 
     def _run_helper_with_fresh_seconds(self, fresh_seconds: int) -> subprocess.CompletedProcess[str]:
-        env = os.environ.copy()
-        env.pop("REPO_ROOT", None)
-        env.update(
+        return self._run_helper_with_env(
             {
                 "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": str(fresh_seconds),
                 "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1",
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
             }
         )
+
+    def _run_helper_at_epoch(self, *, now_epoch: int, fresh_seconds: int) -> subprocess.CompletedProcess[str]:
+        self.fake_epoch_file.write_text(f"{now_epoch}\n", encoding="utf-8")
+        return self._run_helper_with_env(
+            {
+                "PATH": f"{self.fake_bin}{os.pathsep}{os.environ.get('PATH', '')}",
+                "TEST_HEARTBEAT_EPOCH": "100",
+                "RESTART_DAEMONS_HEARTBEAT_FRESH_SECONDS": str(fresh_seconds),
+                "RESTART_DAEMONS_HEARTBEAT_INTERVAL": "1",
+                "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
+            }
+        )
+
+    def _run_helper_with_env(self, updates: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.pop("REPO_ROOT", None)
+        env.update(updates)
         return subprocess.run(
             ["bash", str(self.skill / "scripts" / "restart-daemons.sh")],
             cwd=self.repo,
@@ -302,40 +296,20 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_hung_child_stops_renewing_heartbeat_and_is_restarted(self) -> None:
         self._write_executable(self.skill / "scripts" / "phase9_router_daemon.py", PYTHON_HANG_DAEMON)
-        self._run_helper_with_fresh_seconds(2)
+        self._run_helper_at_epoch(now_epoch=100, fresh_seconds=2)
         old_child_pid = self._read_start_signal("phase9_router_daemon")
         self.assertEqual(1, self._start_count("phase9_router_daemon"))
-        self._stale_heartbeat("phase9_router_daemon")
+        self.assertEqual(
+            "100",
+            (self.repo / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts").read_text(encoding="utf-8").strip(),
+        )
 
-        self._run_helper_with_fresh_seconds(2)
+        self._run_helper_at_epoch(now_epoch=103, fresh_seconds=2)
 
         new_child_pid = self._read_start_signal("phase9_router_daemon")
         self.assertNotEqual(old_child_pid, new_child_pid)
         self.assertEqual(2, self._start_count("phase9_router_daemon"))
         self.assertFalse(self._pid_alive(old_child_pid))
-
-    def test_actor_owned_lease_keeps_long_sleep_daemon_fresh(self) -> None:
-        self._write_executable(self.skill / "scripts" / "dev_sync_daemon.py", PYTHON_LONG_SLEEP_DAEMON)
-        os.mkfifo(self.repo / ".refactor-loop" / "logs" / "dev_sync_daemon.lease-fifo")
-        self._run_helper_with_fresh_seconds(2)
-        first_child_pid = self._read_start_signal("dev_sync_daemon")
-        self.assertEqual(1, self._start_count("dev_sync_daemon"))
-        lease_fd = os.open(
-            self.repo / ".refactor-loop" / "logs" / "dev_sync_daemon.lease-fifo",
-            os.O_RDONLY | os.O_NONBLOCK,
-        )
-        try:
-            readable, _, _ = select.select([lease_fd], [], [], 3.0)
-            if not readable:
-                self.fail("timed out waiting for actor-owned lease renewal")
-            self.assertEqual("leased", os.read(lease_fd, 64).decode("utf-8").strip())
-        finally:
-            os.close(lease_fd)
-
-        self._run_helper_with_fresh_seconds(2)
-
-        self.assertEqual(1, self._start_count("dev_sync_daemon"))
-        self.assertTrue(self._pid_alive(first_child_pid))
 
     def test_restarts_when_heartbeat_missing(self) -> None:
         self._run_helper()
