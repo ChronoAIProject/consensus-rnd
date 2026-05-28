@@ -35,7 +35,9 @@ Use for any GitHub-facing comment or PR body produced by solver, meta-judge, fix
 ## Rules
 
 - First line must start with `## 🤖 ` so `scripts/comment-monitor.sh` skips controller/codex posts.
-- GitHub-facing prose uses the required external language only. Keep code identifiers, file paths, proto fields, errors, and PROJECT_RULES/AGENTS quotes verbatim.
+- GitHub-facing comments / PR bodies are 中文 by default.
+- identifiers / paths / quoted rule text remain verbatim inline; errors, proto fields, and PROJECT_RULES/AGENTS quotes also stay verbatim.
+- no mandatory parallel English section.
 - TL;DR is ≤6 lines including optional cc.
 - Raw artifact/spec/YAML goes only inside `<details>`.
 - First mention of a technical identifier gets a one-sentence explanation.

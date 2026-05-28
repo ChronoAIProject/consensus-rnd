@@ -25,6 +25,11 @@ FORBIDDEN_TOKENS = [
     "deferred-as-issue",
     "tracking-issue",
 ]
+GITHUB_POST_LANGUAGE_FILES = [
+    "_github-post-rules.md",
+    "design-issue-body.md",
+    "design-issue-reply.md",
+]
 
 
 class PromptsCompressionBudgetTests(unittest.TestCase):
@@ -45,14 +50,23 @@ class PromptsCompressionBudgetTests(unittest.TestCase):
                 self.assertNotIn(tok, body, f"{p.name} still contains forbidden token {tok!r}")
 
     def test_sentinel_in_github_posting_prompts(self):
-        github_post_files = [
-            "design-issue-body.md",
-            "design-issue-reply.md",
-            "_github-post-rules.md",
-        ]
-        for fname in github_post_files:
+        for fname in GITHUB_POST_LANGUAGE_FILES:
             body = (PROMPTS_DIR / fname).read_text()
             self.assertIn("⟦AI:AUTO-LOOP⟧", body, f"{fname} missing sentinel")
+
+    def test_github_posting_language_contract_preserved(self):
+        required = [
+            "中文 by default",
+            "identifiers / paths / quoted rule text remain verbatim inline",
+            "no mandatory parallel English section",
+        ]
+        shared = (PROMPTS_DIR / "_github-post-rules.md").read_text()
+        self.assertIn("GitHub-facing comments / PR bodies are 中文 by default", shared)
+        self.assertIn("PROJECT_RULES/AGENTS quotes also stay verbatim", shared)
+        for fname in GITHUB_POST_LANGUAGE_FILES:
+            body = (PROMPTS_DIR / fname).read_text()
+            for token in required:
+                self.assertIn(token, body, f"{fname} missing language token {token!r}")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ Never repeat secrets, NyxId keys, or internal URLs from comments.
 2. `gh issue view ${ISSUE_NUMBER}` body and comments.
 3. Original cluster in `.refactor-loop/runs/audit-iter-${ITERATION}.md`.
 4. Referenced files and lines, opened fully.
-5. SKILL.md language rule: GitHub-facing reply uses the required external language; identifiers and quoted code may stay verbatim.
+5. SKILL.md language rule: GitHub-facing comments / PR bodies are 中文 by default; identifiers / paths / quoted rule text remain verbatim inline; no mandatory parallel English section.
 
 ## Classify the Comment
 

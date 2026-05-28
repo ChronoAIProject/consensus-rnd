@@ -1,6 +1,6 @@
 # ${PROBLEM_TITLE}
 
-> Reply in Chinese. Code identifiers, file paths, errors, and quoted rule text may stay verbatim.
+> GitHub-facing comments / PR bodies are 中文 by default; identifiers / paths / quoted rule text remain verbatim inline; no mandatory parallel English section.
 
 Facts are injected from `source .refactor-loop/host.env`; preserve `${HOST_*}` placeholders.
 
