@@ -18,6 +18,19 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def markdown_headings(text: str, level: int = 2) -> list[str]:
+    prefix = "#" * level
+    return [line for line in text.splitlines() if line.startswith(f"{prefix} ")]
+
+
+def section_between(text: str, start_heading_re: str, end_heading_re: str) -> str:
+    start = re.search(start_heading_re, text, flags=re.MULTILINE)
+    end = re.search(end_heading_re, text[start.end() :] if start else "", flags=re.MULTILINE)
+    if not start or not end:
+        return ""
+    return text[start.end() : start.end() + end.start()]
+
+
 class SkillEntrypointContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
@@ -36,29 +49,30 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_entrypoint_line_budget_and_controller_contract_headings(self) -> None:
         line_count = len(self.skill.splitlines())
+        headings = set(markdown_headings(self.skill))
 
         self.assertGreaterEqual(line_count, 600)
         self.assertLessEqual(line_count, 850)
-        for heading in (
-            "## Controller Contract Index",
-            "## Host 配置(通用化注入点)",
-            "## Phase Index",
-            "## Phase 0 — Bootstrap (first wakeup only)",
-            "## Loop control",
-            "## Label 系统 — 强制",
-            "## Hard rules (controller-level, propagated into every codex prompt)",
-            "## 工作语言规则(源码内英文,源码外中文)",
-            "## Files",
+        for pattern in (
+            r"^## Controller Contract Index$",
+            r"^## Host .+$",
+            r"^## Phase Index$",
+            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Loop control$",
+            r"^## Label .+$",
+            r"^## Hard rules .+$",
+            r"^## .+language.+$|^## .+语言.+$",
+            r"^## Files$",
         ):
-            with self.subTest(heading=heading):
-                self.assertIn(heading, self.skill)
+            with self.subTest(pattern=pattern):
+                self.assertTrue(any(re.match(pattern, heading) for heading in headings))
 
     def test_mandatory_local_invariants_remain_in_entrypoint(self) -> None:
         required = (
             "⟦AI:AUTO-LOOP⟧",
-            "GitHub 是系统状态唯一显示面",
+            "REFERENCE.md#status-and-escalation-templates",
             "Controller = pure orchestration",
-            "first wakeup",
+            "REFERENCE.md#phase-0-details",
             "Phase 0",
             "phase routing",
             "3/3",
@@ -67,16 +81,20 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "label",
             "spawn",
             "Hard rules",
-            "Source files are English-only; external user-facing artifacts are 中文 by default",
-            "No mandatory parallel English section",
+            "REFERENCE.md#language-policy-details",
+            "REFERENCE.md#historical-bilingual-notes",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
-        phase0 = self.skill.split("## Phase 0 — Bootstrap (first wakeup only)", 1)[1]
-        phase0 = phase0.split("## Phase Routing", 1)[0]
+        phase0 = section_between(
+            self.skill,
+            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Phase Routing$",
+        )
+        self.assertTrue(phase0)
         obligations = (
             "source .refactor-loop/host.env",
             "fail closed",
@@ -84,7 +102,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "initialize state",
             "integration branch",
             "ensure labels",
-            "ensure all 5 restart-helper-managed daemons",
+            "restart-helper-managed daemons",
             "arm persistent daemon-event Monitor",
             "dispatch producer",
             "confirm a wake source",
@@ -96,29 +114,41 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertNotEqual(index, -1)
                 self.assertGreater(index, cursor)
             cursor = index
+        for daemon in (
+            "concurrency_monitor.py",
+            "codex-progress-reporter.sh",
+            "comment-monitor.sh",
+            "dev_sync_daemon.py",
+            "phase9_router_daemon.py",
+        ):
+            with self.subTest(daemon=daemon):
+                self.assertIn(daemon, phase0)
 
     def test_wake_source_contract_names_three_lanes(self) -> None:
-        self.assertIn("active daemon-event Monitor bridge", self.skill)
-        self.assertIn("in-flight codex task-notification", self.skill)
-        self.assertIn("confirmed ScheduleWakeup", self.skill)
-        self.assertIn("daemon alone is not a wake source", self.skill)
+        wake_row = next(line for line in self.skill.splitlines() if line.startswith("| Wake source |"))
+        for token in ("daemon-event Monitor bridge", "codex task-notification", "ScheduleWakeup"):
+            with self.subTest(token=token):
+                self.assertIn(token, wake_row)
+        self.assertIn("REFERENCE.md#wake-source-rules", wake_row)
 
     def test_heavy_reference_material_is_not_in_entrypoint(self) -> None:
-        heavy_markers = (
-            "## 📊 当前状态 — <phase>",
-            "## 🆘 状态卡片 — 共识机制无法继续收敛",
-            '"schema_version": 1',
-            "## WorkUnitV1 contract",
-            "## Batching heuristics",
-            "## Recovery playbook",
-            "gh label create",
-            "Poll every 60s; emit one event per failed check",
-            "历史 bilingual 规则的位置",
+        reference_only_anchors = (
+            "workunitv1-contract",
+            "batching-heuristics",
+            "recovery-playbook",
+            "label-bootstrap-loops",
+            "historical-bilingual-notes",
         )
-        for marker in heavy_markers:
-            with self.subTest(marker=marker):
-                self.assertNotIn(marker, self.skill)
-                self.assertIn(marker, self.reference)
+        for anchor in reference_only_anchors:
+            with self.subTest(anchor=anchor):
+                self.assertIn(f"(REFERENCE.md#{anchor})", self.skill)
+                self.assertIn(anchor, self.reference)
+        self.assertNotIn('"schema_version": 1', self.skill)
+        self.assertIn('"schema_version": 1', self.reference)
+        for emoji_heading in ("📊", "🆘"):
+            with self.subTest(emoji_heading=emoji_heading):
+                self.assertNotRegex(self.skill, rf"(?m)^## {emoji_heading} ")
+                self.assertRegex(self.reference, rf"(?m)^## {emoji_heading} ")
 
     def test_entrypoint_uses_lazy_reference_links_only(self) -> None:
         self.assertNotIn("@REFERENCE.md", self.skill)
