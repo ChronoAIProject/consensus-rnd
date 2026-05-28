@@ -46,42 +46,41 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(needle, self.skill)
 
     def test_skill_documents_cron_launchd_install(self) -> None:
+        # Refactor (iter1/issue-141):
+        #   Old pattern: the anti-stop section duplicated cron/launchd command bodies beside the install walkthrough.
+        #   New principle: the anti-stop section keeps only the helper invariant and points scheduler install details to the single walkthrough.
         required = (
             "cron/launchd install",
-            "*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh >> .refactor-loop/logs/restart-cron.log 2>&1",
+            "完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough)",
+            "cron/launchd-only helper invariant",
             "launchd",
-            "StartInterval",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
-    def test_restart_helper_install_uninstall_anchor_is_local_cron_launchd_only(self) -> None:
-        section = self.skill.split(
+        anti_stop_install = self.skill.split(
             "## Anti-stop restart helper cron/launchd install(per #49)",
             1,
-        )[1].split("## Wakeup Skeleton", 1)[0]
-        required = (
-            "cron install one-liner",
-            "launchd host template",
+        )[1].split("## Named runtime exception", 1)[0]
+        local_required = (
             "Uninstall note",
             "cron/launchd-only",
-            "No lifecycle authority",
-            "不新增 watchdog daemon",
+            "do not replace it with a new watchdog daemon, installer script, or lifecycle actor",
         )
-        for needle in required:
+        for needle in local_required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, section)
+                self.assertIn(needle, anti_stop_install)
         forbidden = (
-            "installer.sh",
-            "install-restart",
-            "gh pr create",
-            "gh issue create",
-            "git push",
+            "Host project cron install one-liner",
+            "*/5 * * * * cd $REPO_ROOT && bash skills/codex-refactor-loop/scripts/restart-daemons.sh",
+            "launchd host template",
+            "ProgramArguments",
+            "StartInterval",
         )
-        for token in forbidden:
-            with self.subTest(token=token):
-                self.assertNotIn(token, section)
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, anti_stop_install)
 
     def test_skill_references_issue49_r3_judge_artifact(self) -> None:
         self.assertIn(
