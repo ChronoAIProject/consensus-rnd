@@ -76,4 +76,4 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - Do not commit, push, checkout, create PR, merge, close issues/PRs, edit labels, or perform GitHub lifecycle operations.
 - Prefer `rework` over a doubtful `pass`.
 - Marker/artifact-only prompt: no GitHub operations unless explicitly requested; this prompt does not request posting.
-- All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.
+- AI 内容标识符 `⟦AI:AUTO-LOOP⟧` must be the 末尾独立一行 for all external content and `runs/*.md` artifacts.

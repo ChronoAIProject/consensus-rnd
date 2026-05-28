@@ -1290,7 +1290,7 @@ When reviewer evidence conflicts with maintainer prior session directive, encode
 
 If architect or quality rejects because the PR "needs Phase 9 artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Phase 9 path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Phase 9 with that directive as evidence. This is the Phase 9-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
-Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `controller_lib.sh`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `controller_lib.sh`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` controller routes to reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
 ### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
 

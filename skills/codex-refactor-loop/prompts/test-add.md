@@ -47,4 +47,4 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 
 Marker/artifact-only prompt: no GitHub operations unless explicitly requested; this prompt does not request posting. Forbidden lifecycle: `git commit/push/checkout/merge/reset/rebase`, PR create/merge/close, issue create/close, label edits.
 
-All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.
+AI 内容标识符 `⟦AI:AUTO-LOOP⟧` must be the 末尾独立一行 for all external content and `runs/*.md` artifacts.

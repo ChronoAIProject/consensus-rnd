@@ -45,7 +45,7 @@ verdict: approve | comment | reject
 <only if comment or reject>
 ```
 
-Verdict: `approve` = merge OK from architect angle; `comment` = advisory/non-blocking; `reject` = real PROJECT_RULES/AGENTS regression. In-scope must-fix findings are `reject`; out-of-scope or non-flippable findings are `comment`.
+Verdict: `approve` = merge OK from architect angle; `comment` = advisory/non-blocking; `reject` = real PROJECT_RULES/AGENTS regression. In-scope must-fix-before-merge findings must be `reject`. Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with `REVIEW_DONE:${PR_NUMBER}:architect:<verdict>`.
 

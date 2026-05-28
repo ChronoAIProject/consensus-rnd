@@ -87,6 +87,7 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - Do not commit, push, checkout, open PRs, or dispatch codexes.
 - Abstain when deletion does not fit.
 - Do not escalate merely for philosophy/Tier/core-boundary changes.
+- Either delete/collapse now or abstain/false-positive; Lifecycle decisions stay with controller/maintainer.
 - GitHub-facing output follows `prompts/_github-post-rules.md`; print `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` or `POST_FAILED:...`.
 - Forbidden lifecycle: PR create/merge/close, issue create/close, label edits.
 - All AI-generated external content and `runs/*.md` artifacts end with `⟦AI:AUTO-LOOP⟧`.

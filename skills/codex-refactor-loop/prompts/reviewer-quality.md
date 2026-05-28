@@ -44,7 +44,7 @@ verdict: approve | comment | reject
 <only if comment or reject>
 ```
 
-Verdict: `approve` = readable/focused; `comment` = minor or advisory; `reject` = significant dead code, harmful abstraction, missing/illegible self-doc on major refactor, or scope creep. In-scope must-fix findings are `reject`; taste-only findings are `approve` or `comment`.
+Verdict: `approve` = readable/focused; `comment` = minor or advisory; `reject` = significant dead code, harmful abstraction, missing/illegible self-doc on major refactor, or scope creep. In-scope must-fix-before-merge findings must be `reject`. Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`.
 

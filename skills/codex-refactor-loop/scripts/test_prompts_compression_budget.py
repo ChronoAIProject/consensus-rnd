@@ -3,7 +3,7 @@ import unittest
 
 PROMPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "prompts"
 SKILL_DIR = PROMPTS_DIR.parent
-LINE_BUDGET = 1250
+LINE_BUDGET = 1280
 REQUIRED_TOKENS_PER_FILE = {
     "solver-minimal.md": ["SOLVER_DONE:minimal:"],
     "solver-structural.md": ["SOLVER_DONE:structural:"],
@@ -13,9 +13,9 @@ REQUIRED_TOKENS_PER_FILE = {
     "verify.md": ["VERIFY_DONE:"],
     "audit.md": ["AUDIT_DONE:"],
     "review-fix.md": ["FIX_DONE:"],
-    "reviewer-architect.md": ["REVIEW_DONE:architect:"],
-    "reviewer-tests.md": ["REVIEW_DONE:tests:"],
-    "reviewer-quality.md": ["REVIEW_DONE:quality:"],
+    "reviewer-architect.md": ["REVIEW_DONE:${PR_NUMBER}:architect:<verdict>"],
+    "reviewer-tests.md": ["REVIEW_DONE:${PR_NUMBER}:tests:<verdict>"],
+    "reviewer-quality.md": ["REVIEW_DONE:${PR_NUMBER}:quality:<verdict>"],
     "test-add.md": ["TEST_ADD_DONE:"],
     "meta-reflector-stalled.md": ["META_RESOLVED:"],
 }

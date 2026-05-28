@@ -1,6 +1,6 @@
 # Fix Codex: Address Reject Demands
 
-PR `${PR_NUMBER}` (`${PR_TITLE}`), round `${FIX_ROUND}` of `${MAX_FIX_ROUNDS}`. Read reviewer outputs, treat only `reject` evidence as blocking, and apply fixes so the next Phase 8 review can reach MERGE or MERGE_WITH_COMMENTS.
+PR `${PR_NUMBER}` (`${PR_TITLE}`), round `${FIX_ROUND}` of `${MAX_FIX_ROUNDS}`. Read reviewer outputs; blocking demands come only from `reject` reviewer evidence. Apply fixes so the next Phase 8 review can reach MERGE or MERGE_WITH_COMMENTS.
 
 Truth table: `reject=0,approve≥1,comment=0→MERGE`; `reject=0,approve≥1,comment≥1→MERGE_WITH_COMMENTS`; `reject≥1→FIX`.
 
@@ -14,7 +14,7 @@ Truth table: `reject=0,approve≥1,comment=0→MERGE`; `reject=0,approve≥1,com
 
 ## Procedure
 
-1. Build blocking demand list only from `reject` evidence. Comments are advisory context.
+1. Build blocking demand list only from `reject` evidence. Comments are context: read them and surface them in the report, but do not treat them as mandatory fix demands.
 2. Categorize each demand:
    - A fixable in scope: apply.
    - B fixable but outside scope: print `SCOPE_EXTEND:<file>:<reason>` and apply only if same logical refactor and required to clear reject.

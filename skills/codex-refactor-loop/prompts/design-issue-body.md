@@ -61,4 +61,4 @@ ${CLUSTER_FIX_BOUNDARY}
 
 cc: @<maintainer-handle-from-$MAINTAINER_WHITELIST>
 
-⟦AI:AUTO-LOOP⟧
+AI 内容标识符 `⟦AI:AUTO-LOOP⟧` must be the 末尾独立一行.

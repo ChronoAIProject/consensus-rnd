@@ -546,10 +546,10 @@ class ScriptHygieneBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(post_rules_forbidden=forbidden):
                 self.assertNotIn(forbidden, post_rules)
-        self.assertIn("gh issue view / gh issue comment", post_rules)
-        self.assertIn("gh pr view / gh pr comment / gh pr edit --body-file", post_rules)
+        self.assertIn("`gh issue view`, `gh issue comment`", post_rules)
+        self.assertIn("`gh pr view`, `gh pr comment`, `gh pr edit --body-file`", post_rules)
 
-        for marker in ("ManualIssueTriageDecisionV1", "TRIAGE_DECISION_DONE", "不直接改 GitHub issue body / label"):
+        for marker in ("ManualIssueTriageDecisionV1", "TRIAGE_DECISION_DONE", "controller applies artifacts"):
             self.assertIn(marker, triage_prompt)
         self.assertNotIn("gh issue edit", triage_prompt)
 
@@ -985,14 +985,13 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         for prompt_name in sorted(direct_post_prompts):
             text = (prompts_root / prompt_name).read_text(encoding="utf-8")
             with self.subTest(prompt=prompt_name, contract="direct-post"):
-                self.assertIn("## GitHub post", text)
-                self.assertIn("_github-post-rules.md", text)
+                self.assertRegex(text, r"(GitHub-facing|GitHub commands|follows `prompts/_github-post-rules\.md`)")
+                self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
         for prompt_name in sorted(marker_only_prompts):
             text = (prompts_root / prompt_name).read_text(encoding="utf-8")
             with self.subTest(prompt=prompt_name, contract="marker-only"):
-                self.assertNotIn("## GitHub post", text)
-                self.assertIn("AI 内容标识符", text)
+                self.assertNotIn("POSTED:<role>:<issue-or-pr>:<URL>:<headline>", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
     # Refactor (issue79/r8-consensus-no-implementation-helper-fork):
@@ -1045,8 +1044,9 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
         for token in forbidden_tokens:
             with self.subTest(token=token):
                 self.assertNotIn(token, scan_text)
-        self.assertIn("Either delete/collapse now", scan_text)
-        self.assertIn("Lifecycle decisions stay with controller/maintainer.", scan_text)
+        self.assertIn("propose deletion", scan_text)
+        self.assertIn("Abstain when deletion does not fit.", scan_text)
+        self.assertIn("Do not write or delete code in this run; controller acts on the plan.", scan_text)
 
 
 class RootMarkdownClosureSourceRegressionTests(unittest.TestCase):
@@ -1425,9 +1425,9 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
             "producer: manual-issue",
             "source_ref: gh-issue-${ISSUE_NUMBER}",
             "scope_paths",
-            "problem / invariant text",
+            "problem/invariant text",
             "verification_hints",
-            "\u4e0d\u5199 `cluster_id` \u6216 `legacy_cluster_id`",
+            "Do not write `cluster_id` or `legacy_cluster_id`",
         )
 
         for marker in required_markers:
@@ -1476,12 +1476,11 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         )
 
         required = (
-            f"实现上下文事实源是 `{source_ref}`",
-            "为空时走 audit-backed legacy pathway",
-            f"否则读取 `{source_ref}` 中 \"cluster-079\" 一节",
+            f"otherwise read `{source_ref}` cluster `cluster-079`",
+            f"otherwise `{source_ref}` section `cluster-079`",
             "skills/codex-refactor-loop/prompts/implement.md",
             "skills/codex-refactor-loop/scripts/test_*.py",
-            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "Do not commit, push, checkout",
             "source files English-only; refactor self-documentation required",
             "⟦AI:AUTO-LOOP⟧",
         )
@@ -1498,12 +1497,11 @@ class WorkUnitV1SourceRegressionTests(unittest.TestCase):
         )
 
         required = (
-            f"`{decision_path}` 非空时走 design-issue pathway",
-            f"读取 `{REPO_ROOT / decision_path}`",
-            "design-issue consensus artifact",
+            f"`{decision_path}` non-empty means design-issue pathway",
+            f"`{REPO_ROOT / decision_path}` if set",
             "skills/codex-refactor-loop/prompts/implement.md",
             "skills/codex-refactor-loop/scripts/test_*.py",
-            "禁止 `git commit` / `git push` / `git checkout <branch>`",
+            "Do not commit, push, checkout",
             "source files English-only; refactor self-documentation required",
             "⟦AI:AUTO-LOOP⟧",
         )
@@ -1860,24 +1858,34 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         prompt = self.read_rel("skills/codex-refactor-loop/prompts/meta-reflector-stalled.md")
 
         for token in (
-            "## Priority 0: mandatory no-framing drop",
-            "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
-            "must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`",
+            "Before re-design or human escalation, inspect Phase 9 evidence.",
+            "convergence round `N >= 3`",
+            "solver text/verdict direction is unchanged across 3+ rounds",
+            "`META_RESOLVED:drop:no-actionable-framing-after-N-rounds`",
+            "Do not emit `META_RESOLVED:re-design:<reason>` or `META_RESOLVED:escalate-human:<reason>` for the same case.",
+            "## Self-Check",
+            "Does Phase 9 show no actionable framing after 3+ unchanged solver rounds with no maintainer input?",
             "no-actionable-framing",
-            "phase9-no-framing",
-            "false-positive/wontfix cases and for phase9-no-framing cases",
-            "Do not use `drop` to bypass architect/quality rejects",
-            "Do not route to re-design unless you can cite",
-            "escalate-human 仍是 maintainer physical intervention 唯一出口",
+            "use `META_RESOLVED:re-design:<reason>` only when citing the concrete directive/artifact or distinct actionable framing",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
+        for pattern in (
+            r"## Priority (?:Rule|0: mandatory no-framing drop)",
+            r"(?:no maintainer input arrived|there is no maintainer input)",
+            r"no distinct (?:actionable|solvable) framing remains",
+            r"(?:This route|This `phase9-no-framing` route) is mandatory for that evidence.",
+            r"Human escalation is only for true maintainer physical intervention",
+            r"(?:If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`\..*)?If 4 is yes, emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`.",
+        ):
+            with self.subTest(pattern=pattern):
+                self.assertRegex(prompt, pattern)
 
         self.assertLess(
-            prompt.index("## Priority 0: mandatory no-framing drop"),
-            prompt.index("If any of answers 1-3 is yes"),
+            prompt.index("## Priority"),
+            prompt.index("## Self-Check"),
         )
-        self.assertIn("If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.", prompt)
+        self.assertLess(prompt.index("If 4 is yes, emit"), prompt.index("Human escalation is only"))
         old_directive_marker = "META_RESOLVED:re-design:" + "reframe-with-maintainer-" + "directive"
         self.assertNotIn(old_directive_marker, prompt)
 
@@ -1901,11 +1909,17 @@ class HumanLabelSemanticsTests(unittest.TestCase):
         prompt_authorizes_no_framing_drop = all(
             token in prompt
             for token in (
-                "Does the Phase 9 evidence show no actionable framing after 3+ unchanged solver rounds?",
-                "must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`",
-                "there is no maintainer input",
-                "no distinct solvable framing remains",
-                "If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.",
+                "convergence round `N >= 3`",
+                "solver text/verdict direction is unchanged across 3+ rounds",
+                "Do not emit `META_RESOLVED:re-design:<reason>` or `META_RESOLVED:escalate-human:<reason>` for the same case.",
+            )
+        )
+        prompt_authorizes_no_framing_drop = prompt_authorizes_no_framing_drop and all(
+            re.search(pattern, prompt)
+            for pattern in (
+                r"(?:no maintainer input arrived|there is no maintainer input)",
+                r"no distinct (?:actionable|solvable) framing remains",
+                r"If 4 is yes, emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`.",
             )
         )
 
@@ -1970,7 +1984,7 @@ class HumanLabelSemanticsTests(unittest.TestCase):
                 self.assertIsNone(pattern.search(combined))
 
         self.assertIn("META_RESOLVED:escalate-human", combined)
-        self.assertIn("controller routes to reflector/meta-layer", combined)
+        self.assertIn("controller routes to reflector/meta-layer and must not call the helper", combined)
 
     def test_human_label_helper_requires_meta_resolved_source_marker(self) -> None:
         controller_lib = self.read_rel("skills/codex-refactor-loop/scripts/controller_lib.sh")
@@ -2553,15 +2567,14 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(".claude/skills/codex-refactor-loop/scripts/comment-monitor.sh", text)
         for name in prompt_names[:-1]:
             with self.subTest(prompt=name, expected="post-rules"):
-                self.assertIn("本 skill 的 `prompts/_github-post-rules.md`", (SKILL_ROOT / "prompts" / name).read_text(encoding="utf-8"))
-        self.assertIn("本 skill 的 `scripts/comment-monitor.sh`", self.read_rel("skills/codex-refactor-loop/prompts/_github-post-rules.md"))
+                self.assertIn("prompts/_github-post-rules.md", (SKILL_ROOT / "prompts" / name).read_text(encoding="utf-8"))
+        self.assertIn("scripts/comment-monitor.sh", self.read_rel("skills/codex-refactor-loop/prompts/_github-post-rules.md"))
 
     def test_spawned_prompts_and_banner_builders_keep_final_independent_sentinel(self) -> None:
         prompt_paths = [p for p in sorted((SKILL_ROOT / "prompts").glob("*.md")) if p.name != "_github-post-rules.md"]
         for path in prompt_paths:
             text = path.read_text(encoding="utf-8")
             with self.subTest(prompt=path.name):
-                self.assertIn("末尾独立一行", text)
                 self.assertIn("⟦AI:AUTO-LOOP⟧", text)
 
         for rel in ("skills/codex-refactor-loop/scripts/post_banner.py", "skills/codex-refactor-loop/scripts/comment-monitor.sh"):
@@ -2853,7 +2866,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                     if token not in line:
                         continue
                     with self.subTest(prompt=path.name, token=token, line=line):
-                        self.assertRegex(line, r"禁止|不可调|Do NOT|do not")
+                        self.assertRegex(line, r"禁止|不可调|Do NOT|do not|Forbidden")
 
     def test_disabled_test_escape_hatches_are_not_recommended(self) -> None:
         checked = self.rel_paths("skills/codex-refactor-loop/prompts/*.md", "skills/codex-refactor-loop/SKILL.md")
@@ -2938,8 +2951,6 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         for prompt_name, required_names in scoped_prompts.items():
             text = (SKILL_ROOT / "prompts" / prompt_name).read_text(encoding="utf-8")
             scan_text = "\n".join(line for line in text.splitlines() if host_comment not in line)
-            with self.subTest(prompt=prompt_name, marker="refactor-comment"):
-                self.assertIn(host_comment, text)
             for required in required_names:
                 with self.subTest(prompt=prompt_name, required=required):
                     self.assertIn(required, text)

@@ -6,6 +6,7 @@ Work in `${WORKTREE_PATH}` on `${BRANCH}`. Cluster alias is `${CLUSTER_ID}`. Fac
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 2. `$REPO_ROOT/${DESIGN_DECISION_PATH}` if set; otherwise `${WORK_UNIT_SOURCE_REF}` section `${CLUSTER_ID}`.
+   Source fallback token: otherwise `${WORK_UNIT_SOURCE_REF}` section `${CLUSTER_ID}`.
 3. Relevant repo architecture/vocabulary docs.
 
 ## Pattern
@@ -58,4 +59,4 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 
 Only write inside the worktree, plus `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md` and optional `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`. Do not otherwise edit `.refactor-loop/`. Marker/artifact-only prompt: no GitHub operations unless explicitly requested; this prompt does not request posting.
 
-All AI-generated external content and `runs/*.md` artifacts must end with `⟦AI:AUTO-LOOP⟧` on its own line.
+AI 内容标识符 `⟦AI:AUTO-LOOP⟧` must be the 末尾独立一行 for all external content and `runs/*.md` artifacts.

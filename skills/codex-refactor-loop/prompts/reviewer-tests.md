@@ -46,7 +46,7 @@ verdict: approve | comment | reject
 <only if comment or reject>
 ```
 
-Verdict: `approve` = adequate tests; `comment` = nice-to-have or minor naming/justification issue; `reject` = real net-new logic gap, skip/manual bypass, unallowlisted sleep/delay, or weakened assertion. In-scope must-fix findings are `reject`; advisory findings are `comment`.
+Verdict: `approve` = adequate tests; `comment` = nice-to-have or minor naming/justification issue; `reject` = real net-new logic gap, skip/manual bypass, unallowlisted sleep/delay, or weakened assertion. In-scope must-fix-before-merge findings must be `reject`. Out-of-scope, non-flippable, or advisory findings must be `comment`.
 
 End with `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`.
 

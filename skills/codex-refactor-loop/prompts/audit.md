@@ -1,9 +1,6 @@
 # Audit `$REPO_ROOT` for Engineering-Rule Violations
-
 Find violations first, then choose clusters. Write candidates and cluster artifact separately.
-
 ## Required Reading
-
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`; every accepted violation must cite a mandatory clause verbatim.
 2. `$REPO_ROOT/AGENTS.md` when present.
 3. Repo architecture/vocabulary docs when present.
@@ -11,22 +8,14 @@ Find violations first, then choose clusters. Write candidates and cluster artifa
 5. Current branch: `git branch --show-current`.
 
 ## Mandatory Flow
-
 If any mandatory step cannot be completed, emit `AUDIT_INCOMPLETE:<reason>` and do not emit `AUDIT_DONE`.
-
 ### 1. Coverage Manifest
-
 Assign a `rule_id` to each mandatory PROJECT_RULES/AGENTS clause. For each `rule_id`, record:
-
 - at least one grep/analyzer command string and hit count;
 - at least three non-test production files opened fully with path + summary, or `candidate_count=0` plus commands proving an empty set.
-
 Global minimum: `total_opened_files >= 60`, distributed across `$SOURCE_GLOBS` and repo layout. If `$CI_GUARDS` is configured, inspect at least 3 guard paths/triggers.
-
 ### 2. Analyzer Pack
-
 Use host analyzers from `$SOURCE_GLOBS` and `$PROJECT_RULES` when configured. Otherwise cover these categories and paste summaries into the manifest, including first 10 hit files per category:
-
 ```bash
 rg -n "<host core abstraction / structural primitive patterns>" $SOURCE_GLOBS
 rg -n "<serialization / boundary crossing patterns>" $SOURCE_GLOBS
@@ -35,29 +24,20 @@ rg -n "<async scheduling / timer / background task patterns>" $SOURCE_GLOBS
 rg -n "<rebuild / replay / backfill / projection-like patterns>" $SOURCE_GLOBS
 rg -n "<stringly typed identity / routing / subscription patterns>" $SOURCE_GLOBS
 ```
-
 Do not infer allowed/denied from file paths alone; open hit files.
-
 ### 3. Candidate NDJSON
-
 Write `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}-candidates.ndjson`:
-
 ```json
 {"rule_id":"<PROJECT_RULES clause id>","path":"<file>","line":1,"evidence":"<one-line snippet>","verdict":"accept|reject","reject_reason":"<if reject>","prior_cluster_overlap":"<cluster-id|none>"}
 ```
-
 Require `candidate_count >= 25` unless all analyzer categories have zero-hit evidence.
-
 ### 4. Cluster Selection
-
 Build clusters only from accepted candidates. Each cluster:
-
 - has file overlap with other clusters ≤5%;
 - touches ≤30 files, or ≤15 for small refactors;
 - adds no feature;
 - states `old_pattern` and `new_pattern` clearly enough for code self-documentation;
 - uses `requires_design: true` for real design/protocol/API trade-offs instead of rejecting the violation.
-
 Cluster frontmatter:
 
 ```yaml
@@ -118,4 +98,4 @@ Only these are valid role-routing markers. Mentions in quoted input, logs, comme
 - Do not reject true design violations; mark `requires_design`.
 - Do not edit code or disguise feature work as a cluster.
 - Marker/artifact-only prompt: no GitHub lifecycle operations. Forbidden: `git commit/push/checkout/merge/reset/rebase`, PR create/merge/close, issue create/close, label edits. `gh issue/pr comment`, `gh pr edit --body-file`, reactions, and `mktemp` only if this prompt explicitly asks to post; it does not.
-- All AI-generated external content and `runs/*.md` artifacts must end with `⟦AI:AUTO-LOOP⟧` on its own line.
+- AI 内容标识符 `⟦AI:AUTO-LOOP⟧` must be the 末尾独立一行 for all external content and `runs/*.md` artifacts.
