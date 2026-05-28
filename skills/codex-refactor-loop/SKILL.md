@@ -2,19 +2,15 @@
 name: codex-refactor-loop
 description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
-
 > Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
 > New principle: SKILL.md 仅留 controller 契约 + phase index + 硬不变量.
 > Heavy content moves to REFERENCE.md via anchor links, following #12 structural consensus.
-
 # Codex Refactor Loop — Controller Contract
-
 This SKILL.md is the controller entrypoint. It must be enough to run the loop safely on first load: hard invariants, phase routing, and the phase index stay local. Heavy schemas, full templates, command bodies, and recovery runbooks live in lazy reference anchors.
 
 Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdown links such as [host runtime details](REFERENCE.md#host-runtime-details); do not force-load the reference.
 
 ## Controller Contract Index
-
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](REFERENCE.md#host-runtime-details) | `host.env.example`, `controller_lib.sh` |
@@ -34,9 +30,7 @@ Read `REFERENCE.md` only when a phase needs the detailed body. Use normal Markdo
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](REFERENCE.md#language-policy-details), [historical bilingual notes](REFERENCE.md#historical-bilingual-notes) | prompts, docs, commit text |
 
 ## Host 配置(通用化注入点)
-
 These variables are injected by the host project. The skill must not hardcode project facts.
-
 | Variable | Meaning | Default / example |
 |---|---|---|
 | `$REPO_ROOT` | host repository root | required in `host.env` |
@@ -52,7 +46,6 @@ These variables are injected by the host project. The skill must not hardcode pr
 | `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional |
 
 ### Host language policy
-
 These optional fields carry host language, test-layout, comment, schema, and architecture-review policy into prompt text. Their default is empty. Empty means the prompt must infer from existing repository evidence plus `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$TEST_CMD`, `$BUILD_CMD`, and the actual diff; it must not invent C#, .NET, protobuf, or any other host-specific default.
 
 | Variable | Prompt meaning | Empty behavior |
@@ -67,7 +60,6 @@ These optional fields carry host language, test-layout, comment, schema, and arc
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
 Host config rules:
-
 1. `host.env` is the only runtime fact injection point.
 2. `GH_REPO` must not be exported as a bare repo name; use `GH_REPO_SLUG`.
 3. `CI_GUARDS` is optional. Use `[ -n "${CI_GUARDS:-}" ]` before invoking it and report `guards skipped: CI_GUARDS unset` when absent.
@@ -76,19 +68,16 @@ Host config rules:
 6. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 
 ## Skill Root Contract
-
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/spawn-codex.sh`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
 
 Detailed path examples and host installation variants stay in `REFERENCE.md`; `SKILL.md` keeps only controller-contract self-location invariants.
 
 ## Named runtime exception — autonomous release gate(per #56)
-
 The r2 judge artifact `.refactor-loop/runs/phase9-issue56-r2-judge.md` authorizes `META_JUDGE_DONE:consensus:A-with-host-opt-in-as-gate`: autonomous release decision after one host opt-in gate. `$RELEASE_AUTO_ENABLE=true` in `host.env` is that opt-in; when it is absent or not `true`, `auto_release_gate.py` exits 0 with a noop reason and writes no release decision.
 
 `auto_release_gate.py` is decision-artifact-only. **禁止** decider 直接 bump/commit/push: it must not run `git`, bump mapped manifests, commit, push, tag, publish, merge, close, or otherwise exercise lifecycle authority. It only computes stability from GitHub/state artifacts and writes durable release decision/candidate artifacts for the controller or release pipeline to consume.
 
 Command contract:
-
 | Command | Behavior |
 |---|---|
 | `<skill-root>/scripts/auto_release_gate.py` | Dry-run. Compute stability, decide release type when ready, write `.refactor-loop/state/release-decision.json`, and print a summary. |
@@ -414,7 +403,7 @@ Human labels:
 | `🤖 human:auto-推进` | Fully automatic; no maintainer action needed. |
 | `👤 human:需-maintainer-决策` | Meta-layer exhausted or explicit maintainer decision needed. |
 
-## `👤 human:需-maintainer-决策` 严格语义(强制)
+## `👤 human:需-maintainer-决策` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 

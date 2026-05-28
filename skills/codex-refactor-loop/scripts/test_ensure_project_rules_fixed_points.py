@@ -1974,17 +1974,19 @@ class HumanLabelTaxonomySourceRegressionTests(unittest.TestCase):
 
 
 class HumanLabelSemanticsTests(unittest.TestCase):
-    # Refactor (iter4/human-label-semantics-guard): Old pattern: label used as
-    # an architect-reject workaround. New principle: strict semantics +
-    # reflector self-check + controller helper guard + source-regression test.
+    # Refactor (iter326/issue-106):
+    #   Old pattern: source-regression test 字面拦 Chinese/English prose,中英切换会全面失效
+    #   New principle: no DetectionInvariantV1; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
+    #   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
     def read_rel(self, rel: str) -> str:
         return (REPO_ROOT / rel).read_text(encoding="utf-8")
 
     def test_skill_md_has_strict_human_label_semantics_section(self) -> None:
         skill = self.read_rel("skills/codex-refactor-loop/SKILL.md")
 
-        self.assertIn("## `👤 human:需-maintainer-决策` 严格语义(强制)", skill)
+        self.assertIn('<a id="human-label-strict-semantics"></a>', skill)
         for token in (
+            "👤 human:需-maintainer-决策",
             "Apply only when",
             "DO NOT apply when",
             "architect/quality reviewer",
