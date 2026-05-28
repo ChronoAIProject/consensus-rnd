@@ -1307,6 +1307,35 @@ class WorkUnitSourceRegressionTests(unittest.TestCase):
                 with self.subTest(path=path.name, token=token):
                     self.assertNotIn(token, text)
 
+    # Refactor (iter5/issue107-stage2-source-regression-anchor): Old: stage-1 stripped
+    # V1/V2/schema_version literals from docs but no negative gate locked the removal.
+    # New: assert retired identifier suffixes do not reappear in canonical docs/checker
+    # surfaces. Runtime schema files (state.json container) are out of this assert scope.
+    def test_retired_version_identifier_suffixes_are_absent_from_docs(self) -> None:
+        repo_root = SKILL_ROOT.parent.parent
+        scoped_paths = [
+            repo_root / "CLAUDE.md",
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "REFERENCE.md",
+            SKILL_ROOT / "scripts" / "check_skill_degradation.py",
+        ]
+        retired_tokens = (
+            "Work" + "Unit" + "V1",
+            "Work" + "Unit" + "V2",
+            "Integration" + "Sync" + "Daemon" + "V1",
+            "Integration" + "Sync" + "Request" + "V1",
+            "Manual" + "Issue" + "Triage" + "Decision" + "V1",
+            "Skill" + "Degradation" + "Watch" + "V1",
+            "Worktree" + "Lifecycle" + "Projection" + "V1",
+            "schema_" + "version",
+            "work_unit_" + "schema_" + "version",
+        )
+        for path in scoped_paths:
+            text = path.read_text(encoding="utf-8")
+            for token in retired_tokens:
+                with self.subTest(path=path.name, token=token):
+                    self.assertNotIn(token, text)
+
     def test_render_template_prefers_work_unit_id_over_cluster_alias(self) -> None:
         rendered = self.render_work_unit_template(work_unit_id="unit-123", cluster_id="cluster-007")
 
