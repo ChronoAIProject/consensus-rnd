@@ -48,8 +48,12 @@ def changed_test_files() -> list[Path]:
         text=True,
         check=False,
     )
-    if diff_result.returncode != 0 or untracked_result.returncode != 0:
-        return []
+    if diff_result.returncode != 0:
+        raise AssertionError(
+            f"failed to compute changed test files against {BASE_REF}: {diff_result.stderr.strip()}"
+        )
+    if untracked_result.returncode != 0:
+        raise AssertionError(f"failed to compute untracked test files: {untracked_result.stderr.strip()}")
     paths = set(diff_result.stdout.splitlines()) | set(untracked_result.stdout.splitlines())
     return [REPO_ROOT / line for line in sorted(paths) if line]
 
@@ -57,7 +61,14 @@ def changed_test_files() -> list[Path]:
 class NoNewProseDetectionTests(unittest.TestCase):
     def test_new_or_modified_tests_do_not_add_prose_detection_tokens(self) -> None:
         offenders: list[str] = []
-        for path in changed_test_files():
+        changed_paths = changed_test_files()
+        if SCRIPT_PATH in changed_paths:
+            self.assertGreater(
+                len([path for path in changed_paths if path != SCRIPT_PATH]),
+                0,
+                "this PR changed the prose-detector guard but scanned no other changed test files",
+            )
+        for path in changed_paths:
             if not path.exists():
                 continue
             if path.name == SCRIPT_PATH.name:
