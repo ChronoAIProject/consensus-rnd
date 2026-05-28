@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate lazy REFERENCE.md links from SKILL.md."""
+"""Validate intra-file reference links in SKILL.md."""
 
 from __future__ import annotations
 
@@ -40,18 +40,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
-        self.reference = read(REFERENCE_MD)
 
-    def test_all_skill_reference_links_resolve(self) -> None:
-        links = re.findall(r"\(REFERENCE\.md#([^)#\s]+)\)", self.skill)
+    def test_reference_file_was_merged_into_skill(self) -> None:
+        self.assertFalse(REFERENCE_MD.exists())
+        self.assertIn("## Detailed reference", self.skill)
+
+    def test_all_skill_intra_file_reference_links_resolve(self) -> None:
+        links = re.findall(r"\(#([^)#\s]+)\)", self.skill)
         self.assertGreaterEqual(len(links), 12)
-        available = reference_anchors(self.reference)
+        available = reference_anchors(self.skill)
 
         for anchor in links:
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, available)
 
-    def test_reference_contains_required_split_sections(self) -> None:
+    def test_skill_contains_required_detailed_sections(self) -> None:
         required_anchors = (
             "controller-contract-details",
             "host-runtime-details",
@@ -64,41 +67,39 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "label-bootstrap-loops",
             "historical-bilingual-notes",
         )
-        available = reference_anchors(self.reference)
+        available = reference_anchors(self.skill)
         for anchor in required_anchors:
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, available)
 
-    def test_reference_is_the_heavy_manual_after_split(self) -> None:
-        reference_lines = len(self.reference.splitlines())
+    def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
         skill_lines = len(self.skill.splitlines())
 
-        self.assertGreaterEqual(reference_lines, 2000)
-        self.assertLessEqual(reference_lines, 2500)
-        self.assertGreater(reference_lines, skill_lines * 2)
+        self.assertGreaterEqual(skill_lines, 3000)
+        self.assertIn("Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks", self.skill)
 
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
-    def test_reference_documents_daemon_event_monitor_command(self) -> None:
+    def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
             "tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \\",
-            self.reference,
+            self.skill,
         )
-        self.assertIn("grep --line-buffered -v '^==> ' \\", self.reference)
-        self.assertIn("grep --line-buffered .", self.reference)
-        self.assertIn("forwards every non-empty line", self.reference)
-        self.assertIn("filtering only `tail -F` file headers", self.reference)
+        self.assertIn("grep --line-buffered -v '^==> ' \\", self.skill)
+        self.assertIn("grep --line-buffered .", self.skill)
+        self.assertIn("forwards every non-empty line", self.skill)
+        self.assertIn("filtering only `tail -F` file headers", self.skill)
 
-    def test_reference_rejects_unconditional_daemon_not_wake_source(self) -> None:
+    def test_skill_rejects_unconditional_daemon_not_wake_source(self) -> None:
         self.assertIn(
             "daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge",
-            self.reference,
+            self.skill,
         )
         self.assertNotIn(
             "不产生 harness task-notification,不是 wake 源",
-            self.reference,
+            self.skill,
         )
 
     def test_reference_requires_session_monitor_and_fallback_only_wakes(self) -> None:
@@ -111,7 +112,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         )
         for needle in required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, self.reference)
+                self.assertIn(needle, self.skill)
 
         forbidden = (
             "每个 turn 结束**必须**有已确认的下次唤醒源:active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup 返回 `scheduled`",
@@ -119,9 +120,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         )
         for needle in forbidden:
             with self.subTest(needle=needle):
-                self.assertNotIn(needle, self.reference)
+                self.assertNotIn(needle, self.skill)
         self.assertNotRegex(
-            self.reference,
+            self.skill,
             r"active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup",
         )
 
@@ -130,29 +131,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertFalse((scripts_dir / "daemon_event_monitor.sh").exists())
         self.assertFalse((scripts_dir / "daemon-event-monitor-bridge.sh").exists())
 
-    def test_reference_documents_phase9_router_daemon_boundary(self) -> None:
-        self.assertIn("phase9_router_daemon.py --daemon --repo-root", self.reference)
-        self.assertIn("Allowlist(唯一 direct spawn authority)", self.reference)
-        self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.reference)
-        self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.reference)
-        self.assertIn("meta-judge-issue<N>-r<R>.log", self.reference)
-        self.assertIn("issue/round 来自 filename identity", self.reference)
-        self.assertIn("public marker payload remains role-local", self.reference)
-        self.assertIn("daemon-owned output logs remain `phase9-issue...`", self.reference)
-        self.assertIn("clean `^EXIT=0`", self.reference)
-        self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.reference)
-        self.assertIn(".controller-pending-events.log", self.reference)
-        self.assertIn("no lifecycle authority", self.reference)
-        self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.reference)
+    def test_skill_documents_phase9_router_daemon_boundary(self) -> None:
+        self.assertIn("phase9_router_daemon.py --daemon --repo-root", self.skill)
+        self.assertIn("Allowlist(唯一 direct spawn authority)", self.skill)
+        self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.skill)
+        self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.skill)
+        self.assertIn("meta-judge-issue<N>-r<R>.log", self.skill)
+        self.assertIn("issue/round 来自 filename identity", self.skill)
+        self.assertIn("public marker payload remains role-local", self.skill)
+        self.assertIn("daemon-owned output logs remain `phase9-issue...`", self.skill)
+        self.assertIn("clean `^EXIT=0`", self.skill)
+        self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.skill)
+        self.assertIn(".controller-pending-events.log", self.skill)
+        self.assertIn("no lifecycle authority", self.skill)
+        self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "phase9_router_daemon.py").read_text(encoding="utf-8")
         helper = (SKILL_ROOT / "scripts" / "restart-daemons.sh").read_text(encoding="utf-8")
-        combined = "\n".join((self.skill, self.reference, router, helper))
+        combined = "\n".join((self.skill, router, helper))
         for token in ("phase9-issue", "solver-issue", "meta-judge-issue"):
             with self.subTest(token=token):
                 self.assertIn(token, router)
-                self.assertIn(token, self.reference)
+                self.assertIn(token, self.skill)
         self.assertIn("parse_phase9_log_identity", router)
         self.assertIn("Refactor (issue-100/router-filename-identity)", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
@@ -164,7 +165,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 class AutoLoopStatuslineContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
-        self.reference = read(REFERENCE_MD)
 
     def test_skill_contains_statusline_consensus_section(self) -> None:
         self.assertRegex(
@@ -188,7 +188,7 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         scripts_dir = SKILL_ROOT / "scripts"
         self.assertFalse((scripts_dir / "installer.sh").exists())
         self.assertFalse((scripts_dir / "install-statusline.sh").exists())
-        combined = self.skill + "\n" + self.reference
+        combined = self.skill
         forbidden = (
             "StatuslineDaemon",
             "StatusLineDaemon",
@@ -200,8 +200,8 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
 
-    def test_reference_documents_statusline_snapshot_schema(self) -> None:
-        self.assertIn("### Statusline snapshot schema", self.reference)
+    def test_skill_documents_statusline_snapshot_schema(self) -> None:
+        self.assertIn("### Statusline snapshot schema", self.skill)
         for field in (
             '"actual"',
             '"expected"',
@@ -212,7 +212,7 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
             '"open_issue_count"',
         ):
             with self.subTest(field=field):
-                self.assertIn(field, self.reference)
+                self.assertIn(field, self.skill)
 
 
 if __name__ == "__main__":

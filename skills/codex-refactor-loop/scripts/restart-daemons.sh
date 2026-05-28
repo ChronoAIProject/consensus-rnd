@@ -4,8 +4,12 @@
 #   New principle: checked-in helper, $REPO_ROOT-relative, idempotent + heartbeat-fresh skip, cron/launchd runnable;
 #     controller wakeup checks stale daemon heartbeats and invokes this helper(per #49 r3 META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert).
 #
-# Maintains singleton + heartbeat wrappers for the five restart-helper-managed
-# daemons. Monitor bridge is armed separately by controller.
+# Refactor (iter1/issue-143):
+#   Old pattern: wrapper sidecar wrote heartbeat while daemon actor loop could hang.
+#   New principle: wrapper owns singleton only; actor-owned heartbeat lease renews from daemon tick/sleep.
+#   Heartbeat path/epoch/90s consumers remain compatible; no new daemon or lifecycle authority.
+# Maintains singleton wrappers for the five restart-helper-managed daemons.
+# Monitor bridge is armed separately by controller.
 # This helper has no lifecycle authority and does not alter repository or
 # issue/PR state.
 #
@@ -138,17 +142,12 @@ start_daemon() {
     hb_file="$repo_root/.refactor-loop/heartbeats/${name}.ts"
     died_file="$repo_root/.refactor-loop/logs/${name}.died"
     child_pid=""
-    hb_pid=""
 
     cleanup() {
       local ec=$?
       if [ -n "$child_pid" ]; then
         kill "$child_pid" 2>/dev/null || true
         wait "$child_pid" 2>/dev/null || true
-      fi
-      if [ -n "$hb_pid" ]; then
-        kill "$hb_pid" 2>/dev/null || true
-        wait "$hb_pid" 2>/dev/null || true
       fi
       if [ "$(cat "$pid_file" 2>/dev/null || true)" = "$$" ]; then
         rm -f "$pid_file"
@@ -162,20 +161,13 @@ start_daemon() {
     trap terminate INT TERM
 
     printf "%s\n" "$$" > "$pid_file"
-    (
-      while true; do
-        hb_tmp="${hb_file}.$$"
-        date -u +%s > "$hb_tmp"
-        mv "$hb_tmp" "$hb_file"
-        sleep "$hb_interval"
-      done
-    ) &
-    hb_pid=$!
 
     # shellcheck disable=SC1091
     source "$repo_root/.refactor-loop/host.env"
     cd "$repo_root" || exit 2
     export RESTART_DAEMON_NAME="$name"
+    export RESTART_DAEMON_HEARTBEAT_FILE="$hb_file"
+    export RESTART_DAEMON_HEARTBEAT_INTERVAL="$hb_interval"
     bash -c "$cmd" &
     child_pid=$!
     wait "$child_pid"

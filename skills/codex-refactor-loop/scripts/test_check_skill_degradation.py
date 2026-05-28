@@ -33,7 +33,6 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         ".github/workflows/consensus-rnd-ci.yml",
         ".github/workflows/release.yml",
         "skills/codex-refactor-loop/SKILL.md",
-        "skills/codex-refactor-loop/REFERENCE.md",
         "skills/codex-refactor-loop/host.env.example",
         "skills/codex-refactor-loop/scripts/auto_release_gate.py",
         "skills/codex-refactor-loop/scripts/check_skill_degradation.py",
@@ -104,8 +103,8 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
     def test_checker_allows_forbidden_terms_only_in_denial_context(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
-            reference = repo / "skills/codex-refactor-loop/REFERENCE.md"
-            reference.write_text(reference.read_text(encoding="utf-8") + "\nRuntime creates DegradationCheck objects.\n", encoding="utf-8")
+            skill = repo / "skills/codex-refactor-loop/SKILL.md"
+            skill.write_text(skill.read_text(encoding="utf-8") + "\nRuntime creates DegradationCheck objects.\n", encoding="utf-8")
 
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 

@@ -22,7 +22,6 @@ from integration_sync_requests import validate_request_dict
 SKILL_ROOT = REPO_ROOT / "skills" / "codex-refactor-loop"
 DEV_SYNC = SKILL_ROOT / "scripts" / "dev_sync_daemon.py"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
-REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
 
 
 class FakeGit:
@@ -224,8 +223,8 @@ class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
         self.assertIn("daemon-owned detect-and-emit plus controller-owned git apply", text)
         self.assertIn("integration sync request artifacts", text)
 
-    def test_reference_has_no_active_controller_sync_procedure(self) -> None:
-        text = REFERENCE_MD.read_text(encoding="utf-8")
+    def test_skill_has_no_active_controller_sync_procedure(self) -> None:
+        text = SKILL_MD.read_text(encoding="utf-8")
         self.assertNotIn("### Sync procedure", text)
         self.assertNotIn("### Sync cadence", text)
         self.assertIn("integration sync request artifact", text)

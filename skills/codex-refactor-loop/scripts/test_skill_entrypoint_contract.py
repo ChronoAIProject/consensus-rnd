@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract tests for the codex-refactor-loop entrypoint split."""
+"""Source contract tests for the codex-refactor-loop single-file skill."""
 
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
-REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
 
 
 def read(path: Path) -> str:
@@ -37,7 +36,6 @@ class SkillEntrypointContractTests(unittest.TestCase):
     #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
-        self.reference = read(REFERENCE_MD)
 
     def test_frontmatter_contract_is_minimal_and_trigger_only(self) -> None:
         match = re.match(r"\A---\n(?P<body>.*?)\n---\n", self.skill, flags=re.DOTALL)
@@ -51,11 +49,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertLessEqual(len(body), 1024)
 
     def test_entrypoint_line_budget_and_controller_contract_headings(self) -> None:
-        line_count = len(self.skill.splitlines())
         headings = set(markdown_headings(self.skill))
 
-        self.assertGreaterEqual(line_count, 600)
-        self.assertLessEqual(line_count, 850)
         for pattern in (
             r"^## Controller Contract Index$",
             r"^## Host .+$",
@@ -73,9 +68,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_mandatory_local_invariants_remain_in_entrypoint(self) -> None:
         required = (
             "⟦AI:AUTO-LOOP⟧",
-            "REFERENCE.md#status-and-escalation-templates",
+            "#status-and-escalation-templates",
             "Controller = pure orchestration",
-            "REFERENCE.md#phase-0-details",
+            "#phase-0-details",
             "Phase 0",
             "phase routing",
             "3/3",
@@ -84,8 +79,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "label",
             "spawn",
             "Hard rules",
-            "REFERENCE.md#language-policy-details",
-            "REFERENCE.md#historical-bilingual-notes",
+            "#language-policy-details",
+            "#historical-bilingual-notes",
         )
         for needle in required:
             with self.subTest(needle=needle):
@@ -142,7 +137,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             wake_row,
             r"Monitor bridge,.*\bor\b.*ScheduleWakeup",
         )
-        self.assertIn("REFERENCE.md#wake-source-rules", wake_row)
+        self.assertIn("#wake-source-rules", wake_row)
 
     def test_wakeup_skeleton_orders_monitor_before_sweep_and_spawn(self) -> None:
         skeleton = section_between(
@@ -185,30 +180,30 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertNotIn("first wakeup only", phase0)
         self.assertNotIn("or ScheduleWakeup returned scheduled", phase0)
 
-    def test_heavy_reference_material_is_not_in_entrypoint(self) -> None:
-        reference_only_anchors = (
+    def test_detailed_reference_material_is_in_single_skill_file(self) -> None:
+        detailed_anchors = (
             "work-unit-contract",
             "batching-heuristics",
             "recovery-playbook",
             "label-bootstrap-loops",
             "historical-bilingual-notes",
         )
-        for anchor in reference_only_anchors:
+        self.assertIn("## Detailed reference", self.skill)
+        for anchor in detailed_anchors:
             with self.subTest(anchor=anchor):
-                self.assertIn(f"(REFERENCE.md#{anchor})", self.skill)
-                self.assertIn(anchor, self.reference)
+                self.assertIn(f"(#{anchor})", self.skill)
+                self.assertIn(anchor, self.skill)
         self.assertNotIn('"schema_version": 1', self.skill)
-        self.assertNotIn('"schema_version": 1', self.reference)
-        self.assertNotIn('"work_unit_schema_version": 1', self.reference)
+        self.assertNotIn('"work_unit_schema_version": 1', self.skill)
         for emoji_heading in ("📊", "🆘"):
             with self.subTest(emoji_heading=emoji_heading):
-                self.assertNotRegex(self.skill, rf"(?m)^## {emoji_heading} ")
-                self.assertRegex(self.reference, rf"(?m)^## {emoji_heading} ")
+                self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
 
-    def test_entrypoint_uses_lazy_reference_links_only(self) -> None:
+    def test_skill_uses_intra_file_reference_links_only(self) -> None:
         self.assertNotIn("@REFERENCE.md", self.skill)
         self.assertNotRegex(self.skill, r"\]\(/Users/[^)]+REFERENCE\.md")
-        self.assertRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+        self.assertNotRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+        self.assertRegex(self.skill, r"\(#[^)]+\)")
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
         self.assertIn("phase9_router_daemon.py", self.skill)

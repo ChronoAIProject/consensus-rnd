@@ -28,6 +28,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Literal, cast
 
+from daemon_heartbeat import DaemonHeartbeatLease
+
 
 ROLES = ("minimal", "structural", "delete")
 LIFECYCLE_PREFIXES = (
@@ -611,9 +613,18 @@ def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], No
         if args.once:
             router.tick()
             return 0
+        # Refactor (iter1/issue-143):
+        #   Old pattern: restart wrapper sidecar refreshed heartbeat even if this loop hung.
+        #   New principle: actor loop beats after tick/caught exception, then lease-sleeps.
+        #   --once stays outside the lease loop; daemon mode owns heartbeat progress.
+        lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
         while True:
-            router.tick()
-            time.sleep(args.interval)
+            try:
+                router.tick()
+            except Exception as exc:
+                print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] EXCEPTION in tick: {exc!r}", flush=True)
+            lease.beat()
+            lease.sleep_with_lease(args.interval)
 
 
 if __name__ == "__main__":
