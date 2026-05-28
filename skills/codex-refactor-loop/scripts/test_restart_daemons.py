@@ -106,11 +106,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     #   daemon descendants, leaving persistent test processes.
     #   New principle: test-only cleanup reaps wrapper groups and tmp-root
     #   descendants, then asserts no tmp-root process remains.
-    REFACTOR_SELF_DOCUMENTATION = """
-Refactor (iter1/issue-138):
-  Old pattern: test_restart_daemons.py tearDown 只 kill tracked pid,无法回收 detached daemon 子孙进程 → 测试泄漏常驻进程(本轮发现 256 孤儿)。
-  New principle: 按 .refactor-loop/runs/phase9-issue138-r3-judge.md consensus(hybrid test-only cleanup,no production contract change)逐条:tearDown 按 tmp_root/进程组回收 detached daemon + behavior test 断言无残留;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
-""".strip()
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="restart-daemons-test-"))
         self.repo = self.tmp_root / "repo"
@@ -241,18 +236,52 @@ Refactor (iter1/issue-138):
             self._terminate_process(proc["pid"], timeout=0.5)
 
     def _wait_for_pid_exit(self, pid: int, timeout: float) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not self._pid_alive(pid):
-                return
-            time.sleep(0.02)
+        if not self._pid_alive(pid):
+            return
+        if self._wait_for_pidfd_exit(pid, timeout) or self._wait_for_kqueue_exit(pid, timeout):
+            return
+        if not self._pid_alive(pid):
+            return
+        self.fail(f"platform lacks deterministic pid-exit awaiter for pid={pid}")
 
     def _wait_for_process_group_exit(self, process_group: int, timeout: float) -> None:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if not self._tmp_root_processes(process_group=process_group):
-                return
-            time.sleep(0.02)
+        for proc in tuple(self._tmp_root_processes(process_group=process_group).values()):
+            self._wait_for_pid_exit(proc["pid"], timeout)
+
+    def _wait_for_pidfd_exit(self, pid: int, timeout: float) -> bool:
+        pidfd_open = getattr(os, "pidfd_open", None)
+        if pidfd_open is None:
+            return False
+        try:
+            fd = pidfd_open(pid)
+        except OSError:
+            return not self._pid_alive(pid)
+        try:
+            readable, _, _ = select.select([fd], [], [], timeout)
+            return bool(readable) or not self._pid_alive(pid)
+        finally:
+            os.close(fd)
+
+    def _wait_for_kqueue_exit(self, pid: int, timeout: float) -> bool:
+        if not hasattr(select, "kqueue"):
+            return False
+        try:
+            kqueue = select.kqueue()
+        except OSError:
+            return False
+        try:
+            event = select.kevent(
+                pid,
+                filter=select.KQ_FILTER_PROC,
+                flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT,
+                fflags=select.KQ_NOTE_EXIT,
+            )
+            events = kqueue.control([event], 1, timeout)
+            return bool(events) or not self._pid_alive(pid)
+        except OSError:
+            return not self._pid_alive(pid)
+        finally:
+            kqueue.close()
 
     def _tmp_root_processes(self, *, process_group: int | None = None) -> dict[int, dict[str, int | str]]:
         current_pid = os.getpid()
@@ -484,7 +513,6 @@ Refactor (iter1/issue-138):
                 "RESTART_DAEMONS_STOP_GRACE_SECONDS": "1",
             }
         )
-        command = ["bash", str(self.skill / "scripts" / "restart-daemons.sh")]
 
         first = self._start_helper_process(env)
         second = self._start_helper_process(env)

@@ -213,6 +213,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "test_cleanup_daemons_reaps_tmp_root_wrappers_and_children",
             "start_new_session=True",
             "os.killpg",
+            "pidfd_open",
+            "KQ_FILTER_PROC",
             "ps\", \"-axo\", \"pid=,pgid=,command=\"",
             "tmp_roots = {str(self.tmp_root), str(self.tmp_root.resolve())}",
             "not any(root in command for root in tmp_roots)",
@@ -221,6 +223,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.helper_test)
+        self.assertNotIn("time.sleep(", self.helper_test)
 
     def test_restart_helper_has_no_production_process_probe_or_group_contract(self) -> None:
         forbidden = (
