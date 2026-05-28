@@ -974,7 +974,7 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
 
     # Refactor (iter6/issue-118):
     #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
-    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
     def test_github_post_contract_is_prompt_self_declared(self) -> None:
         prompts_root = SKILL_ROOT / "prompts"
         skill_text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -1030,6 +1030,33 @@ class ProjectRulesPromptContractTests(unittest.TestCase):
                 self.assertNotIn("Marker/artifact-only prompts:", source_text)
                 self.assertIn("prompt body", source_text)
                 self.assertIn("## GitHub post", source_text)
+
+        skill_posting_contract = skill_text.split("## GitHub Posting Contract", 1)[1].split("## Anchor Read Policy", 1)[0]
+        reference_traceability = reference_text.split("### GitHub traceability", 1)[1].split("**@-mention rule:**", 1)[0]
+        former_roster_tokens = (
+            "solver-minimal.md",
+            "solver-structural.md",
+            "solver-delete.md",
+            "meta-judge.md",
+            "reviewer-tests.md",
+            "reviewer-quality.md",
+            "reviewer-architect.md",
+            "review-fix.md",
+            "design-issue-reply.md",
+            "triage-external-issue.md",
+            "audit.md",
+            "implement.md",
+            "verify.md",
+            "remote-ci-fix.md",
+            "test-add.md",
+        )
+        for source_name, posting_section in (
+            ("SKILL.md GitHub Posting Contract", skill_posting_contract),
+            ("REFERENCE.md GitHub traceability", reference_traceability),
+        ):
+            for token in former_roster_tokens:
+                with self.subTest(source=source_name, forbidden_roster_token=token):
+                    self.assertNotIn(token, posting_section)
 
         for forbidden in (
             SKILL_ROOT / "prompts" / "posting-contract.json",

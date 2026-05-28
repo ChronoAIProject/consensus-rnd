@@ -74,7 +74,7 @@ def prompts_with_marker_only_ban() -> list[Path]:
 class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
     # Refactor (iter6/issue-118):
     #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
-    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
+    #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
     def test_marker_only_prompts_with_ban_block_have_complete_lifecycle_ban(self) -> None:
         paths = prompts_with_marker_only_ban()
         self.assertGreater(len(paths), 0)

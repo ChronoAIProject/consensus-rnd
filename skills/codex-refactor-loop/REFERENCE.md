@@ -1117,7 +1117,7 @@ EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation
 <!--
 Refactor (iter6/issue-118):
   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
 -->
 
 - A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.

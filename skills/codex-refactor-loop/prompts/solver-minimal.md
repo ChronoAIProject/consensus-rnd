@@ -91,7 +91,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 <!--
 Refactor (iter6/issue-118):
   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 DESIGN_DECISION_PATH
+  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
 -->
 
 - You do NOT write code; you propose a plan.
