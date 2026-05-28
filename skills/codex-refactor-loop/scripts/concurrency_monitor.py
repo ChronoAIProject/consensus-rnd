@@ -66,6 +66,14 @@ def git_repo_root() -> Path:
 
 
 INTERVAL = int(os.environ.get("INTERVAL", "60"))
+# Read-only CLI flags (--count-only / --list-codex / --once) are the canonical
+# CLI surface controllers MUST call (per SKILL.md "Concurrency Floor"). They
+# read process state only and never write, so let them fall back to
+# `git rev-parse --show-toplevel` when REPO_ROOT is not exported. The daemon
+# (no flags) still requires explicit REPO_ROOT to avoid host-fact leakage.
+_CLI_READONLY_FLAGS = {"--count-only", "--list-codex", "--once"}
+if any(arg in _CLI_READONLY_FLAGS for arg in sys.argv[1:]):
+    os.environ.setdefault("ALLOW_GIT_ROOT_FALLBACK", "1")
 REPO_ROOT = git_repo_root()
 GH_REPO_SLUG = github_repo_slug()
 ALERT_LOG = REPO_ROOT / ".refactor-loop" / ".concurrency-alert.log"

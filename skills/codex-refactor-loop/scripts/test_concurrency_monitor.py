@@ -296,6 +296,54 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.assertIn(str(self.repo), line)
             self.assertNotIn(" -c ", line)
 
+    # Refactor (cli-readonly-fallback): Old pattern: --count-only / --list-codex /
+    # --once raised RuntimeError at module load when REPO_ROOT was unset, even
+    # though SKILL.md mandates them as canonical CLI for controllers (which
+    # often invoke from a repo dir without sourcing host.env first). New
+    # principle: read-only CLI flags auto-set ALLOW_GIT_ROOT_FALLBACK so the
+    # CLI works without env priming; daemon mode (no flag) stays strict.
+    def test_readonly_cli_flags_auto_allow_git_root_fallback_when_repo_root_unset(self) -> None:
+        import subprocess as real_subprocess
+        real_subprocess.run(["git", "init", "-q"], cwd=str(self.repo), check=True)
+        env = {k: v for k, v in os.environ.items() if k != "REPO_ROOT"}
+        env.pop("ALLOW_GIT_ROOT_FALLBACK", None)
+        env["PATH"] = os.environ.get("PATH", "")
+
+        script = Path(self.monitor.__file__)
+        for flag in ("--count-only", "--list-codex"):
+            with self.subTest(flag=flag):
+                result = real_subprocess.run(
+                    [sys.executable, str(script), flag],
+                    cwd=str(self.repo),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0,
+                    msg=f"{flag} should not fail without REPO_ROOT; stderr={result.stderr[:300]}",
+                )
+
+    def test_daemon_mode_without_repo_root_still_fails_closed(self) -> None:
+        import subprocess as real_subprocess
+        env = {k: v for k, v in os.environ.items() if k != "REPO_ROOT"}
+        env.pop("ALLOW_GIT_ROOT_FALLBACK", None)
+        env["PATH"] = os.environ.get("PATH", "")
+
+        script = Path(self.monitor.__file__)
+        result = real_subprocess.run(
+            [sys.executable, str(script)],
+            cwd="/tmp",
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("REPO_ROOT is unset", result.stderr)
+
     def test_degradation_hook_writes_alert_and_existing_pending_event_only_on_failure(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
         self.monitor = importlib.reload(self.monitor)
