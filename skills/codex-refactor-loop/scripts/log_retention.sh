@@ -39,7 +39,8 @@ fi
 
 file_mtime_epoch() {
   local path="$1"
-  stat -f %m "$path" 2>/dev/null || stat -c %Y "$path" 2>/dev/null
+  # Fix (remote-ci/contract-tests): GNU stat accepts -f for filesystem format, so prefer -c for Linux mtime.
+  stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null
 }
 
 now="$(date +%s)"

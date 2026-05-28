@@ -174,6 +174,9 @@ class LogRetentionSourceRegressionTests(unittest.TestCase):
             ".refactor-loop/logs",
             "*.log",
             "rm -f -- \"$path\"",
+            "# Fix (remote-ci/contract-tests): GNU stat accepts -f for filesystem format, so prefer -c for Linux mtime.",
+            "stat -c %Y \"$path\"",
+            "stat -f %m \"$path\"",
             "Refactor (iter326/issue-122)",
             "direct rm only",
             "no archive/index/new daemon",
@@ -200,6 +203,10 @@ class LogRetentionSourceRegressionTests(unittest.TestCase):
         self.assertNotIn('rm -f -- "$REPO_ROOT', self.helper)
         self.assertNotIn(".refactor-loop/runs/*.log", self.helper)
         self.assertNotIn(".refactor-loop/prompts/*.log", self.helper)
+        self.assertLess(
+            self.helper.index("stat -c %Y \"$path\""),
+            self.helper.index("stat -f %m \"$path\""),
+        )
 
     def test_restart_helper_hooks_retention_before_daemon_start(self) -> None:
         self.assertIn("run_log_retention", self.restart)
