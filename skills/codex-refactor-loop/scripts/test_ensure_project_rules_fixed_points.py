@@ -2769,6 +2769,16 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
     def rel_paths(self, *patterns: str) -> list[Path]:
         return [path for pattern in patterns for path in sorted(REPO_ROOT.glob(pattern))]
 
+    def active_prompt_and_reference_paths(self) -> list[Path]:
+        paths = sorted((SKILL_ROOT / "prompts").glob("*.md"))
+        reference = SKILL_ROOT / "REFERENCE.md"
+        if reference.exists():
+            paths.append(reference)
+        return paths
+
+    def strip_issue126_self_doc(self, text: str) -> str:
+        return re.sub(r"<!--\nRefactor \(iter1/issue-126\):.*?\n-->\n", "", text, flags=re.DOTALL)
+
     def assert_absent(self, needle: str, paths: list[Path], allowlist: tuple[str, ...] = ()) -> None:
         for path in paths:
             rel = path.relative_to(REPO_ROOT).as_posix()
@@ -3190,6 +3200,11 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "human:",
             "stale = [",
         )
+        issue126_self_doc_contexts = (
+            "Refactor (iter1/issue-126):",
+            "跨平台 prompt 含 '该项目'/'该项目AI'",
+            "按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus",
+        )
         log_error_context_re = re.compile(
             r"\b(log|print|sys\.stderr\.write|raise|argparse|help=|description=|epilog=|"
             r"set_defaults|ArgumentParser|error|warning)\b",
@@ -3221,6 +3236,8 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
                         if not is_docstring and (path.name in test_source_names or not log_error_context_re.search(context)):
                             continue
                     if any(needle in context for needle in allowed_python_string_contexts):
+                        continue
+                    if path.name == "test_ensure_project_rules_fixed_points.py" and any(needle in context for needle in issue126_self_doc_contexts):
                         continue
                     offenders.append(f"{rel}:{token.start[0]}: {context.strip()}")
 
@@ -3425,6 +3442,27 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
         )
         self.assertIsNone(re.search(r"(?<!HOST_)\bproto\b", prompt_text))
         self.assertIsNone(re.search(r"\.proto\b", prompt_text))
+
+    # Refactor (iter1/issue-126):
+    #   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
+    #   New principle: 按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus 逐条:删除 prompt 硬编码 host 文本,复用现有 host.env surface;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
+    def test_active_prompts_and_reference_do_not_reintroduce_host_placeholders(self) -> None:
+        checked = self.active_prompt_and_reference_paths()
+        combined = "\n".join(self.strip_issue126_self_doc(path.read_text(encoding="utf-8")) for path in checked)
+
+        for literal in ("该项目", "该项目AI"):
+            with self.subTest(literal=literal):
+                self.assertNotIn(literal, combined)
+
+        self.assertIsNone(re.search(r"gh api orgs/[A-Za-z0-9_.-]+/members/\$\{COMMENT_AUTHOR\}", combined))
+        self.assertIsNone(re.search(r"\S+-wt-hotfix-\S*", combined))
+
+        design_reply = self.strip_issue126_self_doc((SKILL_ROOT / "prompts" / "design-issue-reply.md").read_text(encoding="utf-8"))
+        self.assertIn("gh api repos/$GH_REPO_SLUG/collaborators/${COMMENT_AUTHOR}", design_reply)
+        self.assertIn("$MAINTAINER_WHITELIST", design_reply)
+        self.assertIn("not collaborator, not whitelisted", design_reply)
+        self.assertNotIn("not org member", design_reply)
+        self.assertNotIn("CommentAuthorPolicy", (SKILL_ROOT / "scripts" / "comment-monitor.sh").read_text(encoding="utf-8"))
 
 
 class Phase9RouterMarkerTailOnlySourceRegressionTests(unittest.TestCase):
