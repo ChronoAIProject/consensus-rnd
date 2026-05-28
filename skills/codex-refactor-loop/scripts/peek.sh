@@ -15,23 +15,25 @@
 # ⟦AI:AUTO-LOOP⟧
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || true)}"
 if [ -z "${REPO_ROOT:-}" ]; then
   echo "FATAL: REPO_ROOT is unset and git rev-parse --show-toplevel failed" >&2
   exit 2
 fi
+export REPO_ROOT
 cd "$REPO_ROOT"
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/repo_slug.sh"
+source "$SCRIPT_DIR/repo_slug.sh"
 set_gh_repo_args 0 0 || exit $?
 git fetch origin --quiet 2>/dev/null
 
 list_loop_codex() {
-  # Scope to THIS repo by absolute REPO_ROOT, not the relative `.refactor-loop/`
-  # substring (which two loops on one machine share -> cross-host over-count).
-  # Requires callers to pass an absolute --cd so REPO_ROOT is in the cmdline.
-  # Exclude ` -c ` lines: each codex yields a real `bash spawn-codex.sh` supervisor
-  # AND a shell `-c` wrapper that echoes the command; count only the supervisor.
-  ps -eo command= | awk -v repo="$REPO_ROOT" 'repo != "" && /spawn-codex[.]sh/ && index($0, repo) && index($0, " -c ")==0 { print }'
+  python3 "$SKILL_ROOT/scripts/concurrency_monitor.py" --list-codex
+}
+
+count_loop_codex() {
+  python3 "$SKILL_ROOT/scripts/concurrency_monitor.py" --count-only
 }
 
 REVIEW_MARKER_TAIL_LINES=30
@@ -98,7 +100,7 @@ print(f'  {flag} [{author}] ${num} ${kind} ({delta_h:.1f}h ago): {body}')
 done
 
 # 1. Active codex
-n=$(list_loop_codex | wc -l | tr -d ' ')
+n=$(count_loop_codex)
 echo ""
 echo "▍Active codex: ${n}"
 if [ "$n" -gt 0 ]; then

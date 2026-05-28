@@ -210,6 +210,14 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn("MERGE_READY approve=2 comment=1 reject=0", result.stdout)
         self.assertNotIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
 
+    def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
+        text = PEEK.read_text(encoding="utf-8")
+
+        self.assertIn("concurrency_monitor.py\" --count-only", text)
+        self.assertIn("concurrency_monitor.py\" --list-codex", text)
+        self.assertNotIn("ps -ef | awk", text)
+        self.assertNotIn("ps -eo command= | awk", text)
+
 
 if __name__ == "__main__":
     unittest.main()
