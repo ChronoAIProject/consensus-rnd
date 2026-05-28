@@ -458,7 +458,7 @@ Phase 8 keeps the consensus merge gate local enough for routing:
 
 Phase 9 is the sole authorization gate for concrete plans.
 
-1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
+1. Dispatch exactly three solver framings by default: minimal, structural, delete/collapse/abstain.
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
 4. `converge:round-N` always routes to another solver round; no hard round cap.
@@ -555,7 +555,7 @@ Historical bilingual notes are moved to [historical bilingual notes](REFERENCE.m
 - [prompts/review-fix.md](prompts/review-fix.md) — Phase 8 fix worker.
 - [prompts/solver-minimal.md](prompts/solver-minimal.md) — Phase 9 minimal solver.
 - [prompts/solver-structural.md](prompts/solver-structural.md) — Phase 9 structural solver.
-- [prompts/solver-delete.md](prompts/solver-delete.md) — Phase 9 delete/defer solver.
+- [prompts/solver-delete.md](prompts/solver-delete.md) — Phase 9 delete/collapse/abstain solver.
 - [prompts/meta-judge.md](prompts/meta-judge.md) — Phase 9 meta-judge.
 - [scripts/spawn-codex.sh](scripts/spawn-codex.sh) — codex supervisor.
 - [scripts/peek.sh](scripts/peek.sh) — controller wakeup summary.
@@ -727,7 +727,7 @@ Phase 8 guardrails:
 
 Phase 9 guardrails:
 
-1. Minimal, structural, and delete/defer solvers run for each design round.
+1. Minimal, structural, and delete/collapse/abstain solvers run for each design round.
 2. Meta-judge consumes all three outputs.
 3. Only 3/3 consensus plus meta-judge `consensus` authorizes implementation.
 4. `converge` means more solver work, not human escalation.

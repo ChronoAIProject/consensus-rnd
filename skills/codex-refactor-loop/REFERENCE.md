@@ -1231,7 +1231,7 @@ Policy: **3/3 unanimous required** — anything less goes through convergence un
 |---|---|---|
 | **minimal** | smallest viable change; documented rule exception OK if scope is genuinely narrow | `prompts/solver-minimal.md` |
 | **structural** | CLAUDE-philosophy-aligned; new abstraction allowed if justified; never proposes rule exception | `prompts/solver-structural.md` |
-| **delete** | question necessity; propose delete / defer / collapse-and-redirect; abstain if feature genuinely needed | `prompts/solver-delete.md` |
+| **delete** | question necessity; propose delete/collapse/abstain; abstain if feature genuinely needed | `prompts/solver-delete.md` |
 
 A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
 

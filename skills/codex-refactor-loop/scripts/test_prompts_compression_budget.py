@@ -2,6 +2,7 @@ import pathlib
 import unittest
 
 PROMPTS_DIR = pathlib.Path(__file__).resolve().parents[1] / "prompts"
+SKILL_DIR = PROMPTS_DIR.parent
 LINE_BUDGET = 1250
 REQUIRED_TOKENS_PER_FILE = {
     "solver-minimal.md": ["SOLVER_DONE:minimal:"],
@@ -24,6 +25,11 @@ FORBIDDEN_TOKENS = [
     "PromptPartial",
     "deferred-as-issue",
     "tracking-issue",
+]
+FORBIDDEN_DELETE_SOLVER_VOCABULARY = [
+    "delete/defer",
+    "delete / defer",
+    "collapse-and-redirect",
 ]
 GITHUB_POST_LANGUAGE_FILES = [
     "_github-post-rules.md",
@@ -48,6 +54,17 @@ class PromptsCompressionBudgetTests(unittest.TestCase):
             body = p.read_text()
             for tok in FORBIDDEN_TOKENS:
                 self.assertNotIn(tok, body, f"{p.name} still contains forbidden token {tok!r}")
+
+    def test_delete_solver_vocabulary_fact_sources_are_synced(self):
+        fact_sources = [
+            SKILL_DIR / "SKILL.md",
+            SKILL_DIR / "REFERENCE.md",
+            *PROMPTS_DIR.glob("*.md"),
+        ]
+        for p in fact_sources:
+            body = p.read_text()
+            for tok in FORBIDDEN_DELETE_SOLVER_VOCABULARY:
+                self.assertNotIn(tok, body, f"{p.name} still contains stale delete-solver vocabulary {tok!r}")
 
     def test_sentinel_in_github_posting_prompts(self):
         for fname in GITHUB_POST_LANGUAGE_FILES:
