@@ -647,6 +647,36 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertIn("missing_recent_pr_merges_artifact", score.signals["recent_pr_merges_min"]["reason"])
             self.assertEqual(score.signals["recent_pr_merges_min"]["minimum"], 1)
 
+    def test_recent_pr_merges_accepts_projection_shape(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_json(
+                repo / ".refactor-loop/state/recent-pr-merges.json",
+                {
+                    "count": 1,
+                    "window_hours": 2,
+                    "updated_at": "2026-05-29T01:03:04Z",
+                    "merges": [
+                        {
+                            "pr": 55,
+                            "sha": "abc123",
+                            "merged_at": "2026-05-29T01:02:03Z",
+                            "base_ref": "auto-refact-dev",
+                            "head_ref": "refactor/issue145",
+                        }
+                    ],
+                },
+            )
+            gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            signal = gate.recent_pr_merges_min(NOW - timedelta(hours=2), 1)
+
+            self.assertTrue(signal["passed"])
+            self.assertEqual(signal["count"], 1)
+            self.assertEqual(signal["minimum"], 1)
+            self.assertEqual(signal["window_hours"], 2)
+            self.assertEqual(signal["updated_at"], "2026-05-29T01:03:04Z")
+
     def test_fail_closed_when_unresolved_human_escalation_exists(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"

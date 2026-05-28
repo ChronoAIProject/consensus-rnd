@@ -54,6 +54,124 @@ safe_worktree() {
 
 # Post-merge cleanup: merge PR + close linked issue + cleanup labels on both
 # Usage: merge_pr <pr-number> [linked-issue]
+record_recent_pr_merge_artifact() {
+  # Refactor (iter1/issue-145):
+  #   Old pattern: merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json,导致 auto_release_gate 的 recent_pr_merges_min 信号永红(missing artifact),阻塞发版。
+  #   New principle: 按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus(structural):保留 recent_pr_merges_min 信号;merge_pr 成功后由私有 writer append recent-pr-merges.json(sha/time/pr,滚动窗口),artifact-only,release gate 不新增 standalone telemetry。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New 不用 see-issue placeholder;不超范围。
+  local pr="$1"
+  local fact_json=""
+  local attempt
+  for attempt in 1 2 3; do
+    fact_json=$(gh pr view "$pr" "${gh_repo_args[@]}" --json number,mergedAt,mergeCommit,baseRefName,headRefName 2>/dev/null) || fact_json=""
+    if RECENT_PR_MERGE_FACTS="$fact_json" RECENT_PR_MERGE_PR="$pr" python3 - <<'PY' >/dev/null 2>&1
+import json
+import os
+import sys
+
+try:
+    facts = json.loads(os.environ["RECENT_PR_MERGE_FACTS"])
+except Exception:
+    sys.exit(1)
+merge_commit = facts.get("mergeCommit")
+if (
+    facts.get("number") is None
+    and not str(os.environ.get("RECENT_PR_MERGE_PR", "")).strip()
+):
+    sys.exit(1)
+if not facts.get("mergedAt") or not isinstance(merge_commit, dict) or not merge_commit.get("oid"):
+    sys.exit(1)
+PY
+    then
+      break
+    fi
+    [ "$attempt" -lt 3 ] && sleep "${RECENT_PR_MERGE_RETRY_SLEEP_SECONDS:-1}"
+  done
+
+  RECENT_PR_MERGE_FACTS="$fact_json" RECENT_PR_MERGE_PR="$pr" REPO_ROOT="$REPO_ROOT" python3 - <<'PY'
+import json
+import os
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+def parse_time(value):
+    if not isinstance(value, str) or not value:
+        return None
+    normalized = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+def isoformat(value):
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+try:
+    facts = json.loads(os.environ["RECENT_PR_MERGE_FACTS"])
+except Exception:
+    raise SystemExit("merge_pr: recent-pr-merges projection failed: invalid PR facts; recover by writing .refactor-loop/state/recent-pr-merges.json from PR merge facts before cleanup")
+
+merge_commit = facts.get("mergeCommit")
+sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else None
+merged_at = facts.get("mergedAt")
+pr = facts.get("number") or os.environ.get("RECENT_PR_MERGE_PR")
+if not pr or not sha or not merged_at:
+    raise SystemExit("merge_pr: recent-pr-merges projection failed: missing mergedAt or mergeCommit.oid after retry; recover by writing .refactor-loop/state/recent-pr-merges.json from PR merge facts before cleanup")
+
+now = datetime.now(timezone.utc)
+window_hours = 2
+cutoff = now - timedelta(hours=window_hours)
+path = Path(os.environ["REPO_ROOT"]) / ".refactor-loop" / "state" / "recent-pr-merges.json"
+try:
+    existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+except Exception:
+    existing = {}
+
+merges = existing.get("merges") if isinstance(existing, dict) else []
+if not isinstance(merges, list):
+    merges = []
+
+entry = {
+    "pr": int(pr),
+    "sha": str(sha),
+    "merged_at": str(merged_at),
+    "base_ref": facts.get("baseRefName") or "",
+    "head_ref": facts.get("headRefName") or "",
+}
+
+kept = []
+for item in merges:
+    if not isinstance(item, dict):
+        continue
+    item_time = parse_time(item.get("merged_at"))
+    if item_time is None or item_time < cutoff:
+        continue
+    if item.get("pr") == entry["pr"] and item.get("sha") == entry["sha"]:
+        continue
+    kept.append(item)
+kept.append(entry)
+
+data = {
+    "count": len(kept),
+    "window_hours": window_hours,
+    "updated_at": isoformat(now),
+    "merges": kept,
+}
+path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=str(path.parent), delete=False) as handle:
+    json.dump(data, handle, ensure_ascii=False, indent=2)
+    handle.write("\n")
+    tmp_name = handle.name
+Path(tmp_name).replace(path)
+PY
+}
+
+# Refactor (iter1/issue-145):
+#   Old pattern: merge_pr 成功 merge 后未写 .refactor-loop/state/recent-pr-merges.json,导致 auto_release_gate 的 recent_pr_merges_min 信号永红(missing artifact),阻塞发版。
+#   New principle: 按 .refactor-loop/runs/phase9-issue145-r5-judge.md consensus(structural):保留 recent_pr_merges_min 信号;merge_pr 成功后由私有 writer append recent-pr-merges.json(sha/time/pr,滚动窗口),artifact-only,release gate 不新增 standalone telemetry。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New 不用 see-issue placeholder;不超范围。
 merge_pr() {
   # Refactor (iter3/skill-human-label-taxonomy):
   #   Old: four Human labels, including two 🆘 labels, scattered no-gap and
@@ -69,7 +187,14 @@ merge_pr() {
   if [ -z "$linked_issue" ]; then
     linked_issue=$(gh pr view "$pr" "${gh_repo_args[@]}" --json body --jq '.body' 2>/dev/null | grep -oE "Closes #[0-9]+" | head -1 | grep -oE "[0-9]+")
   fi
-  gh pr merge "$pr" "${gh_repo_args[@]}" --admin --squash --delete-branch 2>&1 | tail -1
+  local merge_output merge_status
+  merge_output=$(gh pr merge "$pr" "${gh_repo_args[@]}" --admin --squash --delete-branch 2>&1)
+  merge_status=$?
+  printf '%s\n' "$merge_output" | tail -1
+  if [ "$merge_status" -ne 0 ]; then
+    return "$merge_status"
+  fi
+  record_recent_pr_merge_artifact "$pr" || return "$?"
   # Cleanup PR labels: in-flight → merged
   gh pr edit "$pr" "${gh_repo_args[@]}" \
     --remove-label "🚀 phase:pr-open" \
