@@ -17,8 +17,10 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `post_banner.py`, GitHub labels |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Phase 9 allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `phase9_router_daemon.py` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `spawn-codex.sh`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `comment-monitor.sh` |
-<!-- Refactor (iter3/skill-monitor-wake-source): Old pattern: 2-lane wake source(harness task-notification + ScheduleWakeup). New principle: 3-lane wake source adds daemon-event Monitor lane(daemon writes event file -> mounted persistent Monitor bridge -> controller wakes immediately; daemon alone is not a wake source). -->
-| Wake source | Each turn must end with a confirmed future wake source. | Confirm one of three lanes before ending: active daemon-event Monitor bridge, in-flight codex task-notification, or confirmed ScheduleWakeup. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup |
+<!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
+  New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
+-->
+| Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. | Read and write existing containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [state schema](#state-schema) | `.refactor-loop/state.json` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
@@ -170,13 +172,13 @@ launchd host template:
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Daemon pending-event wakeups are valid only through a mounted persistent Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
 `peek.sh` is a status lens, not routing authority; route actions still come from Phase Routing, clean-exit sweep, and the Phase 9 router daemon.
 
 1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
 2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-3. Before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn, read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+3. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 4. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 5. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
 6. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
@@ -184,7 +186,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 8. Post GitHub banner and sync labels for each state transition.
 9. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
 10. Spawn the next codexes with harness background tasks if actionable work exists.
-11. Confirm a wake source: an active daemon-event Monitor bridge, an in-flight background task notification, or a successfully registered ScheduleWakeup.
+11. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
 12. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
 
 ## Phase Index
@@ -193,7 +195,7 @@ The phase index is the local routing map. It intentionally links to heavy detail
 
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
-| Phase 0 | First wakeup bootstrap. Must complete before normal routing. | [Phase 0 details](#phase-0-details) |
+| Phase 0 | Session bootstrap. Must complete before normal routing. | [Phase 0 details](#phase-0-details) |
 | Phase 1 | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
 | Phase 2 | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](#phase-routing-details) |
 | Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
@@ -204,9 +206,9 @@ The phase index is the local routing map. It intentionally links to heavy detail
 | Phase 8 | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [phase 8 details](#phase-8-details) |
 | Phase 9 | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [phase 9 details](#phase-9-details) |
 
-## Phase 0 — Bootstrap (first wakeup only)
+## Phase 0 — Bootstrap (session bootstrap)
 
-Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes.
+Phase 0 is mandatory and ordered for each controller session bootstrap. Do not spawn normal actors before it completes.
 
 1. `source .refactor-loop/host.env` from `$REPO_ROOT`; if it is absent, unreadable, or lacks required values, fail closed.
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
@@ -219,7 +221,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
-12. confirm a wake source before ending: daemon-event Monitor bridge active, background task notification in flight, or ScheduleWakeup returned scheduled.
+12. confirm the daemon-event Monitor bridge is still active before ending; task-notification and ScheduleWakeup are only turn-level completion/fallback signals, not Monitor substitutes.
 
 Phase 0 anti-patterns stay local because they are safety gates:
 
@@ -885,20 +887,20 @@ Integration sync requests use integration sync request artifacts; controller swe
 
 controller 主链路**优先禁止**用 `( … ) & disown` / `nohup … &` / Bash 内 `spawn-codex.sh ... &` 派 **codex**(即使为省 tool 调用想批量)。detached 进程丢的是 harness 即时 `<task-notification>`,**不是检测能力**:controller 每次 wakeup 的 `EXIT=0` / marker log sweep 仍能扫到 detached codex 的完成,只是延到下次 ScheduleWakeup,变慢。
 
-**真正致命**的是 `detached + 无 active daemon-event Monitor bridge / 已注册的 ScheduleWakeup / task-notification`。单独 detached 只是慢;detached 后又没有任何 wake 源,loop 才会过夜停摆。
+**真正致命**的是 `detached + 无 active daemon-event Monitor bridge`。单独 detached 只是慢;detached 后又没有 session-level Monitor,loop 才会漏掉 daemon events。task-notification / ScheduleWakeup 只能覆盖 turn-level completion/fallback,不能替代每个 controller session 必须维护的 Monitor bridge。
 
 **铁律**:
 - controller 主链路 codex **优先**用 **一个 `Bash run_in_background:true`** 跑一个 `spawn-codex.sh`(N 个 codex 就 N 个调用),拿即时 task-notification。
-- 若 codex 意外被 detached,**不要 panic-kill 后重派**。这会浪费已跑工作;sweep 会在下次 wakeup 接住。正确动作是确认 log 路径可扫,并在本 turn 结束前确认已有 wake 源。
-- 每个 turn 结束**必须**有已确认的下次唤醒源:active daemon-event Monitor bridge, 在飞 task-notification, 或 ScheduleWakeup 返回 `scheduled`。这是比"禁 detached"更本质的不变量。
+- 若 codex 意外被 detached,**不要 panic-kill 后重派**。这会浪费已跑工作;sweep 会在下次 wakeup 接住。正确动作是确认 log 路径可扫,并确认 session-level Monitor bridge 仍 active。
+- 每个 controller session **必须先维护** active daemon-event Monitor bridge;每个 turn 结束还要确认 task-notification 在飞或 ScheduleWakeup 返回 `scheduled` 作为 completion/fallback。后两者不是 Monitor substitute。
 - daemon 自主动作可以 detached,但必须同时满足:prompt 落 `.refactor-loop/prompts/`,log 落 `.refactor-loop/logs/`,状态写 GitHub 或 pending event 可恢复,daemon 单例,并受 `peek.sh` / liveness 检查。
 - daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge.
 **反面(❌ 严禁)**:
-- ❌ detached codex 后发现没有 ScheduleWakeup,却 end turn。
+- ❌ controller session 没有 active Monitor bridge,只靠 task-notification 或 ScheduleWakeup end turn。
 - ❌ 误以为 `concurrency_monitor.py` / progress reporter / comment monitor 单独会唤醒 controller。daemon **只写 alert 文件 / GitHub 评论 / pending event**;只有 mounted Monitor bridge 把 daemon event file 转成 controller wakeup 时,daemon events 才是 wake 源。
 - ❌ detached codex 已在跑,controller 为了"恢复追踪"直接 kill 并重派同任务。应让现有任务跑完,靠下次 wakeup sweep 接住。
 ### ScheduleWakeup 必须确认注册(强制)
-ScheduleWakeup 是 daemon-event Monitor bridge / task-notification 丢失时**兜底**,不是 daemon-event immediate lane。每次调用后**确认返回 `scheduled`**;若 malformed(如 `<invoke>` 漏 `antml:` 前缀)或未注册 → **立即重试**,绝不带着"以为排了但没排"的假设 end turn。turn 结束前心里要有一个**已确认的下次唤醒源**(daemon-event Monitor bridge active, task-notification 在飞, 或 ScheduleWakeup 已注册),否则 loop 就死了。
+ScheduleWakeup 是 task-notification 丢失或长时间无完成通知时的 turn-level **fallback**,不是 daemon-event immediate lane,也不是 session-level Monitor substitute。每次调用后**确认返回 `scheduled`**;若 malformed(如 `<invoke>` 漏 `antml:` 前缀)或未注册 → **立即重试**,绝不带着"以为排了但没排"的假设 end turn。turn 结束前必须先确认 daemon-event Monitor bridge active;若本 turn 还依赖 fallback,再确认 task-notification 在飞或 ScheduleWakeup 已注册,否则 loop 就死了。
 ### 并发 floor 的 `ps codex` 在多系统 host 上会过计(强制修正)
 
 `concurrency_monitor` 与 floor 判定如果用全局 `ps codex exec | wc -l`,当 **host 仓库自身另有 codex-spawning 系统**(如 fkst supervisor 跑自己的 evolve/review 部门并 spawn codex)时,会把两套都算进去 → floor 永远"满"、永不补,而本 loop 实际可能 0 codex。

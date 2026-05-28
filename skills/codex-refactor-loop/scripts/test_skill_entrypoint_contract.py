@@ -31,6 +31,9 @@ def section_between(text: str, start_heading_re: str, end_heading_re: str) -> st
 
 
 class SkillEntrypointContractTests(unittest.TestCase):
+    # Refactor (iter1/issue-139):
+    #   Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
+    #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
 
@@ -100,7 +103,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "restart-helper-managed daemons",
             "arm persistent daemon-event Monitor",
             "dispatch producer",
-            "confirm a wake source",
+            "confirm the daemon-event Monitor bridge",
         )
         cursor = -1
         for obligation in obligations:
@@ -119,12 +122,63 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
 
-    def test_wake_source_contract_names_three_lanes(self) -> None:
+    def test_wake_source_contract_requires_session_monitor_with_fallback_only(self) -> None:
         wake_row = next(line for line in self.skill.splitlines() if line.startswith("| Wake source |"))
-        for token in ("daemon-event Monitor bridge", "codex task-notification", "ScheduleWakeup"):
+        for token in (
+            "Every controller session",
+            "Arm or confirm the daemon-event Monitor bridge",
+            "task-notification",
+            "ScheduleWakeup fallback",
+        ):
             with self.subTest(token=token):
                 self.assertIn(token, wake_row)
+        self.assertNotIn("one of three lanes", wake_row)
+        self.assertNotRegex(
+            wake_row,
+            r"Monitor bridge,.*\bor\b.*ScheduleWakeup",
+        )
         self.assertIn("#wake-source-rules", wake_row)
+
+    def test_wakeup_skeleton_orders_monitor_before_sweep_and_spawn(self) -> None:
+        skeleton = section_between(
+            self.skill,
+            r"^## Wakeup Skeleton$",
+            r"^## Phase Index$",
+        )
+        self.assertTrue(skeleton)
+        required_order = (
+            "must arm or confirm the mounted persistent Monitor bridge before pending-event sweep",
+            "Arm or confirm the persistent daemon-event Monitor bridge",
+            "Sweep GitHub comments and pending events",
+            "Spawn the next codexes",
+            "Confirm the daemon-event Monitor bridge is still maintained",
+            "ScheduleWakeup fallback",
+        )
+        cursor = -1
+        for token in required_order:
+            index = skeleton.find(token)
+            with self.subTest(token=token):
+                self.assertNotEqual(index, -1)
+                self.assertGreater(index, cursor)
+            cursor = index
+        self.assertNotRegex(
+            skeleton,
+            r"Confirm a wake source: an active daemon-event Monitor bridge,.*or.*ScheduleWakeup",
+        )
+
+    def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
+        phase0 = section_between(
+            self.skill,
+            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Phase Routing$",
+        )
+        self.assertTrue(phase0)
+        self.assertIn("session bootstrap", phase0)
+        self.assertIn("arm persistent daemon-event Monitor bridge", phase0)
+        self.assertIn("confirm the daemon-event Monitor bridge is still active before ending", phase0)
+        self.assertIn("not Monitor substitutes", phase0)
+        self.assertNotIn("first wakeup only", phase0)
+        self.assertNotIn("or ScheduleWakeup returned scheduled", phase0)
 
     def test_detailed_reference_material_is_in_single_skill_file(self) -> None:
         detailed_anchors = (
