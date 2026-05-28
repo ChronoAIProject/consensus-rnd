@@ -2157,6 +2157,8 @@ print(check(f"bash -c {repo}/.claude/skills/codex-refactor-loop/scripts/spawn-co
         )
         forbidden = (
             "six required daemons",
+            "ensure all 6 daemons",
+            "6-daemon",
             "required-runtime triage-monitor",
             "triage-monitor required-runtime",
             "triage-monitor.sh required",

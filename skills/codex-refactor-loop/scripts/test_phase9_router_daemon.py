@@ -158,6 +158,24 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("solver-issue100-r4-judge.log", joined)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["100-4-judge"])
 
+    def test_phase9_router_suppresses_judge_dispatch_when_legacy_meta_judge_log_exists(self) -> None:
+        """Legacy meta-judge log presence suppresses same issue/round judge dispatch."""
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"solver-issue100-r4-{role}.log",
+                f"SOLVER_DONE:{role}:propose:summary",
+            )
+        self.write_log(
+            "meta-judge-issue100-r4.log",
+            "META_JUDGE_DONE:converge:round-5:already-dispatched-by-legacy-worker",
+        )
+
+        self.router.tick()
+
+        joined_commands = "\n".join(" ".join(command) for command in self.commands)
+        self.assertNotIn("phase9-issue100-r4-judge.log", joined_commands)
+        self.assertNotIn("100-4-judge", [entry["key"] for entry in self.ledger_entries()])
+
     def test_phase9_log_identity_rejects_unowned_filename_dialects(self) -> None:
         accepted = {
             "phase9-issue100-r3-minimal.log": ("100", 3, "minimal", "phase9"),

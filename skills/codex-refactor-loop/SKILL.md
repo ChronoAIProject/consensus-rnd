@@ -223,7 +223,7 @@ Phase 0 is mandatory and ordered. Do not spawn normal actors before it completes
 5. initialize state in `.refactor-loop/state.json` if missing, using WorkUnitV1 v1 containers only.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](REFERENCE.md#label-bootstrap-loops).
-8. ensure all 6 daemons / daemon-event bridge surfaces are alive as singletons where applicable: restart-helper allowlist `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`, plus the persistent daemon-event Monitor bridge armed below.
+8. ensure all 5 restart-helper-managed daemons are alive as singletons: `concurrency_monitor.py`, `codex-progress-reporter.sh`, `comment-monitor.sh`, `dev_sync_daemon.py`, and `phase9_router_daemon.py`. The persistent daemon-event Monitor bridge is armed separately in step 9.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Phase 0 completion or blocked state.
@@ -233,7 +233,7 @@ Phase 0 anti-patterns stay local because they are safety gates:
 
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
-- Do not start fewer than the restart-helper allowlisted daemons.
+- Do not start fewer than the five required restart-helper-managed daemons.
 - Do not initialize a state-v2, alternate queue, wrapper envelope, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 

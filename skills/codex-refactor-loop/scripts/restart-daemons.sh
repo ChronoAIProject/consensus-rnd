@@ -4,7 +4,8 @@
 #   New principle: checked-in helper, $REPO_ROOT-relative, idempotent + heartbeat-fresh skip, cron/launchd runnable;
 #     controller wakeup checks stale daemon heartbeats and invokes this helper(per #49 r3 META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert).
 #
-# Maintains singleton + heartbeat wrappers for the six long-running daemons.
+# Maintains singleton + heartbeat wrappers for the five restart-helper-managed
+# daemons. Monitor bridge is armed separately by controller.
 # This helper has no lifecycle authority and does not alter repository or
 # issue/PR state.
 
