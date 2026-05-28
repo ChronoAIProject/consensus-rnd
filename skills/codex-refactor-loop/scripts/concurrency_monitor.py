@@ -440,13 +440,6 @@ def dispatch_queue_empty() -> bool:
     return not dispatch_queue_files()
 
 
-def next_dispatch_file() -> tuple[str, Path] | None:
-    files = dispatch_queue_files()
-    if not files:
-        return None
-    return files[0]
-
-
 def archive_dispatched(path: Path, payload: dict, task_id: str) -> Path:
     DISPATCH_DISPATCHED.mkdir(parents=True, exist_ok=True)
     payload["dispatch_at"] = utc_ts()
@@ -462,7 +455,7 @@ def archive_dispatched(path: Path, payload: dict, task_id: str) -> Path:
 
 # Refactor (iter6/issue-133):
 #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 DESIGN_DECISION_PATH
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
 def validate_dispatch_cwd(payload: dict, task_id: str) -> tuple[bool, str]:
     cd_raw = payload.get("cd")
     if not cd_raw:
@@ -483,9 +476,8 @@ def validate_dispatch_cwd(payload: dict, task_id: str) -> tuple[bool, str]:
     if task_id.startswith(MAIN_READONLY_DISPATCH_PREFIXES):
         return True, "main-readonly-prefix"
 
-    if task_id.startswith(MUTABLE_DISPATCH_PREFIXES):
-        pass
-
+    # Unknown prefixes are treated as mutable by default: fail closed unless
+    # the queued dispatch runs inside this repo's isolated worktrees root.
     if cd_resolved == repo_root:
         return False, "repo-root-cd"
     try:
@@ -499,7 +491,7 @@ def validate_dispatch_cwd(payload: dict, task_id: str) -> tuple[bool, str]:
 
 # Refactor (iter6/issue-133):
 #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 DESIGN_DECISION_PATH
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
 def archive_rejected(path: Path, payload: dict, task_id: str, priority: str, reason: str) -> Path:
     DISPATCH_REJECTED.mkdir(parents=True, exist_ok=True)
     payload["rejected_at"] = utc_ts()
@@ -537,7 +529,7 @@ def launch_dispatch(payload: dict) -> None:
 
 # Refactor (iter6/issue-133):
 #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 DESIGN_DECISION_PATH
+#   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
 def dispatch_one_from_queue() -> tuple[str, str, str] | None:
     for priority, path in dispatch_queue_files():
         payload = json.loads(path.read_text(encoding="utf-8"))

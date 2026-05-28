@@ -1700,7 +1700,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor 把 queue payload[cd] 直接交给 spawn-codex.sh --cd,可让 mutable task 跑在 repo-root/main worktree
-    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 DESIGN_DECISION_PATH
+    #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard,无 shared workspace policy。详见 .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_dispatch_queue_workspace_guard_is_documented_and_enforced(self) -> None:
         monitor_text = (SKILL_ROOT / "scripts" / "concurrency_monitor.py").read_text(encoding="utf-8")
         reference_text = (SKILL_ROOT / "REFERENCE.md").read_text(encoding="utf-8")
