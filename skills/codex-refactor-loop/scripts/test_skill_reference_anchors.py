@@ -184,6 +184,12 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
         self.assertEqual(1, walkthrough.count("HOST_*"))
         self.assertNotIn("HOST_TEST_FILE_GLOBS |", walkthrough)
+        self.assertIn("according to the Host env surface matrix", walkthrough)
+        self.assertIn("conditional fail-closed surfaces such as `MAINTAINER_WHITELIST`", walkthrough)
+        self.assertNotIn(
+            "including `REPO_ROOT`, `GH_REPO_SLUG`, `BUILD_CMD`, `TEST_CMD`, `SOURCE_GLOBS`, and `MAINTAINER_WHITELIST`",
+            walkthrough,
+        )
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(

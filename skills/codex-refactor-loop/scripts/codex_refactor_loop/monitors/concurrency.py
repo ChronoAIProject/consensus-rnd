@@ -260,7 +260,7 @@ class ConcurrencyMonitor:
             handle.write(f"{ts} concurrency-alert {msg}\n")
 
     def degradation_watch_interval_seconds(self) -> int:
-        raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "0")
+        raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "1800")
         try:
             interval = int(raw)
         except ValueError:
