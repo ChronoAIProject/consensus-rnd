@@ -354,6 +354,13 @@ class Phase9Router:
             return False
         return any(re.match(r"^EXIT=0$", line) for line in tail)
 
+    # Refactor (iter1/issue-167):
+    #   Old pattern: solver triplet handoff recorded only the base dispatch row,
+    #   so judge dispatch could proceed without durable triplet provenance or a
+    #   visible same-round peer artifact reference failure.
+    #   New principle: keep row-level router-private ledger provenance and a
+    #   narrow fail-closed peer artifact token check on this route; do not add a
+    #   standalone evidence file, hash, or lifecycle authority.
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         by_issue_round: dict[tuple[str, int], dict[str, Marker]] = {}
         for marker in markers:

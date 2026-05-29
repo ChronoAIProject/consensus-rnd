@@ -228,6 +228,23 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
+    def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        for token in (
+            "Refactor (iter1/issue-167)",
+            "Old pattern: solver triplet handoff recorded only the base dispatch row",
+            "durable triplet provenance",
+            "visible same-round peer artifact reference failure",
+            "New principle: keep row-level router-private ledger provenance",
+            "narrow fail-closed peer artifact token check",
+            "do not add a",
+            "standalone evidence file",
+            "hash",
+            "lifecycle authority",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
