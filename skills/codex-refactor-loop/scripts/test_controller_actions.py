@@ -68,7 +68,7 @@ class ControllerActionsTests(unittest.TestCase):
                     "body_artifact_path": "",
                     "comment_artifact_path": ".refactor-loop/runs/triage-comment.md",
                     "add_labels": [],
-                    "remove_labels": ["auto-loop-triage"],
+                    "remove_labels": [labels.TRIAGE_PENDING],
                     "sentinel_present": True,
                     "lifecycle_owner": "controller",
                     "lifecycle_authority": False,
