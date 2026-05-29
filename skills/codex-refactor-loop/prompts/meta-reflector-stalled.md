@@ -56,6 +56,6 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## Marker contract
 
-AI 内容标识符必须保留。最终 marker 必须在末尾独立一行:
+AI content identifier must be preserved. The sentinel must be the penultimate line before the final routing marker:
 
 `⟦AI:AUTO-LOOP⟧`

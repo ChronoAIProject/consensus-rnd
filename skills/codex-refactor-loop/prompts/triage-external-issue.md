@@ -125,4 +125,4 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符
 
-所有 GitHub comment / artifact 必须末尾独立一行 `⟦AI:AUTO-LOOP⟧`。
+GitHub comments must end with the sentinel as the final standalone line. Marker-bearing internal artifacts must put `⟦AI:AUTO-LOOP⟧` on the penultimate line, immediately before the final routing marker.

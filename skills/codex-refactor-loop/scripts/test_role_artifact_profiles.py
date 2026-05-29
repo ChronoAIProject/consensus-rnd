@@ -73,7 +73,7 @@ PROFILES = {
     ),
     "phase8-reviewer": ArtifactProfile(
         required_metadata=("pr", "role", "verdict"),
-        required_sections=("Verdict", "Findings", "Risks", "Recommendation"),
+        required_sections=("Verdict", "Evidence"),
         final_marker_patterns=(r"^REVIEW_DONE:[^:]+:(architect|tests|quality):.+$",),
         forbidden_marker_tokens=tuple(token for token in ROLE_MARKER_TOKENS if token != "REVIEW_DONE"),
         sentinel_policy="penultimate-before-final-marker",
@@ -97,8 +97,8 @@ PROFILES = {
         sentinel_policy="penultimate-before-final-marker",
     ),
     "marker-only-work-unit": ArtifactProfile(
-        required_metadata=("cluster_id", "status"),
-        required_sections=("Summary", "Checks"),
+        required_metadata=(),
+        required_sections=(),
         final_marker_patterns=(
             r"^(AUDIT_DONE|AUDIT_INCOMPLETE|SCOPE_EXTEND|IMPLEMENT_DONE|VERIFY_DONE|REMOTE_CI_FIX_DONE|"
             r"META_RESOLVED|TEST_BLOCKED|TEST_ADD_DONE|TRIAGE_DECISION_DONE):.+$",
@@ -183,14 +183,8 @@ verdict: approve
 ## Verdict
 Approve.
 
-## Findings
+## Evidence
 - None.
-
-## Risks
-- None.
-
-## Recommendation
-- Merge.
 
 ⟦AI:AUTO-LOOP⟧
 REVIEW_DONE:42:architect:approve
@@ -229,9 +223,6 @@ status: ok
 
 ## Summary
 Implementation finished.
-
-## Checks
-- tests: pass
 
 ⟦AI:AUTO-LOOP⟧
 IMPLEMENT_DONE:issue-169:ok
@@ -452,6 +443,43 @@ class RoleArtifactProfileTests(unittest.TestCase):
         self.assertIn("## Body 结构(强制)", body)
         self.assertIn("第一行 `## 🤖 ` 开头", body)
         self.assertIn("raw artifact 必折叠", body)
+
+    def test_phase8_reviewer_profile_matches_live_prompt_output_sections(self) -> None:
+        for filename in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+                self.assertIn("Artifact profile: phase8-reviewer", body)
+                for section in PROFILES["phase8-reviewer"].required_sections:
+                    self.assertRegex(body, rf"(?m)^## {re.escape(section)}(?:\b|$)")
+                self.assertNotIn("## Findings", body)
+                self.assertNotIn("## Risks", body)
+                self.assertNotIn("## Recommendation", body)
+
+    def test_review_fix_profile_matches_live_prompt_output_sections(self) -> None:
+        body = (PROMPTS_DIR / "review-fix.md").read_text(encoding="utf-8")
+
+        self.assertIn("Artifact profile: review-fix", body)
+        for section in PROFILES["review-fix"].required_sections:
+            self.assertRegex(body, rf"(?m)^## {re.escape(section)}(?:\b|$)")
+        self.assertNotIn("Rejected as false-positive findings", body)
+
+    def test_marker_only_profile_does_not_invent_shared_output_sections(self) -> None:
+        self.assertEqual(PROFILES["marker-only-work-unit"].required_metadata, ())
+        self.assertEqual(PROFILES["marker-only-work-unit"].required_sections, ())
+
+    def test_profiled_internal_prompts_distinguish_sentinel_from_final_marker(self) -> None:
+        contradicted = []
+        for path in sorted(PROMPTS_DIR.glob("*.md")):
+            body = path.read_text(encoding="utf-8")
+            if "Artifact profile:" not in body or "Artifact profile: github-ai-post-body" in body:
+                continue
+            if "runs/*.md` artifact" in body and "必须末尾独立一行**加 sentinel" in body:
+                contradicted.append(path.name)
+            if not re.search(r"sentinel.*penultimate line.*final routing marker", body):
+                contradicted.append(f"{path.name}: missing internal sentinel policy")
+
+        self.assertEqual(contradicted, [])
 
 
 if __name__ == "__main__":
