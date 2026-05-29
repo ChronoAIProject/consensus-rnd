@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from .context import LoopContext, LoopContextError
+from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
 
 REVIEW_MARKER_TAIL_LINES = 30
@@ -43,6 +44,8 @@ class PeekStatusLens:
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])
         lines.extend(self._open_prs())
+        lines.extend(["", "▍Unpushed worker output:"])
+        lines.extend(self._unpushed_worker_output())
         lines.extend(["", "▍Monitor zero_streak (last 10 ticks):"])
         lines.extend(self._zero_streak())
         lines.extend(["", "▍Mergeable PRs (controller should merge immediately):"])
@@ -143,6 +146,16 @@ class PeekStatusLens:
             state = self.gh_text(["pr", "view", num, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"]).strip()
             lines.append(f"  • PR #{num} [{state}] CI: fail={fail} pending={pending} pass={passed} — {str(item.get('title') or '')[:60]}")
         return lines
+
+    def _unpushed_worker_output(self) -> list[str]:
+        out = []
+        for action in unpushed_worker_output_actions(self.ctx.repo_root, load_github_items(self.ctx.repo_root)):
+            out.append(
+                "  ⚠️ "
+                f"{action['line']} head={action['head_ref']} ahead={action['ahead_count']} "
+                f"worktree={action['worktree']} — {action['suggested_command']}"
+            )
+        return out
 
     def _zero_streak(self) -> list[str]:
         lines = _tail(self.ctx.paths.logs / "concurrency-monitor.log", 10)

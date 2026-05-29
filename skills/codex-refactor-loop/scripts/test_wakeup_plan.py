@@ -33,6 +33,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
         self.write_fresh_heartbeats()
         self.write_fake_gh()
+        self.write_fake_git()
         self.write_fake_ps()
 
     def tearDown(self) -> None:
@@ -70,6 +71,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$1 $2" == "pr list" ]]; then
                   case "$fixture" in
+                    unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
+                      printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
                     ci_red)
                       printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
                       ;;
@@ -101,6 +105,49 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh.chmod(0o755)
+
+    def write_fake_git(self) -> None:
+        git = self.fakebin / "git"
+        git.write_text(
+            textwrap.dedent(
+                """\
+                #!/usr/bin/env bash
+                fixture="${WAKEUP_PLAN_GH_FIXTURE:-empty}"
+                if [[ -n "${WAKEUP_PLAN_GIT_LOG:-}" ]]; then
+                  printf '%s\n' "$*" >> "$WAKEUP_PLAN_GIT_LOG"
+                fi
+                if [[ "$*" == *"fetch origin --quiet"* ]]; then
+                  [[ "$fixture" == "unpushed_fetch_fail" ]] && exit 42
+                  exit 0
+                fi
+                if [[ "$*" == *"worktree list --porcelain"* ]]; then
+                  [[ "$fixture" == "unpushed_no_worktree" ]] && exit 0
+                  printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/refactor/iter77-worker\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                  exit 0
+                fi
+                if [[ "$*" == *"rev-parse --verify HEAD"* ]]; then
+                  printf 'local-sha\n'
+                  exit 0
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter77-worker"* ]]; then
+                  [[ "$fixture" == "unpushed_no_remote" ]] && exit 1
+                  printf 'remote-sha\n'
+                  exit 0
+                fi
+                if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
+                  if [[ "$fixture" == "unpushed_no_ahead" ]]; then
+                    printf '0\n'
+                  else
+                    printf '2\n'
+                  fi
+                  exit 0
+                fi
+                exit 0
+                """
+            ).lstrip(),
+            encoding="utf-8",
+        )
+        git.chmod(0o755)
 
     def write_fake_ps(self) -> None:
         ps = self.fakebin / "ps"
@@ -148,6 +195,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "WAKEUP_PLAN_GH_FIXTURE": fixture,
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
+                "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
             }
         )
         result = subprocess.run(
@@ -181,6 +229,52 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["kind"], "completed-marker")
         self.assertEqual(plan["actions"][0]["actor"], "controller")
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
+
+    def test_unpushed_worker_output_routes_before_completed_marker_ci_and_existing_issue(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="unpushed")
+
+        self.assertEqual(plan["actions"][0]["kind"], "unpushed-worker-output")
+        self.assertEqual(plan["actions"][0]["item"], "PR #77")
+        self.assertEqual(plan["actions"][0]["line"], "UNPUSHED_WORKER_OUTPUT:77:2")
+        self.assertEqual(plan["actions"][0]["head_ref"], "refactor/iter77-worker")
+        self.assertIn("safe-push origin refactor/iter77-worker", plan["actions"][0]["suggested_command"])
+        kinds = [action["kind"] for action in plan["actions"]]
+        self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("completed-marker"))
+        self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("existing-issue"))
+
+    def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
+        plan = self.run_plan(fixture="unpushed_fetch_fail")
+
+        self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
+
+    def test_unpushed_worker_output_requires_open_auto_loop_pr_local_worktree_remote_ref_and_ahead(self) -> None:
+        for fixture in ("empty", "unpushed_no_worktree", "unpushed_no_remote", "unpushed_no_ahead"):
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+                self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
+
+    def test_unpushed_worker_output_uses_only_allowlisted_git_topology_probes(self) -> None:
+        self.run_plan(fixture="unpushed")
+
+        commands = (self.repo / "git-commands.log").read_text(encoding="utf-8").splitlines()
+        allowed_fragments = (
+            "-C",
+            "fetch origin --quiet",
+            "worktree list --porcelain",
+            "rev-parse --verify HEAD",
+            "rev-parse --verify refs/remotes/origin/refactor/iter77-worker",
+            "rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD",
+        )
+        self.assertTrue(any("fetch origin --quiet" in command for command in commands))
+        self.assertTrue(any("worktree list --porcelain" in command for command in commands))
+        self.assertTrue(any("rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD" in command for command in commands))
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(any(fragment in command for fragment in allowed_fragments))
+                self.assertNotRegex(command, r"\b(push|commit|checkout|switch|reset|rebase|merge|tag)\b")
+                self.assertNotRegex(command, r"\b(add|remove|prune)\b")
 
     def test_ci_red_routes_before_no_gap(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(

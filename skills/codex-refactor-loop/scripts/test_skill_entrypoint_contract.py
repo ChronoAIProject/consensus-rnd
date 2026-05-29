@@ -205,10 +205,18 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
             "**Allowed**",
+            "**Allowed git topology observation(issue #190 only)**",
             "**Forbidden / no lifecycle authority**",
             "no restart",
             "no spawn",
-            "no git",
+            "git fetch origin --quiet",
+            "worktree list --porcelain",
+            "rev-list --count refs/remotes/origin/<head>..HEAD",
+            "UNPUSHED_WORKER_OUTPUT:<pr>:<n>",
+            "no git lifecycle or mutation commands",
+            "no checkout/switch",
+            "no branch create/delete/update",
+            "no worktree add/remove/prune",
             "no GitHub lifecycle mutation",
             "`RECOMMEND:audit`",
             "`AUDIT_DONE:none:0` no longer exempts",
@@ -226,8 +234,16 @@ class SkillEntrypointContractTests(unittest.TestCase):
         script = read(PACKAGE_WAKEUP_PLAN)
         for needle in (
             "Allowed: read `.refactor-loop` files",
-            "Forbidden: no restart/spawn, no git",
+            "issue-190",
+            "git fetch origin --quiet",
+            "git worktree list --porcelain",
+            "git rev-parse --verify HEAD",
+            "git rev-parse --verify refs/remotes/origin/<head>",
+            "git rev-list --count refs/remotes/origin/<head>..HEAD",
+            "Forbidden: no restart/spawn, no git lifecycle or mutation",
+            "no commit, push, checkout/switch",
             "no GitHub lifecycle mutation",
+            ".refactor-loop/runs/phase9-issue190-r3-judge.md",
             "no_lifecycle_authority",
             "count_in_flight_codex",
             "HARD_GATE:dispatch_required",
@@ -236,6 +252,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, script)
+        self.assertNotIn("WorkerOutputProjection", script)
+        self.assertNotIn("codex_refactor_loop.projections", script)
 
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(

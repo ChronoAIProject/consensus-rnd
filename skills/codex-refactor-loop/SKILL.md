@@ -292,9 +292,10 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 `consensus-rnd-cli wakeup-plan` named read-only surface:
 
 - **Allowed**: read `.refactor-loop` files, scan `.refactor-loop/heartbeats/*.ts`, read clean-exit log tails, run read-only GitHub list/check/view commands, and print JSON recommendations.
-- **Forbidden / no lifecycle authority**: no restart, no spawn, no git, no commit, no push, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
+- **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
+- **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
 - **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup. There is no `AUDIT_DONE:none:0` exemption.
-- Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
+- Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
 - If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
 
 ## Phase Index
