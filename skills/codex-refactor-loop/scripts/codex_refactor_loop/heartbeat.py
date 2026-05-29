@@ -23,10 +23,12 @@ class DaemonHeartbeatLease:
     ) -> None:
         self.name = name or os.environ.get("RESTART_DAEMON_NAME") or Path(sys.argv[0]).stem
         root = Path(repo_root or os.environ.get("REPO_ROOT", ".")).resolve()
+        default_heartbeat_file = root / ".refactor-loop" / "heartbeats" / f"{self.name}.ts"
+        env_heartbeat_file = None if repo_root is not None else os.environ.get("RESTART_DAEMON_HEARTBEAT_FILE")
         self.heartbeat_file = Path(
             heartbeat_file
-            or os.environ.get("RESTART_DAEMON_HEARTBEAT_FILE")
-            or root / ".refactor-loop" / "heartbeats" / f"{self.name}.ts"
+            or env_heartbeat_file
+            or default_heartbeat_file
         )
         self.heartbeat_interval = max(1, int(heartbeat_interval or os.environ.get("RESTART_DAEMON_HEARTBEAT_INTERVAL", "30")))
         self.clock = clock
