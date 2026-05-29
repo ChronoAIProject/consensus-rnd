@@ -23,7 +23,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
 -->
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
-| First wakeup | Consensus-rnd Phase bootstrap bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
+| First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
@@ -1430,7 +1430,7 @@ git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
 git push -u origin auto-refact-dev 2>/dev/null || true
 ```
 
-Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies to **new** Consensus-rnd Phase bootstrap bootstraps only.
+Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies only to **new** Consensus-rnd Phase bootstrap runs.
 
 **`pr_mode` choice (set in Consensus-rnd Phase bootstrap; do not change mid-loop)**:
 

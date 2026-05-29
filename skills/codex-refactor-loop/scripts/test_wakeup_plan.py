@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -16,6 +17,9 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -424,6 +428,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
+    def test_all_wakeup_actions_emit_registered_phase_slugs(self) -> None:
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").unlink()
+        heartbeats = self.repo / ".refactor-loop" / "heartbeats"
+        for path in heartbeats.glob("*.ts"):
+            path.unlink()
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").unlink()
+        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")
+
+        for fixture in ("ci_red", "milestone", "existing", "empty"):
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+                for action in plan["actions"]:
+                    assert_stage_slug(action["phase"])
+
+        plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        self.assertEqual(by_kind["completed-marker"]["phase"], "publish")
+        self.assertEqual(by_kind["completed-marker"]["route"], "publish-or-review-gate")
+        self.assertEqual(by_kind["bootstrap"]["phase"], "bootstrap")
+        self.assertEqual(by_kind["bootstrap"]["route"], "daemon-health")
+        self.assertEqual(by_kind["wake-source"]["phase"], "bootstrap")
+        self.assertEqual(by_kind["wake-source"]["route"], "wake-source")
+
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+        plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        self.assertEqual(by_kind["no-gap-violation"]["phase"], "work-intake")
+        self.assertEqual(by_kind["no-gap-violation"]["route"], "no-gap-repair")
 
 
 if __name__ == "__main__":

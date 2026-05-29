@@ -1,4 +1,12 @@
-"""Closed workflow stage registry for codex-refactor-loop."""
+"""Closed workflow stage registry for codex-refactor-loop.
+
+Refactor (iter3/workflow-stage-registry):
+  Old pattern: controller-facing workflow vocabulary was encoded as numeric
+  phase display text plus ad hoc string literals across docs, prompts, and
+  wakeup routing.
+  New principle: one closed registry owns public stage slugs and display text;
+  legacy numbers remain private migration metadata only.
+"""
 
 from __future__ import annotations
 

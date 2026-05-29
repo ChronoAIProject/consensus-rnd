@@ -82,6 +82,11 @@ PHASE_EXPECTED = {
     "🎉 phase:merged": 0,
     "⏸️ phase:blocked": 0,
 }
+NON_ACTION_PHASE_LABELS = {
+    "⚙️ phase:ci-running": "ci-running",
+    "⏸️ phase:blocked": "blocked",
+    "🎉 phase:merged": "merged",
+}
 
 
 @dataclass(frozen=True)
@@ -336,17 +341,19 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
             continue
-        actions.append(
-            {
-                "priority": 3,
-                "kind": "completed-marker",
-                "item": infer_item_from_text(f"{log_path.name} {marker}"),
-                "phase": phase_from_marker(marker),
-                "actor": actor_from_marker(marker),
-                "marker": marker,
-                "evidence": str(log_path.relative_to(repo_root)),
-            }
-        )
+        action = {
+            "priority": 3,
+            "kind": "completed-marker",
+            "item": infer_item_from_text(f"{log_path.name} {marker}"),
+            "phase": phase_from_marker(marker),
+            "actor": actor_from_marker(marker),
+            "marker": marker,
+            "evidence": str(log_path.relative_to(repo_root)),
+        }
+        route = route_from_marker(marker)
+        if route:
+            action["route"] = route
+        actions.append(action)
     return actions
 
 
@@ -362,7 +369,7 @@ def infer_item_from_text(text: str) -> str | None:
 
 def phase_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
-        return "publish-or-review-gate"
+        return "publish"
     if marker.startswith("REVIEW_DONE"):
         return "review-gate"
     if marker.startswith("FIX_DONE"):
@@ -375,7 +382,27 @@ def phase_from_marker(marker: str) -> str:
         return "design-consensus"
     if marker.startswith("VERIFY_DONE"):
         return "publish"
-    return "marker-route"
+    return "work-intake"
+
+
+def route_from_marker(marker: str) -> str | None:
+    if marker.startswith("IMPLEMENT_DONE"):
+        return "publish-or-review-gate"
+    if not marker.startswith(
+        (
+            "AUDIT_DONE",
+            "SOLVER_DONE",
+            "META_JUDGE_DONE",
+            "META_RESOLVED",
+            "IMPLEMENT_DONE",
+            "VERIFY_DONE",
+            "REVIEW_DONE",
+            "FIX_DONE",
+            "TEST_ADD_DONE",
+        )
+    ):
+        return "marker-route"
+    return None
 
 
 def actor_from_marker(marker: str) -> str:
@@ -417,9 +444,10 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "bootstrap",
                 "item": None,
-                "phase": "daemon-health",
+                "phase": "bootstrap",
                 "actor": "controller",
                 "reason": "daemon heartbeat stale-or-missing",
+                "route": "daemon-health",
                 "suggested_command": "python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
                 "daemons": stale_names,
             }
@@ -432,8 +460,9 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "wake-source",
                 "item": None,
-                "phase": "wake-source",
+                "phase": "bootstrap",
                 "actor": "controller",
+                "route": "wake-source",
                 "reason": "missing daemon-event surfaces; confirm Monitor bridge",
             }
         )
@@ -494,8 +523,9 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "priority": 5,
                 "kind": "no-gap-violation",
                 "item": infer_item_from_text(line),
-                "phase": "no-gap-repair",
+                "phase": "work-intake",
                 "actor": "controller",
+                "route": "no-gap-repair",
                 "evidence": line,
             }
         )
@@ -671,7 +701,8 @@ def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
     ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
     for item in ordered:
         phase = phase_from_labels(item.labels)
-        if phase in {"blocked", "merged", "ci-running"}:
+        status = status_from_labels(item.labels)
+        if status in {"blocked", "merged", "ci-running"}:
             continue
         priority = 6 if item.milestone else 7
         actions.append(
@@ -694,17 +725,25 @@ def phase_from_labels(labels: tuple[str, ...]) -> str:
         ("🛠️ phase:implementing", "implementation"),
         ("🔧 phase:fixing", "review-gate"),
         ("👀 phase:reviewing", "review-gate"),
-        ("⚙️ phase:ci-running", "ci-running"),
+        ("⚙️ phase:ci-running", "ci-watch"),
         ("🚀 phase:pr-open", "review-gate"),
         ("✅ phase:consensus-reached", "implementation"),
-        ("⏸️ phase:blocked", "blocked"),
-        ("🎉 phase:merged", "merged"),
+        ("⏸️ phase:blocked", "bootstrap"),
+        ("🎉 phase:merged", "publish"),
     ):
         if label in labels:
-            if phase not in {"ci-running", "blocked", "merged"}:
-                assert_stage_slug(phase)
+            assert_stage_slug(phase)
             return phase
-    return "unlabeled-existing-issue"
+    return "work-intake"
+
+
+def status_from_labels(labels: tuple[str, ...]) -> str | None:
+    for label, status in NON_ACTION_PHASE_LABELS.items():
+        if label in labels:
+            return status
+    if not any(label.startswith("phase:") or " phase:" in label for label in labels):
+        return "unlabeled-existing-issue"
+    return None
 
 
 def actor_from_labels(labels: tuple[str, ...], kind: str) -> str:

@@ -6,6 +6,7 @@ from __future__ import annotations
 import re
 import sys
 import unittest
+import ast
 from pathlib import Path
 
 
@@ -83,14 +84,72 @@ class WorkflowStageRegistryTests(unittest.TestCase):
             phase_from_labels(("👀 phase:reviewing",)),
             phase_from_labels(("🚀 phase:pr-open",)),
             phase_from_labels(("✅ phase:consensus-reached",)),
+            phase_from_labels(("⚙️ phase:ci-running",)),
+            phase_from_labels(("⏸️ phase:blocked",)),
+            phase_from_labels(("🎉 phase:merged",)),
+            phase_from_labels(("auto-loop",)),
         )
         for slug in mapped:
-            if slug == "publish-or-review-gate":
-                for part in ("publish", "review-gate"):
-                    assert_stage_slug(part)
-                continue
             with self.subTest(slug=slug):
                 assert_stage_slug(slug)
+
+    def test_wakeup_plan_phase_literals_are_registered_stage_slugs(self) -> None:
+        path = SCRIPT_DIR / "codex_refactor_loop" / "wakeup_plan.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        phase_values: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values):
+                    if (
+                        isinstance(key, ast.Constant)
+                        and key.value == "phase"
+                        and isinstance(value, ast.Constant)
+                        and isinstance(value.value, str)
+                    ):
+                        phase_values.add(value.value)
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("phase_from_"):
+                for child in ast.walk(node):
+                    if (
+                        isinstance(child, ast.Return)
+                        and isinstance(child.value, ast.Constant)
+                        and isinstance(child.value.value, str)
+                    ):
+                        phase_values.add(child.value.value)
+
+        self.assertTrue(phase_values)
+        for slug in sorted(phase_values):
+            with self.subTest(slug=slug):
+                assert_stage_slug(slug)
+
+    def test_wakeup_plan_non_stage_routes_do_not_use_phase_field(self) -> None:
+        path = SCRIPT_DIR / "codex_refactor_loop" / "wakeup_plan.py"
+        source = path.read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        phase_return_values: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("phase_from_"):
+                for child in ast.walk(node):
+                    if (
+                        isinstance(child, ast.Return)
+                        and isinstance(child.value, ast.Constant)
+                        and isinstance(child.value.value, str)
+                    ):
+                        phase_return_values.add(child.value.value)
+
+        for non_stage in (
+            "publish-or-review-gate",
+            "marker-route",
+            "daemon-health",
+            "wake-source",
+            "no-gap-repair",
+            "ci-running",
+            "blocked",
+            "merged",
+            "unlabeled-existing-issue",
+        ):
+            with self.subTest(non_stage=non_stage):
+                self.assertNotRegex(source, rf'"phase":\s*"{re.escape(non_stage)}"')
+                self.assertNotIn(non_stage, phase_return_values)
 
 
 if __name__ == "__main__":
