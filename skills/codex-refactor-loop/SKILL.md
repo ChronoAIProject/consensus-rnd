@@ -322,7 +322,7 @@ Phase 0 anti-patterns stay local because they are safety gates:
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
 - Do not start fewer than the five required restart-helper-managed daemons.
-- Do not initialize a state-v2, alternate queue, wrapper envelope, or renamed work-unit schema.
+- Do not initialize an alternate state model, alternate queue, wrapper envelope, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 
 ## Phase Routing

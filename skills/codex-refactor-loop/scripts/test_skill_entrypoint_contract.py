@@ -269,6 +269,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(emoji_heading=emoji_heading):
                 self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
 
+    def test_philosophy_and_prompt_prose_do_not_leak_schema_identifier_suffixes(self) -> None:
+        docs = {
+            "SKILL.md": self.skill,
+            "prompts/implement.md": read(SKILL_ROOT / "prompts" / "implement.md"),
+            "prompts/verify.md": read(SKILL_ROOT / "prompts" / "verify.md"),
+            "prompts/meta-judge.md": read(SKILL_ROOT / "prompts" / "meta-judge.md"),
+        }
+        forbidden_fragments = (
+            "state-v2",
+            "v1 audit-backed work unit",
+            "v1 audit cluster alias",
+            '"schema_version": 1',
+            '"work_unit_schema_version": 1',
+        )
+        for path, text in docs.items():
+            with self.subTest(path=path):
+                for fragment in forbidden_fragments:
+                    self.assertNotIn(fragment, text)
+        self.assertIn("schema: refactor-verify-v1", docs["prompts/verify.md"])
+
     def test_skill_uses_intra_file_reference_links_only(self) -> None:
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
