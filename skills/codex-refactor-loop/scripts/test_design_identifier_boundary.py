@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """Source-regression guard for versioned design identifiers."""
 
+# Refactor (iter5/issue107-design-identifier-boundary):
+#   Old: design-facing names carried version-number suffixes, and root controller
+#   state exposed a schema metadata field as part of its durable shape.
+#   New: only release semver fields listed in .version-bump.json may carry
+#   version coordinates; this source-regression guard locks that boundary.
+
 from __future__ import annotations
 
 import json
