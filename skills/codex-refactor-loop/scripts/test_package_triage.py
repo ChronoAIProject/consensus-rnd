@@ -135,6 +135,8 @@ class PackageTriageDecisionTests(unittest.TestCase):
 
     def test_accept_dual_reads_and_removes_legacy_triage_label(self) -> None:
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text(self.self_contained_triage_body, encoding="utf-8")
+        (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(self.self_contained_triage_body, encoding="utf-8")
         calls: list[list[str]] = []
 
         def fake_gh(args: list[str], *, repo: Path, repo_slug: str | None = None) -> subprocess.CompletedProcess[str]:
