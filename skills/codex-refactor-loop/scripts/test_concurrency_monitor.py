@@ -583,6 +583,22 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
         self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
+    def test_degradation_hook_defaults_to_enabled_interval_when_env_unset(self) -> None:
+        os.environ.pop("DEGRADATION_WATCH_INTERVAL_SECONDS", None)
+        self.reload_monitor()
+        state: dict[str, object] = {}
+        result = self.module.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
+
+        self.assertEqual(self.monitor.degradation_watch_interval_seconds(), 1800)
+        with mock.patch.object(self.module.time, "time", return_value=1_800_123):
+            with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result) as run_check:
+                self.monitor.maybe_run_skill_degradation_watch(state)
+
+        run_check.assert_called_once_with()
+        self.assertEqual(state["last_degradation_watch_at"], 1_800_123)
+        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+
     def test_degradation_hook_disabled_by_zero_interval(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
         self.reload_monitor()

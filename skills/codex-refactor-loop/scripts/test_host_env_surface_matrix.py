@@ -103,6 +103,25 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.rows = parse_skill_matrix()
         self.exports, self.template_sections = parse_host_env_example()
 
+    def test_surface_matrix_refactor_self_doc_matches_current_contract(self) -> None:
+        expected_tokens = (
+            "Refactor (iter1/issue-170)",
+            "host.env contract facts were split across prose tables and",
+            "categories, defaults, consumers, and test ownership",
+            "SKILL.md owns one host.env surface matrix",
+            "host.env.example is",
+            "a copyable template view",
+            "tests mechanically derive exported keys",
+            "prompt placeholders",
+            "runtime literal anchors",
+        )
+        for path in (SKILL_MD, HOST_ENV_EXAMPLE):
+            text = read(path)
+            with self.subTest(path=path.name):
+                for token in expected_tokens:
+                    self.assertIn(token, text)
+                self.assertNotIn("host.env.example documented only a subset", text)
+
     def test_skill_matrix_rows_are_complete_and_unique(self) -> None:
         self.assertEqual(set(self.template_sections), TEMPLATE_CATEGORY_HEADERS)
         self.assertNotIn("GH_REPO", self.rows)

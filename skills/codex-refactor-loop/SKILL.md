@@ -34,14 +34,14 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
 ## Host 配置(通用化注入点)
-<!-- Refactor (iter1/issue-140):
-  Old pattern: host.env.example documented only a subset of host
-  variables, so exported keys could drift from the SKILL.md Host config
-  and Host language policy tables.
-  New principle: keep host.env.example exports equal to the SKILL.md host
-  configuration table key set with source-regression coverage, while
-  reusing the existing host.env/SKILL.md surfaces instead of adding a new
-  schema or runtime contract.
+<!-- Refactor (iter1/issue-170):
+  Old pattern: host.env contract facts were split across prose tables and
+  template comments, so categories, defaults, consumers, and test ownership
+  could drift.
+  New principle: SKILL.md owns one host.env surface matrix; host.env.example is
+  a copyable template view; tests mechanically derive exported keys,
+  categories, defaults, prompt placeholders, and runtime literal anchors from
+  that matrix.
 -->
 These variables are injected by the host project. The skill must not hardcode project facts.
 ### Host env surface matrix
