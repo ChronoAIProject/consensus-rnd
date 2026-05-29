@@ -10,12 +10,13 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.sync.dev import IntegrationSyncDaemon, codex_resolve_in_flight, merge_in_progress
+from codex_refactor_loop.sync.dev import IntegrationSyncDaemon, codex_resolve_in_flight, dispatch_codex_resolve, merge_in_progress
 
 
 SYNC_DEV = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "dev.py"
@@ -312,6 +313,43 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
         self.assertTrue(merge_in_progress(self.worktree, command_runner))
 
+    def test_conflict_resolver_prompt_stores_relative_paths_but_spawn_argv_absolute(self) -> None:
+        worktree = self.repo / ".worktrees" / "dev-sync"
+        worktree.mkdir(parents=True)
+        popen_calls: list[list[str]] = []
+        logger_lines: list[str] = []
+
+        with mock.patch("codex_refactor_loop.sync.dev.time.time", return_value=1234), mock.patch(
+            "codex_refactor_loop.sync.dev.subprocess.Popen",
+            side_effect=lambda argv, **_kwargs: popen_calls.append(argv),
+        ):
+            dispatch_codex_resolve(
+                worktree=worktree,
+                main_repo=self.repo,
+                integration="auto-refact-dev",
+                review_base="dev",
+                spawn_codex=self.repo / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli",
+                logger=logger_lines.append,
+            )
+
+        prompt_file = self.repo / ".refactor-loop" / "prompts" / "dev-sync-conflict-1234.md"
+        log_file = self.repo / ".refactor-loop" / "logs" / "dev-sync-codex-1234.log"
+        prompt = prompt_file.read_text(encoding="utf-8")
+        self.assertIn("`.worktrees/dev-sync`", prompt)
+        self.assertIn("prompt artifact: `.refactor-loop/prompts/dev-sync-conflict-1234.md`", prompt)
+        self.assertIn("resolver log artifact: `.refactor-loop/logs/dev-sync-codex-1234.log`", prompt)
+        self.assertIn("main repo: `.`", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+        self.assertEqual(["dispatching codex: prompt=.refactor-loop/prompts/dev-sync-conflict-1234.md log=.refactor-loop/logs/dev-sync-codex-1234.log"], logger_lines)
+
+        argv = popen_calls[0]
+        self.assertEqual(str(worktree), argv[argv.index("--cd") + 1])
+        self.assertEqual(str(self.repo), argv[argv.index("--add-dir") + 1])
+        self.assertEqual(str(prompt_file), argv[argv.index("--prompt") + 1])
+        self.assertEqual(str(log_file), argv[argv.index("--log") + 1])
+        self.assertTrue(Path(argv[argv.index("--cd") + 1]).is_absolute())
+        self.assertTrue(Path(argv[argv.index("--prompt") + 1]).is_absolute())
+
 
 class SyncDevSourceRegressionTests(unittest.TestCase):
     def test_module_is_import_safe_without_repo_root(self) -> None:
@@ -340,6 +378,21 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
         self.assertNotIn("DEV_SYNC_REQUEST:", src)
+
+    def test_sync_source_regression_uses_durable_display_paths(self) -> None:
+        src = SYNC_DEV.read_text(encoding="utf-8")
+        self.assertIn("ctx.durable_artifact_path(worktree)", src)
+        self.assertIn("ctx.durable_artifact_path(prompt_file)", src)
+        self.assertIn("ctx.durable_artifact_path(log_file)", src)
+        self.assertIn("spawn-codex --cd/--add-dir/--prompt/--log", src)
+        for forbidden in (
+            "`{worktree}`. Resolve conflicts",
+            "`cd {worktree}`",
+            "main repo `{main_repo}`",
+            "prompt={prompt_file} log={log_file}",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, src)
 
 
 if __name__ == "__main__":

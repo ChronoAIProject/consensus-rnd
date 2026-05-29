@@ -7,7 +7,7 @@ import re
 import shlex
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Mapping
 
 
@@ -38,7 +38,11 @@ class LoopPaths:
 
 @dataclass(frozen=True)
 class LoopContext:
-    """Resolved host repository and skill context."""
+    """Resolved host repository and skill context.
+
+    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
+    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+    """
 
     repo_root: Path
     skill_root: Path
@@ -94,6 +98,25 @@ class LoopContext:
         if self.gh_repo_slug:
             result["GH_REPO_SLUG"] = self.gh_repo_slug
         return result
+
+    def durable_artifact_path(self, path: Path) -> str:
+        """Return repo-relative POSIX durable text for a host artifact path."""
+        try:
+            return path.resolve().relative_to(self.repo_root.resolve()).as_posix()
+        except ValueError as exc:
+            raise LoopContextError(f"artifact path points outside REPO_ROOT: {path}") from exc
+
+    def artifact_execution_path(self, text: str) -> Path:
+        """Resolve stored repo-relative durable text back to an execution path."""
+        pure = PurePosixPath(text)
+        if not text or pure.is_absolute() or "\\" in text or ".." in pure.parts:
+            raise LoopContextError(f"artifact path must be repo-relative POSIX text: {text!r}")
+        path = (self.repo_root / Path(*pure.parts)).resolve()
+        try:
+            path.relative_to(self.repo_root.resolve())
+        except ValueError as exc:
+            raise LoopContextError(f"artifact path escapes REPO_ROOT: {text!r}") from exc
+        return path
 
 
 def _resolve_repo_root(
