@@ -34,14 +34,14 @@ ${SCOPE_PATHS}
 5. **架构守卫**：跑 host 配置的 `$CI_GUARDS`，必须通过。其它 cluster 特定守卫见 verification hints。
 6. **不依赖外部仓库**：禁止建议在 $EXTERNAL_REPOS/$EXTERNAL_REPOS 改动。
 7. **Schema/protocol**：如 `${HOST_PROTO_POLICY}` 非空或 diff / `$PROJECT_RULES` 显示改了 schema/protocol 文件，按 host policy 本地重生成/验证并确认编译通过。
-8. **构建命令**：使用 host 配置的 `$BUILD_CMD` / `$TEST_CMD`。
+8. **构建命令**：使用 host 配置的 `$BUILD_CMD` / `$TEST_CMD`。它们是 shell command string,必须在已 source `host.env` 的 shell 中用 `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` 或等价 shell invocation 执行。
 
 ## 流程
 
 1. 按 `${DESIGN_DECISION_PATH}` 选择 design-issue consensus artifact 或 audit 段，读所有 `scope_paths` 文件。
 2. 打印 `PLAN:` 前缀的具体改动计划（一行一项）。
 3. 实施。
-4. 编译：`$BUILD_CMD`，失败时修复，最多 5 次迭代。
+4. 编译：`bash -lc "$BUILD_CMD"`，失败时修复，最多 5 次迭代。
 5. 跑指定测试。失败则修复（禁止 disable/skip），最多 5 次。
 6. 跑架构守卫，失败则修复。
 7. `git add -A && git status` 确认改动。

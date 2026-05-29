@@ -24,7 +24,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 -->
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
-| Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. | Read and write existing containers; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [state schema](#state-schema) | `.refactor-loop/state.json` |
+| Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Phase 9 multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [phase 9 details](#phase-9-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
@@ -49,8 +49,8 @@ These variables are injected by the host project. The skill must not hardcode pr
 | `$REPO_ROOT` | host repository root | required in `host.env` |
 | `$GH_REPO_SLUG` | GitHub `OWNER/REPO` slug | required for `gh --repo` |
 | `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional compatibility exports |
-| `$BUILD_CMD` | build command | host-specific |
-| `$TEST_CMD` | test command | host-specific |
+| `$BUILD_CMD` | shell command string for build; execute with `bash -lc "$BUILD_CMD"` after sourcing `host.env` | host-specific |
+| `$TEST_CMD` | shell command string for tests; execute with `bash -lc "$TEST_CMD"` after sourcing `host.env` | host-specific |
 | `$INTEGRATION_BRANCH` | integration branch | `auto-refact-dev` |
 | `$REVIEW_BASE_BRANCH` | review base branch | `dev` |
 | `$PROJECT_RULES` | project rules file and Phase 0 fixed-point target | `CLAUDE.md` |
@@ -86,8 +86,9 @@ Host config rules:
 2. `GH_REPO` must not be exported as a bare repo name; use `GH_REPO_SLUG`.
 3. `CI_GUARDS` is optional. Use `[ -n "${CI_GUARDS:-}" ]` before invoking it and report `guards skipped: CI_GUARDS unset` when absent.
 4. Source `$REPO_ROOT/.refactor-loop/host.env` before daemon or codex supervision commands.
-5. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
-6. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
+5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
+6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
+7. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 
 ## Skill Root Contract
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/consensus-rnd-cli spawn-codex`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
@@ -308,7 +309,7 @@ Phase 0 is mandatory and ordered for each controller session bootstrap. Do not s
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
 3. Run `ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)` against `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 4. If the helper exits non-zero, helper 退出非 0 → bootstrap fail closed; post the failure and stop before actors.
-5. initialize state in `.refactor-loop/state.json` if missing, using the existing work-unit containers only.
+5. Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` if missing; do not create or maintain root `.refactor-loop/state.json`.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
 8. ensure all 5 restart-helper-managed daemons are alive as singletons: `consensus-rnd-cli concurrency`, `consensus-rnd-cli progress-reporter`, `consensus-rnd-cli comment-monitor`, `consensus-rnd-cli dev-sync`, and `consensus-rnd-cli phase9-router`. The persistent daemon-event Monitor bridge is armed separately in step 9.
@@ -322,7 +323,7 @@ Phase 0 anti-patterns stay local because they are safety gates:
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
 - Do not start fewer than the five required restart-helper-managed daemons.
-- Do not initialize an alternate state model, alternate queue, wrapper envelope, or renamed work-unit schema.
+- Do not initialize an alternate state model, alternate queue, wrapper envelope, root state file, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 
 ## Phase Routing
@@ -703,26 +704,25 @@ Authoritative surfaces:
 
 1. GitHub comments and labels tell humans what is happening.
 2. `.refactor-loop/logs/*` tells the controller which actors exited cleanly; verdict markers are trusted only after `EXIT=0`; `.refactor-loop/logs/*.log` is a 24h short-lived surface, not history.
-3. `.refactor-loop/state.json` is a resumability index and debug ledger, not a phase decision source of truth.
-4. `.refactor-loop/prompts/*` tells future maintainers what was dispatched.
-5. Branches, worktrees, and PRs tell git topology.
+3. `.refactor-loop/prompts/*` tells future maintainers what was dispatched.
+4. Branches, worktrees, and PRs tell git topology.
+5. Named specialized artifacts such as `.refactor-loop/state/statusline-snapshot.json`, `.refactor-loop/state/phase8-review-state.json`, `.refactor-loop/state/recent-pr-merges.json`, `.refactor-loop/codex-progress-state.json`, `.refactor-loop/comment-monitor-state.json`, and `.refactor-loop/.concurrency-monitor-state.json` are owned by their producers.
 
 State rules:
 
-1. Use existing containers: `clusters_planned`, `clusters_active`, `clusters_done`, `clusters_failed`, `design_pending`, `remote_ci`.
-2. Do not add a state migration for this split.
-3. Do not add queue aliases, envelope wrappers, or normalizer helpers.
-4. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
-5. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
-6. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
-7. Public operational names remain stable: `cluster`, `refactor`, `auto-loop`, `*_DONE`, branch prefixes, marker names, and label names.
-8. Full schema and examples live in [state schema](#state-schema).
+1. Do not create or maintain root `.refactor-loop/state.json`; it owns no phase decisions, queues, resumability index, or debug ledger.
+2. Do not add queue aliases, envelope wrappers, normalizer helpers, or a migration for a root state file.
+3. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
+4. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
+5. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
+6. Public operational names remain stable: `cluster`, `refactor`, `auto-loop`, `*_DONE`, branch prefixes, marker names, and label names.
+7. Specialized artifact examples live in [specialized state artifacts](#specialized-state-artifacts).
 
 State write timing:
 
-1. Before spawn, record intended actor, prompt, log, target issue/PR, and phase.
-2. After spawn, record background task id if the harness exposes one.
-3. After completion, move active record to done or failed in the same wakeup that routes the marker.
+1. Before spawn, write the prompt artifact and post/sync the GitHub-visible phase state.
+2. After spawn, rely on harness task notification plus log path and GitHub banner/labels.
+3. After completion, route the clean-exit marker in the same wakeup and update GitHub plus any named producer-owned artifact.
 4. After PR creation, record PR number and base/head.
 5. After merge, record merged commit and close/label state.
 6. After a recovery decision, record the reason string and next route.
@@ -866,7 +866,7 @@ This single file is intentionally enough for controller routing. Jump to detaile
 When to read an anchor:
 
 1. Before writing a full status or escalation banner, read [status and escalation templates](#status-and-escalation-templates).
-2. Before editing state shape or producer normalization, read [work-unit contract](#work-unit-contract) and [state schema](#state-schema).
+2. Before editing producer normalization or named state artifacts, read [work-unit contract](#work-unit-contract) and [specialized state artifacts](#specialized-state-artifacts).
 3. Before starting or repairing daemons, read [daemon command bodies](#daemon-command-bodies).
 4. Before changing label bootstrap or transition helpers, read [label bootstrap loops](#label-bootstrap-loops).
 5. Before handling repeated failure, stuck CI, merge conflicts, or stale worktrees, read [recovery playbook](#recovery-playbook).
@@ -883,9 +883,9 @@ When not to read an anchor:
 
 Controller-owned operations:
 
-1. Create, update, and validate `.refactor-loop/state.json`.
+1. Create runtime directories and honor named producer-owned state artifacts; do not create a root state queue.
 2. Create worktrees and branches for worker tasks.
-3. Render worker prompts from stable prompt files and current state.
+3. Render worker prompts from stable prompt files, GitHub state, and source artifacts.
 4. Spawn codex workers and track prompt/log paths.
 5. Commit worker diffs after verification.
 6. Push branches and open/update PRs.
@@ -1094,7 +1094,7 @@ codex 常把 prompt 里的 marker 模板原样回显到 log(如 prompt 写 `SOLV
 <a id="sentinel-and-comment-filters"></a>
 ## ⭐ 核心原则:GitHub 是系统状态唯一显示面(强制)
 
-**Maintainer 打开 GitHub 必须一眼看到完整状态**,不用读本地 log / state.json / ps process / chat history。任何状态变化在 GitHub **立即可见**。
+**Maintainer 打开 GitHub 必须一眼看到完整状态**,不用读本地 log / root state file / ps process / chat history。任何状态变化在 GitHub **立即可见**。
 
 ### 必须 reflect 到 GitHub 的状态变化
 
@@ -1381,7 +1381,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
    - # Refactor (iter1/host-claude-md-fixed-points):
      #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
      #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
-1. **state + integration 分支**:`mkdir -p .refactor-loop/{...}` + 写 `state.json` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。
+1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 work-unit producer**(Phase 1,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
@@ -1389,42 +1389,22 @@ You are the **Controller**. You never edit production code yourself. You orchest
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只 bootstrap state + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
+- ❌ 只建本地目录 + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
 
 ---
 
-If `.refactor-loop/state.json` does not exist:
+Create the runtime directories if missing:
 
 ```bash
 mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}
 ```
 
-Write initial `state.json`:
-
-```json
-{
-  "trunk_branch": "auto-refact-dev",
-  "integration_branch": "auto-refact-dev",
-  "review_base_branch": "dev",
-  "pr_mode": "stacked",
-  "max_parallel_clusters": 3,
-  "iteration": 1,
-  "phase": "audit",
-  "clusters_planned": [],
-  "clusters_active": [],
-  "clusters_done": [],
-  "clusters_failed": []
-}
-```
-
-`clusters_planned`, `clusters_active`, `clusters_done`, and `clusters_failed` are the
-authoritative queue containers, but each item is a work-unit contract record as specified in
-[work-unit contract](#work-unit-contract). If an existing state file lacks the work-unit schema marker, read it
-as legacy state: derive `work_unit_id` from each item's `id`, treat audit clusters as
-`kind="audit-cluster"` and `producer="audit"`, and continue without migration.
+There is no root `.refactor-loop/state.json` bootstrap schema. Work-unit recovery comes from
+GitHub labels/comments, clean `EXIT=0` log tails, prompt artifacts, git topology, and named
+producer-owned state artifacts.
 
 **Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
 
@@ -1488,7 +1468,7 @@ Anti-anchoring: **do not** include phrases like "prefer 0", "loop saturated", "h
 
 After validation: read `audit-iter-N.md`; the controller projects each accepted audit cluster into
 the work-unit fields documented in [work-unit contract](#work-unit-contract) (`work_unit_id`, `kind`, `producer`,
-`source_ref`, and audit compatibility aliases), populate `clusters_planned`, split into batches
+`source_ref`, and audit compatibility aliases), derive the next dispatch batch from the audit artifact and GitHub state
 (max `max_parallel_clusters` per batch) by
 **file/project disjointness**:
 
@@ -1503,7 +1483,7 @@ the work-unit fields documented in [work-unit contract](#work-unit-contract) (`w
   `META_JUDGE_DONE`.
 - Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
   a named operational-policy abstraction for compatibility.
-- Phase 7 `manual-issue` intake may write work-unit contract items into `clusters_planned` only after the
+- Phase 7 `manual-issue` intake may dispatch work-unit contract items only after the
   accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
   `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
   and `verification_hints`. It must not fabricate `cluster_id` or `legacy_cluster_id`.
@@ -1523,20 +1503,13 @@ For every cluster with `requires_design: true`:
      --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
    ```
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
-2. Record in state.json:
-   ```json
-   "design_pending": [
-     {"work_unit_id": "cluster-NNN", "cluster_id": "cluster-NNN", "issue_number": 234,
-      "opened_at": "<ISO8601>", "last_checked": "<ISO8601>",
-      "last_comment_count": 0, "status": "awaiting_design"}
-   ]
-   ```
-   `design_pending.work_unit_id` is canonical. `design_pending.cluster_id` remains a legacy alias
-   for current audit-backed issues and existing controller routing.
+2. Record design-pending status on GitHub: the issue body/comment links the source work unit,
+   `work_unit_id`, opened timestamp, and current status. Future routing reads GitHub labels,
+   comments, and Phase 9 artifacts, not a root local queue.
 3. Skip the cluster in Phase 2 (do NOT batch it).
 4. PushNotification: "iter<N> opened design issue #<issue> for cluster-<id>. Auto-loop paused on this cluster pending human design decision."
 
-Update state, advance to Phase 2 (with requires_design clusters excluded).
+Update GitHub-visible state, advance to Phase 2 (with requires_design clusters excluded).
 
 ### Stale-worktree audit pollution(强制 pre-audit cleanup)
 
@@ -1593,13 +1566,13 @@ For each cluster in the current batch:
 
 3. Dispatch via `consensus-rnd-cli spawn-codex --cd <worktree>` with `--stall 5400` (5400s no-output stall window).
 
-4. Update `clusters_active` with the work-unit identity/provenance fields plus `bg_task` id.
+4. Post/sync the GitHub status with the work-unit identity/provenance fields, prompt path, log path, and harness task id if exposed.
 
 After all parallel dispatches, schedule wakeup 1800s safety net. **End turn.**
 
 When each task notification fires → check log tail for `IMPLEMENT_DONE:<cluster-id>:<status>`:
 - `ok` → advance that cluster to Phase 3 (verify).
-- `partial` / `blocked` → move to `clusters_failed`, log reason, optionally re-dispatch with corrected prompt.
+- `partial` / `blocked` → post the failed/blocked reason, log it in the run artifact, optionally re-dispatch with corrected prompt.
 
 Do **not** advance the whole batch in lockstep; verify each cluster independently as soon as its implement finishes.
 
@@ -1628,7 +1601,7 @@ Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{p
 
 - `pass` → advance to Phase 4 (merge).
 - `rework` → re-dispatch implement codex with verifier's findings appended.
-- `abort` → move to `clusters_failed`, surface in PushNotification.
+- `abort` → post the failure/blocking reason and surface in PushNotification.
 
 ---
 
@@ -1736,7 +1709,7 @@ For each `pass` cluster, serially:
 
 7b. **立刻给 PR 加 `auto-loop` label**:`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Phase 4b 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
 
-7b. Record the PR number in `state.clusters_active[i].pr_number`.
+7b. Record the PR number in the GitHub banner/comment and run artifact for the active work unit.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
     - For each downstream cluster whose `dependencies` contained it:
       - `git -C <worktree> rebase --onto integration_branch <old_upstream_branch>` (or `gh pr edit <pr> --base integration_branch` if stacked-on-stacked is no longer needed).
@@ -1808,7 +1781,7 @@ For each `bucket: fail` check:
    ```
 
 2. Classify:
-   - **Flaky / infra-only** (network timeout, registry unreachable, runner OOM that doesn't recur): retry by `gh workflow run` or pushing an empty whitespace commit; document under `clusters_failed` with reason `flaky`.
+   - **Flaky / infra-only** (network timeout, registry unreachable, runner OOM that doesn't recur): retry by `gh workflow run` or pushing an empty whitespace commit; document the `flaky` reason in GitHub and the run artifact.
    - **Real failure tied to merged work**: dispatch a `prompts/remote-ci-fix.md` codex (see template) with the failure log + last 10 cluster commits as input. Treat the resulting fix as a mini-cluster: implement → controller verify (re-run local guards + the specific failing test) → commit → push → Phase 5 again.
    - **Pre-existing failure unrelated to merged work** (failure exists on `dev` base too): document, do not fix in this PR; surface via PushNotification.
 
@@ -1821,7 +1794,7 @@ For each `bucket: fail` check:
 
 ### Loop control under Phase 5
 
-- Cap remote-ci fix attempts per check at **2**. After 2 attempts on the same check → mark `clusters_failed` reason `remote-ci-stuck`, send PushNotification, stop the loop.
+- Cap remote-ci fix attempts per check at **2**. After 2 attempts on the same check → post reason `remote-ci-stuck`, send PushNotification, stop the loop.
 - Phase 5 may overlap with Phase 2 of the next iteration. If a new cluster's local CI passes but remote CI is still failing on a prior commit → push anyway (CI re-runs on each push); the watch picks up the latest checks.
 
 ---
@@ -1989,7 +1962,7 @@ Policy: AI keeps iterating until the fixed Phase 8 truth table resolves to `MERG
 
 Loop:
 
-1. **Round entry** — `state.pr_reviews[PR].fix_round += 1`. If `fix_round > max_fix_rounds`, escalate (see below).
+1. **Round entry** — derive the next fix round from review/fix artifacts. If `fix_round > max_fix_rounds`, escalate (see below).
 2. **Dispatch fix codex** in PR's own worktree:
    ```bash
    <skill-root>/scripts/consensus-rnd-cli spawn-codex \
@@ -2119,7 +2092,7 @@ Forbidden:
 
 ### Re-review on push
 
-If PR is pushed after consensus (rebase, requested change), head SHA changes. Next Phase 8 sweep: if `state.pr_reviews[PR].head_sha != current head SHA` → drop prior consensus, re-dispatch all reviewers against new head. Never auto-merge stale consensus.
+If PR is pushed after consensus (rebase, requested change), head SHA changes. Next Phase 8 sweep compares the reviewed head SHA to the current head SHA; mismatch drops prior consensus and re-dispatches all reviewers. Never auto-merge stale consensus.
 
 ### Idempotency
 
@@ -2139,7 +2112,7 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ## Phase 9 — Multi-solver design consensus (sole authorization gate)
 
-Runs when a `state.design_pending[i]` work-unit item needs a concrete implementation decision.
+Runs when a GitHub design issue / Phase 9 artifact needs a concrete implementation decision.
 Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Phase 9 can frame the decision as
 work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
 solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
@@ -2351,7 +2324,7 @@ fi
 - ✅ writer-codex 起草 PR body / consensus 公告(基于已 consensus 的 plan)
 
 当 maintainer 给出方向性指令:
-1. controller 把指令记入 `state.design_pending[i].maintainer_directive`
+1. controller records the directive in the Phase 9 run artifact and GitHub issue thread.
 2. 立刻派一轮 fresh 3 solver(把指令 verbatim 作为 narrowing constraint)
 3. solver 们各自把指令具体化成 impl 计划(可能 minimal 给一套、structural 给另一套、delete 给第三套)
 4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
@@ -2383,7 +2356,7 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
    <winning solver's concrete plan verbatim>
    ```
 3. Add `auto-loop-resume` label to the issue (mirrors maintainer-decision flow).
-4. Move cluster from `design_pending` to `clusters_active`.
+4. Move the design issue through GitHub labels/comments into implementing state.
 5. Dispatch implement codex per Phase 2 (worktree + 5400s no-output stall window).
 6. **Post 共识卡片**(强制)— 不再用普通 status banner,改用 distinct **consensus card** 格式:
 
@@ -2455,24 +2428,10 @@ Required labels (additions to Phase 8 set):
 - (re-used) `auto-loop-resume` on consensus dispatch
 - (re-used) `auto-loop-stuck` on escalation
 
-### State tracking
+### Phase 9 tracking
 
-```json
-"design_pending": [{
-  "cluster_id": "...",
-  "issue_number": 684,
-  "auto_solve": true,
-  "phase9": {
-    "rounds": [
-      {"round": 1, "solvers": {"minimal": "propose", "structural": "propose", "delete": "abstain"},
-       "judge": "converge", "convergence_question": "..."},
-      {"round": 2, "solvers": {...}, "judge": "consensus", "chosen_framing": "structural"}
-    ],
-    "final_decision": "consensus:structural" | "escalate:stalled" | null,
-    "implement_dispatched": true | false
-  }
-}]
-```
+Phase 9 tracking lives in GitHub issue labels/comments plus `.refactor-loop/runs/phase9-issue<N>-r<M>-*.md`
+solver/judge artifacts. Do not mirror it into a root local state queue.
 
 ### Anti-spiral safeguards (no hard round cap — different safeguards instead)
 
@@ -3018,7 +2977,7 @@ Bash(
 
 Policy: **源文件内部 English-only;源文件之外的 user-facing artifact 默认 中文**。
 
-中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。Internal artifact(`.refactor-loop/runs/*.md`、state.json)仍是英文(只要 grep / 调试用)。
+中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts)仍是英文(只要 grep / 调试用)。
 
 英文适用对象:所有源文件(`.rs` / `.lua` / `.sh` / `.py` / `.ts`)内部自然语言与代码元素,包括注释、docstring、`log.{info,warn,error}` 字符串、error / panic 文本、代码 identifier、代码内构造的 commit-body 模板字符串。fkst 是 substrate,无 end-user UI;人读 `git log` / `journalctl` / source,英文 log 与注释强制英文同理,保持 LLM 语料一致、跨工程 reuse、无 encoding / 字体问题。
 
@@ -3067,10 +3026,9 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 ## Work-unit contract
 
-The work-unit contract is the queue item contract stored inside the existing `clusters_planned`,
-`clusters_active`, `clusters_done`, and `clusters_failed` containers. The container names are
-historical but authoritative; do not add migrated queue containers, envelope wrappers, a normalizer
-helper, or a state migration for this contract.
+The work-unit contract describes the fields carried through audit artifacts, GitHub design issues,
+prompt artifacts, and implementation/review run artifacts. Do not add migrated queue containers,
+envelope wrappers, a normalizer helper, or a root state migration for this contract.
 
 Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
 remains the stable installed skill entrypoint. `refactor` is a valid development/work-unit
@@ -3099,9 +3057,6 @@ Audit compatibility:
 - For current audit-backed units, `work_unit_id == id == cluster_id == legacy_cluster_id`.
 - For non-audit units, `work_unit_id` is not required to start with `cluster-`; omit
   `legacy_cluster_id` and do not fabricate `cluster_id`.
-- Old state without the work-unit schema marker is read as legacy state. Derive
-  `work_unit_id` from each queue item's `id`, treat items as `kind="audit-cluster"` and
-  `producer="audit"`, and use the audit section as `source_ref` when known.
 - Prompt dispatch for current audit-backed units exports `WORK_UNIT_ID=$CLUSTER_ID`. Existing
   markers, artifact names, branch names, and audit section lookups may continue to use
   `CLUSTER_ID` during compatibility.
@@ -3131,7 +3086,7 @@ for this contract.
 `audit` remains the default producer. It reads the raw artifact contract from
 `prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
 The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
-the work-unit contract before adding it to `clusters_planned`:
+the work-unit contract before dispatching or opening a design issue:
 
 - `work_unit_id: <cluster-id>`
 - `id: <cluster-id>`
@@ -3161,8 +3116,13 @@ solver dispatch:
 Manual issues must not fabricate `cluster_id` or `legacy_cluster_id`; those fields are audit
 compatibility aliases only.
 
-<a id="state-schema"></a>
-## State schema (`.refactor-loop/state.json`)
+<a id="specialized-state-artifacts"></a>
+## Specialized state artifacts
+
+There is no root `.refactor-loop/state.json` contract. The controller must not create or maintain
+a root local state queue, schema, resumability index, or debug ledger. Local machine-readable state
+is owned by named producers, while controller decisions come from GitHub labels/comments, clean
+`EXIT=0` log tails, prompt artifacts, git topology, and Phase 9 run artifacts.
 
 ### Statusline snapshot schema
 
@@ -3196,117 +3156,10 @@ Fields:
 - `open_pr_count`: open auto-loop PR count from the same GitHub scan used by the monitor.
 - `open_issue_count`: open auto-loop issue count from the same GitHub scan used by the monitor.
 
-```json
-{
-  "loop_started_at": "<ISO8601>",
-  "trunk_branch": "<branch the loop integrates into; same as integration_branch>",
-  "integration_branch": "<branch all clusters land on>",
-  "review_base_branch": "<dev or main — target of the rollup PR>",
-  "pr_mode": "stacked | single",
-  "max_parallel_clusters": 3,
-  "iteration": 1,
-  "phase": "audit | implement-batch-X | verify-batch-X | merge | remote-ci-watch | remote-ci-fix | done",
-  "audit": {
-    "status": "running | done | failed",
-    "log": "<relative path>",
-    "output": "<relative path>",
-    "total_clusters": <int>
-  },
-  "clusters_planned": [
-    {
-      "work_unit_id": "cluster-001",
-      "id": "cluster-001",
-      "cluster_id": "cluster-001",
-      "legacy_cluster_id": "cluster-001",
-      "kind": "audit-cluster",
-      "producer": "audit",
-      "source_ref": "audit-iter-1.md#cluster-001",
-      "batch": "A",
-      "scope_paths": ["<path>"],
-      "old_pattern": "<problem>",
-      "new_principle": "<target principle>",
-      "verification_hints": "<checks>",
-      "risk": "low|medium|high",
-      "leverage": "low|medium|high",
-      "dependencies": ["cluster-XXX"]
-    }
-  ],
-  "clusters_active": [
-    {
-      "work_unit_id": "cluster-001",
-      "id": "cluster-001",
-      "cluster_id": "cluster-001",
-      "legacy_cluster_id": "cluster-001",
-      "kind": "audit-cluster",
-      "producer": "audit",
-      "source_ref": "audit-iter-1.md#cluster-001",
-      "phase": "implement | verify",
-      "worktree": "<relative path>",
-      "branch": "<refactor/iterN-cluster-id>",
-      "bg_task": "<harness background task id>",
-      "log": "<relative path>",
-      "pr_number": <int|null>,
-      "pr_base_branch": "<integration or upstream cluster branch>"
-    }
-  ],
-  "clusters_done": [
-    {
-      "work_unit_id": "cluster-001",
-      "id": "cluster-001",
-      "cluster_id": "cluster-001",
-      "legacy_cluster_id": "cluster-001",
-      "kind": "audit-cluster",
-      "producer": "audit",
-      "source_ref": "audit-iter-1.md#cluster-001",
-      "merged_at": "<ISO8601>",
-      "commit": "<sha>",
-      "pr_number": <int|null>,
-      "merged_into": "<integration_branch | upstream-cluster-branch>"
-    }
-  ],
-  "clusters_failed": [
-    {
-      "work_unit_id": "cluster-001",
-      "id": "cluster-001",
-      "cluster_id": "cluster-001",
-      "legacy_cluster_id": "cluster-001",
-      "kind": "audit-cluster",
-      "producer": "audit",
-      "source_ref": "audit-iter-1.md#cluster-001",
-      "phase": "implement|verify|merge|remote-ci|stack-rebase",
-      "reason": "<short>"
-    }
-  ],
-  "rollup_pr": {
-    "pr_number": <int|null>,
-    "base": "<review_base_branch>",
-    "head": "<integration_branch>"
-  },
-  "design_pending": [
-    {
-      "work_unit_id": "cluster-NNN",
-      "cluster_id": "cluster-NNN",
-      "issue_number": <int>,
-      "opened_at": "<ISO8601>",
-      "last_checked": "<ISO8601>",
-      "last_comment_count": <int>,
-      "status": "awaiting_design | comments_seen | resume | rejected"
-    }
-  ],
-  "remote_ci": {
-    "pr_number": <int|null>,
-    "last_watched_sha": "<sha>",
-    "monitor_task_id": "<harness monitor id>",
-    "check_attempts": {
-      "<check_name>": {
-        "attempts": <int>,
-        "last_classification": "real|flaky|infra|preexisting|info-only",
-        "last_fix_codex_log": "<relative path>"
-      }
-    }
-  }
-}
-```
+Other named surfaces include `.refactor-loop/state/phase8-review-state.json`,
+`.refactor-loop/state/recent-pr-merges.json`, `.refactor-loop/codex-progress-state.json`,
+`.refactor-loop/comment-monitor-state.json`, and `.refactor-loop/.concurrency-monitor-state.json`.
+Each producer owns its own schema and lifecycle.
 
 <a id="batching-heuristics"></a>
 ## Batching heuristics
@@ -3320,7 +3173,7 @@ Goal: parallel safety. Two clusters can be in the same batch **only if** all fou
 
 Greedy bin-packing:
 
-1. Sort `clusters_planned` by `risk` (low first), then `leverage` (high first).
+1. Sort candidate work units by `risk` (low first), then `leverage` (high first).
 2. For each cluster, assign to first batch where it's compatible with every existing member.
 3. Each batch has at most `max_parallel_clusters`.
 
@@ -3339,7 +3192,7 @@ If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a ne
 - Read the cluster's implement summary for blocker description.
 - If blocker is "scope ambiguity" → tighten prompt, re-dispatch.
 - If blocker is "test fundamentally broken" → spawn a separate "fix the test" mini-cluster before retrying.
-- After 2 consecutive failures → move to `clusters_failed`, do NOT auto-retry; surface via PushNotification.
+- After 2 consecutive failures → post the repeated-failure reason, do NOT auto-retry; surface via PushNotification.
 
 ### Verify returned `rework`
 
@@ -3367,8 +3220,8 @@ Detection: after every merge, verify `git log --oneline -1` shows the new merge 
 
 ### Phase 5 remote-ci check stuck
 
-- Cap fix attempts per check at 2 (configurable via `state.remote_ci.check_attempts.<name>.max`).
-- After cap: mark `clusters_failed` reason `remote-ci-stuck:<check>`, push PushNotification with run url, stop the loop.
+- Cap fix attempts per check at 2.
+- After cap: post reason `remote-ci-stuck:<check>`, push PushNotification with run url, stop the loop.
 - Common stuck causes: real environmental gap (docker service missing on runner), test contract change needing human design call, flake masking a real issue. Each is a stop-and-escalate signal, not auto-retry.
 
 ### Phase 4 stacked-PR rebase storm
@@ -3407,5 +3260,5 @@ The Phase 5 Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the
 
 ### Trunk branch moved while batch was in flight
 
-- Detect via `git rev-parse HEAD` vs `state.json.trunk_head` before each merge.
+- Detect via live `git rev-parse HEAD` and merge-base checks before each merge.
 - If moved → for each `pass` cluster: rebase its branch onto new trunk HEAD inside its worktree, re-run verify, then merge.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -365,7 +366,17 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    # Refactor (iter1/issue-116):
+    #   Old pattern: `peek --help` ignored argv, loaded LoopContext, fetched
+    #   git, and ran the live status sweep, so bounded help could hang.
+    #   New principle: argparse owns the human status-lens help surface before
+    #   any repository, git, or GitHub access. `peek` remains text-only; the
+    #   machine-readable next-action surface is `wakeup-plan`.
+    parser = argparse.ArgumentParser(
+        prog="consensus-rnd-cli peek",
+        description="render the human-readable codex-refactor-loop status lens",
+    )
+    parser.parse_args(argv)
     try:
         ctx = LoopContext.load(read_only=True, allow_git_root_fallback=True, cwd=os.getcwd())
     except LoopContextError as exc:

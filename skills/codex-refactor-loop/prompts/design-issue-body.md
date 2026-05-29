@@ -48,7 +48,7 @@ ${WHY_NEEDS_DESIGN}
 - Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
 - Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
 - 加 `auto-loop-resume` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
-- 不加 `auto-loop-resume` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 标记 `clusters_failed[design-rejected:closed]`。
+- 不加 `auto-loop-resume` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 在 GitHub / run artifact 记录 `design-rejected:closed`。
 
 ---
 
