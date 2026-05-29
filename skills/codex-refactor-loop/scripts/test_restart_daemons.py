@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import signal
 import subprocess
@@ -192,6 +193,29 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(2, self.start_count("phase9_router_daemon"))
         self.assertIn("package_tree_sha256", self.fingerprint_path("phase9_router_daemon").read_text(encoding="utf-8"))
+
+    def test_restarts_when_fingerprint_valid_json_has_malformed_schema(self) -> None:
+        self.run_helper()
+        cases = (
+            ("concurrency_monitor", lambda valid: {key: value for key, value in valid.items() if key != "entrypoint_sha256"}),
+            ("comment-monitor", lambda valid: {**valid, "command": "python3 consensus-rnd-cli comment-monitor --daemon"}),
+        )
+        old_pids: dict[str, int] = {}
+        for name, malformed in cases:
+            old_pids[name] = self.read_pid(name)
+            path = self.fingerprint_path(name)
+            valid = json.loads(path.read_text(encoding="utf-8"))
+            path.write_text(json.dumps(malformed(valid), sort_keys=True) + "\n", encoding="utf-8")
+
+        self.run_helper()
+
+        for name, old_pid in old_pids.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(old_pid, self.read_pid(name))
+                self.assertEqual(2, self.start_count(name))
+                repaired = json.loads(self.fingerprint_path(name).read_text(encoding="utf-8"))
+                self.assertIsInstance(repaired["command"], list)
+                self.assertIn("entrypoint_sha256", repaired)
 
     def test_restarts_when_heartbeat_stale(self) -> None:
         self.run_helper()
