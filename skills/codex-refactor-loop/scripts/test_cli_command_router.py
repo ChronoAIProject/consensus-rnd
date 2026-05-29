@@ -40,6 +40,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "phase9-router",
                 "post-banner",
                 "release-gate",
+                "release-required-checks",
                 "merge-pr",
                 "open-pr",
                 "apply-human-label",

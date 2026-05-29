@@ -69,7 +69,7 @@ class LoopContext:
             cwd=cwd,
         )
         host_env = _load_host_env(repo)
-        merged = {**host_env, **source_env}
+        merged = {**source_env, **host_env}
         if repo_source == "host.env":
             merged["REPO_ROOT"] = str(repo)
         elif "REPO_ROOT" in host_env:

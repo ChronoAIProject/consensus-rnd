@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from ..state import read_json, write_json
+from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
 
 
 # Refactor (issue160-p3-auto-release-gate):
@@ -44,7 +45,7 @@ DAEMON_NAMES = (
     "dev_sync_daemon",
     "phase9_router_daemon",
 )
-REQUIRED_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
+REQUIRED_CHECKS = REQUIRED_RELEASE_CHECKS
 HEARTBEAT_FRESH_SECONDS = 90
 
 
@@ -250,6 +251,7 @@ class AutoReleaseGate:
 
     def required_checks_recent_green(self, since: datetime) -> dict[str, Any]:
         try:
+            repo_slug = os.environ["GH_REPO_SLUG"].strip()
             review_base = os.environ["REVIEW_BASE_BRANCH"].strip()
             integration = os.environ["INTEGRATION_BRANCH"].strip()
         except KeyError as exc:
@@ -257,54 +259,63 @@ class AutoReleaseGate:
             reason = f"missing {missing} from host.env/environment; unsafe to infer release check branch"
             print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
             return {"passed": False, "reason": reason, "source": "env"}
-        if not review_base or not integration:
-            reason = "empty REVIEW_BASE_BRANCH or INTEGRATION_BRANCH; unsafe to infer release check branch"
+        if not repo_slug or not review_base or not integration:
+            reason = "empty GH_REPO_SLUG, REVIEW_BASE_BRANCH, or INTEGRATION_BRANCH; unsafe to infer release check branch"
             print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
             return {"passed": False, "reason": reason, "source": "env"}
         branches = (review_base, integration)
         print(f"check branches: {review_base}, {integration}")
+        # Refactor (issue157 release gate):
+        #   Old pattern: gh run list matched workflow run names, so a workflow
+        #   called consensus-rnd-ci could not prove exact required check-runs.
+        #   New principle: read the shared Checks API projection by exact
+        #   check-run name for both release branches, fail-closed on drift.
+        projection = ReleaseRequiredChecksProjection(
+            runner=lambda cmd: self.runner(cmd, self.repo_root),
+            now=self.now,
+        )
         evidence: dict[str, Any] = {}
         red_checks: list[dict[str, str]] = []
+        pending_checks: list[dict[str, str]] = []
+        stale_checks: list[dict[str, str]] = []
+        api_failures: list[dict[str, str]] = []
         for branch in branches:
-            result = self.runner(
-                [
-                    "gh",
-                    "run",
-                    "list",
-                    "--branch",
-                    branch,
-                    "--json",
-                    "databaseId,createdAt,conclusion,status,name",
-                    "--limit",
-                    "50",
-                ],
-                self.repo_root,
-            )
-            if result.returncode != 0:
-                return {"passed": False, "reason": f"gh run list failed for {branch}", "source": "gh"}
-            try:
-                runs = json.loads(result.stdout)
-            except json.JSONDecodeError:
-                return {"passed": False, "reason": f"invalid gh JSON for {branch}", "source": "gh"}
-            branch_evidence: dict[str, bool] = {}
-            for check in REQUIRED_CHECKS:
-                recent_runs = [
-                    run for run in runs
-                    if run.get("name") == check
-                    and run.get("status") == "completed"
-                    and (parse_time(run.get("createdAt")) or datetime.min.replace(tzinfo=timezone.utc)) >= since
-                ]
-                for run in recent_runs:
-                    conclusion = str(run.get("conclusion") or "")
-                    if conclusion and conclusion != "success":
-                        red_checks.append({"branch": branch, "name": check, "conclusion": conclusion})
-                branch_evidence[check] = any(run.get("conclusion") == "success" for run in recent_runs)
-            evidence[branch] = branch_evidence
+            status = projection.check_ref(repo_slug, branch, since=since)
+            evidence[branch] = status.checks
+            red_checks.extend({"branch": branch, **check} for check in status.red_checks)
+            pending_checks.extend({"branch": branch, "name": check} for check in status.pending_checks)
+            stale_checks.extend({"branch": branch, "name": check} for check in status.stale_checks)
+            if status.reason in {"api_failure", "invalid_json"}:
+                api_failures.append({"branch": branch, "reason": status.reason})
+        if api_failures:
+            return {
+                "passed": False,
+                "reason": api_failures[0]["reason"],
+                "api_failures": api_failures,
+                "branches": evidence,
+                "source": "checks-api-projection",
+            }
         if red_checks:
-            return {"passed": False, "reason": "ci_red", "red_checks": red_checks, "branches": evidence, "source": "gh"}
+            return {"passed": False, "reason": "ci_red", "red_checks": red_checks, "branches": evidence, "source": "checks-api-projection"}
+        if pending_checks:
+            return {
+                "passed": False,
+                "reason": "pending_required_checks",
+                "pending_checks": pending_checks,
+                "branches": evidence,
+                "source": "checks-api-projection",
+            }
+        if stale_checks:
+            return {
+                "passed": False,
+                "reason": "stale_required_checks",
+                "stale_checks": stale_checks,
+                "branches": evidence,
+                "source": "checks-api-projection",
+            }
         passed = all(all(checks.values()) for checks in evidence.values())
         reason = None if passed else "missing_required_checks_recent_green"
-        return {"passed": passed, "reason": reason, "branches": evidence, "source": "gh"}
+        return {"passed": passed, "reason": reason, "branches": evidence, "source": "checks-api-projection"}
 
     def no_label_on_open_prs(self, label: str) -> dict[str, Any]:
         return self.no_label("pr", label)

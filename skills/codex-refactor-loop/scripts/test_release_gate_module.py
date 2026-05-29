@@ -80,13 +80,13 @@ class FakeRunner:
 
     def __call__(self, cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         self.commands.append(cmd)
-        if cmd[:3] == ["gh", "run", "list"]:
+        if cmd[:2] == ["gh", "api"]:
             created = gate.isoformat(NOW)
             runs = [
-                {"databaseId": index + 1, "createdAt": created, "conclusion": "success", "status": "completed", "name": name}
+                {"id": index + 1, "created_at": created, "started_at": created, "completed_at": created, "conclusion": "success", "status": "completed", "name": name}
                 for index, name in enumerate(gate.REQUIRED_CHECKS)
             ]
-            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(runs), stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"check_runs": runs}), stderr="")
         if len(cmd) >= 2 and cmd[0] == "gh" and cmd[2:3] == ["list"]:
             return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
         return subprocess.CompletedProcess(cmd, 99, stdout="", stderr="unexpected command")
@@ -125,8 +125,9 @@ class ReleaseGateModuleTests(unittest.TestCase):
             write_live_state(repo)
             runner = FakeRunner()
             release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
-            old_env = {key: gate.os.environ.get(key) for key in ("REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH")}
+            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH")}
             try:
+                gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
                 gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
                 gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
                 stability = release_gate.compute_stability(min_recent_merges=1)
@@ -138,10 +139,13 @@ class ReleaseGateModuleTests(unittest.TestCase):
                         gate.os.environ[key] = value
 
             self.assertTrue(stability.ready)
-            required_runs = [cmd for cmd in runner.commands if cmd[:3] == ["gh", "run", "list"]]
-            self.assertEqual([cmd[4] for cmd in required_runs], ["review-base", "integration-branch"])
+            required_runs = [cmd for cmd in runner.commands if cmd[:2] == ["gh", "api"]]
+            self.assertEqual([cmd[2] for cmd in required_runs], [
+                "repos/owner/repo/commits/review-base/check-runs",
+                "repos/owner/repo/commits/integration-branch/check-runs",
+            ])
             for cmd in required_runs:
-                self.assertIn("databaseId,createdAt,conclusion,status,name", cmd)
+                self.assertIn("--paginate", cmd)
             label_commands = [cmd for cmd in runner.commands if cmd[:2] in (["gh", "issue"], ["gh", "pr"]) and cmd[2:3] == ["list"]]
             labels = [cmd[cmd.index("--label") + 1] for cmd in label_commands]
             self.assertIn("⏸️ phase:blocked", labels)
@@ -168,7 +172,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
             self.assertEqual(loaded["RELEASE_AUTO_ENABLE"], "true")
             self.assertEqual(loaded["REVIEW_BASE_BRANCH"], "root-review")
-            self.assertEqual(loaded["INTEGRATION_BRANCH"], "integration")
+        self.assertEqual(loaded["INTEGRATION_BRANCH"], "integration")
 
     def test_fresh_heartbeats_reads_ts_files_and_rejects_legacy_state_only(self) -> None:
         with copy_repo_fixture() as tmp:

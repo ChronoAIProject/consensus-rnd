@@ -46,7 +46,7 @@ class CommentMonitor:
         self.repo = ctx.gh_repo_slug
         if not self.repo:
             raise RuntimeError("FATAL: GH_REPO_SLUG is unset and gh repo view failed")
-        whitelist = os.environ.get("MAINTAINER_WHITELIST") or ctx.host_env.get("MAINTAINER_WHITELIST")
+        whitelist = ctx.host_env.get("MAINTAINER_WHITELIST")
         if not whitelist:
             raise RuntimeError("FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed")
         self.maintainers = {item for item in whitelist.replace(",", " ").split() if item}

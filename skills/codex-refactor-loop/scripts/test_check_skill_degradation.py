@@ -31,6 +31,7 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/host.env.example",
         "skills/codex-refactor-loop/scripts/consensus-rnd-cli",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
@@ -86,15 +87,15 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
 
         self.assertTrue(any(f.check == "forbidden-runtime-file" and "degradation_watchdog.py" in f.path for f in findings))
 
-    def test_checker_detects_release_gate_missing_skill_degradation(self) -> None:
+    def test_checker_detects_release_projection_missing_skill_degradation(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
-            gate = repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py"
-            gate.write_text(gate.read_text(encoding="utf-8").replace(', "skill-degradation"', ""), encoding="utf-8")
+            projection = repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
+            projection.write_text(projection.read_text(encoding="utf-8").replace(', "skill-degradation"', ""), encoding="utf-8")
 
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 
-        self.assertTrue(any(f.check == "release-gate" for f in findings))
+        self.assertTrue(any(f.check in {"release-gate", "release-workflow"} for f in findings))
 
     def test_checker_allows_forbidden_terms_only_in_denial_context(self) -> None:
         with copy_minimal_repo() as tmp:

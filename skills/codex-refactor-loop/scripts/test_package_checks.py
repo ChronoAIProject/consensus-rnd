@@ -114,6 +114,7 @@ class PackageChecksTests(unittest.TestCase):
                 *degradation.REQUIRED_MONITOR_MARKERS,
                 *degradation.REQUIRED_CI_MARKERS,
                 *degradation.REQUIRED_RELEASE_MARKERS,
+                *degradation.REQUIRED_RELEASE_PROJECTION_MARKERS,
                 *degradation.REQUIRED_RELEASE_GATE_MARKERS,
             ]
         )

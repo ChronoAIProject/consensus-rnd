@@ -71,11 +71,13 @@ def write_opt_in(
     enabled: bool = True,
     review_base: str = "review-base",
     integration: str = "integration-branch",
+    repo_slug: str = "owner/repo",
 ) -> None:
     (repo / "host.env").write_text(
         "\n".join(
             [
                 f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
+                f"export GH_REPO_SLUG={repo_slug}",
                 f"export REVIEW_BASE_BRANCH={review_base}",
                 f"export INTEGRATION_BRANCH={integration}",
                 "",
@@ -88,15 +90,17 @@ def write_opt_in(
 def write_gh_stub(
     bin_dir: Path,
     *,
-    run_conclusions: dict[str, str] | None = None,
-    run_names: list[str] | None = None,
-    run_exit_code: int = 0,
-    run_stdout: str | None = None,
+    check_conclusions: dict[str, str] | None = None,
+    check_names: list[str] | None = None,
+    check_statuses: dict[str, str] | None = None,
+    api_exit_code: int = 0,
+    api_stdout: str | None = None,
     labeled_items: dict[str, list[dict[str, int]]] | None = None,
     list_failures: dict[str, str] | None = None,
 ) -> None:
-    run_conclusions = run_conclusions or {}
-    run_names = run_names or ["contract-tests", "manifest-version-sync", "skill-degradation"]
+    check_conclusions = check_conclusions or {}
+    check_names = check_names or ["contract-tests", "manifest-version-sync", "skill-degradation"]
+    check_statuses = check_statuses or {}
     labeled_items = labeled_items or {}
     list_failures = list_failures or {}
     gh = bin_dir / "gh"
@@ -108,23 +112,24 @@ from datetime import datetime, timezone
 
 now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 args = sys.argv[1:]
-run_conclusions = {json.dumps(run_conclusions, ensure_ascii=False)}
-run_names = {json.dumps(run_names, ensure_ascii=False)}
-run_exit_code = {run_exit_code}
-run_stdout = {run_stdout!r}
+check_conclusions = {json.dumps(check_conclusions, ensure_ascii=False)}
+check_names = {json.dumps(check_names, ensure_ascii=False)}
+check_statuses = {json.dumps(check_statuses, ensure_ascii=False)}
+api_exit_code = {api_exit_code}
+api_stdout = {api_stdout!r}
 labeled_items = {json.dumps(labeled_items, ensure_ascii=False)}
 list_failures = {json.dumps(list_failures, ensure_ascii=False)}
-if args[:3] == ["run", "list", "--branch"]:
-    if run_exit_code:
-        print("simulated gh run list failure", file=sys.stderr)
-        raise SystemExit(run_exit_code)
-    if run_stdout is not None:
-        print(run_stdout)
+if args[:2] == ["api", "repos/owner/repo/commits/trunk-review/check-runs"] or args[:2] == ["api", "repos/owner/repo/commits/release-integration/check-runs"] or (len(args) >= 2 and args[0] == "api" and args[1].endswith("/check-runs")):
+    if api_exit_code:
+        print("simulated gh api failure", file=sys.stderr)
+        raise SystemExit(api_exit_code)
+    if api_stdout is not None:
+        print(api_stdout)
         raise SystemExit(0)
-    print(json.dumps([
-        {{"databaseId": index + 1, "createdAt": now, "conclusion": run_conclusions.get(name, "success"), "status": "completed", "name": name}}
-        for index, name in enumerate(run_names)
-    ]))
+    print(json.dumps({{"check_runs": [
+        {{"id": index + 1, "created_at": now, "started_at": now, "completed_at": now, "conclusion": check_conclusions.get(name, "success"), "status": check_statuses.get(name, "completed"), "name": name}}
+        for index, name in enumerate(check_names)
+    ]}}))
     raise SystemExit(0)
 if len(args) >= 2 and args[1] == "list":
     kind = args[0]
@@ -327,7 +332,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             write_live_state(repo)
             bin_dir = repo / "bin"
             bin_dir.mkdir()
-            write_gh_stub(bin_dir, run_conclusions={"contract-tests": "failure"})
+            write_gh_stub(bin_dir, check_conclusions={"contract-tests": "failure"})
             env = {
                 **os.environ,
                 "REPO_ROOT": str(repo),
@@ -360,16 +365,17 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
     def test_fail_closed_when_branch_env_unset(self) -> None:
         cases = (
-            ("unset", "export RELEASE_AUTO_ENABLE=true\n", "REVIEW_BASE_BRANCH"),
+            ("unset", "export RELEASE_AUTO_ENABLE=true\nexport GH_REPO_SLUG=owner/repo\n", "REVIEW_BASE_BRANCH"),
             (
                 "empty",
                 "\n".join([
                     "export RELEASE_AUTO_ENABLE=true",
+                    "export GH_REPO_SLUG=",
                     "export REVIEW_BASE_BRANCH=",
                     "export INTEGRATION_BRANCH=",
                     "",
                 ]),
-                "empty REVIEW_BASE_BRANCH or INTEGRATION_BRANCH",
+                "empty GH_REPO_SLUG, REVIEW_BASE_BRANCH, or INTEGRATION_BRANCH",
             ),
         )
         for name, host_env, expected_reason in cases:
@@ -389,37 +395,37 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                     assert_no_release_artifacts(self, repo)
                     assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", expected_reason)
 
-    def test_fail_closed_when_gh_run_list_nonzero(self) -> None:
+    def test_fail_closed_when_check_runs_api_nonzero(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_opt_in(repo, review_base="trunk-review", integration="release-integration")
             write_live_state(repo)
             bin_dir = repo / "bin"
             bin_dir.mkdir()
-            write_gh_stub(bin_dir, run_exit_code=2)
+            write_gh_stub(bin_dir, api_exit_code=2)
 
             result = run_gate_cli(repo, bin_dir)
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("required_checks_recent_green", result.stdout)
             assert_no_release_artifacts(self, repo)
-            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "gh run list failed")
+            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "api_failure")
 
-    def test_fail_closed_when_invalid_run_json(self) -> None:
+    def test_fail_closed_when_invalid_check_runs_json(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_opt_in(repo, review_base="trunk-review", integration="release-integration")
             write_live_state(repo)
             bin_dir = repo / "bin"
             bin_dir.mkdir()
-            write_gh_stub(bin_dir, run_stdout="{not-json")
+            write_gh_stub(bin_dir, api_stdout="{not-json")
 
             result = run_gate_cli(repo, bin_dir)
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("required_checks_recent_green", result.stdout)
             assert_no_release_artifacts(self, repo)
-            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "invalid gh JSON")
+            assert_signal_blocked(self, repo, bin_dir, "required_checks_recent_green", "invalid_json")
 
     def test_fail_closed_when_required_check_runs_missing(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -428,7 +434,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             write_live_state(repo)
             bin_dir = repo / "bin"
             bin_dir.mkdir()
-            write_gh_stub(bin_dir, run_names=["unrelated-check"])
+            write_gh_stub(bin_dir, check_names=["consensus-rnd-ci"])
 
             result = run_gate_cli(repo, bin_dir)
 

@@ -62,6 +62,7 @@ CHECKED_SURFACE_FILES = (
     SKILL_RELATIVE / "SKILL.md",
     SKILL_RELATIVE / "host.env.example",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py",
     CI_WORKFLOW,
@@ -141,15 +142,22 @@ REQUIRED_CI_MARKERS = (
 )
 
 REQUIRED_RELEASE_MARKERS = (
+    "release-required-checks",
+    "workflow_run:",
+    "github.event.workflow_run.head_branch == 'dev'",
+    "github.event.workflow_run.head_sha",
+)
+
+REQUIRED_RELEASE_PROJECTION_MARKERS = (
     '"skill-degradation"',
     '"contract-tests"',
     '"manifest-version-sync"',
+    "REQUIRED_RELEASE_CHECKS",
 )
 
 REQUIRED_RELEASE_GATE_MARKERS = (
-    '"skill-degradation"',
-    '"contract-tests"',
-    '"manifest-version-sync"',
+    "ReleaseRequiredChecksProjection",
+    "checks-api-projection",
 )
 
 
@@ -258,12 +266,38 @@ class SkillDriftChecker:
     def release_workflow_required_check_present(self) -> list[Finding]:
         findings = self.require_markers(RELEASE_WORKFLOW, REQUIRED_RELEASE_MARKERS, "release-workflow")
         text = self.read(RELEASE_WORKFLOW)
-        if text and not self.required_array_contains(text, CHECK_NAME):
+        if "push:" in text:
             findings.append(
                 Finding(
                     "release-workflow",
                     str(RELEASE_WORKFLOW),
-                    "release required checks must include skill-degradation",
+                    "release workflow must not trigger directly on push@dev",
+                )
+            )
+        if "checks.listForRef" in text or "const required" in text:
+            findings.append(
+                Finding(
+                    "release-workflow",
+                    str(RELEASE_WORKFLOW),
+                    "release workflow must use the shared required-check projection",
+                )
+            )
+        projection_text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py")
+        for marker in REQUIRED_RELEASE_PROJECTION_MARKERS:
+            if projection_text and marker not in projection_text:
+                findings.append(
+                    Finding(
+                        "release-workflow",
+                        str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py"),
+                        f"shared release required-check projection missing {marker}",
+                    )
+                )
+        if projection_text and '"skill-degradation"' not in projection_text:
+            findings.append(
+                Finding(
+                    "release-workflow",
+                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py"),
+                    "shared release required checks must include skill-degradation",
                 )
             )
         return findings
@@ -275,12 +309,21 @@ class SkillDriftChecker:
             "release-gate",
         )
         text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py")
-        if text and '"skill-degradation"' not in text:
+        projection_text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py")
+        if projection_text and '"skill-degradation"' not in projection_text:
+            findings.append(
+                Finding(
+                    "release-gate",
+                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py"),
+                    "required_checks_recent_green must require skill-degradation",
+                )
+            )
+        if text and "gh\", \"run\", \"list" in text:
             findings.append(
                 Finding(
                     "release-gate",
                     str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py"),
-                    "required_checks_recent_green must require skill-degradation",
+                    "release gate must not read workflow-run names for required checks",
                 )
             )
         return findings

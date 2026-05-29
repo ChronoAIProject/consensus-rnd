@@ -17,6 +17,7 @@ from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
 from .release.gate import main as release_gate_main
+from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
 from .retention import main as retention_main
 from .sync.apply import main as sync_apply_main
@@ -49,6 +50,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "dev-sync": CommandSpec(dev_sync_main, "run the Python integration sync daemon"),
     "phase9-router": CommandSpec(phase9_router_main, "run the Python Phase 9 router"),
     "release-gate": CommandSpec(release_gate_main, "run the Python auto release gate"),
+    "release-required-checks": CommandSpec(release_required_checks_main, "check exact release required check-runs", read_only=True),
     "merge-pr": CommandSpec(controller_actions_main, "invoke Python controller action merge_pr"),
     "open-pr": CommandSpec(controller_actions_main, "invoke Python controller action open_pr_with_label"),
     "apply-human-label": CommandSpec(controller_actions_main, "apply maintainer-decision label after guard checks"),
