@@ -36,7 +36,7 @@ class LabelContractSourceTests(unittest.TestCase):
         active_contracts = {
             "entry mode": self._section(text, "## Two entry modes", "## Host 配置"),
             "bootstrap": self._section(text, "## Label bootstrap loops", "## Codex invocation details"),
-            "pr open": self._section(text, "### Phase 4b", "9b. Goto Phase 5"),
+            "pr open": self._section(text, "### Consensus-rnd Phase publish stacked", "### Consensus-rnd Phase publish stack-depth cap"),
             "existing priority": self._section(text, "### Existing-issue priority route table", "### Stale-issue revival"),
             "stale revival": self._section(text, "### Stale-issue revival", "### Concurrency floor ="),
             "milestone": self._section(text, "## Milestone priority", "## Named runtime exception"),

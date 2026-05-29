@@ -37,8 +37,8 @@ class LabelRuntimeCallerTests(unittest.TestCase):
         )
 
     def test_wakeup_phase_and_actor_dual_read(self) -> None:
-        self.assertEqual(wakeup_plan.phase_from_labels(("🔍 phase:design-solving",)), "phase-9-design-solving")
-        self.assertEqual(wakeup_plan.phase_from_labels((labels.PHASE_CONSENSUS_REACHED,)), "phase-2-implementing")
+        self.assertEqual(wakeup_plan.phase_from_labels(("🔍 phase:design-solving",)), "design-consensus")
+        self.assertEqual(wakeup_plan.phase_from_labels((labels.PHASE_CONSENSUS_REACHED,)), "implementation")
         self.assertEqual(wakeup_plan.actor_from_labels(("👤 human:需-maintainer-决策",), "issue"), "controller")
         self.assertEqual(wakeup_plan.actor_from_labels((labels.PHASE_FIXING, labels.HUMAN_AUTO), "PR"), "fix-codex")
 
