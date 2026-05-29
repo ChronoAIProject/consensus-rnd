@@ -265,8 +265,10 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(f"(#{anchor})", self.skill)
                 self.assertIn(anchor, self.skill)
-        self.assertNotIn('"schema_version": 1', self.skill)
-        self.assertNotIn('"work_unit_schema_version": 1', self.skill)
+        schema_field = "schema" + "_version"
+        work_unit_schema_field = "work_unit_" + schema_field
+        self.assertNotIn(f'"{schema_field}": 1', self.skill)
+        self.assertNotIn(f'"{work_unit_schema_field}": 1', self.skill)
         for emoji_heading in ("📊", "🆘"):
             with self.subTest(emoji_heading=emoji_heading):
                 self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
@@ -278,12 +280,14 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "prompts/verify.md": read(SKILL_ROOT / "prompts" / "verify.md"),
             "prompts/meta-judge.md": read(SKILL_ROOT / "prompts" / "meta-judge.md"),
         }
+        schema_field = "schema" + "_version"
+        work_unit_schema_field = "work_unit_" + schema_field
         forbidden_fragments = (
             "state-v2",
             "v1 audit-backed work unit",
             "v1 audit cluster alias",
-            '"schema_version": 1',
-            '"work_unit_schema_version": 1',
+            f'"{schema_field}": 1',
+            f'"{work_unit_schema_field}": 1',
         )
         for path, text in docs.items():
             with self.subTest(path=path):

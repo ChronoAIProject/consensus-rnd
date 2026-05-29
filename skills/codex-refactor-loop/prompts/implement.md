@@ -57,7 +57,7 @@ ${SCOPE_PATHS}
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `SCOPE_EXTEND:<file>:<reason>`

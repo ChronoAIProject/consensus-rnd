@@ -368,7 +368,7 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
                 self.assertIn(required, combined)
 
         for forbidden in (
-            "ControllerLifecycleIntentV1",
+            "ControllerLifecycleIntent",
             "ControllerCommand",
             "ControllerOrchestrator",
             "generic event bus",

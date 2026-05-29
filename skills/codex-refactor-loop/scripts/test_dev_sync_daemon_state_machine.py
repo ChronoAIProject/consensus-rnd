@@ -249,7 +249,7 @@ class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
                 SYNC_APPLY,
             )
         )
-        for forbidden in ("ControllerLifecycleIntentV1", "ControllerCommand", "ControllerOrchestrator", "generic event bus"):
+        for forbidden in ("ControllerLifecycleIntent", "ControllerCommand", "ControllerOrchestrator", "generic event bus"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)
 

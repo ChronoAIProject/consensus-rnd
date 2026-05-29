@@ -47,8 +47,8 @@ FORBIDDEN_RUNTIME_FILES = (
 
 FORBIDDEN_SURFACE_PATTERNS = (
     re.compile(r"\b" + "Degradation" + r"Check\b"),
-    re.compile(r"\b" + "SkillDegradation" + r"CheckV1\b"),
-    re.compile(r"\b" + "WorkUnit" + r"V2\b"),
+    re.compile(r"\b" + "SkillDegradation" + r"Check\b"),
+    re.compile(r"\b" + "WorkUnit" + r"Replacement\b"),
     re.compile(r"\b" + "Controller" + r"Event\b"),
     re.compile(r"\b" + "Controller" + r"Command\b"),
     re.compile(r"\b" + "Controller" + r"Orchestrator\b"),

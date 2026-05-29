@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
 
-CONTRACT_MARKER = "MarkerEmissionContractV1: single-valid-invalid-role-marker-source"
+CONTRACT_MARKER = "MarkerEmissionContract: single-valid-invalid-role-marker-source"
 SECTION_HEADING = "## Marker emission allowlist(强制)"
 REQUIRED_PROHIBITION = (
     "Only the markers listed above are valid role-routing markers for this prompt. "

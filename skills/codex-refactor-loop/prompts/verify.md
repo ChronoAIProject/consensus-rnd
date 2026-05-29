@@ -98,7 +98,7 @@ verified_at: <ISO8601>
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `VERIFY_DONE:${CLUSTER_ID}:<verdict>`
