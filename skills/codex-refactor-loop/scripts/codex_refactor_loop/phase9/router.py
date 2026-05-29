@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-# Refactor (iter3/skill-daemon-first-refactor): Old pattern: all Phase 9 routes
+# Refactor (iter3/skill-daemon-first-refactor): Old pattern: all numeric design-consensus routes
 # were manually dispatched by the LLM controller, which easily missed markers.
 # New principle: narrow allowlist daemon directly dispatches SOLVER_DONE
 # triplet/converge/stalled routes; all other markers append fallback events
 # (#37 structural B consensus).
-"""Narrow Phase 9 deterministic router daemon.
+"""Narrow design-consensus deterministic router daemon.
 
-This daemon owns only three Phase 9 direct-dispatch routes:
+This daemon owns only three design-consensus direct-dispatch routes:
 solver triplet -> meta-judge, converge -> next solver triplet, and valid
 stalled -> reflector. Every other marker is forwarded to the existing
 controller pending-event file without spawning.
@@ -30,6 +30,7 @@ from typing import Callable, Iterable, Literal, cast
 
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
+from ..workflow_stages import format_stage
 
 
 ROLES = ("minimal", "structural", "delete")
@@ -57,7 +58,7 @@ class Phase9MarkerGrammar:
     #   with non-ASCII convergence bodies or route suffixes, so triplet judge
     #   and converge dispatches fell back to the controller.
     #   New principle: route-specific marker grammar keeps non-ASCII bodies
-    #   valid for route markers without adding a Phase9RoundProjection layer.
+    #   valid for route markers without adding a design-consensus round projection layer.
     ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     VERDICT_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     CONVERGE_RE = re.compile(r"^META_JUDGE_DONE:converge:round-(\d+)(?::.*)?$")
@@ -341,7 +342,7 @@ class Phase9Router:
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
         # Refactor (issue-100/router-filename-identity): Old pattern: one loose regex
-        # accepted non-owned Phase 9-ish names. New principle: router-private filename
+        # accepted non-owned design-consensus-ish names. New principle: router-private filename
         # identity allowlist accepts only phase9-issue, solver-issue, and meta-judge-issue
         # dialects; public markers remain role-local.
         return parse_phase9_log_identity(path.name)
@@ -628,14 +629,14 @@ class Phase9Router:
         marker_lines = "\n".join(f"- {m.role}: {m.log_path}" for m in sorted(markers, key=lambda m: m.role or ""))
         evidence_line = f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, 'judge')}"
         return (
-            f"# Phase 9 meta-judge\n\nIssue: #{issue}\nRound: {round_no}\n\n"
+            f"# {format_stage('design-consensus')} meta-judge\n\nIssue: #{issue}\nRound: {round_no}\n\n"
             f"Read the three completed solver logs and emit META_JUDGE_DONE.\n\n{marker_lines}\n\n"
             f"{evidence_line}\n"
         )
 
     def _solver_prompt(self, issue: str, round_no: int, role: str, marker: str) -> str:
         return (
-            f"# Phase 9 {role} solver\n\n"
+            f"# {format_stage('design-consensus')} {role} solver\n\n"
             f"{self._solver_work_unit_header(issue, round_no, role)}\n\n"
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
         )
@@ -674,7 +675,7 @@ class Phase9Router:
         template = self._stalled_reflector_template()
         evidence_lines = "\n".join(self._stalled_evidence_lines(marker.issue, marker.round))
         return (
-            f"# Phase 9 stalled reflector\n\nIssue: #{marker.issue}\nRound: {marker.round}\n"
+            f"# {format_stage('design-consensus')} stalled reflector\n\nIssue: #{marker.issue}\nRound: {marker.round}\n"
             f"Stalled marker: {marker.marker}\n\n"
             f"## Solver log evidence\n\n{evidence_lines}\n\n"
             f"## Stalled reflector template\n\n{template}\n"
@@ -789,7 +790,9 @@ class Phase9Router:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Narrow Phase 9 router daemon")
+    parser = argparse.ArgumentParser(
+        description="phase9-router compatibility alias for the design-consensus router daemon"
+    )
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--daemon", action="store_true", help="run persistently")
     mode.add_argument("--once", action="store_true", help="run one scan and exit")

@@ -233,7 +233,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         result = self.run_peek()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Phase 9 router / pending events", result.stdout)
+        self.assertIn("Consensus-rnd Phase design-consensus router / pending events", result.stdout)
         self.assertIn('"key":"k1"', result.stdout)
         self.assertIn("phase9-router-fallback unknown marker fact", result.stdout)
         self.assertNotIn("推荐下一步", result.stdout)

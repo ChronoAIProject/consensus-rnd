@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Behavior tests for the closed workflow stage registry."""
+
+from __future__ import annotations
+
+import re
+import sys
+import unittest
+from pathlib import Path
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from codex_refactor_loop.workflow_stages import (  # noqa: E402
+    WORKFLOW_STAGES,
+    assert_stage_slug,
+    format_stage,
+    stage_by_slug,
+)
+from codex_refactor_loop.wakeup_plan import phase_from_labels, phase_from_marker  # noqa: E402
+
+
+EXPECTED_SLUGS = (
+    "bootstrap",
+    "work-intake",
+    "implementation",
+    "verification",
+    "publish",
+    "ci-watch",
+    "integration-sync",
+    "design-intake",
+    "review-gate",
+    "design-consensus",
+)
+
+
+class WorkflowStageRegistryTests(unittest.TestCase):
+    def test_stage_slugs_are_closed_unique_non_numeric(self) -> None:
+        slugs = tuple(stage.slug for stage in WORKFLOW_STAGES)
+
+        self.assertEqual(slugs, EXPECTED_SLUGS)
+        self.assertEqual(len(slugs), len(set(slugs)))
+        for stage in WORKFLOW_STAGES:
+            with self.subTest(slug=stage.slug):
+                self.assertRegex(stage.slug, r"^[a-z]+(?:-[a-z]+)*$")
+                self.assertNotRegex(stage.slug, r"\d")
+                self.assertEqual(format_stage(stage), f"Consensus-rnd Phase {stage.slug}")
+                self.assertEqual(format_stage(stage.slug), f"Consensus-rnd Phase {stage.slug}")
+                self.assertEqual(stage_by_slug(stage.slug), stage)
+
+    def test_stage_by_slug_fails_closed(self) -> None:
+        numeric_display = "Phase " + "9"
+        for bad_slug in ("", numeric_display, "design", "stage-9", "issue-182"):
+            with self.subTest(bad_slug=bad_slug):
+                with self.assertRaises(ValueError):
+                    stage_by_slug(bad_slug)
+                with self.assertRaises(ValueError):
+                    assert_stage_slug(bad_slug)
+
+    def test_legacy_numbers_are_private_migration_metadata(self) -> None:
+        legacy_numbers = [stage.legacy_number for stage in WORKFLOW_STAGES]
+
+        self.assertEqual(sorted(legacy_numbers), list(range(10)))
+        for stage in WORKFLOW_STAGES:
+            with self.subTest(slug=stage.slug):
+                self.assertNotRegex(format_stage(stage), re.compile(r"\bPhase\s+[0-9]\b"))
+                self.assertNotIn(str(stage.legacy_number), format_stage(stage))
+
+    def test_label_and_wakeup_mappings_use_registered_stage_slugs(self) -> None:
+        mapped = (
+            phase_from_marker("AUDIT_DONE:ok"),
+            phase_from_marker("IMPLEMENT_DONE:ok"),
+            phase_from_marker("VERIFY_DONE:ok"),
+            phase_from_marker("REVIEW_DONE:12:architect:approve"),
+            phase_from_marker("FIX_DONE:12:round-1"),
+            phase_from_marker("TEST_ADD_DONE:12:ok"),
+            phase_from_marker("SOLVER_DONE:minimal:propose"),
+            phase_from_marker("META_JUDGE_DONE:consensus:framing"),
+            phase_from_labels(("🔍 phase:design-solving",)),
+            phase_from_labels(("🛠️ phase:implementing",)),
+            phase_from_labels(("🔧 phase:fixing",)),
+            phase_from_labels(("👀 phase:reviewing",)),
+            phase_from_labels(("🚀 phase:pr-open",)),
+            phase_from_labels(("✅ phase:consensus-reached",)),
+        )
+        for slug in mapped:
+            if slug == "publish-or-review-gate":
+                for part in ("publish", "review-gate"):
+                    assert_stage_slug(part)
+                continue
+            with self.subTest(slug=slug):
+                assert_stage_slug(slug)
+
+
+if __name__ == "__main__":
+    unittest.main()

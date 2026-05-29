@@ -1,4 +1,4 @@
-# Role: Meta-judge — Phase 9 consensus arbiter
+# Role: Meta-judge — Consensus-rnd Phase design-consensus consensus arbiter
 
 Artifact profile: phase9-meta-judge
 
@@ -120,7 +120,7 @@ decision: consensus | converge | escalate
 
 End with EXACTLY ONE marker:
 - `META_JUDGE_DONE:consensus:<framing>:<summary>` — controller auto-dispatches implement
-- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Phase 9 with convergence question
+- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question
 - `META_JUDGE_DONE:escalate:stalled:<short>` — controller adds `auto-loop-stuck` label + PushNotification
 
 ## Marker emission allowlist(强制)

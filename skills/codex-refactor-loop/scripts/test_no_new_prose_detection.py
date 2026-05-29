@@ -15,7 +15,7 @@ BASE_REF = "origin/auto-refact-dev"
 # Refactor (iter326/issue-106):
 #   Old pattern: source-regression tests literally matched Chinese/English prose, so switching languages broke them wholesale
 #   New principle: no detection-invariant schema suffix; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
-#   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
+#   explicit anchors, source-regression guard against future localized prose detectors (Consensus-rnd Phase design-consensus r1 consensus:structural)
 FORBIDDEN_NEW_TEST_TOKENS = (
     "事实源唯一",
     "GitHub 是系统状态唯一显示面",

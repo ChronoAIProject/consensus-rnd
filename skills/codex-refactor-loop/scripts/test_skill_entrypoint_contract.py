@@ -58,8 +58,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for pattern in (
             r"^## Controller Contract Index$",
             r"^## Host .+$",
-            r"^## Phase Index$",
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Workflow Stage Index$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Loop control$",
             r"^## Label .+$",
             r"^## Hard rules .+$",
@@ -74,8 +74,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "⟦AI:AUTO-LOOP⟧",
             "#status-and-escalation-templates",
             "Controller = pure orchestration",
-            "#phase-0-details",
-            "Phase 0",
+            "#bootstrap-details",
+            "Consensus-rnd Phase bootstrap",
             "phase routing",
             "3/3",
             "CODEX_FLOOR",
@@ -107,7 +107,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -161,7 +161,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         self.assertTrue(skeleton)
         self.assertIn("consensus-rnd-cli wakeup-plan", skeleton)
@@ -191,7 +191,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         checklist = section_between(
             self.skill,
@@ -258,7 +258,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -325,7 +325,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
         self.assertIn("consensus-rnd-cli phase9-router", self.skill)
-        self.assertIn("narrow Phase 9 allowlist", self.skill)
+        self.assertIn("narrow Consensus-rnd Phase design-consensus allowlist", self.skill)
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)

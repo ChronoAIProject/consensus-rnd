@@ -3,7 +3,7 @@
 Artifact profile: marker-only-work-unit
 
 你是 triage codex,任务:把 maintainer 加了 `auto-loop-triage` label 的**外部 issue** 评估为:
-- **accept** — 是 concrete repository work unit suitable for consensus;reshape body 为 `manual-issue` WorkUnit-backed design issue + 切换 label 进入 Phase 9 三 solver 流程
+- **accept** — 是 concrete repository work unit suitable for consensus;reshape body 为 `manual-issue` WorkUnit-backed design issue + 切换 label 进入 Consensus-rnd Phase design-consensus 三 solver 流程
 - **reject** — 不适合作为 consensus work unit(产品需求 / runtime bug report / 外部依赖 / duplicate / unclear / scope 过大),评论解释 + 移除 triage label
 
 ## Context
@@ -48,7 +48,7 @@ Artifact profile: marker-only-work-unit
    - `verification_hints`
    - 不写 `cluster_id` 或 `legacy_cluster_id`
 5. 写 proposed issue body 到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-body.md`,末尾独立一行 sentinel。
-6. 写 GitHub comment 正文到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md`,解释:"Triage 接受:identified as manual-issue work unit issue-${ISSUE_NUMBER};已写 durable decision artifact,等待 controller/helper reshape body + 切 label 进入 Phase 9 三 solver 流程",末尾独立一行 sentinel。
+6. 写 GitHub comment 正文到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md`,解释:"Triage 接受:identified as manual-issue work unit issue-${ISSUE_NUMBER};已写 durable decision artifact,等待 controller/helper reshape body + 切 label 进入 Consensus-rnd Phase design-consensus 三 solver 流程",末尾独立一行 sentinel。
 7. 写 `ManualIssueTriageDecision` JSON artifact 到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json`,字段固定:
    - `schema: "ManualIssueTriageDecision"`
    - `issue_number: ${ISSUE_NUMBER}`

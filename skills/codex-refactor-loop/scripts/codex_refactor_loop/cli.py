@@ -76,7 +76,7 @@ COMMANDS: dict[str, CommandSpec] = {
     ),
     "phase9-router": CommandSpec(
         phase9_router_main,
-        "run the Python Phase 9 router",
+        "compatibility alias for the Python design-consensus router",
         ("read-log", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(

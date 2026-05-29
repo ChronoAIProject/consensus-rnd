@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Behavior tests for the narrow Phase 9 router daemon."""
+"""Behavior tests for the narrow Consensus-rnd Phase design-consensus router daemon."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -289,6 +290,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
+        self.assertIn("Consensus-rnd Phase design-consensus meta-judge", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
         self.assertNotIn("phase9-evidence", prompt)
         self.assertNotIn("Dispatch ledger:", prompt)
 
@@ -727,11 +730,13 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotEqual(
             prompt.strip(),
             (
-                "# Phase 9 stalled reflector\n\nIssue: #85\nRound: 3\n"
+                "# Consensus-rnd Phase design-consensus stalled reflector\n\nIssue: #85\nRound: 3\n"
                 f"Stalled marker: {stalled_marker}\n\n"
                 "Reflect on the convergence failure and emit META_RESOLVED."
             ),
         )
+        self.assertIn("Consensus-rnd Phase design-consensus stalled reflector", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
 
     def test_stalled_reflector_prompt_fails_closed_on_template_oserror(self) -> None:
         for round_no in (1, 2, 3):
