@@ -14,7 +14,12 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 MAP_PATH = ROOT / ".version-bump.json"
-SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+SEMVER_RE = re.compile(
+    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+    r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
+    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?"
+    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
+)
 
 
 @dataclass(frozen=True)
@@ -29,10 +34,11 @@ def parse_version(version: str) -> tuple[int, int, int]:
     match = SEMVER_RE.match(version)
     if not match:
         raise ValueError(f"invalid semver: {version}")
-    return tuple(int(part) for part in match.groups())
+    return tuple(int(part) for part in match.group(1, 2, 3))
 
 
 def bump_semver(version: str, level: str) -> str:
+    # Bumps apply to the core version and intentionally drop pre-release/build metadata.
     major, minor, patch = parse_version(version)
     if level == "major":
         return f"{major + 1}.0.0"

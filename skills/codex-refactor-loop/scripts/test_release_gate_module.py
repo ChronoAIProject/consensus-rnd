@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -93,6 +94,21 @@ class FakeRunner:
 
 
 class ReleaseGateModuleTests(unittest.TestCase):
+    def test_semver_parser_accepts_prerelease_and_build_metadata(self) -> None:
+        for version in ("1.0.0", "1.0.0-beta.1", "1.0.0-rc.1+build.5"):
+            with self.subTest(version=version):
+                self.assertEqual(gate.parse_semver(version), (1, 0, 0))
+
+    def test_semver_parser_rejects_invalid_versions(self) -> None:
+        for version in ("1.0", "1.0.0.0", "1.0.0-", "v1.0.0", ""):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(ValueError, f"invalid semver: {re.escape(version)}"):
+                    gate.parse_semver(version)
+
+    def test_semver_bump_drops_prerelease_and_build_metadata(self) -> None:
+        self.assertEqual(gate.bump_semver("1.0.0-beta.1", "patch"), "1.0.1")
+        self.assertEqual(gate.bump_semver("1.0.0-rc.1+build.5", "minor"), "1.1.0")
+
     def test_green_fixture_decision_and_dispatch_artifacts_keep_schema(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -104,8 +120,8 @@ class ReleaseGateModuleTests(unittest.TestCase):
             release_gate.dispatch_release(decision)
 
             self.assertTrue(decision["ready"])
-            self.assertEqual(decision["from_version"], "0.1.0")
-            self.assertEqual(decision["to_version"], "0.1.1")
+            self.assertEqual(decision["from_version"], "1.0.0-beta.1")
+            self.assertEqual(decision["to_version"], "1.0.1")
             self.assertEqual(decision["bump_type"], "patch")
             self.assertEqual(list(decision["signals"].keys()), list(gate.SIGNAL_NAMES))
             candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
