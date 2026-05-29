@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import banners, project_rules, spawn, statusline
+from . import banners, github_body, project_rules, spawn, statusline
 from .controller_actions import main as controller_actions_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -88,6 +88,11 @@ COMMANDS: dict[str, CommandSpec] = {
         release_required_checks_main,
         "check exact release required check-runs",
         ("read-gh",),
+    ),
+    "render-github-body": CommandSpec(
+        github_body.main,
+        "render a self-contained GitHub body from local artifacts",
+        ("read-artifact",),
     ),
     "merge-pr": CommandSpec(
         controller_actions_main,

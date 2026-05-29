@@ -39,6 +39,7 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 - **中文 only**:per [SKILL.md 工作语言规则],不要平行 EN section。Code identifier / file path / schema field names 保留原英文。CLAUDE/AGENTS 条款引用 verbatim 不翻译。
 - **TL;DR ≤ 6 行**(3 bullet + 可选 cc 行)。
 - **raw artifact 必折叠**:不要让 TL;DR 之后立刻出现 raw YAML / verbatim spec dump。先用人话讲,raw 都进 `<details>`。
+- **GitHub body 必须自包含**:凡 GitHub-facing body 引用授权、共识、solver/judge 结论、escalation 或 design/triage 判断,必须内联完整 raw artifact；本地 `.refactor-loop/runs/*.md` 路径只能出现在 `<details><summary>本机调试线索</summary>` 中,且永远不是唯一授权来源。
 - **No jargon dumps**:每个技术词(如 `IActorDispatchPort`)首次出现要一句话解释("actor 之间发命令的标准通道")。
 - **Numbers > adjectives**:"delete -180 LOC" 优于 "substantial cleanup"。
 - **No filler**:"我们会分析…"、"various improvements"、"comprehensive review" 禁用。
@@ -91,6 +92,7 @@ handle map 来自 host 配置的 `$MAINTAINER_WHITELIST`；未在 whitelist 中�
 - ❌ 第一行不是 `## 🤖`(monitor false-positive react)
 - ❌ TL;DR > 6 行
 - ❌ raw YAML / verbatim spec 在 TL;DR 之后(没折叠)
+- ❌ 用 `授权:.refactor-loop/runs/phase9-issueN-rM-judge.md` 这类本地路径当唯一来源
 - ❌ 写"将彻底改造"/"comprehensive review" 等空话
 - ❌ Code identifier 直接出现没解释一句
 - ❌ TL;DR 没说"下一步 / 需要 maintainer 做什么"

@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.sync import apply as apply_integration_sync_request
 from codex_refactor_loop import triage as apply_triage_decision
+from codex_refactor_loop.github_body import render_github_body
 from codex_refactor_loop.triage import ACCEPT_LABELS
 
 
@@ -245,6 +246,13 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         runs.mkdir(parents=True)
         (runs / "comment.md").write_text("comment\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
         (runs / "body.md").write_text("body\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        (runs / "authority.md").write_text("完整 triage 授权内容\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        self.self_contained_triage_body = render_github_body(
+            kind="triage",
+            title="triage accepted",
+            artifact_paths=[runs / "authority.md"],
+            debug_paths=[".refactor-loop/runs/authority.md"],
+        )
         self.decision_path = runs / "triage-issue-53.json"
         self.write_decision()
 
@@ -295,6 +303,8 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
 
     def test_accept_happy_path_comments_edits_body_adds_fixed_labels_and_records_applied(self) -> None:
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text(self.self_contained_triage_body, encoding="utf-8")
+        (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(self.self_contained_triage_body, encoding="utf-8")
         calls: list[list[str]] = []
 
         def fake_gh(args: list[str], *, repo: Path, repo_slug=None) -> subprocess.CompletedProcess[str]:

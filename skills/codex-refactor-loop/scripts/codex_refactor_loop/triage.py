@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .context import LoopContext
+from .github_body import validate_self_contained_github_body
 
 
 ACCEPT_LABELS = [
@@ -222,6 +223,10 @@ def _artifact_has_final_sentinel(path: Path) -> bool:
     return path.exists() and path.read_text(encoding="utf-8").splitlines()[-1:] == [FINAL_SENTINEL]
 
 
+def _validate_github_body_artifact(path: Path, *, authority_required: bool) -> None:
+    validate_self_contained_github_body(path.read_text(encoding="utf-8"), authority_required=authority_required)
+
+
 def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_number: int, verdict: str) -> int:
     try:
         if applied_marker(config, decision_path).exists():
@@ -236,6 +241,7 @@ def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_numb
         comment_file = path_under_repo(config.repo, decision.comment_artifact_path)
         if not _artifact_has_final_sentinel(comment_file):
             raise ManualIssueTriageDecisionError("comment artifact missing final sentinel")
+        _validate_github_body_artifact(comment_file, authority_required=(decision.verdict == "accept"))
         comment = run_gh(
             ["issue", "comment", str(issue_number), "--body-file", str(comment_file)],
             repo=config.repo,
@@ -248,6 +254,7 @@ def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_numb
             body_file = path_under_repo(config.repo, decision.body_artifact_path)
             if not _artifact_has_final_sentinel(body_file):
                 raise ManualIssueTriageDecisionError("body artifact missing final sentinel")
+            _validate_github_body_artifact(body_file, authority_required=True)
             args = ["issue", "edit", str(issue_number), "--body-file", str(body_file)]
             args += ["--remove-label", "auto-loop-triage"]
             for label in ACCEPT_LABELS:
