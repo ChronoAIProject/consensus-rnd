@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import re
@@ -14,8 +13,9 @@ from pathlib import Path
 from string import Template
 from typing import Mapping, Sequence
 
-from .context import LoopContext, LoopContextError
+from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .triage import apply_decision, load_triage_apply_config
 
 
 PR_LABELS_REMOVE = (
@@ -41,6 +41,10 @@ ISSUE_LABELS_REMOVE = (
 
 
 class ControllerActions:
+    # Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed
+    # merge/open/safe-push/apply lifecycle commands as generic callable verbs.
+    # New principle: keep these as controller-internal primitives only; callers
+    # construct ControllerActions directly and public CLI routing cannot reach them.
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         self.integration_branch = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
@@ -342,13 +346,17 @@ class ControllerActions:
         Path(tmp).replace(path)
 
     def apply_triage_decision_marker(self, marker: str) -> int:
+        # Refactor (iter201/issue-201): Old pattern: controller marker handling
+        # subprocessed consensus-rnd-cli apply-triage, preserving public lifecycle
+        # reachability. New principle: direct internal call keeps validation and
+        # applied/rejected artifacts without exposing a public lifecycle command.
         match = re.fullmatch(r"TRIAGE_DECISION_DONE:([0-9]+):(accept|reject):(\.refactor-loop/runs/.*\.json)", marker)
         if not match:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
-        cli = self.ctx.skill_root / "scripts" / "consensus-rnd-cli"
         issue, verdict, rel_path = match.groups()
-        return subprocess.call([sys.executable, str(cli), "apply-triage", issue, verdict, str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
+        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
+        return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -392,59 +400,3 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run controller-owned action helpers")
-    sub = parser.add_subparsers(dest="command", required=True)
-    merge = sub.add_parser("merge-pr")
-    merge.add_argument("pr")
-    merge.add_argument("issue", nargs="?")
-    open_pr = sub.add_parser("open-pr")
-    open_pr.add_argument("title")
-    open_pr.add_argument("body_file")
-    open_pr.add_argument("base", nargs="?")
-    open_pr.add_argument("head", nargs="?")
-    rollup_pr = sub.add_parser("open-release-rollup-pr")
-    rollup_pr.add_argument("event_json")
-    rollup_pr.add_argument("body_file")
-    rollup_pr.add_argument("title", nargs="?", default="Release rollup")
-    human = sub.add_parser("apply-human-label")
-    human.add_argument("pr_number")
-    human.add_argument("source_marker", nargs="?")
-    human.add_argument("reason", nargs="?")
-    safe_push = sub.add_parser("safe-push")
-    safe_push.add_argument("remote", nargs="?", default="origin")
-    safe_push.add_argument("branch", nargs="?")
-    safe_sync = sub.add_parser("safe-sync-main")
-    safe_sync.add_argument("remote", nargs="?", default="origin")
-    safe_sync.add_argument("branch", nargs="?")
-    args = parser.parse_args(argv)
-    try:
-        actions = ControllerActions(LoopContext.load(cwd=os.getcwd()))
-        if args.command == "merge-pr":
-            return actions.merge_pr(args.pr, args.issue or "")
-        if args.command == "open-pr":
-            pr_num, url = actions.open_pr_with_label(args.title, args.body_file, args.base, args.head or "")
-            os.environ["PR_NUM"] = str(pr_num)
-            print(url)
-            return 0
-        if args.command == "open-release-rollup-pr":
-            pr_num, url = actions.open_release_rollup_pr_from_pending_event(args.event_json, args.body_file, args.title)
-            os.environ["PR_NUM"] = str(pr_num)
-            print(url)
-            return 0
-        if args.command == "apply-human-label":
-            return actions.apply_human_label_or_skip(args.pr_number, args.source_marker or "", args.reason or "")
-        if args.command == "safe-push":
-            return actions.safe_push(args.remote, args.branch or "")
-        if args.command == "safe-sync-main":
-            return actions.safe_sync_main(args.remote, args.branch or "")
-    except (LoopContextError, RuntimeError) as exc:
-        sys.stderr.write(f"{exc}\n")
-        return 2
-    return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
