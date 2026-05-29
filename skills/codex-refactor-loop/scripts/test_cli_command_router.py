@@ -80,12 +80,11 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 }
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
-    "dev-sync": {"git-fetch", "git-worktree"},
+    "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
 }
 
 CONTROLLER_LIFECYCLE_COMMANDS = {
     "apply-human-label",
-    "apply-sync",
     "apply-triage",
     "merge-pr",
     "open-pr",
@@ -113,7 +112,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_each_public_operation_is_registered(self) -> None:
         self.assertEqual(
             {
-                "apply-sync",
                 "apply-triage",
                 "check-degradation",
                 "check-manifest",
@@ -139,7 +137,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "apply-human-label",
                 "safe-push",
                 "safe-sync-main",
-                "sync-request",
             },
             set(COMMANDS),
         )
@@ -191,7 +188,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "sync-request", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
@@ -204,9 +201,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
 
     def test_dev_sync_declares_integration_worktree_git_carveout(self) -> None:
         self.assertEqual(
-            {"git-fetch", "git-worktree"},
-            set(COMMANDS["dev-sync"].authority) & {"git-fetch", "git-worktree"},
+            {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+            set(COMMANDS["dev-sync"].authority)
+            & {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
         )
+
+    def test_legacy_sync_request_cli_commands_are_removed(self) -> None:
+        self.assertNotIn("apply-sync", COMMANDS)
+        self.assertNotIn("sync-request", COMMANDS)
 
     def test_handler_live_surfaces_are_declared_in_command_authority(self) -> None:
         handler_surface_requirements = {

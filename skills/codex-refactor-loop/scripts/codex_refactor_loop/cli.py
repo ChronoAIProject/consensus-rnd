@@ -20,9 +20,7 @@ from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
 from .retention import main as retention_main
-from .sync.apply import main as sync_apply_main
 from .sync.dev import main as dev_sync_main
-from .sync.requests import main as sync_requests_main
 from .phase9.router import main as phase9_router_main
 from .triage import main as triage_main
 from .wakeup_plan import main as wakeup_plan_main
@@ -72,7 +70,19 @@ COMMANDS: dict[str, CommandSpec] = {
     "dev-sync": CommandSpec(
         dev_sync_main,
         "run the Python integration sync daemon",
-        ("read-git", "read-gh", "git-fetch", "git-worktree", "write-event", "write-artifact", "spawn"),
+        (
+            "read-git",
+            "read-gh",
+            "git-fetch",
+            "git-worktree",
+            "git-merge",
+            "git-push",
+            "git-rebase",
+            "git-reset",
+            "write-event",
+            "write-artifact",
+            "spawn",
+        ),
     ),
     "phase9-router": CommandSpec(
         phase9_router_main,
@@ -131,11 +141,6 @@ COMMANDS: dict[str, CommandSpec] = {
         ("read-source", "read-state"),
     ),
     "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
-    "apply-sync": CommandSpec(
-        sync_apply_main,
-        "apply an IntegrationSyncRequest artifact",
-        ("read-artifact", "write-artifact", "git-fetch", "git-merge", "git-rebase", "git-reset", "git-push"),
-    ),
     "apply-triage": CommandSpec(
         triage_main,
         "apply a ManualIssueTriageDecision artifact",
@@ -143,7 +148,6 @@ COMMANDS: dict[str, CommandSpec] = {
     ),
     "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
     "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points", ("write-source",)),
-    "sync-request": CommandSpec(sync_requests_main, "validate IntegrationSyncRequest artifacts", ("read-artifact",)),
 }
 
 
