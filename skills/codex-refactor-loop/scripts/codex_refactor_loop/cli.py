@@ -92,7 +92,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "merge-pr": CommandSpec(
         controller_actions_main,
         "invoke Python controller action merge_pr",
-        ("read-gh", "gh-merge", "gh-label", "gh-close", "git-worktree"),
+        ("read-gh", "gh-merge", "gh-label", "gh-close", "git-worktree", "write-state"),
     ),
     "open-pr": CommandSpec(
         controller_actions_main,
@@ -129,7 +129,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "apply-triage": CommandSpec(
         triage_main,
         "apply a ManualIssueTriageDecision artifact",
-        ("read-artifact", "write-artifact", "gh-comment", "gh-label", "gh-edit"),
+        ("read-artifact", "write-artifact", "read-gh", "gh-comment", "gh-label", "gh-edit"),
     ),
     "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
     "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points", ("write-source",)),

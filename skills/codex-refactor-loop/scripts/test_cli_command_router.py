@@ -200,6 +200,26 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             set(COMMANDS["dev-sync"].authority) & {"git-fetch", "git-worktree"},
         )
 
+    def test_handler_live_surfaces_are_declared_in_command_authority(self) -> None:
+        handler_surface_requirements = {
+            "merge-pr": {
+                "source": SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py",
+                "needles": ("record_recent_pr_merge", "recent-pr-merges.json"),
+                "authority": {"write-state"},
+            },
+            "apply-triage": {
+                "source": SCRIPT_DIR / "codex_refactor_loop" / "triage.py",
+                "needles": ('["issue", "view", str(issue_number), "--json", "labels"]',),
+                "authority": {"read-gh"},
+            },
+        }
+        for command, requirement in handler_surface_requirements.items():
+            with self.subTest(command=command):
+                source = requirement["source"].read_text(encoding="utf-8")
+                for needle in requirement["needles"]:
+                    self.assertIn(needle, source)
+                self.assertTrue(requirement["authority"].issubset(COMMANDS[command].authority))
+
     def test_lifecycle_tokens_stay_on_controller_apply_surfaces(self) -> None:
         for name, spec in COMMANDS.items():
             with self.subTest(command=name):
