@@ -1,6 +1,6 @@
 # Role: Solver — delete framing(no defer)
 
-Artifact profile: phase9-solver
+Artifact profile: phase9-delete-solver
 
 <!-- Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)

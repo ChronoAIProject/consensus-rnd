@@ -52,7 +52,6 @@ PROMPT_ALLOWLISTS = {
         "REMOTE_CI_FIX_DONE:${CHECK_NAME}:<status>",
     ),
     "review-fix.md": (
-        "SCOPE_EXTEND:<file>:<reason>",
         "FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>",
         "FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>",
     ),
@@ -110,6 +109,7 @@ PROMPT_ALLOWLISTS = {
 
 KNOWN_ARTIFACT_PROFILES = {
     "phase9-solver",
+    "phase9-delete-solver",
     "phase9-meta-judge",
     "phase8-reviewer",
     "review-fix",
@@ -128,7 +128,7 @@ PROMPT_ARTIFACT_PROFILES = {
     "reviewer-quality.md": "phase8-reviewer",
     "solver-minimal.md": "phase9-solver",
     "solver-structural.md": "phase9-solver",
-    "solver-delete.md": "phase9-solver",
+    "solver-delete.md": "phase9-delete-solver",
     "meta-judge.md": "phase9-meta-judge",
     "meta-reflector-stalled.md": "marker-only-work-unit",
     "test-add.md": "marker-only-work-unit",
@@ -148,9 +148,10 @@ PROFILE_TERMINAL_MARKER_TOKENS = {
         "TEST_ADD_DONE",
         "TRIAGE_DECISION_DONE",
     },
-    "review-fix": {"SCOPE_EXTEND", "FIX_DONE", "FIX_BLOCKED"},
+    "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
     "phase8-reviewer": {"REVIEW_DONE"},
     "phase9-solver": {"SOLVER_DONE"},
+    "phase9-delete-solver": {"SOLVER_DONE"},
     "phase9-meta-judge": {"META_JUDGE_DONE"},
 }
 

@@ -64,6 +64,23 @@ PROFILES = {
         forbidden_marker_tokens=tuple(token for token in ROLE_MARKER_TOKENS if token != "SOLVER_DONE"),
         sentinel_policy="penultimate-before-final-marker",
     ),
+    "phase9-delete-solver": ArtifactProfile(
+        required_metadata=("solver", "issue", "cluster", "verdict"),
+        required_sections=(
+            "Classification",
+            "Recommended action",
+            "Concrete plan",
+            "Reverse-evidence",
+            "Risks",
+            "Escalation triggers",
+            "Reasoning trace",
+        ),
+        final_marker_patterns=(
+            r"^SOLVER_DONE:delete:(propose|abstain|escalate|false-positive):.+$",
+        ),
+        forbidden_marker_tokens=tuple(token for token in ROLE_MARKER_TOKENS if token != "SOLVER_DONE"),
+        sentinel_policy="penultimate-before-final-marker",
+    ),
     "phase9-meta-judge": ArtifactProfile(
         required_metadata=("issue", "cluster", "convergence_round", "solver_verdicts", "decision"),
         required_sections=("Decision", "If consensus", "If converge", "If escalate", "Round audit trail"),
@@ -142,6 +159,38 @@ The profile checks remain shape-only.
 
 ⟦AI:AUTO-LOOP⟧
 SOLVER_DONE:minimal:propose:test-only profile inventory
+"""
+
+VALID_DELETE_SOLVER = """---
+solver: delete
+issue: 169
+cluster: issue-169
+verdict: propose
+---
+
+## Classification
+a
+
+## Recommended action
+Delete the dead path.
+
+## Concrete plan (if propose)
+- Files to delete: one file
+
+## Reverse-evidence (why this is safe to delete)
+- No callers.
+
+## Risks
+- Caller search could be incomplete.
+
+## Escalation triggers (if any)
+- none
+
+## Reasoning trace
+The profile matches the delete solver template.
+
+⟦AI:AUTO-LOOP⟧
+SOLVER_DONE:delete:propose:delete dead path
 """
 
 VALID_META_JUDGE = """---
@@ -297,6 +346,33 @@ def final_nonempty_line(text: str) -> str:
     return ""
 
 
+def fenced_marker_templates(section: str) -> tuple[str, ...]:
+    templates = []
+    token_pattern = "|".join(re.escape(token) for token in ROLE_MARKER_TOKENS)
+    for template in re.findall(r"`([^`\n]+)`", section):
+        if re.match(rf"^(?:{token_pattern}):", template):
+            templates.append(template)
+    return tuple(templates)
+
+
+def review_fix_terminal_marker_section(body: str) -> str:
+    match = re.search(
+        r"End your output with EXACTLY one of:\n(?P<section>.*?)\n## Marker emission allowlist",
+        body,
+        flags=re.S,
+    )
+    return match.group("section") if match else ""
+
+
+def marker_allowlist_section(body: str) -> str:
+    match = re.search(
+        r"## Marker emission allowlist\(强制\)\n(?P<section>.*?)\n## Hard rules",
+        body,
+        flags=re.S,
+    )
+    return match.group("section") if match else ""
+
+
 def validate_internal_artifact(profile_id: str, text: str) -> list[str]:
     profile = PROFILES[profile_id]
     errors: list[str] = []
@@ -362,6 +438,12 @@ class RoleArtifactProfileTests(unittest.TestCase):
 
     def test_phase9_solver_valid_fixture_passes_shape_only(self) -> None:
         self.assertEqual(validate_internal_artifact("phase9-solver", VALID_SOLVER), [])
+
+    def test_phase9_delete_solver_valid_fixture_passes_shape_only(self) -> None:
+        self.assertEqual(validate_internal_artifact("phase9-delete-solver", VALID_DELETE_SOLVER), [])
+
+    def test_phase9_solver_rejects_delete_solver_output_shape(self) -> None:
+        self.assertInvalidBecause("phase9-solver", VALID_DELETE_SOLVER, "missing sections")
 
     def test_phase9_solver_rejects_embedded_foreign_marker(self) -> None:
         artifact = VALID_SOLVER.replace(
@@ -463,6 +545,46 @@ class RoleArtifactProfileTests(unittest.TestCase):
         for section in PROFILES["review-fix"].required_sections:
             self.assertRegex(body, rf"(?m)^## {re.escape(section)}(?:\b|$)")
         self.assertNotIn("Rejected as false-positive findings", body)
+
+    def test_review_fix_terminal_marker_contract_is_single_source(self) -> None:
+        body = (PROMPTS_DIR / "review-fix.md").read_text(encoding="utf-8")
+        expected_templates = (
+            "FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>",
+            "FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>",
+        )
+
+        self.assertEqual(fenced_marker_templates(review_fix_terminal_marker_section(body)), expected_templates)
+        self.assertEqual(fenced_marker_templates(marker_allowlist_section(body)), expected_templates)
+        self.assertEqual(
+            PROFILES["review-fix"].final_marker_patterns,
+            (
+                r"^FIX_DONE:[^:]+:round-\d+:applied-\d+:rejected-\d+:blocked-\d+$",
+                r"^FIX_BLOCKED:[^:]+:round-\d+:(conflict|human-decision|build-broken|other):.+$",
+            ),
+        )
+        self.assertEqual(
+            PROFILES["review-fix"].forbidden_marker_tokens,
+            tuple(token for token in ROLE_MARKER_TOKENS if token not in {"FIX_DONE", "FIX_BLOCKED"}),
+        )
+
+    def test_phase9_solver_profiles_match_live_prompt_output_sections(self) -> None:
+        prompt_profiles = {
+            "solver-minimal.md": "phase9-solver",
+            "solver-structural.md": "phase9-solver",
+            "solver-delete.md": "phase9-delete-solver",
+        }
+        for filename, profile_id in prompt_profiles.items():
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+
+                self.assertIn(f"Artifact profile: {profile_id}", body)
+                for section in PROFILES[profile_id].required_sections:
+                    self.assertRegex(body, rf"(?m)^## {re.escape(section)}(?:\b|$)")
+                for other_profile_id, other_profile in PROFILES.items():
+                    if not other_profile_id.startswith("phase9-") or other_profile_id == profile_id:
+                        continue
+                    for section in set(other_profile.required_sections) - set(PROFILES[profile_id].required_sections):
+                        self.assertNotRegex(body, rf"(?m)^## {re.escape(section)}(?:\b|$)")
 
     def test_marker_only_profile_does_not_invent_shared_output_sections(self) -> None:
         self.assertEqual(PROFILES["marker-only-work-unit"].required_metadata, ())
