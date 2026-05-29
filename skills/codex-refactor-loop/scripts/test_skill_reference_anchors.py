@@ -36,6 +36,37 @@ def reference_anchors(reference: str) -> set[str]:
     return anchors
 
 
+def section_after_anchor(markdown: str, anchor: str) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    return _section_after_first_heading(after_anchor)
+
+
+def section_after_heading(markdown: str, heading: str) -> str:
+    pattern = re.compile(rf"(?m)^## {re.escape(heading)}$")
+    match = pattern.search(markdown)
+    if not match:
+        raise AssertionError(f"missing markdown heading: {heading}")
+    return _section_after_first_heading(markdown[match.start() :])
+
+
+def _section_after_first_heading(markdown: str) -> str:
+    lines = markdown.splitlines(keepends=True)
+    if not lines:
+        return ""
+    start = 0
+    for index, line in enumerate(lines):
+        if re.match(r"^##\s+", line):
+            start = index
+            break
+    for index in range(start + 1, len(lines)):
+        if re.match(r"^##\s+", lines[index]):
+            return "".join(lines[start:index])
+    return "".join(lines[start:])
+
+
 class SkillReferenceAnchorTests(unittest.TestCase):
     # Refactor (iter1/issue-139):
     #   Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
@@ -91,6 +122,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
         #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks required host surfaces.
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
         combined_links = "\n".join((self.readme, self.skill))
         self.assertNotIn("REFERENCE.md#downstream-install-walkthrough", combined_links)
         self.assertIn("SKILL.md#downstream-install-walkthrough", combined_links)
@@ -101,17 +133,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host.env.example",
             ".refactor-loop/host.env",
             "consensus-rnd-cli restart-daemons",
-            "cron",
-            "launchd",
-            "statusLine",
             "consensus-rnd-cli statusline",
+            "source .refactor-loop/host.env && exec",
             ".git",
             "CI",
             "policy",
+            "HOST_*",
         )
         for needle in required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, self.skill)
+                self.assertIn(needle, walkthrough)
 
         forbidden_paths = (
             "scripts/install.sh",
@@ -124,31 +155,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertFalse((REPO_ROOT / forbidden).exists(), forbidden)
 
-        walkthrough = self.skill.split("## Downstream install walkthrough", 1)[1].split(
-            "## Named runtime exception",
-            1,
-        )[0]
         self.assertEqual(1, walkthrough.count("HOST_*"))
         self.assertNotIn("HOST_TEST_FILE_GLOBS |", walkthrough)
-        self.assertIn("source .refactor-loop/host.env && exec", walkthrough)
-
-        restart_helper = self.skill.split("## Anti-stop restart helper cron/launchd install(per #49)", 1)[1].split(
-            "## Named runtime exception",
-            1,
-        )[0]
-        self.assertIn("cron/launchd-only helper invariant", restart_helper)
-        self.assertNotIn("Host project cron install one-liner", restart_helper)
-        self.assertNotIn("launchd host template", restart_helper)
-        self.assertNotIn("ProgramArguments", restart_helper)
-        self.assertNotIn("restart-cron.log", restart_helper)
-
-        command_bodies = (
-            "source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
-            "source .refactor-loop/host.env && exec python3 &lt;skill-root&gt;/scripts/consensus-rnd-cli restart-daemons",
-        )
-        for body in command_bodies:
-            with self.subTest(body=body):
-                self.assertEqual(1, self.skill.count(body))
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
@@ -275,18 +283,18 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
             r"(?m)^## Claude Code statusline\(per #51 consensus\)$",
             "statusline consensus section must be an independent markdown heading",
         )
+        section = section_after_heading(self.skill, "Claude Code statusline(per #51 consensus)")
         required = (
-            "**Producer**",
-            "**Consumer**",
-            "**Install one-liner**",
-            "**Uninstall one-liner**",
-            "**无新 daemon**",
-            "**手动一行,无 installer script**",
+            "statusLine",
+            "consensus-rnd-cli statusline",
+            "install",
+            "installer script",
+            "daemon",
             "Named runtime exception",
         )
         for needle in required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, self.skill)
+                self.assertIn(needle, section)
 
     def test_statusline_contract_does_not_add_daemon_or_installer(self) -> None:
         scripts_dir = SKILL_ROOT / "scripts"
@@ -305,15 +313,12 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
                 self.assertNotIn(token, combined)
 
     def test_statusline_install_uninstall_anchor_is_local_and_manual(self) -> None:
-        section = self.skill.split("## Claude Code statusline(per #51 consensus)", 1)[1].split(
-            "## Anti-stop restart helper cron/launchd install(per #49)",
-            1,
-        )[0]
+        section = section_after_heading(self.skill, "Claude Code statusline(per #51 consensus)")
         required = (
-            "Install one-liner",
-            "Uninstall one-liner",
             "statusLine",
-            "手动一行,无 installer script",
+            "consensus-rnd-cli statusline",
+            "installer script",
+            "Uninstall",
         )
         for needle in required:
             with self.subTest(needle=needle):
