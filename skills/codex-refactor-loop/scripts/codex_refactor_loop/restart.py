@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+import argparse
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -269,7 +270,8 @@ def _terminate_pid(pid: int, grace: int) -> None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    parser = argparse.ArgumentParser(description="Restart restart-helper-managed daemons")
+    parser.parse_args(argv)
     try:
         ctx = LoopContext.load(cwd=os.getcwd())
         return RestartDaemons(ctx).run()
