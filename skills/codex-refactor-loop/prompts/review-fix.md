@@ -52,8 +52,8 @@ Run minimal validation (no Docker startup unless the test needs it):
 
 ```bash
 cd $REPO_ROOT && \
-  $BUILD_CMD
-  $TEST_CMD
+  bash -lc "$BUILD_CMD"
+  bash -lc "$TEST_CMD"
 ```
 
 Pick the test projects whose code you changed; do NOT run the full solution test suite (too slow). If build fails → fix or `FIX_BLOCKED:build:<short>`.

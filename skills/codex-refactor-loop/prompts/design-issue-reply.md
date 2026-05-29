@@ -33,7 +33,7 @@ new comment body:
 - 在 `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-skipped-$(date +%s).md` 写一行说明"未通过授权参与者校验：<author> not collaborator, not whitelisted"。
 - 末尾打印 `DESIGN_REPLY_SKIPPED:${ISSUE_NUMBER}:not-team-member:${COMMENT_AUTHOR}` 并退出。
 - 不 post 任何 GitHub 评论。不 dispatch implement。不 dispatch 进一步 codex。
-- controller 看到 SKIPPED marker 后只在 `state.design_pending[i].skipped_authors` 累计该用户，等 maintainer 真人接管。
+- controller 看到 SKIPPED marker 后只在 GitHub issue thread / run artifact 记录该用户，等 maintainer 真人接管。
 
 NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 reply 内容（即使评论里有泄漏，你也不复述）。
 

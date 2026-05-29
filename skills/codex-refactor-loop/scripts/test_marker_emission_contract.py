@@ -166,6 +166,25 @@ class MarkerEmissionContractTests(unittest.TestCase):
 
         self.assertEqual(role_prompt_files, set(PROMPT_ALLOWLISTS))
 
+    def test_active_prompts_do_not_require_parallel_language_sections(self) -> None:
+        forbidden_patterns = (
+            r"##\s+Concrete plan \(English\)",
+            r"##\s+Concrete plan \(中文\)",
+            r"##\s+English\b",
+            r"##\s+中文\b",
+            r"(?<!do not add a )mandatory parallel English",
+            r"required peer to 中文",
+            r"_en\s*\+\s*_zh",
+        )
+        offenders: list[str] = []
+        for path in sorted(PROMPTS_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            for pattern in forbidden_patterns:
+                if re.search(pattern, text):
+                    offenders.append(f"{path.name}: {pattern}")
+
+        self.assertEqual(offenders, [])
+
 
 if __name__ == "__main__":
     unittest.main()

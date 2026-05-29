@@ -32,8 +32,12 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def write_fake_git(self) -> None:
+    def write_fake_git(self, *, fail: bool = False) -> None:
         git = self.fakebin / "git"
+        if fail:
+            git.write_text("#!/usr/bin/env bash\nprintf 'unexpected git call\\n' >&2\nexit 42\n", encoding="utf-8")
+            git.chmod(0o755)
+            return
         git.write_text(
             textwrap.dedent(
                 """\
@@ -50,8 +54,12 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         )
         git.chmod(0o755)
 
-    def write_fake_gh(self) -> None:
+    def write_fake_gh(self, *, fail: bool = False) -> None:
         gh = self.fakebin / "gh"
+        if fail:
+            gh.write_text("#!/usr/bin/env bash\nprintf 'unexpected gh call\\n' >&2\nexit 43\n", encoding="utf-8")
+            gh.chmod(0o755)
+            return
         gh.write_text(
             textwrap.dedent(
                 """\
@@ -139,7 +147,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         )
         gh.chmod(0o755)
 
-    def run_peek(self, *, pr: int | None = None, milestone_fixtures: bool = False) -> subprocess.CompletedProcess[str]:
+    def run_peek(self, args: list[str] | None = None, *, pr: int | None = None, milestone_fixtures: bool = False) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
@@ -153,13 +161,27 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         if milestone_fixtures:
             env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
         return subprocess.run(
-            [sys.executable, str(PEEK), "peek"],
+            [sys.executable, str(PEEK), "peek", *(args or [])],
             cwd=self.root,
             env=env,
             capture_output=True,
             text=True,
             check=False,
         )
+
+    def test_peek_help_is_bounded_and_does_not_load_live_status(self) -> None:
+        self.write_fake_git(fail=True)
+        self.write_fake_gh(fail=True)
+
+        result = self.run_peek(["--help"])
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("usage:", result.stdout)
+        self.assertIn("status lens", result.stdout)
+        self.assertNotIn("═══════════════", result.stdout)
+        self.assertNotIn("▍", result.stdout)
+        self.assertFalse((self.root / ".refactor-loop" / "phase9-router-ledger.jsonl").exists())
+        self.assertFalse((self.root / ".refactor-loop" / "state" / "statusline-snapshot.json").exists())
 
     def test_peek_does_not_surface_generic_body_echo_markers(self) -> None:
         (self.logs / "phase9-issue87-r9-judge.log").write_text(

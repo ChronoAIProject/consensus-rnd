@@ -65,7 +65,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host-runtime-details",
             "status-and-escalation-templates",
             "work-unit-contract",
-            "state-schema",
+            "specialized-state-artifacts",
             "batching-heuristics",
             "recovery-playbook",
             "daemon-command-bodies",

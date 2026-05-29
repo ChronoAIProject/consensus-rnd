@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import subprocess
@@ -55,7 +56,11 @@ def render_snapshot(data: Mapping[str, Any]) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    parser = argparse.ArgumentParser(
+        prog="consensus-rnd-cli statusline",
+        description="render the latest read-only statusline snapshot",
+    )
+    parser.parse_args(argv)
     path = snapshot_path()
     if path is None or not path.is_file():
         print("⏸ no-snapshot")

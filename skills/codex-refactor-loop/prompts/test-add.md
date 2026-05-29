@@ -46,12 +46,12 @@ ${UNCOVERED_LINES}
 4. 实施测试。
 5. 跑：
    ```
-   $TEST_CMD
+   bash -lc "$TEST_CMD"
    ```
    必须全部通过。
 6. 本地 codecov 验证（如果工具可用）：
    ```
-   $TEST_CMD
+   bash -lc "$TEST_CMD"
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
 7. 若 `$CI_GUARDS` 非空,跑 `bash "$REPO_ROOT/$CI_GUARDS"` —— 必须通过（禁 `sleep/delay` 等）；为空则记录 guards skipped。

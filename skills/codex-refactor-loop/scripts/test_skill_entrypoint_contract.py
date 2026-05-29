@@ -11,6 +11,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
@@ -114,7 +115,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "source .refactor-loop/host.env",
             "fail closed",
             "ProjectRulesFixedPointEnsurer",
-            "initialize state",
+            "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
             "integration branch",
             "ensure labels",
             "restart-helper-managed daemons",
@@ -257,6 +258,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "recovery-playbook",
             "label-bootstrap-loops",
             "historical-bilingual-notes",
+            "specialized-state-artifacts",
         )
         self.assertIn("## Detailed reference", self.skill)
         for anchor in detailed_anchors:
@@ -306,6 +308,78 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
+
+    def test_runtime_surface_boundary_keeps_peek_human_and_wakeup_plan_machine(self) -> None:
+        self.assertIn("`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader", self.skill)
+        self.assertIn("`consensus-rnd-cli peek` is a status lens, not routing authority", self.skill)
+        self.assertIn("structured output", self.skill)
+        self.assertNotIn("peek --json", self.skill)
+        self.assertNotIn("`--json`", read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py"))
+
+    def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
+        forbidden = (
+            "Write initial state.json",
+            "authoritative queue containers",
+            "state.json.trunk_head",
+            "clusters_planned",
+            "clusters_active",
+            "clusters_done",
+            "clusters_failed",
+            "design_pending",
+            "remote_ci",
+            "State schema",
+            "state schema",
+            "state-schema",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.skill)
+
+        required = (
+            "Root `.refactor-loop/state.json` is not a contract surface",
+            "do not create or maintain root `.refactor-loop/state.json`",
+            ".refactor-loop/state/statusline-snapshot.json",
+            ".refactor-loop/state/phase8-review-state.json",
+            ".refactor-loop/state/recent-pr-merges.json",
+            ".refactor-loop/codex-progress-state.json",
+            ".refactor-loop/comment-monitor-state.json",
+            ".refactor-loop/.concurrency-monitor-state.json",
+            "specialized-state-artifacts",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.skill)
+
+    def test_host_commands_are_shell_strings_executed_via_bash_lc(self) -> None:
+        docs = {
+            "SKILL.md": self.skill,
+            "host.env.example": read(HOST_ENV_EXAMPLE),
+            "prompts/implement.md": read(SKILL_ROOT / "prompts" / "implement.md"),
+            "prompts/review-fix.md": read(SKILL_ROOT / "prompts" / "review-fix.md"),
+            "prompts/test-add.md": read(SKILL_ROOT / "prompts" / "test-add.md"),
+            "sync/dev.py": read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "sync" / "dev.py"),
+        }
+        for path, text in docs.items():
+            with self.subTest(path=path):
+                if path in {"SKILL.md", "host.env.example", "prompts/implement.md"}:
+                    self.assertIn("shell command string", text)
+                if "BUILD_CMD" in text:
+                    self.assertIn('bash -lc "$BUILD_CMD"', text)
+                if "TEST_CMD" in text:
+                    self.assertIn('bash -lc "$TEST_CMD"', text)
+
+        bare_host_command_lines: list[str] = []
+        bare_host_command_re = re.compile(r"^\s*\$(BUILD_CMD|TEST_CMD)\s*$")
+        for path, text in docs.items():
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if bare_host_command_re.match(line):
+                    bare_host_command_lines.append(f"{path}:{lineno}:{line.strip()}")
+
+        self.assertEqual(
+            bare_host_command_lines,
+            [],
+            "Host command strings must be executed via bash -lc, not as bare lines",
+        )
 
 
 if __name__ == "__main__":

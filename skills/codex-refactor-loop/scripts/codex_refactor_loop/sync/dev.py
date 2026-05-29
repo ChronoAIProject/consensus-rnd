@@ -185,7 +185,7 @@ marker. The controller apply helper owns the later fixed lifecycle apply.
    versus `{integration}` changes.
 4. Merge both substantive sides: tests, new files, docs, and production code.
 5. Run `git add <files>` for resolved files.
-6. Run `$BUILD_CMD` and fix build failures caused by the resolution.
+6. Run `bash -lc "$BUILD_CMD"` and fix build failures caused by the resolution.
 7. Finish with marker `DEV_SYNC_RESOLVED:<files-resolved>` or
    `DEV_SYNC_BLOCKED:<reason>`.
 
