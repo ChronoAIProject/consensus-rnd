@@ -257,7 +257,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
-`wakeup_plan.py` is the prioritized-next-action reader. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `wakeup_plan.py`,据其输出执行。Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md`. `wakeup_plan.py` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒,除非已到 `AUDIT_DONE:none:0` fixed point 并输出 `CONCURRENCY_LOW:no-work-after-audit-none`.
+`wakeup_plan.py` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/codex_loop.py wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `wakeup_plan.py`,据其输出执行。Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md` and `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md`. `wakeup_plan.py` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
 
 `peek.sh` is a status lens, not routing authority; it remains useful for human-readable ambient state after the plan. `wakeup_plan.py` outputs prioritized routing recommendations from local evidence plus GitHub labels; `peek.sh` displays status and does not decide next action.
 
@@ -279,9 +279,9 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 
 - **Allowed**: read `.refactor-loop` files, scan `.refactor-loop/heartbeats/*.ts`, read clean-exit log tails, run read-only GitHub list/check/view commands, and print JSON recommendations.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git, no commit, no push, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
-- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup, except at the `AUDIT_DONE:none:0` fixed point.
+- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup. There is no `AUDIT_DONE:none:0` exemption.
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
-- If no actionable work exists before the latest controller-validated `AUDIT_DONE:none:0`, it emits `RECOMMEND:audit`; after that fixed point it emits `CONCURRENCY_LOW:no-work-after-audit-none`.
+- If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
 
 ## Phase Index
 
@@ -419,7 +419,7 @@ Controller non-duties:
 
 The floor is local because it prevents loop stalls.
 
-<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 ordinary audit fallback is guarded by the latest controller-validated audit result, and a validated AUDIT_DONE:none:0 stops fabricated refill work.(2026-05-26 maintainer-directive + issue-86 Phase 9 consensus) -->
+<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 audit fallback is mandatory, and AUDIT_DONE:none:0 no longer exempts a positive deficit.(2026-05-29 maintainer-directive floor-no-exemption overrides issue-86 immunity) -->
 
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
@@ -434,9 +434,9 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `concurrency_monitor.py` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Phase 7 / Phase 9 actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- Ordinary audit fallback is valid only before the latest controller-validated audit reaches `AUDIT_DONE:none:0`. Before that fixed point, the guarded fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。
-- After the latest controller-validated audit is `AUDIT_DONE:none:0` and no real queued/actionable work exists, emit `CONCURRENCY_LOW:no-work-after-audit-none` and do not fabricate ordinary audit, profile, planner, or synthetic producer work just to satisfy `$CODEX_FLOOR`.
-- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由 before the validated `AUDIT_DONE:none:0` fixed point; after that fixed point, the correct visible state is `CONCURRENCY_LOW:no-work-after-audit-none`, not fake work.
+- If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。
+- `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
+- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
 - **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open `auto-loop` issue/PR lacking in-flight codex coverage of its phase label; when any open `auto-loop` issue/PR carries `🎯 milestone`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
 - **Stale-issue revival(3h)**: Open `auto-loop` issue/PR with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
 
@@ -464,7 +464,7 @@ Fact source is unique: milestone members = GitHub `🎯 milestone` label. Do not
 - **Host-agnostic**: dispatch JSON schema host-agnostic;cd/prompt/log path 由入队方决定,不含 host fact。
 - **No lifecycle authority**: 不开 / 关 issue / PR,不打 label,不 commit / push;只 fork 进程 + 归档 JSON + 写 event log。
 - **Behavior tests**: `test_concurrency_monitor.py` 覆盖 priority order / overshoot prevention / dispatch_one / tick() 整链 / floor 边界 / archive collision / filename-derived task_id。
-- **Source-regression**: `test_ensure_project_rules_fixed_points.py` 字面断言本段标题 + "top_up_from_dispatch_queue" + "DISPATCH_FIRED" + "CONCURRENCY_LOW" + "narrow allowlist" 等关键字面。
+- **Source-regression**: `test_ensure_project_rules_fixed_points.py` 字面断言本段标题 + "top_up_from_dispatch_queue" + "DISPATCH_FIRED" + "HARD_GATE:dispatch_required=N" + "narrow allowlist" 等关键字面。
 
 授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
 
@@ -1065,7 +1065,7 @@ Auto-dispatch semantics:
 - After each launch, the monitor archives the consumed file to `.refactor-loop/dispatch-dispatched/<task-id>.json`, adding `dispatch_at`, `priority`, and `source_dispatch_file` for audit trail.
 - The monitor writes `DISPATCH_FIRED:<task-id>:<priority>:<reason>` to `.refactor-loop/.controller-pending-events.log`.
 - If a queued mutable task violates the cwd guard, the monitor moves it to `.refactor-loop/dispatch-rejected/<task-id>.json`, adding `rejected_at`, `reject_reason`, `priority`, and `source_dispatch_file`, writes `DISPATCH_REJECTED:<task-id>:<priority>:main-worktree-cd:<reason>`, and continues scanning for the next legal queued item.
-- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `CONCURRENCY_LOW:actual=N expected=M queue=0` so the controller can enqueue real work when one of the floor refill routes below is valid.
+- If `actual < CODEX_FLOOR` and the queue is empty, the monitor writes `HARD_GATE:dispatch_required=N:actual=A expected=E queue=0` so the controller must enqueue or dispatch real work; audit is the fallback when no open actionable work exists.
 - This daemon path is a narrow exception for mechanical controller-runtime dispatch; it does not add lifecycle authority or change marker routing.
 
 ### 完成判据必须用 `EXIT=0`,marker 只作 verdict(排 prompt 回显)(强制)
@@ -2547,7 +2547,7 @@ Stale revival selects the actor by current phase label using the Existing-issue 
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若 latest controller-validated audit 已是 `AUDIT_DONE:none:0` 且没有真实 work,不得为了 floor 合成普通 audit 或 profile/planner work;写可见 `CONCURRENCY_LOW:no-work-after-audit-none`。
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `concurrency_monitor.py` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` no longer exempts a positive deficit。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -2559,14 +2559,14 @@ Stale revival selects the actor by current phase label using the Existing-issue 
 1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
 2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
 3. **Phase 7 / Phase 9 actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
-4. **Ordinary audit refill before fixed point** — envsubst next iteration `prompts/audit.md` only when the latest controller-validated audit is not `AUDIT_DONE:none:0`.
-5. **Visible low-floor stop** — when the latest controller-validated audit is `AUDIT_DONE:none:0` and no real work exists, write `CONCURRENCY_LOW:no-work-after-audit-none` and stop fabricating floor work.
+4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` does not exempt a positive deficit.
+5. **Visible hard gate** — when no real open work exists, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; do not stop with a low-floor exemption.
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 仍继续派普通 audit / self-audit / retrospective / profile / planner work 凑 floor → 必须写 `CONCURRENCY_LOW:no-work-after-audit-none`
+- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 必须继续 hard-gate dispatch;无 open actionable work 时派 audit
 - ❌ 一次性派 `>= 15` 个 codex 凑吞吐。大 burst 会压 API,更容易触发 transient stream-disconnect,并让 prompt 回显误判与追踪问题一起放大。
 
 ### Transient stream-disconnect 处理(强制)
@@ -2595,8 +2595,8 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 # 按优先级派 NEEDED 个 codex:
 # queue -> actionable marker / maintainer comment / CI red / no-gap / Phase 7/9 route
-# -> ordinary audit only before latest controller-validated AUDIT_DONE:none:0
-# -> CONCURRENCY_LOW:no-work-after-audit-none
+# -> audit fallback, including after AUDIT_DONE:none:0
+# -> HARD_GATE:dispatch_required=N until deficit is gone
 ```
 
 **反面禁止**:
@@ -2604,9 +2604,9 @@ NEEDED=$(( FLOOR - ACTIVE ))
 - ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
-- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后伪造普通 audit / producer work → 写 `CONCURRENCY_LOW:no-work-after-audit-none`
+- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → 继续 `HARD_GATE:dispatch_required=N`;无 open actionable work 时派 audit
 
-结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;但 controller-validated `AUDIT_DONE:none:0` 是 ordinary audit fixed point,不能为 floor 伪造 no-op work。
+结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md` removes the former audit-none floor exemption.
 
 ### Sync to remote in time (强制)
 

@@ -1715,7 +1715,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("expected > 0 and actual == 0", monitor_text)
         self.assertIn("dispatch-queue", monitor_text)
         self.assertIn("DISPATCH_FIRED:", monitor_text)
-        self.assertIn("CONCURRENCY_LOW:actual=", monitor_text)
+        self.assertIn("HARD_GATE:dispatch_required=", monitor_text)
         self.assertIn('os.environ.get("CODEX_FLOOR"', monitor_text)
         for forbidden in (
             "MIN_PARALLEL",
@@ -1743,7 +1743,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
         self.assertIn("[concurrency floor details](#concurrency-floor-details)", skill_text)
         self.assertIn("Dispatch queue protocol", reference_text)
         self.assertIn("DISPATCH_FIRED:<task-id>:<priority>:<reason>", reference_text)
-        self.assertIn("CONCURRENCY_LOW:actual=N expected=M queue=0", reference_text)
+        self.assertIn("HARD_GATE:dispatch_required=N", reference_text)
         self.assertEqual(reference_text.count("**判定脚本**(controller wakeup step 1.5):"), 1)
 
     # Refactor (iter6/issue-133):
@@ -1851,7 +1851,7 @@ class ConcurrencyFloorSourceRegressionTests(unittest.TestCase):
             "No lifecycle authority",
             "top_up_from_dispatch_queue",
             "DISPATCH_FIRED",
-            "CONCURRENCY_LOW",
+            "HARD_GATE:dispatch_required=N",
             "maintainer-directive equivalence",
         ):
             with self.subTest(required=required):

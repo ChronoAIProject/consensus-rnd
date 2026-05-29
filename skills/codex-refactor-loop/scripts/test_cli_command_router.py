@@ -24,6 +24,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             {
                 "spawn-codex",
                 "peek",
+                "wakeup-plan",
                 "restart-daemons",
                 "statusline",
                 "comment-monitor",
@@ -66,6 +67,13 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"peek": COMMANDS["peek"].__class__(handler, "peek", True), **{k: v for k, v in COMMANDS.items() if k != "peek"}}):
             self.assertEqual(0, router.run("peek", ["--flag"]))
         handler.assert_called_once_with(["--flag"])
+
+    def test_wakeup_plan_command_uses_registered_python_handler(self) -> None:
+        router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
+        handler = mock.Mock(return_value=0)
+        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"wakeup-plan": COMMANDS["wakeup-plan"].__class__(handler, "wakeup", True), **{k: v for k, v in COMMANDS.items() if k != "wakeup-plan"}}):
+            self.assertEqual(0, router.run("wakeup-plan", ["--repo-root", "/tmp/repo"]))
+        handler.assert_called_once_with(["--repo-root", "/tmp/repo"])
 
     def test_controller_actions_dispatch_to_python_action_handler(self) -> None:
         router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)

@@ -264,13 +264,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 5)
 
-    def test_monitor_emits_concurrency_low_when_queue_empty(self) -> None:
+    def test_monitor_emits_hard_gate_when_queue_empty(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
 
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("CONCURRENCY_LOW:actual=0 expected=0 queue=0", events)
+        self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
 
     def test_monitor_archives_dispatched_json_with_timestamp(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", reason="PR #44 r3 fix needed")

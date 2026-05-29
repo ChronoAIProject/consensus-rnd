@@ -14,6 +14,7 @@ from .monitors.comment import main as comment_monitor_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
 from .restart import main as restart_main
+from .wakeup_plan import main as wakeup_plan_main
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -29,6 +30,7 @@ class CommandSpec:
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor"),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", read_only=True),
+    "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", read_only=True),
     "restart-daemons": CommandSpec(restart_main, "run the Python daemon restart helper"),
     "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", read_only=True),
     "comment-monitor": CommandSpec(comment_monitor_main, "run the Python comment monitor daemon"),

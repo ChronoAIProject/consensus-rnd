@@ -12,6 +12,7 @@ SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "wakeup_plan.py"
+PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
 
 
 def read(path: Path) -> str:
@@ -208,7 +209,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "no git",
             "no GitHub lifecycle mutation",
             "`RECOMMEND:audit`",
-            "`CONCURRENCY_LOW:no-work-after-audit-none`",
+            "`AUDIT_DONE:none:0` no longer exempts",
             "deficit hard-gate",
             "controller 不得带 `deficit>0` 结束唤醒",
             "`HARD_GATE:dispatch_required=N`",
@@ -220,7 +221,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertIn(needle, combined)
 
     def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
-        script = read(WAKEUP_PLAN)
+        script = read(PACKAGE_WAKEUP_PLAN)
         for needle in (
             "Allowed: read `.refactor-loop` files",
             "Forbidden: no restart/spawn, no git",

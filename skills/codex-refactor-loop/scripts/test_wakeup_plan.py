@@ -224,13 +224,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
         self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
 
+    def test_github_action_queries_only_open_auto_loop_items(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn('"--state", "open"', source)
+        self.assertNotIn('"--state", "closed"', source)
+        self.assertNotIn('"--state", "merged"', source)
+
     def test_audit_fallback_when_latest_audit_is_not_none_zero(self) -> None:
         plan = self.run_plan()
 
         self.assertEqual(plan["actions"], [])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
 
-    def test_all_empty_after_audit_none_zero_outputs_concurrency_low(self) -> None:
+    def test_all_empty_after_audit_none_zero_still_recommends_audit(self) -> None:
         (self.logs / "audit-iter-8.log").write_text(
             "AUDIT_DONE:none:0\nEXIT=0\n",
             encoding="utf-8",
@@ -239,7 +246,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan()
 
         self.assertEqual(plan["actions"], [])
-        self.assertEqual(plan["recommendation"], "CONCURRENCY_LOW:no-work-after-audit-none")
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+
+    def test_daemon_health_ignores_solver_text_without_ts_heartbeat(self) -> None:
+        heartbeats = self.repo / ".refactor-loop" / "heartbeats"
+        for path in heartbeats.glob("*.ts"):
+            path.unlink()
+        (heartbeats / "solver-output.log").write_text(str(int(time.time())), encoding="utf-8")
+
+        plan = self.run_plan()
+
+        health = plan["daemon_health"]
+        self.assertTrue(all(item["name"] != "solver-output" for item in health["items"]))
+        self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "missing" for item in health["items"]))
 
     def test_daemon_health_reports_stale_and_missing_with_restart_hint(self) -> None:
         heartbeats = self.repo / ".refactor-loop" / "heartbeats"
@@ -280,7 +299,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
-    def test_fixed_point_outputs_concurrency_low_without_fake_hard_gate_work(self) -> None:
+    def test_fixed_point_keeps_hard_gate_and_audit_fallback(self) -> None:
         (self.logs / "audit-iter-8.log").write_text(
             "AUDIT_DONE:none:0\nEXIT=0\n",
             encoding="utf-8",
@@ -289,10 +308,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
         self.assertEqual(plan["concurrency"]["deficit"], 5)
-        self.assertEqual(plan["recommendation"], "CONCURRENCY_LOW:no-work-after-audit-none")
-        self.assertFalse(plan["hard_gate"]["active"])
-        self.assertEqual(plan["hard_gate"]["reason"], "CONCURRENCY_LOW:no-work-after-audit-none")
-        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertIsNone(plan["hard_gate"]["reason"])
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
 
 if __name__ == "__main__":

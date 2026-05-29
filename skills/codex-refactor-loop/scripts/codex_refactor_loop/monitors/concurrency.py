@@ -503,8 +503,9 @@ class ConcurrencyMonitor:
         target = max(expected, floor)
         if actual < target:
             if self.dispatch_queue_empty():
-                self.write_pending_event(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
-                log(f"CONCURRENCY_LOW:actual={actual} expected={expected} queue=0")
+                deficit = target - actual
+                self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
             else:
                 actual = self.top_up_from_dispatch_queue(actual, target)
 
