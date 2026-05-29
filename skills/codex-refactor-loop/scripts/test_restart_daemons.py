@@ -19,6 +19,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import restart
 from codex_refactor_loop.restart import DAEMON_COMMANDS, RestartConfig, RestartDaemons
 
 
@@ -107,6 +108,13 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
+
+    def test_help_exits_without_starting_daemons(self) -> None:
+        with mock.patch.object(restart.RestartDaemons, "run") as run:
+            with self.assertRaises(SystemExit) as raised:
+                restart.main(["--help"])
+        self.assertEqual(0, raised.exception.code)
+        run.assert_not_called()
 
     def test_idempotent_when_daemon_fresh(self) -> None:
         self.run_helper()
