@@ -133,6 +133,20 @@ def ensure_worktree(
     return True
 
 
+def remote_branch_exists(
+    *,
+    main_repo: Path,
+    branch: str,
+    command_runner=run,
+    logger: Callable[[str], None] = log,
+) -> bool:
+    result = command_runner(["git", "ls-remote", "--exit-code", "--heads", "origin", branch], cwd=main_repo)
+    if result.returncode != 0 or not result.stdout.strip():
+        logger(f"ALERT: missing remote integration branch origin/{branch}")
+        return False
+    return True
+
+
 def codex_resolve_in_flight(
     *,
     main_repo: Path,
@@ -414,14 +428,12 @@ class IntegrationSyncDaemon:
                 "list",
                 "--state",
                 "open",
-                "--head",
-                self.integration,
                 "--base",
                 self.review_base,
                 "--limit",
-                "1",
+                "100",
                 "--json",
-                "number,headRefName,baseRefName",
+                "number,headRefName,baseRefName,headRefOid",
             ],
             cwd=self.main_repo,
         )
@@ -433,7 +445,17 @@ class IntegrationSyncDaemon:
         except json.JSONDecodeError:
             self.log("skip release-rollup detector: open PR query returned invalid JSON")
             return True
-        return bool(rows)
+        integration_sha = self.remote_branch_sha(self.worktree, self.integration)
+        if not integration_sha:
+            return True
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            head = str(row.get("headRefName") or "")
+            head_sha = str(row.get("headRefOid") or "")
+            if head == self.integration or (head.startswith("rollup/") and head_sha == integration_sha):
+                return True
+        return False
 
     def release_rollup_event_recently_emitted(self, integration_sha: str, now: datetime) -> bool:
         if self.release_rollup_cooldown_seconds <= 0 or not self.pending_events_file.exists():
@@ -536,14 +558,12 @@ class IntegrationSyncDaemon:
                 "list",
                 "--state",
                 "merged",
-                "--head",
-                self.integration,
                 "--base",
                 self.review_base,
                 "--limit",
-                "1",
+                "100",
                 "--json",
-                "number,headRefOid,mergedAt",
+                "number,headRefName,headRefOid,mergedAt",
             ],
             cwd=self.main_repo,
         )
@@ -556,7 +576,17 @@ class IntegrationSyncDaemon:
             return RollupDetection("ambiguous")
         if not rows:
             return None
-        row = rows[0]
+        row = None
+        for candidate in rows:
+            if not isinstance(candidate, dict):
+                continue
+            head_name = str(candidate.get("headRefName") or "")
+            head_oid = str(candidate.get("headRefOid") or "").strip()
+            if head_name == self.integration or head_name.startswith("rollup/") or head_oid == expected_remote_sha:
+                row = candidate
+                break
+        if row is None:
+            return None
         old_head = (row.get("headRefOid") or "").strip()
         if not old_head:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-headRefOid")
@@ -636,6 +666,14 @@ class IntegrationSyncDaemon:
 
     def tick(self) -> None:
         cwd = self.worktree
+        if not remote_branch_exists(
+            main_repo=self.main_repo,
+            branch=self.integration,
+            command_runner=self.run,
+            logger=self.log,
+        ):
+            self.append_pending_event("missing-integration-branch", self.integration)
+            return
         if not cwd.exists():
             self.log(f"worktree {cwd} missing, attempting create")
             if not self.ensure_worktree():

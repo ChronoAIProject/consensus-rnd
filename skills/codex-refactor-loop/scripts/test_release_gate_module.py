@@ -212,6 +212,8 @@ class ReleaseGateModuleTests(unittest.TestCase):
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56", source)
         self.assertIn("decision-artifact-only", source)
+        self.assertNotIn('["git"', source)
+        self.assertNotIn('"git"', source)
         for forbidden in (
             "dispatch_queue(",
             "pending_events(",

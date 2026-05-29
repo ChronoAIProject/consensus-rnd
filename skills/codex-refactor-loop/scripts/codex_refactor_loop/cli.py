@@ -99,6 +99,11 @@ COMMANDS: dict[str, CommandSpec] = {
         "invoke Python controller action open_pr_with_label",
         ("gh-open", "gh-label"),
     ),
+    "open-release-rollup-pr": CommandSpec(
+        controller_actions_main,
+        "open release rollup PR from throwaway head branch",
+        ("read-git", "git-push", "gh-open", "gh-label"),
+    ),
     "apply-human-label": CommandSpec(
         controller_actions_main,
         "apply maintainer-decision label after guard checks",
@@ -161,7 +166,7 @@ class RuntimeCommandRouter:
         if spec is None:
             sys.stderr.write(f"unknown command: {command}\n")
             return 2
-        if command in {"merge-pr", "open-pr", "apply-human-label", "safe-push", "safe-sync-main"}:
+        if command in {"merge-pr", "open-pr", "open-release-rollup-pr", "apply-human-label", "safe-push", "safe-sync-main"}:
             return spec.handler([command, *args])
         return spec.handler(args)
 

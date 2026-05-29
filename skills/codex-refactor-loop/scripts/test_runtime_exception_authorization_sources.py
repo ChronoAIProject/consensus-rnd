@@ -15,6 +15,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 MIRROR_RELATIVE = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"
 MIRROR = REPO_ROOT / MIRROR_RELATIVE
+REPO_RULES = REPO_ROOT / "CLAUDE.md"
 
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
@@ -57,6 +58,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.mirror = read(MIRROR)
+        self.repo_rules = read(REPO_RULES)
 
     def test_mirror_file_exists_and_is_versionable(self) -> None:
         self.assertTrue(MIRROR.exists())
@@ -129,6 +131,21 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(grant=grant):
                 self.assertNotIn(grant, self.mirror)
+
+    def test_integration_sync_ls_remote_is_authorized_only_as_readonly_branch_probe(self) -> None:
+        expected_command = "git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH"
+        integration_entry = mirror_entry(self.mirror, "integration-sync-daemon-53")
+
+        self.assertIn(expected_command, self.repo_rules)
+        self.assertIn(expected_command, self.skill)
+        self.assertIn(expected_command, integration_entry)
+        self.assertIn("read-only", integration_entry)
+        self.assertIn("remote integration branch existence only", integration_entry)
+        self.assertIn("no worker-diff commit", integration_entry)
+        self.assertIn("no PR create, merge, close, or edit", integration_entry)
+
+        other_mirror_entries = self.mirror.replace(integration_entry, "")
+        self.assertNotIn(expected_command, other_mirror_entries)
 
 
 if __name__ == "__main__":
