@@ -33,6 +33,15 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
+## Two entry modes
+
+The loop has two supported entry modes:
+
+- `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Phase 9.
+- `issue-driven / Path A`: create or reuse a concrete GitHub issue, add `auto-loop`, `phase9-auto-solve`, `🔍 phase:design-solving`, and `🤖 human:auto-推进`, then let the controller sweep dispatch Phase 9 directly.
+
+Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Phase 9 solver consensus and meta-judge consensus before implementation.
+
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-140):
   Old pattern: host.env.example documented only a subset of host
@@ -2126,6 +2135,12 @@ conformance, and core abstractions. There is no post-consensus maintainer approv
 ratification, reinstall ratification, or philosophy escalation gate.
 
 Policy: **3/3 unanimous required** — anything less goes through convergence until consensus or true stall.
+
+### Solver source contract
+
+Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_SOURCE_REF=gh-issue-<N>` means `gh issue view <N>` issue body/comments are the scope source. If an issue body or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated.
+
+Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues.
 
 ### Default solver roles
 
