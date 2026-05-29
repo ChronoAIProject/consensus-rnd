@@ -146,7 +146,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, top)
 
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
-        phase9 = section_after_heading(self.skill, "Phase 9 — Multi-solver design consensus (sole authorization gate)")
+        phase9 = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)",
+        )
         for needle in (
             "### Solver source contract",
             "WORK_UNIT_SOURCE_REF",

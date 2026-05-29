@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source-regression tests for Phase 9 solver source contracts."""
+"""Source-regression tests for Consensus-rnd Phase design-consensus solver source contracts."""
 
 from __future__ import annotations
 
