@@ -8,11 +8,14 @@ from __future__ import annotations
 # labels, legacy aliases, and dual-read migration planning.
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Iterable, Sequence
+
+from .context import LoopContext, LoopContextError
 
 
 CANONICAL_PREFIX = "crnd"
@@ -351,8 +354,16 @@ def _spec_dict(spec: LabelSpec) -> dict[str, object]:
 
 
 def _load_gh_labels() -> list[dict[str, str]]:
+    try:
+        ctx = LoopContext.load(env=dict(os.environ), read_only=True, cwd=os.getcwd())
+    except LoopContextError as exc:
+        raise RuntimeError(f"cannot load host context for gh label list: {exc}") from exc
+    if not ctx.gh_repo_slug:
+        raise RuntimeError("GH_REPO_SLUG is unset; unsafe to infer GitHub repository")
     result = subprocess.run(
-        ["gh", "label", "list", "--json", "name,description,color", "--limit", "1000"],
+        ["gh", "label", "list", "--repo", ctx.gh_repo_slug, "--json", "name,description,color", "--limit", "1000"],
+        cwd=str(ctx.repo_root),
+        env=ctx.env_for_subprocess(),
         capture_output=True,
         text=True,
         check=False,

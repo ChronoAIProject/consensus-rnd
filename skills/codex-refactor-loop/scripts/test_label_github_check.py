@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -106,14 +107,42 @@ class LabelGithubCheckTests(unittest.TestCase):
             stdout=json.dumps([{"name": labels.PHASE_FIXING, "description": "x", "color": "ffffff"}]),
             stderr="",
         )
-        with mock.patch("codex_refactor_loop.labels.subprocess.run", return_value=completed) as run:
-            self.assertEqual(labels._load_gh_labels(), [{"name": labels.PHASE_FIXING, "description": "x", "color": "ffffff"}])
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            refactor_loop = repo / ".refactor-loop"
+            refactor_loop.mkdir()
+            (refactor_loop / "host.env").write_text(
+                f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
+                encoding="utf-8",
+            )
+            source_env = {"PATH": "/usr/bin"}
+            with mock.patch("codex_refactor_loop.labels.subprocess.run", return_value=completed) as run:
+                with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
+                    with mock.patch("codex_refactor_loop.labels.os.environ", source_env):
+                        self.assertEqual(labels._load_gh_labels(), [{"name": labels.PHASE_FIXING, "description": "x", "color": "ffffff"}])
         run.assert_called_once_with(
-            ["gh", "label", "list", "--json", "name,description,color", "--limit", "1000"],
+            ["gh", "label", "list", "--repo", "owner/repo", "--json", "name,description,color", "--limit", "1000"],
+            cwd=str(repo.resolve()),
+            env=mock.ANY,
             capture_output=True,
             text=True,
             check=False,
         )
+        self.assertEqual(run.call_args.kwargs["env"]["GH_REPO_SLUG"], "owner/repo")
+
+    def test_load_gh_labels_fails_closed_when_repo_slug_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            refactor_loop = repo / ".refactor-loop"
+            refactor_loop.mkdir()
+            (refactor_loop / "host.env").write_text(f'export REPO_ROOT="{repo}"\n', encoding="utf-8")
+            source_env = {"PATH": "/usr/bin"}
+            with mock.patch("codex_refactor_loop.labels.subprocess.run") as run:
+                with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
+                    with mock.patch("codex_refactor_loop.labels.os.environ", source_env):
+                        with self.assertRaisesRegex(RuntimeError, "GH_REPO_SLUG is unset"):
+                            labels._load_gh_labels()
+        run.assert_not_called()
 
     def test_design_issue_labels_cli_returns_catalog_bundle(self) -> None:
         stdout = io.StringIO()
