@@ -253,6 +253,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, router)
 
+    def test_skill_documents_cli_runtime_authority_fact_source(self) -> None:
+        required = (
+            "Refactor (iter1/issue-166)",
+            "Old pattern: CLI command authority was represented by coarse read_only metadata",
+            "New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source",
+            "dev-sync's integration-worktree git surface",
+            "## CLI runtime authority fact source(per #166)",
+            "cli.py::COMMANDS[*].authority",
+            "unique mechanical fact source for CLI runtime command authority",
+            "CommandSpec.authority",
+            "inline closed-token tuple",
+            "git/gh/spawn/write-artifact/label/merge",
+            "narrow allowlist",
+            "durable authorization source",
+            "no lifecycle authority by default",
+            "Worker prompt authority remains in prompt contracts and prompt tests",
+            "not as pseudo-commands in `COMMANDS`",
+            "behavior test and source-regression anchor",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")

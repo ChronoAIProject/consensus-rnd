@@ -35,35 +35,105 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 class CommandSpec:
     handler: Callable[[Sequence[str] | None], int]
     description: str
-    read_only: bool = False
+    authority: tuple[str, ...]
 
 
+# Refactor (iter1/issue-166): Old pattern: CommandSpec exposed a coarse
+# read_only boolean, so daemon/controller git, GitHub, spawn, and artifact
+# surfaces were inferred from prose and could drift from runtime. New principle:
+# COMMANDS keeps one inline closed-token authority tuple per command as the
+# mechanical CLI authority fact source; named runtime exceptions, such as
+# dev-sync's integration-worktree carveout, must be explicit here and in tests.
 COMMANDS: dict[str, CommandSpec] = {
-    "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor"),
-    "peek": CommandSpec(peek_main, "run the Python read-only state sweep", read_only=True),
-    "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", read_only=True),
-    "restart-daemons": CommandSpec(restart_main, "run the Python daemon restart helper"),
-    "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", read_only=True),
-    "comment-monitor": CommandSpec(comment_monitor_main, "run the Python comment monitor daemon"),
-    "concurrency": CommandSpec(concurrency_main, "run the Python concurrency monitor or read-only counter"),
-    "progress-reporter": CommandSpec(progress_reporter_main, "run the Python progress reporter daemon"),
-    "dev-sync": CommandSpec(dev_sync_main, "run the Python integration sync daemon"),
-    "phase9-router": CommandSpec(phase9_router_main, "run the Python Phase 9 router"),
-    "release-gate": CommandSpec(release_gate_main, "run the Python auto release gate"),
-    "release-required-checks": CommandSpec(release_required_checks_main, "check exact release required check-runs", read_only=True),
-    "merge-pr": CommandSpec(controller_actions_main, "invoke Python controller action merge_pr"),
-    "open-pr": CommandSpec(controller_actions_main, "invoke Python controller action open_pr_with_label"),
-    "apply-human-label": CommandSpec(controller_actions_main, "apply maintainer-decision label after guard checks"),
-    "safe-push": CommandSpec(controller_actions_main, "push after bounded fetch/rebase catch-up"),
-    "safe-sync-main": CommandSpec(controller_actions_main, "catch current branch up to the remote tip"),
-    "post-banner": CommandSpec(banners.main, "post a controller status banner"),
-    "check-degradation": CommandSpec(degradation_main, "run the static skill degradation check", read_only=True),
-    "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", read_only=True),
-    "apply-sync": CommandSpec(sync_apply_main, "apply an IntegrationSyncRequest artifact"),
-    "apply-triage": CommandSpec(triage_main, "apply a ManualIssueTriageDecision artifact"),
-    "log-retention": CommandSpec(retention_main, "run daemonless log retention"),
-    "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points"),
-    "sync-request": CommandSpec(sync_requests_main, "validate or emit IntegrationSyncRequest artifacts"),
+    "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
+    "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
+    "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
+    "restart-daemons": CommandSpec(
+        restart_main,
+        "run the Python daemon restart helper",
+        ("spawn-daemon", "write-state", "delete-log"),
+    ),
+    "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", ("read-state", "read-git")),
+    "comment-monitor": CommandSpec(
+        comment_monitor_main,
+        "run the Python comment monitor daemon",
+        ("read-gh", "gh-reaction", "gh-comment", "write-state", "write-event"),
+    ),
+    "concurrency": CommandSpec(
+        concurrency_main,
+        "run the Python concurrency monitor or read-only counter",
+        ("read-process", "read-gh", "write-state", "write-event", "spawn", "write-artifact"),
+    ),
+    "progress-reporter": CommandSpec(
+        progress_reporter_main,
+        "run the Python progress reporter daemon",
+        ("read-gh", "gh-comment", "write-state"),
+    ),
+    "dev-sync": CommandSpec(
+        dev_sync_main,
+        "run the Python integration sync daemon",
+        ("read-git", "read-gh", "git-fetch", "git-worktree", "write-event", "write-artifact", "spawn"),
+    ),
+    "phase9-router": CommandSpec(
+        phase9_router_main,
+        "run the Python Phase 9 router",
+        ("read-log", "write-event", "write-artifact", "spawn"),
+    ),
+    "release-gate": CommandSpec(
+        release_gate_main,
+        "run the Python auto release gate",
+        ("read-state", "read-gh", "write-artifact"),
+    ),
+    "release-required-checks": CommandSpec(
+        release_required_checks_main,
+        "check exact release required check-runs",
+        ("read-gh",),
+    ),
+    "merge-pr": CommandSpec(
+        controller_actions_main,
+        "invoke Python controller action merge_pr",
+        ("read-gh", "gh-merge", "gh-label", "gh-close", "git-worktree", "write-state"),
+    ),
+    "open-pr": CommandSpec(
+        controller_actions_main,
+        "invoke Python controller action open_pr_with_label",
+        ("gh-open", "gh-label"),
+    ),
+    "apply-human-label": CommandSpec(
+        controller_actions_main,
+        "apply maintainer-decision label after guard checks",
+        ("read-state", "gh-label"),
+    ),
+    "safe-push": CommandSpec(
+        controller_actions_main,
+        "push after bounded fetch/rebase catch-up",
+        ("git-fetch", "git-rebase", "git-push"),
+    ),
+    "safe-sync-main": CommandSpec(
+        controller_actions_main,
+        "catch current branch up to the remote tip",
+        ("git-fetch", "git-rebase"),
+    ),
+    "post-banner": CommandSpec(banners.main, "post a controller status banner", ("gh-comment",)),
+    "check-degradation": CommandSpec(
+        degradation_main,
+        "run the static skill degradation check",
+        ("read-source", "read-state"),
+    ),
+    "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
+    "apply-sync": CommandSpec(
+        sync_apply_main,
+        "apply an IntegrationSyncRequest artifact",
+        ("read-artifact", "write-artifact", "git-fetch", "git-merge", "git-rebase", "git-reset", "git-push"),
+    ),
+    "apply-triage": CommandSpec(
+        triage_main,
+        "apply a ManualIssueTriageDecision artifact",
+        ("read-artifact", "write-artifact", "read-gh", "gh-comment", "gh-label", "gh-edit"),
+    ),
+    "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
+    "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points", ("write-source",)),
+    "sync-request": CommandSpec(sync_requests_main, "validate IntegrationSyncRequest artifacts", ("read-artifact",)),
 }
 
 
