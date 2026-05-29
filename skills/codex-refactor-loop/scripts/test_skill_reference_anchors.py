@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,10 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 README_MD = REPO_ROOT / "README.md"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
+
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop.workflow_stages import WORKFLOW_STAGES, format_stage  # noqa: E402
 
 
 def read(path: Path) -> str:
@@ -108,6 +113,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, available)
 
+    def test_workflow_stage_index_uses_registry_display_and_anchors(self) -> None:
+        available = reference_anchors(self.skill)
+        index = section_after_heading(self.skill, "Workflow Stage Index")
+        self.assertIn("scripts/codex_refactor_loop/workflow_stages.py", self.skill)
+        for stage in WORKFLOW_STAGES:
+            with self.subTest(slug=stage.slug):
+                self.assertIn(format_stage(stage), index)
+                self.assertIn(stage.slug, index)
+                self.assertIn(stage.detail_anchor, available)
+
     def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
         skill_lines = len(self.skill.splitlines())
 
@@ -131,7 +146,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(needle, top)
 
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
-        phase9 = section_after_heading(self.skill, "Phase 9 — Multi-solver design consensus (sole authorization gate)")
+        phase9 = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)",
+        )
         for needle in (
             "### Solver source contract",
             "WORK_UNIT_SOURCE_REF",

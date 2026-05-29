@@ -137,7 +137,7 @@ def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None =
     comment_artifact_path = _repo_artifact_path(data.get("comment_artifact_path"))
     if verdict == "accept":
         if add_labels != ACCEPT_LABELS:
-            raise ManualIssueTriageDecisionError("accept add_labels must be fixed Phase 9 labels")
+            raise ManualIssueTriageDecisionError("accept add_labels must be fixed design-consensus labels")
         if not body_artifact_path:
             raise ManualIssueTriageDecisionError("accept requires body_artifact_path")
     else:

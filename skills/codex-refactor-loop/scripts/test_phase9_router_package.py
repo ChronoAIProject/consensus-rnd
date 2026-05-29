@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Behavior tests for the packaged Phase 9 router module."""
+"""Behavior tests for the packaged Consensus-rnd Phase design-consensus router module."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -85,6 +86,11 @@ class Phase9RouterPackageTests(unittest.TestCase):
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["149-3-delete", "149-3-minimal", "149-3-structural"],
         )
+        prompt = (self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue149-r3-minimal.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Consensus-rnd Phase design-consensus minimal solver", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
 
     def test_converge_solver_prompt_declares_issue_source_ref(self) -> None:
         self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")

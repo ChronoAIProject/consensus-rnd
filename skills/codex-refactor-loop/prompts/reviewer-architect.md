@@ -53,7 +53,7 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: no architectural concerns; merge OK from architect angle.
 - **comment**: minor observations or improvements; not blocking but worth surfacing in the PR comment.

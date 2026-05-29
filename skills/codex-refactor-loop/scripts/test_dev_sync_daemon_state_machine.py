@@ -246,7 +246,7 @@ class IntegrationSyncRequestSchemaTests(unittest.TestCase):
 class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
     def test_skill_phase6_names_detector_and_controller_apply_boundary(self) -> None:
         text = SKILL_MD.read_text(encoding="utf-8")
-        self.assertIn("## Named runtime exception — integration sync daemon phase-6 controller boundary", text)
+        self.assertIn("## Named runtime exception — integration sync daemon integration-sync controller boundary", text)
         self.assertIn("daemon-owned detect-and-emit plus controller-owned git apply", text)
         self.assertIn("integration sync request artifacts", text)
 

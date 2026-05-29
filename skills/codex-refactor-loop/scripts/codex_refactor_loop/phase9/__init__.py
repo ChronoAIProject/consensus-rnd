@@ -1,4 +1,4 @@
-"""Phase 9 deterministic routing helpers."""
+"""Design-consensus deterministic routing helpers."""
 
 from __future__ import annotations
 

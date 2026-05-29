@@ -147,7 +147,7 @@ class PackageTriageDecisionTests(unittest.TestCase):
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=["auto-loop"])
         with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
             self.assertEqual(apply_decision(self.config, self.decision_path, issue_number=53, verdict="accept"), 2)
-        self.assertIn("accept add_labels must be fixed Phase 9 labels", self.rejected_record().read_text(encoding="utf-8"))
+        self.assertIn("accept add_labels must be fixed design-consensus labels", self.rejected_record().read_text(encoding="utf-8"))
 
     def test_rejects_path_traversal_and_missing_final_sentinel_before_github_mutation(self) -> None:
         self.write_decision(comment_artifact_path="../../../etc/passwd")

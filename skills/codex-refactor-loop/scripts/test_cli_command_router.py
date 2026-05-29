@@ -154,6 +154,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("codex-refactor-loop controller command router", result.stdout)
 
+    def test_phase9_router_is_compatibility_alias_for_design_consensus(self) -> None:
+        self.assertIn("phase9-router", COMMANDS)
+        self.assertIn("compatibility alias", COMMANDS["phase9-router"].description)
+        self.assertIn("design-consensus router", COMMANDS["phase9-router"].description)
+
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CLI), "does-not-exist"],

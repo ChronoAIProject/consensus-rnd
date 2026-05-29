@@ -3,7 +3,7 @@ name: codex-refactor-loop
 description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
 > Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
-> New principle: SKILL.md 仅留 controller 契约 + phase index + 硬不变量.
+> New principle: SKILL.md 仅留 controller 契约 + workflow stage index + 硬不变量.
 > Maintainer directive merges the former REFERENCE.md back into this single SKILL.md; use intra-file anchor links.
 > Refactor (iter1/issue-141): Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
 > New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 consensus-rnd-cli restart-daemons 不无限阻塞。
@@ -17,16 +17,16 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, `consensus-rnd-cli controller actions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
-| Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Phase 9 allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
+| Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
 <!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
 -->
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
-| First wakeup | Phase 0 bootstrap is ordered and mandatory before any normal phase. | Run the Phase 0 checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
+| First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
-| 3/3 consensus | Concrete plans require Phase 9 multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [phase 9 details](#phase-9-details) | `solver-*.md`, `meta-judge.md` |
+| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `👤 human:需-maintainer-决策` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | `consensus-rnd-cli controller actions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
@@ -37,10 +37,12 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 
 The loop has two supported entry modes:
 
-- `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Phase 9.
-- `issue-driven / Path A`: create or reuse a concrete GitHub issue, add `auto-loop`, `phase9-auto-solve`, `🔍 phase:design-solving`, and `🤖 human:auto-推进`, then let the controller sweep dispatch Phase 9 directly.
+- `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Consensus-rnd Phase design-consensus.
+- `issue-driven / Path A`: create or reuse a concrete GitHub issue, add `auto-loop`, `phase9-auto-solve`, `🔍 phase:design-solving`, and `🤖 human:auto-推进`, then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly.
 
-Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Phase 9 solver consensus and meta-judge consensus before implementation.
+Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
+
+Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The closed registry is the only current controller workflow stage vocabulary; public stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
 
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-170):
@@ -66,7 +68,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$TEST_CMD` | required | LoopContext | host shell command string | fail closed for test-required work; callers must execute with `bash -lc "$TEST_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$INTEGRATION_BRANCH` | defaulted | sync helpers | `auto-refact-dev` | default to `auto-refact-dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
-| `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` for Phase 0 fixed-point and prompt evidence | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
+| `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` for Consensus-rnd Phase bootstrap fixed-point and prompt evidence | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
 | `$RELEASE_AUTO_MIN_MERGES` | defaulted | release-gate | `1` | default to `1` recent merge for stability scoring | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | defaulted | release-gate | `2` | default to `2` hours since last release decision | release-gate | `test_auto_release_gate.py` |
@@ -190,7 +192,7 @@ Command contract:
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller or `release.yml` owns bump/commit/push. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
 
-Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `⏸️ phase:blocked` PRs; zero `👤 human:需-maintainer-决策` labels; zero Phase 8 reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
+Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `⏸️ phase:blocked` PRs; zero `👤 human:需-maintainer-决策` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
 
 `release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, host opt-in name, and lifecycle owner.
 
@@ -240,7 +242,7 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 - **Behavior tests**:`test_statusline` < 200ms + 各 state icon + freeze 指示 + daemon health 显示;`test_concurrency_monitor::SnapshotDaemonHealthFieldTests` 覆盖 fresh / stale / malformed / missing-dir / 动态发现 / snapshot 字段。
 - **Source-regression**:本段 + Named exception 子段 + install one-liner。
 
-授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#statusline-51`(Phase 9 r3 3/3 unanimous consensus on C framing)。
+授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#statusline-51`(Consensus-rnd Phase design-consensus r3 3/3 unanimous consensus on C framing)。
 
 ## Anti-stop restart helper cron/launchd install(per #49)
 
@@ -255,7 +257,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 ## Named runtime exception — anti-stop restart helper(per #49)
 
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Phase 9 r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
 - **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
@@ -263,11 +265,11 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat skip / stale/missing/malformed heartbeat repair / dead pid repair / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
 - **Source-regression**: `AntiStopRestartHelperContractTests` + `LogRetentionSourceRegressionTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 mirror authorization path、helper singleton check + actor-owned heartbeat freshness check、controller wakeup ordering、anti-regression forbidden tokens、no wrapper sidecar heartbeat writer、direct rm、no archive/index/new daemon。
 
-授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Phase 9 r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
+授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Consensus-rnd Phase design-consensus r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
 `consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md` and `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
 
@@ -296,26 +298,26 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
 - If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
 
-## Phase Index
+## Workflow Stage Index
 
-The phase index is the local routing map. It intentionally links to heavy details instead of inlining them.
+The workflow stage index is the local routing map. It intentionally links to heavy details instead of inlining them.
 
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
-| Phase 0 | Session bootstrap. Must complete before normal routing. | [Phase 0 details](#phase-0-details) |
-| Phase 1 | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
-| Phase 2 | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](#phase-routing-details) |
-| Phase 3 | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
-| Phase 4 | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](#merge-and-push-details) |
-| Phase 5 | Watch remote CI after push; classify failures and route fix/test-add work immediately. | [remote CI details](#remote-ci-details) |
-| Phase 6 | Integration sync is daemon-owned detect-and-emit plus controller-owned git apply. | [daemon command bodies](#daemon-command-bodies) |
-| Phase 7 | Sweep design issues and maintainer comments every wakeup. External issues enter through explicit labels or triage. | [design issue details](#design-issue-details) |
-| Phase 8 | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [phase 8 details](#phase-8-details) |
-| Phase 9 | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [phase 9 details](#phase-9-details) |
+| Consensus-rnd Phase bootstrap | Session bootstrap. Must complete before normal routing. | [Consensus-rnd Phase bootstrap details](#bootstrap-details) |
+| Consensus-rnd Phase work-intake | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
+| Consensus-rnd Phase implementation | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](#phase-routing-details) |
+| Consensus-rnd Phase verification | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
+| Consensus-rnd Phase publish | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](#merge-and-push-details) |
+| Consensus-rnd Phase ci-watch | Watch remote CI after push; classify failures and route fix/test-add work immediately. | [remote CI details](#remote-ci-details) |
+| Consensus-rnd Phase integration-sync | Integration sync is daemon-owned detect-and-emit plus controller-owned git apply. | [daemon command bodies](#daemon-command-bodies) |
+| Consensus-rnd Phase design-intake | Sweep design issues and maintainer comments every wakeup. External issues enter through explicit labels or triage. | [design issue details](#design-issue-details) |
+| Consensus-rnd Phase review-gate | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [review-gate details](#review-gate-details) |
+| Consensus-rnd Phase design-consensus | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [design-consensus details](#design-consensus-details) |
 
-## Phase 0 — Bootstrap (session bootstrap)
+## Consensus-rnd Phase bootstrap — Bootstrap (session bootstrap)
 
-Phase 0 is mandatory and ordered for each controller session bootstrap. Do not spawn normal actors before it completes.
+Consensus-rnd Phase bootstrap is mandatory and ordered for each controller session bootstrap. Do not spawn normal actors before it completes.
 
 1. `source .refactor-loop/host.env` from `$REPO_ROOT`; if it is absent, unreadable, or lacks required values, fail closed.
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
@@ -327,10 +329,10 @@ Phase 0 is mandatory and ordered for each controller session bootstrap. Do not s
 8. ensure all 5 restart-helper-managed daemons are alive as singletons: `consensus-rnd-cli concurrency`, `consensus-rnd-cli progress-reporter`, `consensus-rnd-cli comment-monitor`, `consensus-rnd-cli dev-sync`, and `consensus-rnd-cli phase9-router`. The persistent daemon-event Monitor bridge is armed separately in step 9.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
-11. Post a GitHub status card for Phase 0 completion or blocked state.
+11. Post a GitHub status card for Consensus-rnd Phase bootstrap completion or blocked state.
 12. confirm the daemon-event Monitor bridge is still active before ending; task-notification and ScheduleWakeup are only turn-level completion/fallback signals, not Monitor substitutes.
 
-Phase 0 anti-patterns stay local because they are safety gates:
+Consensus-rnd Phase bootstrap anti-patterns stay local because they are safety gates:
 
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
@@ -350,16 +352,16 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
-| `META_RESOLVED:re-design` | Close/withdraw current path and restart Phase 9 only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
+| `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
 | `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策`, passing the full marker source; the helper fails closed without that marker and posts the reason banner only if not skipped by maintainer-directive. |
-| `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Phase 8 reviewers. |
-| `IMPLEMENT_DONE:blocked` | Route to recovery or Phase 9 depending on reason. |
-| Latest complete Phase 8 reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
-| Latest complete Phase 8 reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
-| Latest complete Phase 8 reviewer round resolves to `FIX` | Dispatch fix codex for next round using reject evidence as blocking input. |
-| Phase 8 gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or re-dispatch the missing/invalid reviewer; never merge. |
+| `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Consensus-rnd Phase review-gate reviewers. |
+| `IMPLEMENT_DONE:blocked` | Route to recovery or Consensus-rnd Phase design-consensus depending on reason. |
+| Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
+| Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
+| Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `FIX` | Dispatch fix codex for next round using reject evidence as blocking input. |
+| Consensus-rnd Phase review-gate gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or re-dispatch the missing/invalid reviewer; never merge. |
 | `FIX_DONE` | Dispatch reviewers again. |
 | `TEST_ADD_DONE` | Commit/push and resume CI watch. |
 
@@ -418,15 +420,15 @@ Controller duties:
 - Spawn codex workers.
 - Own git topology: commit, merge, push, PR create/merge/close.
 - Maintain wake source and concurrency floor.
-- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Phase 9 allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge`, valid `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
+- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Consensus-rnd Phase design-consensus allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge`, valid `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
 
 Controller non-duties:
 
 - Do not edit product/refactor code as the controller.
 - Do not run reviewer, solver, implementer, or verifier reasoning inline when a codex role exists.
-- Do not fabricate consensus without Phase 9.
+- Do not fabricate consensus without Consensus-rnd Phase design-consensus.
 - Do not hide status in local files only.
-- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Phase 9-authorized consensus-rnd-cli phase9-router private ledger plus existing-format pending-event append for narrow deterministic Phase 9 dispatch; do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
+- Do not create new runtime abstractions, event envelopes, state versions, or producer registries for this split, except the Consensus-rnd Phase design-consensus-authorized consensus-rnd-cli phase9-router private ledger plus existing-format pending-event append for narrow deterministic Consensus-rnd Phase design-consensus dispatch; do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority.
 
 ## Concurrency Floor
 
@@ -438,7 +440,7 @@ The floor is local because it prevents loop stalls.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
 - Count only this repository's loop codexes: command line contains `consensus-rnd-cli spawn-codex` and the absolute `$REPO_ROOT`.
 - Exclude shell ` -c ` wrapper rows so each real codex counts once.
-<!-- Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep consensus-rnd-cli spawn-codex 重新实现 count_in_flight_codex 逻辑,容易跟 daemon 算法漂移。 New principle: 直接调 `python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only` 拿 canonical 整数,或 `--list-codex` 拿每条 supervisor cmdline。禁止 controller 临时 ps/awk pipeline。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+<!-- Refactor (iter4/skill-count-cli-canonical): Old pattern: controller 手 ps | grep consensus-rnd-cli spawn-codex 重新实现 count_in_flight_codex 逻辑,容易跟 daemon 算法漂移。 New principle: 直接调 `python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only` 拿 canonical 整数,或 `--list-codex` 拿每条 supervisor cmdline。禁止 controller 临时 ps/awk pipeline。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 - **Canonical CLI**(controller 强制使用,**禁止**手 `ps | grep`):
   - `python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only` → 打印 canonical 计数(int)并退出
   - `python3 <skill-root>/scripts/consensus-rnd-cli concurrency --list-codex` → 每行一个 supervisor cmdline,scope `$REPO_ROOT` + 排除 ` -c ` wrapper
@@ -446,7 +448,7 @@ The floor is local because it prevents loop stalls.
   - 直接读 daemon 日志 `tail -1 .refactor-loop/logs/concurrency_monitor.log` 也是 canonical 来源;两条路径都比 controller 自重算 ps grep 安全。
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
-- If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Phase 7 / Phase 9 actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
+- If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
 - If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
@@ -471,7 +473,7 @@ Fact source is unique: milestone members = GitHub `🎯 milestone` label. Do not
 
 ## Named runtime exception — concurrency_monitor auto-topup(per #57)
 
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli concurrency` 的 `top_up_from_dispatch_queue` + tick() deficit 分支 = **第二个** Phase 9 / maintainer-directive 等价授权的 controller-runtime 直接 dispatch 路径(narrow allowlist):
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli concurrency` 的 `top_up_from_dispatch_queue` + tick() deficit 分支 = **第二个** Consensus-rnd Phase design-consensus / maintainer-directive 等价授权的 controller-runtime 直接 dispatch 路径(narrow allowlist):
 
 - **Narrow allowlist**: 只在 `actual < max(expected, CODEX_FLOOR)` 且 `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` 非空时 fork `consensus-rnd-cli spawn-codex` detached;不读 prompt body、不决定 cd / log path,只消费 controller / actor 入队 spec。
 - **Host-agnostic**: dispatch JSON schema host-agnostic;cd/prompt/log path 由入队方决定,不含 host fact。
@@ -512,11 +514,11 @@ Phase labels:
 
 | Label | Meaning |
 |---|---|
-| `🔍 phase:design-solving` | Phase 9 solvers/judge active. |
+| `🔍 phase:design-solving` | Consensus-rnd Phase design-consensus solvers/judge active. |
 | `✅ phase:consensus-reached` | Consensus accepted and ready for implementation. |
 | `🛠️ phase:implementing` | Implement codex active. |
 | `🚀 phase:pr-open` | PR exists and is waiting for review/CI route. |
-| `👀 phase:reviewing` | Phase 8 reviewers active. |
+| `👀 phase:reviewing` | Consensus-rnd Phase review-gate reviewers active. |
 | `🔧 phase:fixing` | Fix codex active. |
 | `⚙️ phase:ci-running` | Remote CI watch/fix active. |
 | `🎉 phase:merged` | Work landed. |
@@ -539,7 +541,7 @@ Human labels:
 - manual merge a script cannot execute(rare)
 
 **DO NOT apply when**:
-- architect/quality reviewer 因 "needs Phase 9 artifact" reject → 开真 Phase 9(reflector option A)
+- architect/quality reviewer 因 "needs Consensus-rnd Phase design-consensus artifact" reject → 开真 Consensus-rnd Phase design-consensus(reflector option A)
 - reviewer 与 maintainer prior session directive 冲突 → 把 directive 编码为 `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` artifact + 更新 reviewer prompts 含 "maintainer-directive precedence" 段
 - controller uncertain → reflector,不 label
 - reflector 自己 emit `META_RESOLVED:escalate-human` 但 controller 复审发现 maintainer 已授权 → 撤 label,以 maintainer-directive artifact 替代
@@ -555,11 +557,11 @@ Hard label rules:
 5. PRs must carry `auto-loop` or comment monitoring will miss them.
 6. Bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
 
-## Phase 8 — Multi-Codex PR Review
+## Consensus-rnd Phase review-gate — Multi-Codex PR Review
 
-Phase 8 keeps the consensus merge gate local enough for routing:
+Consensus-rnd Phase review-gate keeps the consensus merge gate local enough for routing:
 
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 1. Dispatch three reviewers in parallel: architect, tests, quality.
 2. Each reviewer posts or emits a `REVIEW_DONE` verdict.
@@ -568,12 +570,12 @@ Phase 8 keeps the consensus merge gate local enough for routing:
 5. `comment` is terminal advisory evidence: surface it, but do not count it as approval and do not dispatch fix for comments alone.
 6. `FIX` dispatches fix codex; fix completion dispatches reviewers again.
 7. After repeated fix failure, dispatch meta-layer reflector before any human label.
-8. Every Phase 8 action posts to the PR for traceability.
-9. Detailed reviewer prompts, retry rules, and anti-spiral safeguards are in [phase 8 details](#phase-8-details).
+8. Every Consensus-rnd Phase review-gate action posts to the PR for traceability.
+9. Detailed reviewer prompts, retry rules, and anti-spiral safeguards are in [review-gate details](#review-gate-details).
 
-## Phase 9 — Multi-Solver Design Consensus
+## Consensus-rnd Phase design-consensus — Multi-Solver Design Consensus
 
-Phase 9 is the sole authorization gate for concrete plans.
+Consensus-rnd Phase design-consensus is the sole authorization gate for concrete plans.
 
 1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
 2. A meta-judge reads all three solver outputs.
@@ -581,8 +583,8 @@ Phase 9 is the sole authorization gate for concrete plans.
 4. `converge:round-N` always routes to another solver round; no hard round cap.
 5. `escalate:stalled` routes to reflector, not directly to human.
 6. Maintainer replies reset the round when they materially change framing.
-7. Any concrete plan bypassing Phase 9 is invalid.
-8. Full consensus card template and solver rules are in [phase 9 details](#phase-9-details).
+7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
+8. Full consensus card template and solver rules are in [design-consensus details](#design-consensus-details).
 
 ## Status Banners
 
@@ -641,26 +643,26 @@ Operational details live in [language policy details](#language-policy-details);
 - [prompts/meta-reflector-stalled.md](prompts/meta-reflector-stalled.md) — meta-reflector self-check prompt for stalled routes.
 - [prompts/design-issue-body.md](prompts/design-issue-body.md) — design issue body template.
 - [prompts/design-issue-reply.md](prompts/design-issue-reply.md) — maintainer-comment analyst prompt.
-- [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Phase 8 architecture reviewer.
-- [prompts/reviewer-tests.md](prompts/reviewer-tests.md) — Phase 8 tests reviewer.
-- [prompts/reviewer-quality.md](prompts/reviewer-quality.md) — Phase 8 quality reviewer.
-- [prompts/review-fix.md](prompts/review-fix.md) — Phase 8 fix worker.
-- [prompts/solver-minimal.md](prompts/solver-minimal.md) — Phase 9 minimal solver.
-- [prompts/solver-structural.md](prompts/solver-structural.md) — Phase 9 structural solver.
-- [prompts/solver-delete.md](prompts/solver-delete.md) — Phase 9 delete/defer solver.
-- [prompts/meta-judge.md](prompts/meta-judge.md) — Phase 9 meta-judge.
+- [prompts/reviewer-architect.md](prompts/reviewer-architect.md) — Consensus-rnd Phase review-gate architecture reviewer.
+- [prompts/reviewer-tests.md](prompts/reviewer-tests.md) — Consensus-rnd Phase review-gate tests reviewer.
+- [prompts/reviewer-quality.md](prompts/reviewer-quality.md) — Consensus-rnd Phase review-gate quality reviewer.
+- [prompts/review-fix.md](prompts/review-fix.md) — Consensus-rnd Phase review-gate fix worker.
+- [prompts/solver-minimal.md](prompts/solver-minimal.md) — Consensus-rnd Phase design-consensus minimal solver.
+- [prompts/solver-structural.md](prompts/solver-structural.md) — Consensus-rnd Phase design-consensus structural solver.
+- [prompts/solver-delete.md](prompts/solver-delete.md) — Consensus-rnd Phase design-consensus delete/defer solver.
+- [prompts/meta-judge.md](prompts/meta-judge.md) — Consensus-rnd Phase design-consensus meta-judge.
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
 - [scripts/consensus-rnd-cli controller actions](scripts/consensus-rnd-cli controller actions) — shared controller helpers.
 - [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
-- [scripts/consensus-rnd-cli ensure-project-rules](scripts/consensus-rnd-cli ensure-project-rules) — Phase 0 fixed-point helper.
+- [scripts/consensus-rnd-cli ensure-project-rules](scripts/consensus-rnd-cli ensure-project-rules) — Consensus-rnd Phase bootstrap fixed-point helper.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
 - [scripts/consensus-rnd-cli restart-daemons](scripts/consensus-rnd-cli restart-daemons) — cron/launchd anti-stop helper for existing daemon wrappers.
 - [scripts/consensus-rnd-cli log-retention](scripts/consensus-rnd-cli log-retention) — daemonless 24h direct-rm helper for `.refactor-loop/logs/*.log`.
 - [scripts/consensus-rnd-cli progress-reporter](scripts/consensus-rnd-cli progress-reporter) — progress comment daemon.
 - [scripts/consensus-rnd-cli comment-monitor](scripts/consensus-rnd-cli comment-monitor) — maintainer comment monitor.
 - [scripts/consensus-rnd-cli dev-sync](scripts/consensus-rnd-cli dev-sync) — integration sync daemon.
-- [scripts/consensus-rnd-cli phase9-router](scripts/consensus-rnd-cli phase9-router) — narrow Phase 9 direct-dispatch daemon.
+- [scripts/consensus-rnd-cli phase9-router](scripts/consensus-rnd-cli phase9-router) — narrow Consensus-rnd Phase design-consensus direct-dispatch daemon.
 - [Detailed reference](#detailed-reference) — heavy runbooks, templates, schemas, and recovery details in this file.
 
 ## Controller Wakeup Checklist
@@ -703,7 +705,7 @@ Priority order when multiple actions are possible:
 When uncertain:
 
 - Prefer a reversible status post plus a correctly scoped codex dispatch.
-- Prefer Phase 9 for design uncertainty.
+- Prefer Consensus-rnd Phase design-consensus for design uncertainty.
 - Prefer reflector for repeated AI-loop disagreement.
 - Prefer recovery playbook for operational failures.
 - Never invent a human gate just because the controller is tired.
@@ -746,20 +748,20 @@ The controller recognizes two producers:
 | Producer | Intake | Controller behavior |
 |---|---|---|
 | `audit` | Default compatibility audit/refactor intake. | Run audit prompt, project accepted clusters into work-unit items, batch by dependencies/risk. |
-| `manual-issue` | Explicit GitHub issue intake via labels/triage. | Normalize problem and verification hints into a design issue, then use Phase 9. |
+| `manual-issue` | Explicit GitHub issue intake via labels/triage. | Normalize problem and verification hints into a design issue, then use Consensus-rnd Phase design-consensus. |
 
 Producer rules:
 
 1. Audit is the default when the user asks for the unattended loop without a narrower producer.
 2. Manual issues enter only through explicit maintainer label or triage monitor routing.
-3. `requires_design` audit clusters open GitHub issues and do not auto-implement until Phase 9 consensus.
+3. `requires_design` audit clusters open GitHub issues and do not auto-implement until Consensus-rnd Phase design-consensus consensus.
 4. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
 5. Batching should prefer independent, low-risk work and preserve dependency ordering.
 6. Detailed producer fields and batching heuristics live in [work-unit contract](#work-unit-contract) and [batching heuristics](#batching-heuristics).
 
 ## Phase Guardrails
 
-Phase 1 guardrails:
+Consensus-rnd Phase work-intake guardrails:
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
 2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`.
@@ -767,7 +769,7 @@ Phase 1 guardrails:
 4. Clean stale worktrees before audit pollution can affect decisions.
 5. For `requires_design`, open or update GitHub design issues and label them `🔍 phase:design-solving` plus `🤖 human:auto-推进`.
 
-Phase 2 guardrails:
+Consensus-rnd Phase implementation guardrails:
 
 1. One implement codex per work unit in the current batch.
 2. Each work unit gets an isolated worktree and branch.
@@ -775,7 +777,7 @@ Phase 2 guardrails:
 4. Implement codex must not commit, push, create PRs, merge, or close issues.
 5. `IMPLEMENT_DONE:ok` means the controller may inspect diff, run host checks, commit, and advance.
 
-Phase 3 guardrails:
+Consensus-rnd Phase verification guardrails:
 
 1. Verifier is independent from implementer.
 2. Verification uses `$BUILD_CMD`, `$TEST_CMD`, and optional `$CI_GUARDS`.
@@ -783,7 +785,7 @@ Phase 3 guardrails:
 4. Rework returns to implement/fix routing, not human by default.
 5. Verification logs still require tail `EXIT=0`.
 
-Phase 4 guardrails:
+Consensus-rnd Phase publish guardrails:
 
 1. Controller owns commit, merge, push, PR create, PR close, and PR merge.
 2. Workers never run git lifecycle commands unless a prompt explicitly says a command is forbidden context.
@@ -791,7 +793,7 @@ Phase 4 guardrails:
 4. After merge/push/open PR, post status and run `consensus-rnd-cli peek`.
 5. Stacked PR mode and single PR mode details live in [merge and push details](#merge-and-push-details).
 
-Phase 5 guardrails:
+Consensus-rnd Phase ci-watch guardrails:
 
 1. Every wakeup checks all open auto-loop PR CI before sleeping.
 2. Red CI routes immediately to classification and fix/test-add dispatch.
@@ -799,20 +801,20 @@ Phase 5 guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Phase 6 guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits integration sync request artifacts and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume those artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
+Consensus-rnd Phase integration-sync guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits integration sync request artifacts and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume those artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
 
-## Named runtime exception — integration sync daemon phase-6 controller boundary
+## Named runtime exception — integration sync daemon integration-sync controller boundary
 The integration sync daemon owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and integration sync request artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.
 
-Phase 7 guardrails:
+Consensus-rnd Phase design-intake guardrails:
 
 1. Sweep design issues every wakeup.
-2. Maintainer replies that materially change framing reset the Phase 9 round.
+2. Maintainer replies that materially change framing reset the Consensus-rnd Phase design-consensus round.
 3. Bot comments and AI sentinel comments do not count as maintainer input.
 4. External issues require explicit opt-in labels; controller wakeup sweep dispatches triage and applies manual issue triage decision artifacts.
-5. Do not auto-implement from a free-form issue without Phase 9 consensus.
+5. Do not auto-implement from a free-form issue without Consensus-rnd Phase design-consensus consensus.
 
-Phase 8 guardrails:
+Consensus-rnd Phase review-gate guardrails:
 
 1. Dispatch architect, tests, and quality reviewers in parallel.
 2. Reviews are tied to a PR head SHA.
@@ -820,7 +822,7 @@ Phase 8 guardrails:
 4. Reviewer consensus must be visible on the PR.
 5. Re-review after push; do not reuse stale approval across materially changed heads.
 
-Phase 9 guardrails:
+Consensus-rnd Phase design-consensus guardrails:
 
 1. Minimal, structural, and delete/defer solvers run for each design round.
 2. Meta-judge consumes all three outputs.
@@ -840,8 +842,8 @@ Use this local triage before opening the heavy recovery playbook:
 | Worktree merge says already up to date unexpectedly | Check cwd and branch before retrying. | [recovery playbook](#recovery-playbook) |
 | Remote CI monitor appears stuck | Check PR checks directly and dispatch fix if red. | [remote CI details](#remote-ci-details) |
 | No codex running with active work | Treat as no-gap violation and spawn next route. | [concurrency floor details](#concurrency-floor-details) |
-| Repeated reviewer/fix loop | Dispatch reflector before human label. | [phase 8 details](#phase-8-details) |
-| Design consensus not converging | Continue rounds or reflector according to judge marker. | [phase 9 details](#phase-9-details) |
+| Repeated reviewer/fix loop | Dispatch reflector before human label. | [review-gate details](#review-gate-details) |
+| Design consensus not converging | Continue rounds or reflector according to judge marker. | [design-consensus details](#design-consensus-details) |
 | Maintainer says stop | Stop visibly, leave state/logs intact, and do not schedule wakeup. | [recovery playbook](#recovery-playbook) |
 
 Recovery rules:
@@ -925,7 +927,7 @@ Maintainer-owned operations:
 2. Approve a real human-needed decision after `META_RESOLVED:escalate-human`.
 3. Stop the loop.
 4. Expand scope beyond the current work unit or repo.
-5. Change product/philosophy boundaries that Phase 9 cannot decide.
+5. Change product/philosophy boundaries that Consensus-rnd Phase design-consensus cannot decide.
 
 ## Detailed reference
 
@@ -998,7 +1000,7 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
 Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `python3 <skill-root>/scripts/consensus-rnd-cli apply-sync` after live-state validation.
-**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync detection/request)、`consensus-rnd-cli phase9-router`(30s narrow Phase 9 deterministic routing)。
+**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync detection/request)、`consensus-rnd-cli phase9-router`(30s narrow Consensus-rnd Phase design-consensus deterministic routing)。
 
 `consensus-rnd-cli restart-daemons` also runs daemonless log retention before daemon freshness checks. `consensus-rnd-cli log-retention` has no lifecycle authority: it reads `$REPO_ROOT/.refactor-loop/host.env`, targets only `$REPO_ROOT/.refactor-loop/logs/*.log`, and directly removes regular log files older than 24h. It must not create archive/index state, scan or delete `.refactor-loop/runs/` or prompts, call GitHub, run git, spawn codex, or become a daemon. Verification lives in `test_log_retention.py`.
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
@@ -1114,7 +1116,7 @@ codex 常把 prompt 里的 marker 模板原样回显到 log(如 prompt 写 `SOLV
 |---|---|---|
 | 派 codex(任何角色) | spawn 同 turn | `## 📊 状态卡片` post 到关联 issue/PR + label transition |
 | Codex 完成(任何角色) | task-notification 处理 | update 卡片(或 post 新卡片说"X 已完成,下一步 Y") |
-| 共识达成 | meta-judge consensus | `## ✅ 共识卡片` post(详见 Phase 9 Consensus action) |
+| 共识达成 | meta-judge consensus | `## ✅ 共识卡片` post(详见 Consensus-rnd Phase design-consensus Consensus action) |
 | Maintainer 评论被识别 | daemon eyes react 后 | `## 📊 状态 — 已收到 maintainer 评论(daemon 识别)` daemon banner |
 | Reflector 决议 | META_RESOLVED:<kind> | `## 🤖 meta-reflector decision: <kind>` post + label 转 |
 | Escalate human | label 加 🆘 | banner 说"✅ 需要 maintainer 决策:具体什么决策" |
@@ -1167,7 +1169,7 @@ gh issue view <N> --json comments --jq '
 - 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
 - Open auto-loop PR 的 CI + state
 - Merge readiness / daemon health / monitor zero_streak 摘要
-- Phase 9 router ledger + pending events 近 10 行
+- Consensus-rnd Phase design-consensus router ledger + pending events 近 10 行
 - Open auto-loop issue + phase label
 
 `consensus-rnd-cli peek` 是 observability-only status lens,只读展示 ledger / pending / readiness / health,不显示 generic marker-to-route recommendation。Route authority remains SKILL Phase Routing + controller clean-exit log-tail sweep + `consensus-rnd-cli phase9-router`。
@@ -1200,9 +1202,9 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
 | META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
-| META_JUDGE_DONE:escalate:stalled | reflector(per Phase 9 路由表) |
+| META_JUDGE_DONE:escalate:stalled | reflector(per Consensus-rnd Phase design-consensus 路由表) |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
-| IMPLEMENT_DONE:ok | controller commit/push/open PR + Phase 8 reviewer × 3 |
+| IMPLEMENT_DONE:ok | controller commit/push/open PR + Consensus-rnd Phase review-gate reviewer × 3 |
 | REVIEW_DONE × 3 + any reject | fix codex r+1 |
 | FIX_DONE | reviewer r+1 |
 | TEST_ADD_DONE | controller commit/push 等 CI |
@@ -1286,7 +1288,7 @@ validate_prompt out.md                                    # check 0 unresolved {
 
 **强制**:
 - 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Phase 8 reviewer policy.
+- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
 - worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
 - PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
 
@@ -1374,8 +1376,8 @@ You are the **Controller**. You never edit production code yourself. You orchest
 
 **默认 worker = codex CLI(`codex exec`),不是 Claude `Agent` / `Task` subagent(强制)**。所有需要「思考」的工作——分析、诊断、设计、实现、验证、review、solve,乃至对本 skill 自身的 baseline / 验证测试——一律 delegate 给 `codex exec`(经 `consensus-rnd-cli spawn-codex`)。❌ 严禁用 Claude `Agent` / `Task` subagent 替代 codex 做这些工作。理由:codex 进程是 harness-tracked、可跨 session 存活、log 落 `.refactor-loop/logs/` 可 sweep、完成发 task-notification、被 concurrency floor 计数——这套无人值守编排的**全部不变量都建立在「worker 是 codex 进程」之上**;Claude subagent 不落盘 marker、不被 floor 计数、不留可 sweep 的状态,会让监控面、恢复逻辑、并发兜底全部失效。`refactor-team` skill 才是 Agent-subagent based 的那套;**本 skill 的 worker 恒为 codex CLI**。
 
-<a id="phase-0-details"></a>
-## Phase 0 — Bootstrap (first wakeup only)
+<a id="bootstrap-details"></a>
+## Consensus-rnd Phase bootstrap — Bootstrap (first wakeup only)
 
 ### 首次唤醒强制序列(MANDATORY — 按序跑完才能 end turn)
 
@@ -1392,11 +1394,11 @@ You are the **Controller**. You never edit production code yourself. You orchest
    - helper 退出非 0 → bootstrap fail closed:不得初始化 state、不得建 labels、不得起 daemon、不得派 audit / solver / reviewer / implement actor。
    - # Refactor (iter1/host-claude-md-fixed-points):
      #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-     #   New principle: Phase 0 ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+     #   New principle: Consensus-rnd Phase bootstrap ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
-3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Phase 9 router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 work-unit producer**(Phase 1,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
@@ -1428,9 +1430,9 @@ git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
 git push -u origin auto-refact-dev 2>/dev/null || true
 ```
 
-Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies to **new** Phase 0 bootstraps only.
+Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies only to **new** Consensus-rnd Phase bootstrap runs.
 
-**`pr_mode` choice (set in Phase 0; do not change mid-loop)**:
+**`pr_mode` choice (set in Consensus-rnd Phase bootstrap; do not change mid-loop)**:
 
 - `"stacked"` (**default**): each cluster opens its own PR. Hard-dep clusters stack (PR B's base = PR A's branch); soft-dep / independent clusters PR against `integration_branch`. Integration branch eventually opens one rollup PR to `review_base_branch`. Reviewer sees small per-cluster PRs and can ack independently; cost is rebase-on-reject when an upstream cluster is changed. This is the right shape for typical refactor loops (3+ clusters, reviewable independently).
 - `"single"`: all clusters merge to `integration_branch` and a single PR targets `review_base_branch`. Simple; reviewer sees one big PR. Use only when the loop is expected to produce ≤ 2 clusters or the user explicitly asks for a single PR.
@@ -1442,12 +1444,12 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 ---
 
 <a id="phase-routing-details"></a>
-## Phase 1 — Work-unit production (audit default)
+## Consensus-rnd Phase work-intake — Work-unit production (audit default)
 
 The default work-unit producer is `audit`. Producer normalization is documented in
 [work-unit contract](#work-unit-contract): accepts only `producer: audit` and `producer: manual-issue`.
-`audit` is the raw artifact producer for this phase; `manual-issue` enters through Phase 7
-triage and must already be reshaped before Phase 9.
+`audit` is the raw artifact producer for this phase; `manual-issue` enters through Consensus-rnd Phase design-intake
+triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
 2. Replace `{{iteration}}` placeholder.
@@ -1469,7 +1471,7 @@ triage and must already be reshaped before Phase 9.
 When task notification fires → **controller validation** before accepting the audit:
 
 - a. Check log tail for the terminal marker: `AUDIT_DONE:...:<N>` or `AUDIT_INCOMPLETE:<reason>`.
-- b. If `AUDIT_INCOMPLETE` → log reason, re-dispatch audit with the missing pieces called out in the prompt header (e.g., "previous audit returned INCOMPLETE because <reason>; deliver the missing artifact this run"). Do NOT proceed to Phase 2 with an incomplete audit.
+- b. If `AUDIT_INCOMPLETE` → log reason, re-dispatch audit with the missing pieces called out in the prompt header (e.g., "previous audit returned INCOMPLETE because <reason>; deliver the missing artifact this run"). Do NOT proceed to Consensus-rnd Phase implementation with an incomplete audit.
 - c. Verify the two output files exist: `audit-iter-N.md` AND `audit-iter-N-candidates.ndjson`. Missing either → treat as INCOMPLETE.
 - d. Verify the candidate file has `>= 25` entries unless the audit body explicitly explains why every analyzer pack command returned 0 hits.
 - e. Verify the audit body contains the 6 fixed-analyzer-pack commands by name with hit counts.
@@ -1495,7 +1497,7 @@ the work-unit fields documented in [work-unit contract](#work-unit-contract) (`w
   `META_JUDGE_DONE`.
 - Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
   a named operational-policy abstraction for compatibility.
-- Phase 7 `manual-issue` intake may dispatch work-unit contract items only after the
+- Consensus-rnd Phase design-intake `manual-issue` intake may dispatch work-unit contract items only after the
   accepted GitHub issue has been reshaped with `kind="manual-work-unit"`,
   `producer="manual-issue"`, `source_ref="gh-issue-<N>"`, `scope_paths`, problem/invariant text,
   and `verification_hints`. It must not fabricate `cluster_id` or `legacy_cluster_id`.
@@ -1517,11 +1519,11 @@ For every cluster with `requires_design: true`:
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record design-pending status on GitHub: the issue body/comment links the source work unit,
    `work_unit_id`, opened timestamp, and current status. Future routing reads GitHub labels,
-   comments, and Phase 9 artifacts, not a root local queue.
-3. Skip the cluster in Phase 2 (do NOT batch it).
+   comments, and Consensus-rnd Phase design-consensus artifacts, not a root local queue.
+3. Skip the cluster in Consensus-rnd Phase implementation (do NOT batch it).
 4. PushNotification: "iter<N> opened design issue #<issue> for cluster-<id>. Auto-loop paused on this cluster pending human design decision."
 
-Update GitHub-visible state, advance to Phase 2 (with requires_design clusters excluded).
+Update GitHub-visible state, advance to Consensus-rnd Phase implementation (with requires_design clusters excluded).
 
 ### Stale-worktree audit pollution(强制 pre-audit cleanup)
 
@@ -1558,7 +1560,7 @@ git branch -D <stale-branch>  # 同 step 一起清
 
 ---
 
-## Phase 2 — Implement (parallel codexes, one per cluster in current batch)
+## Consensus-rnd Phase implementation — Implement (parallel codexes, one per cluster in current batch)
 
 For each cluster in the current batch:
 
@@ -1583,14 +1585,14 @@ For each cluster in the current batch:
 After all parallel dispatches, schedule wakeup 1800s safety net. **End turn.**
 
 When each task notification fires → check log tail for `IMPLEMENT_DONE:<cluster-id>:<status>`:
-- `ok` → advance that cluster to Phase 3 (verify).
+- `ok` → advance that cluster to Consensus-rnd Phase verification (verify).
 - `partial` / `blocked` → post the failed/blocked reason, log it in the run artifact, optionally re-dispatch with corrected prompt.
 
 Do **not** advance the whole batch in lockstep; verify each cluster independently as soon as its implement finishes.
 
 ---
 
-## Phase 3 — Verify (one codex per cluster, independent of implement codex)
+## Consensus-rnd Phase verification — Verify (one codex per cluster, independent of implement codex)
 
 For each cluster whose implement finished `ok`:
 
@@ -1611,13 +1613,13 @@ For each cluster whose implement finished `ok`:
 
 Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{pass, rework, abort}`.
 
-- `pass` → advance to Phase 4 (merge).
+- `pass` → advance to Consensus-rnd Phase publish (merge).
 - `rework` → re-dispatch implement codex with verifier's findings appended.
 - `abort` → post the failure/blocking reason and surface in PushNotification.
 
 ---
 
-## Phase 4 — Merge & Push (controller, not codex)
+## Consensus-rnd Phase publish — Merge & Push (controller, not codex)
 
 <a id="merge-and-push-details"></a>
 ### Post-merge trunk build verify(强制)
@@ -1659,7 +1661,7 @@ For each `pass` cluster, serially:
 
 4. **Branch off** by `pr_mode`:
 
-### Phase 4a — `pr_mode: "single"`
+### Consensus-rnd Phase publish single — `pr_mode: "single"`
 
 5a. Merge cluster branch into `integration_branch`:
     ```bash
@@ -1668,17 +1670,17 @@ For each `pass` cluster, serially:
     ```
 6a. Re-run local CI on integration_branch (catches inter-cluster interaction).
 7a. `git push origin <integration_branch>`.
-8a. Goto Phase 5 (remote CI watch).
+8a. Goto Consensus-rnd Phase ci-watch (remote CI watch).
 
-### Phase 4b — `pr_mode: "stacked"`
+### Consensus-rnd Phase publish stacked — `pr_mode: "stacked"`
 
 5b. **Choose PR base** per the cluster's `dependencies` field from the audit:
     - `dependencies: []` (independent, soft-dep, or batch-disjoint) → base = `integration_branch`.
     - `dependencies: ["cluster-XXX", ...]` (hard-dep — won't compile without the prerequisite) → base = the prerequisite cluster's branch (use the **first**, primary one; document others in PR description).
 
-    **All cluster PRs target the integration branch by default. Never PR directly to `review_base_branch` (dev).** The rollup PR (Phase 4b step 10b, one per iteration) is the only PR that targets `review_base_branch`. Rationale: cluster PRs stay small and reviewer-friendly; the integration branch holds the cumulative refactor state with merge-conflict resolution done once; the rollup PR is the human gate where iter-level rationale (scorecard, cluster ledger, CI guard adds) lives.
+    **All cluster PRs target the integration branch by default. Never PR directly to `review_base_branch` (dev).** The rollup PR (Consensus-rnd Phase publish stacked step 10b, one per iteration) is the only PR that targets `review_base_branch`. Rationale: cluster PRs stay small and reviewer-friendly; the integration branch holds the cumulative refactor state with merge-conflict resolution done once; the rollup PR is the human gate where iter-level rationale (scorecard, cluster ledger, CI guard adds) lives.
 
-    Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Phase 6 sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
+    Edge case — if a maintainer accidentally retargets a cluster PR to `review_base_branch`, the next Consensus-rnd Phase integration-sync sweep detects the mismatch and posts a comment requesting retarget (does NOT auto-edit, to respect maintainer intent).
 
 6b. **Open PR** (**body follows current language policy: 中文 by default; no mandatory parallel English section**):
 
@@ -1720,7 +1722,7 @@ For each `pass` cluster, serially:
 
     Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
 
-7b. **立刻给 PR 加 `auto-loop` label**:`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Phase 4b 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
+7b. **立刻给 PR 加 `auto-loop` label**:`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
 
 7b. Record the PR number in the GitHub banner/comment and run artifact for the active work unit.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
@@ -1728,13 +1730,13 @@ For each `pass` cluster, serially:
       - `git -C <worktree> rebase --onto integration_branch <old_upstream_branch>` (or `gh pr edit <pr> --base integration_branch` if stacked-on-stacked is no longer needed).
       - Re-run local CI in worktree; on conflict, mark cluster `rework` and re-dispatch implement codex with conflict diff.
       - Force-push the cluster branch: `git push --force-with-lease origin refactor/iterN-<cluster-id>`.
-9b. Goto Phase 5 (remote CI watch on the cluster's PR).
-10b. After **all** iteration clusters have merged into `integration_branch`, Phase 6 may emit `DEV_SYNC_PENDING:release-rollup-needed:<json>`. Controller re-checks for an open rollup PR covering the same integration SHA to `$REVIEW_BASE_BRANCH` and, only when none exists, creates it through `open_release_rollup_pr_from_pending_event <event-json> <body-file>`. That helper pushes a one-time `rollup/<integration_sha>` head and opens `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`; merge auto-delete may delete only the throwaway head, never `$INTEGRATION_BRANCH`. Daemon only detects/writes the event; PR create, labels, review gate, CI, and merge policy stay controller-owned.
+9b. Goto Consensus-rnd Phase ci-watch (remote CI watch on the cluster's PR).
+10b. After **all** iteration clusters have merged into `integration_branch`, Consensus-rnd Phase integration-sync may emit `DEV_SYNC_PENDING:release-rollup-needed:<json>`. Controller re-checks for an open rollup PR covering the same integration SHA to `$REVIEW_BASE_BRANCH` and, only when none exists, creates it through `open_release_rollup_pr_from_pending_event <event-json> <body-file>`. That helper pushes a one-time `rollup/<integration_sha>` head and opens `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`; merge auto-delete may delete only the throwaway head, never `$INTEGRATION_BRANCH`. Daemon only detects/writes the event; PR create, labels, review gate, CI, and merge policy stay controller-owned.
 After merge of the cluster branch into its target → `git worktree remove "$REPO_ROOT/.worktrees/<cluster-id>"`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
 
-If no clusters left in current batch → start next batch (Phase 2 again). If no batches left → start next iteration (Phase 1 again) or **start Phase 5 if there is an open PR for the trunk/cluster branches**.
+If no clusters left in current batch → start next batch (Consensus-rnd Phase implementation again). If no batches left → start next iteration (Consensus-rnd Phase work-intake again) or **start Consensus-rnd Phase ci-watch if there is an open PR for the trunk/cluster branches**.
 
-### Phase 4 stack-depth cap
+### Consensus-rnd Phase publish stack-depth cap
 
 Hard cap: any single dependency stack ≥ 5 PRs deep triggers a controller halt. Reason: rebase blast-radius compounds — reviewer changes to the bottom PR force-rebase the entire stack, and reviewers stop landing PRs that get rebased twice. On cap:
 - send PushNotification with the stack contents,
@@ -1743,14 +1745,14 @@ Hard cap: any single dependency stack ≥ 5 PRs deep triggers a controller halt.
 
 ---
 
-## Phase 5 — Remote CI watch (controller, after push)
+## Consensus-rnd Phase ci-watch — Remote CI watch (controller, after push)
 
 <a id="remote-ci-details"></a>
 ## Remote CI details
 
-Local CI passing is necessary but not sufficient. Remote CI runs additional jobs that don't fit on the controller machine (kafka integration, projection provider e2e, host composition smoke, codecov, etc.). Phase 5 watches them and treats remote failures the same way Phase 3 treats verify failures: dispatch a focused fix codex, loop back through verify/merge.
+Local CI passing is necessary but not sufficient. Remote CI runs additional jobs that don't fit on the controller machine (kafka integration, projection provider e2e, host composition smoke, codecov, etc.). Consensus-rnd Phase ci-watch watches them and treats remote failures the same way Consensus-rnd Phase verification treats verify failures: dispatch a focused fix codex, loop back through verify/merge.
 
-### When Phase 5 fires
+### When Consensus-rnd Phase ci-watch fires
 
 After every push to `<trunk_branch>` that is the head of an open PR. Detect open PR with:
 
@@ -1758,7 +1760,7 @@ After every push to `<trunk_branch>` that is the head of an open PR. Detect open
 PR_NUMBER=$(gh pr list --head "<trunk_branch>" --json number --jq '.[0].number')
 ```
 
-If no open PR → skip Phase 5 (local CI is sufficient).
+If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 
 ### Arm the watch
 
@@ -1795,7 +1797,7 @@ For each `bucket: fail` check:
 
 2. Classify:
    - **Flaky / infra-only** (network timeout, registry unreachable, runner OOM that doesn't recur): retry by `gh workflow run` or pushing an empty whitespace commit; document the `flaky` reason in GitHub and the run artifact.
-   - **Real failure tied to merged work**: dispatch a `prompts/remote-ci-fix.md` codex (see template) with the failure log + last 10 cluster commits as input. Treat the resulting fix as a mini-cluster: implement → controller verify (re-run local guards + the specific failing test) → commit → push → Phase 5 again.
+   - **Real failure tied to merged work**: dispatch a `prompts/remote-ci-fix.md` codex (see template) with the failure log + last 10 cluster commits as input. Treat the resulting fix as a mini-cluster: implement → controller verify (re-run local guards + the specific failing test) → commit → push → Consensus-rnd Phase ci-watch again.
    - **Pre-existing failure unrelated to merged work** (failure exists on `dev` base too): document, do not fix in this PR; surface via PushNotification.
 
 3. `codecov/patch` specifically: this measures coverage on **lines added by this PR**, i.e. the refactor's own new/modified production lines. A refactor-induced patch-coverage drop is the loop's own responsibility — the loop just shipped new code without tests, that is exactly what the loop must close before merge. Treat as a **real failure**:
@@ -1805,21 +1807,21 @@ For each `bucket: fail` check:
    - Test-add codex output joins the cluster's branch and re-pushes; codecov re-evaluates.
    - **Exception** (info-only ack): if `head_totals.coverage - base_totals.coverage > -0.5%` (i.e. project coverage barely moved) AND the cluster summary explicitly declared deletion-heavy refactor, you may ack the codecov failure with a PushNotification explaining the math; do not silently dismiss.
 
-### Loop control under Phase 5
+### Loop control under Consensus-rnd Phase ci-watch
 
 - Cap remote-ci fix attempts per check at **2**. After 2 attempts on the same check → post reason `remote-ci-stuck`, send PushNotification, stop the loop.
-- Phase 5 may overlap with Phase 2 of the next iteration. If a new cluster's local CI passes but remote CI is still failing on a prior commit → push anyway (CI re-runs on each push); the watch picks up the latest checks.
+- Consensus-rnd Phase ci-watch may overlap with Consensus-rnd Phase implementation of the next iteration. If a new cluster's local CI passes but remote CI is still failing on a prior commit → push anyway (CI re-runs on each push); the watch picks up the latest checks.
 
 ---
 
-## Phase 6 — Integration branch auto-sync with `review_base_branch` (heartbeat)
+## Consensus-rnd Phase integration-sync — Integration branch auto-sync with `review_base_branch` (heartbeat)
 
 <a id="daemon-command-bodies"></a>
 ## Daemon command bodies
 
-Phase 6 is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
+Consensus-rnd Phase integration-sync is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
 
-### Phase 6 现在由独立 daemon 自主完成
+### Consensus-rnd Phase integration-sync 现在由独立 daemon 自主完成
 
 **`<skill-root>/scripts/consensus-rnd-cli dev-sync`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
 
@@ -1841,27 +1843,27 @@ Daemon 工作流由 `integration sync daemon` 命名状态机表达:
 9. `MISSING_INTEGRATION_BRANCH_ALERT`: daemon startup/tick verifies `origin/$INTEGRATION_BRANCH` exists via `git ls-remote --exit-code --heads origin "$INTEGRATION_BRANCH"`. If missing, append `DEV_SYNC_PENDING:missing-integration-branch:<branch>` and stop the tick without guessing or recreating the branch.
 Ambiguous rollup metadata, failed request emission, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
-### Phase 9 router daemon command body
+### Consensus-rnd Phase design-consensus router daemon command body
 `consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
 - `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
-Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 5-daemon restart-helper-managed 面一致,包含 Phase 9 router; persistent daemon-event Monitor bridge 单独由 controller arm。
+Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 5-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
 Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
-dev sync stays with daemon; Phase 9 triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
+dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
-# Phase 6 现在 controller 只读 daemon-maintained health/log surface
+# Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
 python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons
 python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only >/dev/null
 bash <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 heartbeat stale/missing/malformed → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper 重启。
-若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Phase 8 review gate 与 CI/merge policy。
+若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
@@ -1885,16 +1887,16 @@ After a rollup PR has merged into `review_base_branch`, `integration sync daemon
 
 ---
 
-## Phase 7 — Design-issue watch (sweep on every wakeup)
+## Consensus-rnd Phase design-intake — Design-issue watch (sweep on every wakeup)
 
 <a id="design-issue-details"></a>
 ## Design issue details
 
-Runs **after Phase 6 sync** and **before** any new Phase 2 / 3 / 4 / 5 cluster work on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
+Runs **after Consensus-rnd Phase integration-sync sync** and **before** any new Consensus-rnd Phase implementation / 3 / 4 / 5 cluster work on every controller wakeup (whether triggered by user `/loop`, ScheduleWakeup, or task-notification). Goal: detect when a paused-for-design cluster has a maintainer response and resume it.
 
 ### 外部 issue 接入(强制)
 
-**问题**:audit codex 自动产生的 design issue 走完 Phase 9 链路;但 maintainer 或其他人手动开的 issue(无 `auto-loop` label)不接入,controller 看不见。
+**问题**:audit codex 自动产生的 design issue 走完 Consensus-rnd Phase design-consensus 链路;但 maintainer 或其他人手动开的 issue(无 `auto-loop` label)不接入,controller 看不见。
 
 **两条 onboarding path**:
 
@@ -1902,7 +1904,7 @@ Runs **after Phase 6 sync** and **before** any new Phase 2 / 3 / 4 / 5 cluster w
 
 maintainer 在外部 issue 上加 **4 label**:`auto-loop` + `phase9-auto-solve` + `🔍 phase:design-solving` + `🤖 human:auto-推进`
 
-Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-solve" --state open`,把它当 Phase 9 candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
+Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-solve" --state open`,把它当 Consensus-rnd Phase design-consensus candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
 
 **前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
 
@@ -1912,7 +1914,7 @@ maintainer 只加 1 label:`auto-loop-triage`
 
 This path is the `manual-issue` producer. The triage codex accepts only concrete repository
 work units suitable for consensus, reshapes the issue into a work-unit-backed design issue, and
-then label-routes it to Phase 9. Accepted manual issues must contain `work_unit_id: issue-<N>`,
+then label-routes it to Consensus-rnd Phase design-consensus. Accepted manual issues must contain `work_unit_id: issue-<N>`,
 `kind: manual-work-unit`, `producer: manual-issue`, `source_ref: gh-issue-<N>`, `scope_paths`,
 problem/invariant text, and `verification_hints`; they must not include fabricated `cluster_id` or
 `legacy_cluster_id`.
@@ -1922,13 +1924,14 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 Controller wakeup sweep handles external `auto-loop-triage` issue intake; `triage-monitor.sh` is deleted. Triage workers emit a manual issue triage decision artifact plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
 
 
-## Phase 8 details
+<a id="review-gate-details"></a>
+## Consensus-rnd Phase review-gate details
 
-## Phase 8 — Multi-codex PR review with consensus merge
+## Consensus-rnd Phase review-gate — Multi-codex PR review with consensus merge
 
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
-Runs when a cluster PR's remote CI is green (Phase 5 settled with pass) and the PR is mergeable. Goal: 3 (or more) independent codex reviewers from **different angles** verify the PR at the current head SHA; the controller then chooses exactly one action from `MERGE`, `MERGE_WITH_COMMENTS`, `WAIT_EXPLICIT_APPROVAL`, `FIX`, or `WAIT_OR_REDISPATCH`.
+Runs when a cluster PR's remote CI is green (Consensus-rnd Phase ci-watch settled with pass) and the PR is mergeable. Goal: 3 (or more) independent codex reviewers from **different angles** verify the PR at the current head SHA; the controller then chooses exactly one action from `MERGE`, `MERGE_WITH_COMMENTS`, `WAIT_EXPLICIT_APPROVAL`, `FIX`, or `WAIT_OR_REDISPATCH`.
 
 ### Default reviewer roles
 
@@ -1972,7 +1975,7 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 ### Fix-retry loop (AI iterates until consensus)
 
-Policy: AI keeps iterating until the fixed Phase 8 truth table resolves to `MERGE` or `MERGE_WITH_COMMENTS`, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR。
+Policy: AI keeps iterating until the fixed Consensus-rnd Phase review-gate truth table resolves to `MERGE` or `MERGE_WITH_COMMENTS`, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR。
 
 Loop:
 
@@ -2015,7 +2018,7 @@ Escalation action:
 - Each fix round must reduce total reject count OR change which reviewer rejects. If neither → escalate.
 - Cumulative PR diff size grows by ≤ +30% per round; if a fix round adds more code than the original PR → controller flags scope-runaway and escalates.
 
-### GitHub traceability (mandatory — every Phase 8 action posts to the PR)
+### GitHub traceability (mandatory — every Consensus-rnd Phase review-gate action posts to the PR)
 
 All review/fix/consensus/escalation behavior MUST be observable on GitHub so the whole loop is traceable without reading local `.refactor-loop/` artifacts. Authority-bearing GitHub bodies(PR description, design issue body, consensus/authorization comment, escalation comment, triage body-comment) must inline the cited artifact text; local `.refactor-loop/runs/*.md` paths are allowed only under `<details><summary>本机调试线索</summary>` and never as the only source. Natural-language GitHub posts follow the skill language rule.
 
@@ -2061,7 +2064,7 @@ The audit codex captures `original_authors` per cluster (top blame authors acros
 
 Required PR comments (controller posts via `gh pr comment <PR> --body-file <file>`):
 
-| Phase 8 event | PR comment content |
+| Consensus-rnd Phase review-gate event | PR comment content |
 |---|---|
 | Reviewer round N complete | 中文 table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
 | Fix codex round N complete (FIX_DONE) | 中文 FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
@@ -2106,11 +2109,11 @@ Forbidden:
 
 ### Re-review on push
 
-If PR is pushed after consensus (rebase, requested change), head SHA changes. Next Phase 8 sweep compares the reviewed head SHA to the current head SHA; mismatch drops prior consensus and re-dispatches all reviewers. Never auto-merge stale consensus.
+If PR is pushed after consensus (rebase, requested change), head SHA changes. Next Consensus-rnd Phase review-gate sweep compares the reviewed head SHA to the current head SHA; mismatch drops prior consensus and re-dispatches all reviewers. Never auto-merge stale consensus.
 
 ### Idempotency
 
-Skip a PR in Phase 8 if any of:
+Skip a PR in Consensus-rnd Phase review-gate if any of:
 - already merged / closed
 - `needs-human-review` label present (operator handling)
 - consensus recorded for current head SHA AND not stale
@@ -2121,13 +2124,13 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 
 ---
 
-<a id="phase-9-details"></a>
-## Phase 9 details
+<a id="design-consensus-details"></a>
+## Consensus-rnd Phase design-consensus details
 
-## Phase 9 — Multi-solver design consensus (sole authorization gate)
+## Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)
 
-Runs when a GitHub design issue / Phase 9 artifact needs a concrete implementation decision.
-Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Phase 9 can frame the decision as
+Runs when a GitHub design issue / Consensus-rnd Phase design-consensus artifact needs a concrete implementation decision.
+Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Consensus-rnd Phase design-consensus can frame the decision as
 work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
 solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
 unanimous + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient
@@ -2155,7 +2158,7 @@ A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
 
 ### Dispatch (parallel)
 
-For each cluster needing Phase 9:
+For each cluster needing Consensus-rnd Phase design-consensus:
 
 ```bash
 for role in minimal structural delete; do
@@ -2181,7 +2184,7 @@ envsubst < <skill-root>/prompts/meta-judge.md \
   --stall 3600
 ```
 
-This triplet dispatch is now the first Phase 9 daemon-first route: `consensus-rnd-cli phase9-router` may do it directly after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains required.
+This triplet dispatch is now the first Consensus-rnd Phase design-consensus daemon-first route: `consensus-rnd-cli phase9-router` may do it directly after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains required.
 
 Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**:
 
@@ -2206,13 +2209,13 @@ reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_R
 
 When reviewer evidence conflicts with maintainer prior session directive, encode the directive as `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` before considering any human label. A maintainer-directive artifact is the durable replacement for verbal authorization and has precedence over reviewer uncertainty about authorization.
 
-If architect or quality rejects because the PR "needs Phase 9 artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Phase 9 path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Phase 9 with that directive as evidence. This is the Phase 9-artifact replacement path; the label is not an interchange format for architect/quality reject.
+If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
 Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `consensus-rnd-cli controller actions`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
 ### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
 
-PR #47/#48/#50/#52 因 architect codex 严格读 CLAUDE.md reject,reflector 选 option C 误以 label 绕路。实际 maintainer 已多次 session 内 verbal 授权。Fix:开真 Phase 9(issue #54),encode maintainer-directive artifact 作 Phase 9-等价。从此 label 严语义 + helper 守护。
+PR #47/#48/#50/#52 因 architect codex 严格读 CLAUDE.md reject,reflector 选 option C 误以 label 绕路。实际 maintainer 已多次 session 内 verbal 授权。Fix:开真 Consensus-rnd Phase design-consensus(issue #54),encode maintainer-directive artifact 作 Consensus-rnd Phase design-consensus-等价。从此 label 严语义 + helper 守护。
 
 ### Reflector 完成 → 立即回到共识阶段(强制)
 <!--
@@ -2344,7 +2347,7 @@ fi
 - ✅ writer-codex 起草 PR body / consensus 公告(基于已 consensus 的 plan)
 
 当 maintainer 给出方向性指令:
-1. controller records the directive in the Phase 9 run artifact and GitHub issue thread.
+1. controller records the directive in the Consensus-rnd Phase design-consensus run artifact and GitHub issue thread.
 2. 立刻派一轮 fresh 3 solver(把指令 verbatim 作为 narrowing constraint)
 3. solver 们各自把指令具体化成 impl 计划(可能 minimal 给一套、structural 给另一套、delete 给第三套)
 4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
@@ -2356,32 +2359,32 @@ fi
 
 Policy:任何 maintainer 新回复都让本轮推理失效,必须重新派 3 solver 并重新达成共识。
 
-When the auto-discover Monitor fires `design-issue-event:<N>` and the new comment is from a verified team member (per Phase 7 security gate) AND is substantive (>30 chars / contains technical content / not a controller self-reply):
+When the auto-discover Monitor fires `design-issue-event:<N>` and the new comment is from a verified team member (per Consensus-rnd Phase design-intake security gate) AND is substantive (>30 chars / contains technical content / not a controller self-reply):
 
-1. **TaskStop any in-flight Phase 9 codex for that issue** (solvers OR meta-judge) — old reasoning is stale once new constraint lands.
+1. **TaskStop any in-flight Consensus-rnd Phase design-consensus codex for that issue** (solvers OR meta-judge) — old reasoning is stale once new constraint lands.
 2. **Treat the new comment as fresh constraint material** — prepend its verbatim text to a NEW round's solver prompt header under "Maintainer comment (must incorporate)".
 3. **Dispatch FRESH 3 solver codex** (not "continue convergence"; truly fresh, with all prior rounds as context but no inherited stance).
 4. **No round counter penalty** — maintainer input is the loop's continuation signal, not a stop signal. The round counter increments but does NOT trip the escalation cap.
 5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `auto-loop-resume` label with their explicit framing in a comment.
 
-This means: even if a previous round escalated with `auto-loop-stuck`, a new maintainer comment re-opens Phase 9. The `auto-loop-stuck` label is removed automatically on reset; `phase9-converging` is re-applied.
+This means: even if a previous round escalated with `auto-loop-stuck`, a new maintainer comment re-opens Consensus-rnd Phase design-consensus. The `auto-loop-stuck` label is removed automatically on reset; `phase9-converging` is re-applied.
 
 ### Consensus action (3/3 unanimous + meta-judge consensus)
 
 1. Read the winning solver's "Concrete plan" section from the meta-judge output.
 2. Materialize `prompts/implement-<cluster-id>.md` prepending:
    ```markdown
-   ## Design decision (from Phase 9 consensus, issue #${ISSUE_NUMBER})
+   ## Design decision (from Consensus-rnd Phase design-consensus consensus, issue #${ISSUE_NUMBER})
    <winning solver's framing verbatim>
    <winning solver's concrete plan verbatim>
    ```
 3. Add `auto-loop-resume` label to the issue (mirrors maintainer-decision flow).
 4. Move the design issue through GitHub labels/comments into implementing state.
-5. Dispatch implement codex per Phase 2 (worktree + 5400s no-output stall window).
+5. Dispatch implement codex per Consensus-rnd Phase implementation (worktree + 5400s no-output stall window).
 6. **Post 共识卡片**(强制)— 不再用普通 status banner,改用 distinct **consensus card** 格式:
 
 ```markdown
-## ✅ 共识卡片 — Phase 9 r${ROUND} consensus reached
+## ✅ 共识卡片 — Consensus-rnd Phase design-consensus r${ROUND} consensus reached
 
 | 维度 | 值 |
 |---|---|
@@ -2392,7 +2395,7 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
 | Solver 投票 | minimal: <verdict>:<summary> · structural: <verdict>:<summary> · delete: <verdict>:<summary> |
 | Meta-judge 仲裁 | ${JUDGE_VERBATIM_REASON} |
 | Concrete plan 摘要 | <3-5 bullet,来自 winning solver "Concrete plan" 头几条> |
-| 下一步自动会做 | 1. 创 worktree + branch  2. 派 implement codex(5400s no-output stall window)  3. implement done 后 open PR + Phase 8 reviewer  4. PR merge 后 close 本 issue |
+| 下一步自动会做 | 1. 创 worktree + branch  2. 派 implement codex(5400s no-output stall window)  3. implement done 后 open PR + Consensus-rnd Phase review-gate reviewer  4. PR merge 后 close 本 issue |
 | **是否需要人介入** | **❌ 否**(自动推进;maintainer 仍可在本 issue 评论 override) |
 
 📦 implement worktree:\`$REPO_ROOT/.worktrees/iter${ITER}-${CLUSTER_ID}\`
@@ -2404,7 +2407,7 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
 ```
 
 **约束**:
-- 共识卡片第一行**必须** `## ✅ 共识卡片 — Phase 9 r${ROUND} consensus reached`(✅ 而非 📊,与普通 status banner 区分)
+- 共识卡片第一行**必须** `## ✅ 共识卡片 — Consensus-rnd Phase design-consensus r${ROUND} consensus reached`(✅ 而非 📊,与普通 status banner 区分)
 - 末尾 `🤖 controller consensus card` 标识 + sentinel
 - 不在普通 status banner / 进度评论用 ✅ 开头(只共识达成时用)
 - 共识卡片是 **一次性 event** post,implement 派出同 turn 内发,不重复
@@ -2424,16 +2427,16 @@ These are first-class consensus scope, not escalation triggers. Meta-judge MUST 
 
 If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, route `escalate:stalled` to reflector. Do not create `escalate:gpg-ratification` or `escalate:philosophy`.
 
-### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Phase 8)
+### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
-Every Phase 9 action posts a 中文 comment to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
+Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the issue. **The issue must be a complete audit trail** — solver outputs follow the current language policy; the controller posts each one as a SEPARATE issue comment so reviewers can inspect the 3 perspectives side-by-side. Comments are traceability, not a human approval gate.
 
-| Phase 9 event | Issue comment content |
+| Consensus-rnd Phase design-consensus event | Issue comment content |
 |---|---|
-| Round N solvers dispatched | 中文: "Phase 9 round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
+| Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
-| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Phase 9 Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Phase 9 Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
+| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
 | Meta-judge → escalate:stalled | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
@@ -2441,16 +2444,16 @@ Every Phase 9 action posts a 中文 comment to the issue. **The issue must be a 
 
 **Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The raw reasoning, evidence, and concrete plans are the audit record; a summary loses too much fidelity. The 3+ comments per round are intentional.
 
-Required labels (additions to Phase 8 set):
+Required labels (additions to Consensus-rnd Phase review-gate set):
 - `phase9-solving`: 3 solver codexes in flight
 - `phase9-judging`: meta-judge in flight
 - `phase9-converging`: convergence round in progress
 - (re-used) `auto-loop-resume` on consensus dispatch
 - (re-used) `auto-loop-stuck` on escalation
 
-### Phase 9 tracking
+### Consensus-rnd Phase design-consensus tracking
 
-Phase 9 tracking lives in GitHub issue labels/comments plus `.refactor-loop/runs/phase9-issue<N>-r<M>-*.md`
+Consensus-rnd Phase design-consensus tracking lives in GitHub issue labels/comments plus `.refactor-loop/runs/phase9-issue<N>-r<M>-*.md`
 solver/judge artifacts. Do not mirror it into a root local state queue.
 
 ### Anti-spiral safeguards (no hard round cap — different safeguards instead)
@@ -2460,7 +2463,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
 - **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until 3/3 unanimous OR true stall reaches reflector OR maintainer adds new constraints OR maintainer closes issue.
 - **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → **trigger meta-layer reflector** (not human escalate;)。Reflector 同样回 4 framing question + 输出 `META_RESOLVED:<kind>` marker;路由:
   - `retry-fix` → 派 r+1 solver,加 "reflector 提示: 你们三 round 没收敛,本轮必须 propose 新 framing 不重复之前"
-  - `re-design` → reset Phase 9 round counter,prompt 重写带 reflector 总结的新 framing 角度
+  - `re-design` → reset Consensus-rnd Phase design-consensus round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
   - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
@@ -2469,11 +2472,11 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
 - Architecture/philosophy/Tier triggers never escalate immediately. They require stricter concrete text in solver plans, then either consensus or stall.
 
-### When to trigger Phase 9 (operator policy)
+### When to trigger Consensus-rnd Phase design-consensus (operator policy)
 
-- **Default ON for design decisions that need a concrete plan**. Operator labels may prioritize work, but Tier/CLAUDE/philosophy scope is not a reason to bypass Phase 9.
-- Rationale: Phase 9 is the authorization mechanism. Hard architectural calls require better solver evidence and exact rule text, not a maintainer dialog gate.
-- The cluster spec's `requires_design: true` + `human_brief.why_needs_design` content informs solver prompts; philosophy keywords must be incorporated into the consensus question instead of silently no-oping Phase 9.
+- **Default ON for design decisions that need a concrete plan**. Operator labels may prioritize work, but Tier/CLAUDE/philosophy scope is not a reason to bypass Consensus-rnd Phase design-consensus.
+- Rationale: Consensus-rnd Phase design-consensus is the authorization mechanism. Hard architectural calls require better solver evidence and exact rule text, not a maintainer dialog gate.
+- The cluster spec's `requires_design: true` + `human_brief.why_needs_design` content informs solver prompts; philosophy keywords must be incorporated into the consensus question instead of silently no-oping Consensus-rnd Phase design-consensus.
 
 ---
 
@@ -2489,18 +2492,18 @@ Policy. An iteration completing is NEVER a stop signal. The loop's only legitima
 2. Every cluster in the current batch failed verify twice — escalate operator.
 3. Operator explicitly tells the loop to stop.
 
-**Iteration boundary is automatic**: as soon as iter N's last cluster PR merges into `integration_branch` (NOT after rollup PR human review — rollup runs independently in parallel as a human gate), controller IMMEDIATELY dispatches `Phase 1 audit` for iter N+1. The rollup PR (auto-refact-dev → review_base_branch) is a parallel human-review track, not a serial gate.
+**Iteration boundary is automatic**: as soon as iter N's last cluster PR merges into `integration_branch` (NOT after rollup PR human review — rollup runs independently in parallel as a human gate), controller IMMEDIATELY dispatches `Consensus-rnd Phase work-intake audit` for iter N+1. The rollup PR (auto-refact-dev → review_base_branch) is a parallel human-review track, not a serial gate.
 
 Concretely, this means:
 - After PR #<pr> (a cluster PR in iterN) merged, controller does NOT wait for PR #<pr> (rollup) review — it immediately dispatches the iterN audit codex.
-- iterN implement / verify / Phase 8 review runs in parallel with iterN rollup PR being reviewed.
+- iterN implement / verify / Consensus-rnd Phase review-gate review runs in parallel with iterN rollup PR being reviewed.
 - If iterN rollup PR gets rejected by human, iterN work stays on auto-refact-dev (which now contains iterN + iterN deltas); we re-do iterN rework on top and ship combined.
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label. If any such open item carries `🎯 milestone`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
-- `🔍 phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet (round = current_round_or_1) for that issue
+- `🔍 phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
 - `👀 phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
 - `🔧 phase:fixing` with 0 codex → dispatch fix codex for next round
 - `🛠️ phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
@@ -2513,7 +2516,7 @@ Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop i
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open `auto-loop` issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
-Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Phase 9 r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
+Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
 
 ### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 
@@ -2537,7 +2540,7 @@ Stale revival selects the actor by current phase label using the Existing-issue 
 
 1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
 2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
-3. **Phase 7 / Phase 9 actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
+3. **Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
 4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` does not exempt a positive deficit.
 5. **Visible hard gate** — when no real open work exists, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; do not stop with a low-floor exemption.
 
@@ -2573,7 +2576,7 @@ NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
 # 按优先级派 NEEDED 个 codex:
-# queue -> actionable marker / maintainer comment / CI red / no-gap / Phase 7/9 route
+# queue -> actionable marker / maintainer comment / CI red / no-gap / Consensus-rnd Phase design-intake/9 route
 # -> audit fallback, including after AUDIT_DONE:none:0
 # -> HARD_GATE:dispatch_required=N until deficit is gone
 ```
@@ -2593,9 +2596,9 @@ Policy:controller must sync with remote promptly before deriving GitHub and bran
 
 - After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
 - After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / maintainer all need to see latest state, not yesterday's local state.
-- Phase 6 sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
-- Phase 5 CI watch reads `gh pr checks <PR>` (always remote), never a local cached value.
-- Phase 7/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.
+- Consensus-rnd Phase integration-sync sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
+- Consensus-rnd Phase ci-watch CI watch reads `gh pr checks <PR>` (always remote), never a local cached value.
+- Consensus-rnd Phase design-intake/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.
 
 If a push fails (network, conflict, branch protection): controller MUST surface the failure inline and either fix-and-retry or escalate within the same turn — never silently leave local changes uncommitted/unpushed.
 
@@ -2625,12 +2628,12 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 | 触发 | banner 内容要点 |
 |---|---|
-| 共识达成(Phase 9 meta-judge `consensus`) | "✅ 共识达成,implement 派出" + chosen framing |
+| 共识达成(Consensus-rnd Phase design-consensus meta-judge `consensus`) | "✅ 共识达成,implement 派出" + chosen framing |
 | implement 完成(任何 cluster) | "实施完成,即将开 PR" + LOC delta + 文件清单 |
 | PR open | "PR open + reviewer 派出" + PR # + base branch |
-| Phase 8 r1 reviewer 完成 | "评审 r1: <N approve / N comment / N reject>" + next step |
-| Phase 8 fix 派出 | "fix r<N> 派出,目标修 reject" |
-| Phase 8 consensus 达成 | "Phase 8 共识达成,等 CI 绿后 merge" |
+| Consensus-rnd Phase review-gate r1 reviewer 完成 | "评审 r1: <N approve / N comment / N reject>" + next step |
+| Consensus-rnd Phase review-gate fix 派出 | "fix r<N> 派出,目标修 reject" |
+| Consensus-rnd Phase review-gate consensus 达成 | "Consensus-rnd Phase review-gate 共识达成,等 CI 绿后 merge" |
 | CI 全绿 | "CI 全绿,合并中" |
 | CI red | "CI 红,fix codex 派出" |
 | merge 完成 | "🎉 已合并到 <branch>" |
@@ -2787,23 +2790,23 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 -->
 
-**问题**:Phase 8 fix r6 仍 reject,或 CI same-check 6 次仍 fail,**第一反应不是喊 human**,而是**反思上一层是否本身错了**。喊 human 是最后的手段。
+**问题**:Consensus-rnd Phase review-gate fix r6 仍 reject,或 CI same-check 6 次仍 fail,**第一反应不是喊 human**,而是**反思上一层是否本身错了**。喊 human 是最后的手段。
 
 **层级**(由小到大):
 1. **fix(r1..r6)**:针对 reviewer evidence 直接补丁
 2. **Meta-layer reflect**:反思 design / cluster / audit 框定是否本身错位
-3. **Phase 9 re-design**:重派 3 solver + meta-judge,prompt 带 "previous design caused 6 round non-converge"
+3. **Consensus-rnd Phase design-consensus re-design**:重派 3 solver + meta-judge,prompt 带 "previous design caused 6 round non-converge"
 4. **Cluster re-split**:audit 阶段 re-evaluate,把当前 cluster 拆 / 合 / 撤回
 5. **Drop / wontfix**:确认任务本身价值不足,关 PR + close issue with wontfix
 6. **Human escalation**:`👤 human:需-maintainer-决策` + reason banner + PushNotification(只在 meta-layer 也无法解时)
 
 ### 触发 meta-layer 反思
 
-- Phase 8 `fix_round > 3` 仍 reject(所有 reviewer 同一组 / 同一 reviewer 反复 reject)
+- Consensus-rnd Phase review-gate `fix_round > 3` 仍 reject(所有 reviewer 同一组 / 同一 reviewer 反复 reject)
 - CI same-check 失败 6 次(同 test 6 次 fix 仍红)
 - Cumulative PR diff size > 原 PR 200%(scope-runaway 信号)
 - Reviewer 同一类 evidence(test coverage / dead surface / self-doc)在 3 round 内反复出现 → meta-reflect "为什么 evidence 总是同类"
-- **Phase 9 design issue stall**:3 consecutive round 无 maintainer input AND solver verdict text 无变化 → 也走 meta-layer
+- **Consensus-rnd Phase design-consensus design issue stall**:3 consecutive round 无 maintainer input AND solver verdict text 无变化 → 也走 meta-layer
 
 ### 派出 reflector codex
 
@@ -2812,16 +2815,16 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 你是 reflector codex,不写代码,只反思。Input:
 - 当前 PR diff
 - 所有 review round 的 reject evidence(verbatim)
-- 当前 Phase 9 共识 / audit cluster 框定
+- 当前 Consensus-rnd Phase design-consensus 共识 / audit cluster 框定
 你的任务:回答 4 问 + 给 1 决议:
 1. Reviewer 反复 reject 的根本原因是 design 错位 / cluster scope 错位 / audit framing 错位 / 还是仅"reviewer 在做完整审查正常 surfacing 小 gap"?
 2. 当前 PR scope 是否爆炸(原 cluster 范围 vs 现 diff)?
-3. 当前 design 共识(Phase 9)是否本身有漏洞(reviewer 抓到 design 没考虑的角落)?
+3. 当前 design 共识(Consensus-rnd Phase design-consensus)是否本身有漏洞(reviewer 抓到 design 没考虑的角落)?
 4. Audit cluster 框定是否过大 / 过小 / 错混?
 
 决议(选一):
 - `META_RESOLVED:retry-fix`: 是 reviewer 正常审查,继续 fix r4+ 仍可收敛(给 reviewer 一个 "approve if r4 仍 narrow valid" 的窗口)
-- `META_RESOLVED:re-design`: design 错位,关 PR / 撤回当前 implement,re-Phase 9 with reflector prompt
+- `META_RESOLVED:re-design`: design 错位,关 PR / 撤回当前 implement,re-Consensus-rnd Phase design-consensus with reflector prompt
 - `META_RESOLVED:re-cluster`: cluster scope 错位,关 PR + audit 阶段 re-split(拆为 2-3 个小 cluster)
 - `META_RESOLVED:drop`: 任务价值不足或代价 > 收益,关 PR + close issue wontfix
 - `META_RESOLVED:escalate-human`: meta-layer 也无法解,真的需要 maintainer 决策(reason 必须说明 rework / deadlock / ci-stuck 等原因)
@@ -2836,7 +2839,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 
 Controller 读 marker 后路由:
 - `retry-fix` → 派 fix r4 + 提高 max_fix_rounds 临时到 5(只本 PR)+ 同时 narrow reviewer 关注新 evidence only(不再 surface 旧 evidence)
-- `re-design` → 关 PR / 撤回 commits / re-Phase 9 with constraint = reject evidence pattern
+- `re-design` → 关 PR / 撤回 commits / re-Consensus-rnd Phase design-consensus with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
 - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
@@ -2871,11 +2874,11 @@ CI sweep contract: every controller wakeup checks open auto-loop PR checks, imme
 
 | Label | 含义 | 触发 |
 |---|---|---|
-| `🔍 phase:design-solving` | Phase 9 多 solver 跑 | 派 r1/r2 三 solver 后 |
+| `🔍 phase:design-solving` | Consensus-rnd Phase design-consensus 多 solver 跑 | 派 r1/r2 三 solver 后 |
 | `✅ phase:consensus-reached` | meta-judge 共识达成 | meta-judge `consensus:...` 后 |
 | `🛠️ phase:implementing` | implement codex 跑 | implement dispatch 后 |
 | `🚀 phase:pr-open` | PR 已开 | gh pr create 后 |
-| `👀 phase:reviewing` | Phase 8 reviewer 跑 | reviewer dispatch 后 |
+| `👀 phase:reviewing` | Consensus-rnd Phase review-gate reviewer 跑 | reviewer dispatch 后 |
 | `🔧 phase:fixing` | fix codex 跑(reject 后修) | fix dispatch 后 |
 | `⚙️ phase:ci-running` | CI watch 中 | push 后 CI 启动 |
 | `🎉 phase:merged` | 已 merge | gh pr merge 后(也 close issue) |
@@ -2935,7 +2938,7 @@ PR 同理(`gh pr edit` instead of `gh issue edit`)。
 - **Label 与 banner 同步发**:不允许 label 转移但不发 banner,或发 banner 但 label 没改。
 - **同一组只允许一个**:不能同时有 `🛠️ phase:implementing` 和 `🚀 phase:pr-open`(实施完成 → 立刻改 pr-open)。
 - **`👤` 出现 = 共识机制停滞或自动修复耗尽**:其他 active human label(`🤖`) = 完全自动。`🆘 human:` 只允许作为 legacy cleanup target。
-- **escalation 不等于人工授权 gate**:Phase 9 只有 `escalate:stalled` → reflector;只有 `META_RESOLVED:escalate-human` 才配 `👤`。
+- **escalation 不等于人工授权 gate**:Consensus-rnd Phase design-consensus 只有 `escalate:stalled` → reflector;只有 `META_RESOLVED:escalate-human` 才配 `👤`。
 
 ### 反面(❌ 禁止)
 
@@ -3121,8 +3124,8 @@ filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` re
 
 ### `manual-issue` producer
 
-`manual-issue` is the Phase 7 `auto-loop-triage` intake path for maintainer-selected GitHub
-issues. Accepted issues must be reshaped into a work-unit-backed design issue before Phase 9
+`manual-issue` is the Consensus-rnd Phase design-intake `auto-loop-triage` intake path for maintainer-selected GitHub
+issues. Accepted issues must be reshaped into a work-unit-backed design issue before Consensus-rnd Phase design-consensus
 solver dispatch:
 
 - `work_unit_id: issue-<N>`
@@ -3142,7 +3145,7 @@ compatibility aliases only.
 There is no root `.refactor-loop/state.json` contract. The controller must not create or maintain
 a root local state queue, schema, resumability index, or debug ledger. Local machine-readable state
 is owned by named producers, while controller decisions come from GitHub labels/comments, clean
-`EXIT=0` log tails, prompt artifacts, git topology, and Phase 9 run artifacts.
+`EXIT=0` log tails, prompt artifacts, git topology, and Consensus-rnd Phase design-consensus run artifacts.
 
 ### Statusline snapshot schema
 
@@ -3220,13 +3223,13 @@ If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a ne
 - Re-dispatch implement codex in the same worktree (do not destroy the worktree; codex keeps the working tree changes plus rework instructions).
 - After 2 rework cycles → escalate to `abort`.
 
-### Merge conflict in Phase 4
+### Merge conflict in Consensus-rnd Phase publish
 
 - `git merge --abort` first.
 - Treat as `rework` with conflict diff appended to the prompt.
 - Re-dispatch implement codex with explicit instruction: "rebase your changes onto trunk HEAD, resolve listed conflicts".
 
-### cwd leak in Phase 4 ("Already up to date.")
+### cwd leak in Consensus-rnd Phase publish ("Already up to date.")
 
 Symptom: `git merge` after a `cd "$REPO_ROOT/.worktrees/<id>"` chain prints `Already up to date.` instead of merging the branch into trunk.
 
@@ -3238,13 +3241,13 @@ Fix:
 
 Detection: after every merge, verify `git log --oneline -1` shows the new merge commit (not the prior trunk head). If not, redo from `$REPO_ROOT`.
 
-### Phase 5 remote-ci check stuck
+### Consensus-rnd Phase ci-watch remote-ci check stuck
 
 - Cap fix attempts per check at 2.
 - After cap: post reason `remote-ci-stuck:<check>`, push PushNotification with run url, stop the loop.
 - Common stuck causes: real environmental gap (docker service missing on runner), test contract change needing human design call, flake masking a real issue. Each is a stop-and-escalate signal, not auto-retry.
 
-### Phase 4 stacked-PR rebase storm
+### Consensus-rnd Phase publish stacked-PR rebase storm
 
 When PR A (bottom of a stack) gets reviewer changes:
 
@@ -3255,11 +3258,11 @@ When PR A (bottom of a stack) gets reviewer changes:
 5. If rebase fails on conflict, mark that cluster `rework`, dispatch implement codex with conflict diff + "rebase onto integration head, preserve cluster intent" instruction.
 
 Mitigations encoded in skill defaults:
-- Stack depth cap = 5 (see SKILL.md Phase 4 stack-depth cap).
+- Stack depth cap = 5 (see SKILL.md Consensus-rnd Phase publish stack-depth cap).
 - Soft-dep clusters always base on `integration_branch`, never on another cluster — even if conceptually related — unless hard-dep is explicit in `audit.dependencies[]`.
 - Bundle related rework: if reviewer touches A and C, rebase B then C in one batch, single CI run, single force-push round.
 
-### Phase 4 PR creation idempotency
+### Consensus-rnd Phase publish PR creation idempotency
 
 `gh pr create` errors if a PR already exists for the same head→base. Detect first:
 
@@ -3274,9 +3277,9 @@ fi
 
 Re-running the loop after partial failure must NOT create duplicate PRs.
 
-### Phase 5 long-running bash
+### Consensus-rnd Phase ci-watch long-running bash
 
-The Phase 5 Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command and it hangs at architecture_guards.sh (observed in practice — appears stuck after the merge section), `TaskStop` it and run the remaining steps in separate foreground Bash calls. Do not assume the chain completed.
+The Consensus-rnd Phase ci-watch Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command and it hangs at architecture_guards.sh (observed in practice — appears stuck after the merge section), `TaskStop` it and run the remaining steps in separate foreground Bash calls. Do not assume the chain completed.
 
 ### Trunk branch moved while batch was in flight
 

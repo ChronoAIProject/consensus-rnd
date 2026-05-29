@@ -56,7 +56,7 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: test coverage and quality are adequate for the diff.
 - **comment**: missing nice-to-have tests, minor naming issues, or polling-allowlist addition lacks justification but is plausible.

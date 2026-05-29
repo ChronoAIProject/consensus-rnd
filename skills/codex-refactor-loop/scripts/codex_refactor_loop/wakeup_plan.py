@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
@@ -62,7 +63,7 @@ DONE_PREFIXES = (
     "TRIAGE_DECISION_DONE",
 )
 PHASE_ACTORS = (
-    ("🔍 phase:design-solving", "phase9-solver-or-judge"),
+    ("🔍 phase:design-solving", "design-consensus-solver-or-judge"),
     ("🛠️ phase:implementing", "implement-codex"),
     ("🔧 phase:fixing", "fix-codex"),
     ("👀 phase:reviewing", "reviewer-codex"),
@@ -80,6 +81,11 @@ PHASE_EXPECTED = {
     "✅ phase:consensus-reached": 0,
     "🎉 phase:merged": 0,
     "⏸️ phase:blocked": 0,
+}
+NON_ACTION_PHASE_LABELS = {
+    "⚙️ phase:ci-running": "ci-running",
+    "⏸️ phase:blocked": "blocked",
+    "🎉 phase:merged": "merged",
 }
 
 
@@ -335,17 +341,19 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
             continue
-        actions.append(
-            {
-                "priority": 3,
-                "kind": "completed-marker",
-                "item": infer_item_from_text(f"{log_path.name} {marker}"),
-                "phase": phase_from_marker(marker),
-                "actor": actor_from_marker(marker),
-                "marker": marker,
-                "evidence": str(log_path.relative_to(repo_root)),
-            }
-        )
+        action = {
+            "priority": 3,
+            "kind": "completed-marker",
+            "item": infer_item_from_text(f"{log_path.name} {marker}"),
+            "phase": phase_from_marker(marker),
+            "actor": actor_from_marker(marker),
+            "marker": marker,
+            "evidence": str(log_path.relative_to(repo_root)),
+        }
+        route = route_from_marker(marker)
+        if route:
+            action["route"] = route
+        actions.append(action)
     return actions
 
 
@@ -361,20 +369,40 @@ def infer_item_from_text(text: str) -> str | None:
 
 def phase_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
-        return "phase-4-open-pr-or-phase-8-review"
+        return "publish"
     if marker.startswith("REVIEW_DONE"):
-        return "phase-8-review-gate"
+        return "review-gate"
     if marker.startswith("FIX_DONE"):
-        return "phase-8-rereview"
+        return "review-gate"
     if marker.startswith("TEST_ADD_DONE"):
-        return "phase-5-ci-watch"
+        return "ci-watch"
     if marker.startswith("AUDIT_DONE"):
-        return "phase-1-audit-result"
+        return "work-intake"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "phase-9-consensus-route"
+        return "design-consensus"
     if marker.startswith("VERIFY_DONE"):
-        return "phase-4-controller-lifecycle"
-    return "marker-route"
+        return "publish"
+    return "work-intake"
+
+
+def route_from_marker(marker: str) -> str | None:
+    if marker.startswith("IMPLEMENT_DONE"):
+        return "publish-or-review-gate"
+    if not marker.startswith(
+        (
+            "AUDIT_DONE",
+            "SOLVER_DONE",
+            "META_JUDGE_DONE",
+            "META_RESOLVED",
+            "IMPLEMENT_DONE",
+            "VERIFY_DONE",
+            "REVIEW_DONE",
+            "FIX_DONE",
+            "TEST_ADD_DONE",
+        )
+    ):
+        return "marker-route"
+    return None
 
 
 def actor_from_marker(marker: str) -> str:
@@ -389,7 +417,7 @@ def actor_from_marker(marker: str) -> str:
     if marker.startswith("AUDIT_DONE"):
         return "controller"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "phase9-router-or-controller"
+        return "design-consensus-router-or-controller"
     if marker.startswith("VERIFY_DONE"):
         return "controller"
     return "controller"
@@ -404,7 +432,7 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "bootstrap",
                 "item": None,
-                "phase": "phase-0-bootstrap",
+                "phase": "bootstrap",
                 "actor": "controller",
                 "reason": "missing .refactor-loop/host.env",
             }
@@ -416,9 +444,10 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "bootstrap",
                 "item": None,
-                "phase": "daemon-health",
+                "phase": "bootstrap",
                 "actor": "controller",
                 "reason": "daemon heartbeat stale-or-missing",
+                "route": "daemon-health",
                 "suggested_command": "python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
                 "daemons": stale_names,
             }
@@ -431,8 +460,9 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "wake-source",
                 "item": None,
-                "phase": "wake-source",
+                "phase": "bootstrap",
                 "actor": "controller",
+                "route": "wake-source",
                 "reason": "missing daemon-event surfaces; confirm Monitor bridge",
             }
         )
@@ -455,7 +485,7 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
                         "priority": 2,
                         "kind": "maintainer-comment",
                         "item": infer_item_from_text(line),
-                        "phase": "phase-7-comment-intake",
+                        "phase": "design-intake",
                         "actor": "controller",
                         "evidence": line,
                     }
@@ -493,8 +523,9 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "priority": 5,
                 "kind": "no-gap-violation",
                 "item": infer_item_from_text(line),
-                "phase": "no-gap-repair",
+                "phase": "work-intake",
                 "actor": "controller",
+                "route": "no-gap-repair",
                 "evidence": line,
             }
         )
@@ -625,7 +656,8 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
                 "priority": 3,
                 "kind": "unpushed-worker-output",
                 "item": item.item,
-                "phase": "controller-push-required",
+                "phase": "publish",
+                "route": "controller-push-required",
                 "actor": "controller",
                 "head_ref": head_ref,
                 "worktree": str(worktree),
@@ -657,7 +689,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
                 "priority": 4,
                 "kind": "ci-red",
                 "item": item.item,
-                "phase": "phase-5-ci-red",
+                "phase": "ci-watch",
                 "actor": "remote-ci-fix-codex",
                 "fail_count": fail_count,
             }
@@ -670,7 +702,8 @@ def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
     ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
     for item in ordered:
         phase = phase_from_labels(item.labels)
-        if phase in {"blocked", "merged", "ci-running"}:
+        status = status_from_labels(item.labels)
+        if status in {"blocked", "merged", "ci-running"}:
             continue
         priority = 6 if item.milestone else 7
         actions.append(
@@ -689,19 +722,29 @@ def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
 
 def phase_from_labels(labels: tuple[str, ...]) -> str:
     for label, phase in (
-        ("🔍 phase:design-solving", "phase-9-design-solving"),
-        ("🛠️ phase:implementing", "phase-2-implementing"),
-        ("🔧 phase:fixing", "phase-8-fixing"),
-        ("👀 phase:reviewing", "phase-8-reviewing"),
-        ("⚙️ phase:ci-running", "ci-running"),
-        ("🚀 phase:pr-open", "phase-8-reviewing"),
-        ("✅ phase:consensus-reached", "phase-2-implementing"),
-        ("⏸️ phase:blocked", "blocked"),
-        ("🎉 phase:merged", "merged"),
+        ("🔍 phase:design-solving", "design-consensus"),
+        ("🛠️ phase:implementing", "implementation"),
+        ("🔧 phase:fixing", "review-gate"),
+        ("👀 phase:reviewing", "review-gate"),
+        ("⚙️ phase:ci-running", "ci-watch"),
+        ("🚀 phase:pr-open", "review-gate"),
+        ("✅ phase:consensus-reached", "implementation"),
+        ("⏸️ phase:blocked", "bootstrap"),
+        ("🎉 phase:merged", "publish"),
     ):
         if label in labels:
+            assert_stage_slug(phase)
             return phase
-    return "unlabeled-existing-issue"
+    return "work-intake"
+
+
+def status_from_labels(labels: tuple[str, ...]) -> str | None:
+    for label, status in NON_ACTION_PHASE_LABELS.items():
+        if label in labels:
+            return status
+    if not any(label.startswith("phase:") or " phase:" in label for label in labels):
+        return "unlabeled-existing-issue"
+    return None
 
 
 def actor_from_labels(labels: tuple[str, ...], kind: str) -> str:

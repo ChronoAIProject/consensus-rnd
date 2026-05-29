@@ -53,7 +53,7 @@ class ProjectRulesFixedPointEnsurer:
     #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
     #   foundational fixed points were present, so the loop did not reliably
     #   load the base theory.
-    #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently writes
+    #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently writes
     #   a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
     #   (consensus:minimal), without overwriting host-owned content.
     def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
@@ -69,7 +69,7 @@ class ProjectRulesFixedPointEnsurer:
         #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
         #   foundational fixed points were present, so the loop did not
         #   reliably load the base theory.
-        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently
+        #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently
         #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
         #   (consensus:minimal), without overwriting host-owned content.
         original = self._read_target()
@@ -112,7 +112,7 @@ class ProjectRulesFixedPointEnsurer:
         #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
         #   foundational fixed points were present, so the loop did not
         #   reliably load the base theory.
-        #   New principle: Phase 0 ProjectRulesFixedPointEnsurer idempotently
+        #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently
         #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
         #   (consensus:minimal), without overwriting host-owned content.
         starts = list(START_RE.finditer(text))

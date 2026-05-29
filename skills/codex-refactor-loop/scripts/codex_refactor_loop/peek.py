@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from .context import LoopContext, LoopContextError
+from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
 
@@ -33,7 +34,7 @@ class PeekStatusLens:
         active = self._list_loop_codex()
         if active:
             lines.extend(f"  • {item}" for item in sorted(active))
-        lines.extend(["", "▍Phase 9 router / pending events:", "  ledger tail:"])
+        lines.extend(["", f"▍{format_stage('design-consensus')} router / pending events:", "  ledger tail:"])
         lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl", 10, "    "))
         lines.append("  pending events tail:")
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
