@@ -283,7 +283,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn("▍Unpushed worker output:", result.stdout)
         self.assertIn("UNPUSHED_WORKER_OUTPUT:77:3", result.stdout)
         self.assertIn("head=refactor/iter77-worker", result.stdout)
-        self.assertIn("safe-push origin refactor/iter77-worker", result.stdout)
+        self.assertIn("controller_action=safe_push", result.stdout)
+        self.assertIn("no_lifecycle_authority=true", result.stdout)
+        self.assertNotIn("consensus-rnd-cli safe-push", result.stdout)
+        self.assertNotIn("safe-push origin refactor/iter77-worker", result.stdout)
         self.assertNotIn('"actions"', result.stdout)
         self.assertNotIn('"schema": "wakeup-plan"', result.stdout)
 

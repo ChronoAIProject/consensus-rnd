@@ -15,7 +15,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 ## Controller Contract Index
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
-| Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, `consensus-rnd-cli controller actions` |
+| Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
@@ -28,7 +28,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
-| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `👤 human:需-maintainer-决策` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | `consensus-rnd-cli controller actions`, GitHub labels |
+| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `👤 human:需-maintainer-决策` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
@@ -200,8 +200,9 @@ Stability requires all signals green and fail-closed handling on missing or red 
 The release lifecycle surface consumes decision-artifact-only output: a scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, call the existing version bump command, commit/push mapped manifests, and let `release.yml` publish; or `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same opt-in, bump/publish through guarded jobs, and record the result. `consensus-rnd-cli release-gate` remains decider only; controller/workflow owns lifecycle operations and must re-validate host opt-in. Forbidden: per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization.
 
 <!-- Refactor (iter1/issue-166): Old pattern: CLI command authority was represented by coarse read_only metadata and prose-only runtime exception text, so the matrix could under-report command surfaces. New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source, including named narrow carveouts such as dev-sync's integration-worktree git surface, and SKILL prose cannot grant missing runtime authority. -->
+<!-- Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed merge-pr/open-pr/safe-push/apply-sync/apply-triage lifecycle commands and wakeup_plan/peek rendered copyable suggested_command, forming generic lifecycle authority. New principle: delete public lifecycle CLI surface; COMMANDS covers public non-lifecycle commands only, controller lifecycle primitives stay internal, wakeup-plan emits fixed controller_action facts with no_lifecycle_authority:true, and dev-sync keeps only the #53 carveout. -->
 ## CLI runtime authority fact source(per #166)
-`skills/codex-refactor-loop/scripts/codex_refactor_loop/cli.py::COMMANDS[*].authority` is the unique mechanical fact source for CLI runtime command authority. Each `CommandSpec.authority` is an inline closed-token tuple that states the command's maximum git/gh/spawn/write-artifact/label/merge capability. SKILL prose explains the human contract, narrow allowlist, durable authorization source, and no lifecycle authority by default; it must not grant a CLI capability missing from `CommandSpec.authority`. Worker prompt authority remains in prompt contracts and prompt tests, not as pseudo-commands in `COMMANDS`. New or expanded CLI runtime authority requires matching behavior test and source-regression anchor coverage.
+`skills/codex-refactor-loop/scripts/codex_refactor_loop/cli.py::COMMANDS[*].authority` is the unique mechanical fact source for CLI runtime command authority for worker-visible, non-lifecycle public commands. Each `CommandSpec.authority` is an inline closed-token tuple that states a public command's maximum git/gh/spawn/write-artifact/label/merge capability. Controller lifecycle primitives such as `merge_pr`, `open_pr_with_label`, `open_release_rollup_pr_from_pending_event`, `apply_human_label_or_skip`, `safe_push`, `safe_sync_main`, and triage apply stay outside `COMMANDS`; their authorization comes from controller-owned decisions/action facts and direct internal call boundaries. `wakeup-plan` may emit only fixed facts such as `controller_action: "safe_push"` with `no_lifecycle_authority: true`; `peek` may display those facts but must not render executable lifecycle commands. SKILL prose explains the human contract, narrow allowlist, durable authorization source, and no lifecycle authority by default; it must not grant a CLI capability missing from `CommandSpec.authority`. Worker prompt authority remains in prompt contracts and prompt tests, not as pseudo-commands in `COMMANDS`. New or expanded public CLI runtime authority requires matching behavior test and source-regression anchor coverage.
 
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
@@ -653,7 +654,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [prompts/meta-judge.md](prompts/meta-judge.md) — Consensus-rnd Phase design-consensus meta-judge.
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
-- [scripts/consensus-rnd-cli controller actions](scripts/consensus-rnd-cli controller actions) — shared controller helpers.
+- `scripts/codex_refactor_loop/controller_actions.py` — controller-internal lifecycle primitives; not a public CLI command surface.
 - [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
 - [scripts/consensus-rnd-cli ensure-project-rules](scripts/consensus-rnd-cli ensure-project-rules) — Consensus-rnd Phase bootstrap fixed-point helper.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
@@ -1271,26 +1272,30 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
-### Controller helper 库:`<skill-root>/scripts/consensus-rnd-cli controller actions`(强制)
+### Controller-internal lifecycle primitives(强制)
 
-7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
+<!-- Refactor (iter201/issue-201): Old pattern: lifecycle helpers were
+documented as public consensus-rnd-cli/controller-actions shell commands.
+New principle: lifecycle operations are controller-internal ControllerActions
+methods/direct package calls, never worker-visible public CLI verbs. -->
 
-```bash
-source <skill-root>/scripts/consensus-rnd-cli controller actions
+7 个曾发生的 bug 都来自 controller boilerplate 重复 + shell 变量传值 bug。统一用 controller-internal `ControllerActions` primitives, not public CLI commands:
 
-safe_worktree iterN cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
-open_pr_with_label "iterN cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
-merge_pr <pr>                                             # auto-close linked issue + cleanup labels
-render_template implement.md out.md                       # 处理 {{var}} 和 $VAR 两种语法
-sweep_stale_labels                                        # 清 closed but 仍挂 in-flight label
-validate_prompt out.md                                    # check 0 unresolved {{var}}
+```python
+actions = ControllerActions(LoopContext.load(cwd=os.getcwd()))
+actions.safe_worktree(iteration, cluster, base)
+actions.open_pr_with_label(title, body_file, base=base, head=head)
+actions.merge_pr(pr)
+actions.render_template(input_path, output_path)
+actions.apply_human_label_or_skip(pr_number, source_marker, reason)
 ```
 
 **强制**:
-- 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
-- worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
-- PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- 派 codex 前必须 validate rendered prompt output — 防 codex blocked on unresolved placeholder
+- merge PR 必须用 internal `merge_pr(pr)` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
+- worktree 创建必须用 internal `safe_worktree(iteration, cluster, base)` — 处理 "already exists" race
+- PR 号捕获必须用 internal `open_pr_with_label(...)` returned tuple — **禁止** shell `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- `safe_push`, `safe_sync_main`, triage apply, and human-label apply are internal primitives/direct package calls only; `consensus-rnd-cli merge-pr/open-pr/open-release-rollup-pr/apply-human-label/safe-push/safe-sync-main/apply-sync/apply-triage` must fail closed as unknown public commands.
 
 **Label 生命周期(强制状态机)**:
 <!--
@@ -2211,7 +2216,7 @@ When reviewer evidence conflicts with maintainer prior session directive, encode
 
 If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
-Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `consensus-rnd-cli controller actions`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+Controller label application must use internal `ControllerActions.apply_human_label_or_skip(pr_number, source_marker, reason)` with the full `META_RESOLVED:escalate-human:<reason>` marker as `source_marker`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the primitive. If it finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
 ### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
 

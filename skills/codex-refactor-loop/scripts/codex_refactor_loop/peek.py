@@ -149,12 +149,17 @@ class PeekStatusLens:
         return lines
 
     def _unpushed_worker_output(self) -> list[str]:
+        # Refactor (iter201/issue-201): Old pattern: peek displayed a copyable
+        # consensus-rnd-cli safe-push command, making a status lens look like a
+        # lifecycle dispatcher. New principle: show fixed facts only; controller
+        # lifecycle execution remains internal and non-public.
         out = []
         for action in unpushed_worker_output_actions(self.ctx.repo_root, load_github_items(self.ctx.repo_root)):
             out.append(
                 "  ⚠️ "
                 f"{action['line']} head={action['head_ref']} ahead={action['ahead_count']} "
-                f"worktree={action['worktree']} — {action['suggested_command']}"
+                f"worktree={action['worktree']} controller_action={action['controller_action']} "
+                f"no_lifecycle_authority={str(action['no_lifecycle_authority']).lower()}"
             )
         return out
 

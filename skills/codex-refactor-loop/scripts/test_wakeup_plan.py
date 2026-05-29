@@ -258,7 +258,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["item"], "PR #77")
         self.assertEqual(plan["actions"][0]["line"], "UNPUSHED_WORKER_OUTPUT:77:2")
         self.assertEqual(plan["actions"][0]["head_ref"], "refactor/iter77-worker")
-        self.assertIn("safe-push origin refactor/iter77-worker", plan["actions"][0]["suggested_command"])
+        self.assertEqual(plan["actions"][0]["controller_action"], "safe_push")
+        self.assertTrue(plan["actions"][0]["no_lifecycle_authority"])
+        self.assertNotIn("suggested_command", plan["actions"][0])
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("completed-marker"))
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("existing-issue"))
