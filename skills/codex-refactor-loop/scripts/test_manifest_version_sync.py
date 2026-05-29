@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for check_manifest_version_sync.py."""
+"""Behavior tests for consensus-rnd-cli check-manifest."""
 
 from __future__ import annotations
 
@@ -11,14 +11,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_manifest_version_sync import (
+from codex_refactor_loop.checks.manifest import (
     ManifestVersionSyncError,
     check_manifest_version_sync,
-    _load_json,
+    load_json as _load_json,
     load_manifest_records,
 )
 
-SCRIPT_PATH = Path(__file__).with_name("check_manifest_version_sync.py")
+SCRIPT_PATH = Path(__file__).with_name("consensus-rnd-cli")
 REPO_ROOT = SCRIPT_PATH.parents[3]
 
 EXPECTED_VERSION_RECORDS = {
@@ -174,7 +174,7 @@ class ManifestVersionSyncTests(unittest.TestCase):
 
     def test_cli_smoke_real_repo_succeeds(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(SCRIPT_PATH)],
+            [sys.executable, str(SCRIPT_PATH), "check-manifest"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -201,7 +201,7 @@ class ManifestVersionSyncTests(unittest.TestCase):
             gemini_path.write_text(json.dumps(gemini_manifest, indent=2) + "\n", encoding="utf-8")
 
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH), "--repo-root", str(repo)],
+                [sys.executable, str(SCRIPT_PATH), "check-manifest", "--repo-root", str(repo)],
                 cwd=repo,
                 capture_output=True,
                 text=True,

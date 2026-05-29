@@ -46,22 +46,24 @@ class FloorFillNotOptionalTests(unittest.TestCase):
         self.assertIn("in-flight codex", self.section)
         self.assertRegex(self.section, r"in-flight codex.*actionable marker")
 
-    def test_guarded_audit_fallback_before_fixed_point(self) -> None:
+    def test_audit_fallback_has_no_fixed_point_exemption(self) -> None:
         for required in ("envsubst", "audit-iter-N", "harness background task"):
             with self.subTest(required=required):
                 self.assertIn(required, self.section)
-        self.assertIn("Ordinary audit fallback is valid only before", self.section)
-        self.assertIn("latest controller-validated audit", self.section)
+        self.assertIn("deficit>0", self.section)
+        self.assertIn("no exemption", self.section)
+        self.assertIn("audit fallback", self.section)
 
-    def test_none_zero_stops_fabricated_audit_and_surfaces_low_floor(self) -> None:
+    def test_none_zero_no_longer_stops_floor_refill(self) -> None:
         for required in (
             "AUDIT_DONE:none:0",
-            "controller-validated",
-            "CONCURRENCY_LOW:no-work-after-audit-none",
-            "do not fabricate",
+            "no longer exempts",
+            "RECOMMEND:audit",
+            "HARD_GATE:dispatch_required=N",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.section)
+        self.assertNotIn("CONCURRENCY_LOW:no-work-after-audit-none", self.section)
 
     def test_rationalization_wording_blocked(self) -> None:
         # Typical defer wording must stay explicitly blocked before the fixed point.

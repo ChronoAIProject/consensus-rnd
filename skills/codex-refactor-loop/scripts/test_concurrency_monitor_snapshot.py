@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import importlib
 import json
 import os
 import sys
@@ -36,12 +35,13 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             clear=False,
         )
         self.env.start()
-        sys.modules.pop("concurrency_monitor", None)
-        self.monitor = importlib.import_module("concurrency_monitor")
+        from codex_refactor_loop.context import LoopContext
+        from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.monitor = ConcurrencyMonitor(self.ctx)
 
     def tearDown(self) -> None:
         self.env.stop()
-        sys.modules.pop("concurrency_monitor", None)
         self.tmp.cleanup()
 
     def snapshot_path(self) -> Path:
@@ -164,7 +164,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             if cmd[:2] == ["ps", "-eo"]:
                 return SimpleNamespace(
                     returncode=0,
-                    stdout=f"bash {self.monitor.REPO_ROOT}/skills/codex-refactor-loop/scripts/spawn-codex.sh --cd {self.monitor.REPO_ROOT}\n",
+                    stdout=f"bash {self.repo}/skills/codex-refactor-loop/scripts/consensus-rnd-cli spawn-codex --cd {self.repo}\n",
                 )
             return SimpleNamespace(returncode=1, stdout="")
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for controller_lib.sh safe_push + safe_sync_main helpers.
+"""Behavior tests for codex_refactor_loop/controller_actions.py safe_push + safe_sync_main helpers.
 
 Refactor (iter4/skill-safe-push-helper): Old pattern: controller manually ran
 pull --rebase after non-fast-forward push. New principle: safe_push includes
@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,7 +19,7 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-CONTROLLER_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "controller_lib.sh"
+CLI = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
 
 
 def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -65,12 +66,9 @@ class SafePushHelperTests(unittest.TestCase):
     def _run_helper(self, fn_call: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update({"REPO_ROOT": str(self.local)})
-        cmd = [
-            "bash",
-            "-c",
-            f'source "{CONTROLLER_LIB}"; {fn_call}',
-        ]
-        return subprocess.run(cmd, env=env, text=True, capture_output=True)
+        parts = fn_call.split()
+        command = {"safe_push": "safe-push", "safe_sync_main": "safe-sync-main"}[parts[0]]
+        return subprocess.run([sys.executable, str(CLI), command, *parts[1:]], env=env, text=True, capture_output=True)
 
     def test_safe_push_succeeds_when_remote_up_to_date(self) -> None:
         (self.local / "a.txt").write_text("a", encoding="utf-8")

@@ -1,9 +1,11 @@
 name: release
 
 on:
-  push:
-    branches:
-      - dev
+  workflow_run:
+    workflows:
+      - consensus-rnd-ci
+    types:
+      - completed
   workflow_dispatch:
     inputs:
       dry_run:
@@ -18,28 +20,27 @@ permissions:
 
 jobs:
   release:
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - uses: actions/github-script@v7
-        name: Verify required release checks
-        with:
-          script: |
-            const required = ["contract-tests", "manifest-version-sync", "skill-degradation"];
-            const { owner, repo } = context.repo;
-            const ref = context.sha;
-            const { data } = await github.rest.checks.listForRef({ owner, repo, ref });
-            const byName = new Map(data.check_runs.map((check) => [check.name, check]));
-            for (const name of required) {
-              const check = byName.get(name);
-              if (!check || check.conclusion !== "success") {
-                core.setFailed(`required check ${name} is missing or not successful`);
-                return;
-              }
-            }
+      - name: Verify required release checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO_SLUG: ${{ github.repository }}
+          REF: ${{ github.event.workflow_run.head_sha || github.sha }}
+          WAIT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && '180' || '0' }}
+        run: |
+          python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli release-required-checks \
+            --repo "$GH_REPO_SLUG" \
+            --ref "$REF" \
+            --since-minutes 120 \
+            --wait-seconds "$WAIT_SECONDS" \
+            --json
 
       - id: manifest
         name: Read committed manifest version

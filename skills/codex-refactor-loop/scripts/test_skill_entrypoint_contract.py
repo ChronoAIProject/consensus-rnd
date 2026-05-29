@@ -11,6 +11,9 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
+PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
+PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
 
 
 def read(path: Path) -> str:
@@ -86,6 +89,20 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
+    def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
+        required = (
+            "## Milestone priority",
+            "🎯 milestone",
+            "orthogonal third axis",
+            "Before any non-milestone existing-issue work or ordinary audit fallback",
+            "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
+            "milestone members = GitHub `🎯 milestone` label",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
         phase0 = section_between(
             self.skill,
@@ -113,11 +130,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertGreater(index, cursor)
             cursor = index
         for daemon in (
-            "concurrency_monitor.py",
-            "codex-progress-reporter.sh",
-            "comment-monitor.sh",
-            "dev_sync_daemon.py",
-            "phase9_router_daemon.py",
+            "consensus-rnd-cli concurrency",
+            "consensus-rnd-cli progress-reporter",
+            "consensus-rnd-cli comment-monitor",
+            "consensus-rnd-cli dev-sync",
+            "consensus-rnd-cli phase9-router",
         ):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
@@ -146,8 +163,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
             r"^## Phase Index$",
         )
         self.assertTrue(skeleton)
+        self.assertIn("consensus-rnd-cli wakeup-plan", skeleton)
+        self.assertIn("every wakeup must mechanically call", skeleton)
         required_order = (
             "must arm or confirm the mounted persistent Monitor bridge before pending-event sweep",
+            "Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"` first",
             "Arm or confirm the persistent daemon-event Monitor bridge",
             "Sweep GitHub comments and pending events",
             "Spawn the next codexes",
@@ -165,6 +185,56 @@ class SkillEntrypointContractTests(unittest.TestCase):
             skeleton,
             r"Confirm a wake source: an active daemon-event Monitor bridge,.*or.*ScheduleWakeup",
         )
+
+    def test_wakeup_plan_entrypoint_contract_is_read_only_and_authorized(self) -> None:
+        skeleton = section_between(
+            self.skill,
+            r"^## Wakeup Skeleton$",
+            r"^## Phase Index$",
+        )
+        checklist = section_between(
+            self.skill,
+            r"^## Controller Wakeup Checklist$",
+            r"^## ",
+        )
+        combined = f"{skeleton}\n{checklist}"
+        for needle in (
+            "consensus-rnd-cli wakeup-plan",
+            "每次唤醒",
+            "Mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"`",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+            "**Allowed**",
+            "**Forbidden / no lifecycle authority**",
+            "no restart",
+            "no spawn",
+            "no git",
+            "no GitHub lifecycle mutation",
+            "`RECOMMEND:audit`",
+            "`AUDIT_DONE:none:0` no longer exempts",
+            "deficit hard-gate",
+            "controller 不得带 `deficit>0` 结束唤醒",
+            "`HARD_GATE:dispatch_required=N`",
+            "structured `hard_gate`",
+            "not advisory",
+            "`consensus-rnd-cli peek` is a status lens",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
+        script = read(PACKAGE_WAKEUP_PLAN)
+        for needle in (
+            "Allowed: read `.refactor-loop` files",
+            "Forbidden: no restart/spawn, no git",
+            "no GitHub lifecycle mutation",
+            "no_lifecycle_authority",
+            "count_in_flight_codex",
+            "HARD_GATE:dispatch_required",
+            "hard_gate",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, script)
 
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(
@@ -199,6 +269,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(emoji_heading=emoji_heading):
                 self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
 
+    def test_philosophy_and_prompt_prose_do_not_leak_schema_identifier_suffixes(self) -> None:
+        docs = {
+            "SKILL.md": self.skill,
+            "prompts/implement.md": read(SKILL_ROOT / "prompts" / "implement.md"),
+            "prompts/verify.md": read(SKILL_ROOT / "prompts" / "verify.md"),
+            "prompts/meta-judge.md": read(SKILL_ROOT / "prompts" / "meta-judge.md"),
+        }
+        forbidden_fragments = (
+            "state-v2",
+            "v1 audit-backed work unit",
+            "v1 audit cluster alias",
+            '"schema_version": 1',
+            '"work_unit_schema_version": 1',
+        )
+        for path, text in docs.items():
+            with self.subTest(path=path):
+                for fragment in forbidden_fragments:
+                    self.assertNotIn(fragment, text)
+        self.assertIn("schema: refactor-verify-v1", docs["prompts/verify.md"])
+
     def test_skill_uses_intra_file_reference_links_only(self) -> None:
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
@@ -210,7 +300,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertRegex(self.skill, r"\(#[^)]+\)")
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
-        self.assertIn("phase9_router_daemon.py", self.skill)
+        self.assertIn("consensus-rnd-cli phase9-router", self.skill)
         self.assertIn("narrow Phase 9 allowlist", self.skill)
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)

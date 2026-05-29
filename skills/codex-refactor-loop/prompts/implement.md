@@ -3,7 +3,7 @@
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。
-当前 v1 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；审计段查找、既有 artifact 文件名、分支/worktree 名和 marker 仍使用该 alias。
+当前 audit-backed work unit 的兼容 cluster alias 是 `${CLUSTER_ID}`；审计段查找、既有 artifact 文件名、分支/worktree 名和 marker 仍使用该 alias。
 实现上下文事实源是 `${WORK_UNIT_SOURCE_REF}`。audit-backed work unit 指向 `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`；design-issue work unit 指向已达成共识的 decision artifact。
 `${DESIGN_DECISION_PATH}` 非空时走 design-issue pathway，读取该 consensus artifact；为空时走 audit-backed legacy pathway，读取 `${WORK_UNIT_SOURCE_REF}` 中的 "${CLUSTER_ID}" 一节。
 

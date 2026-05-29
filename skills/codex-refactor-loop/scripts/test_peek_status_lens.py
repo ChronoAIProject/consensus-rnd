@@ -15,7 +15,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
-PEEK = SKILL_ROOT / "scripts" / "peek.sh"
+PEEK = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 
 
 class PeekStatusLensBehaviorTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                   *) exit 0 ;;
                 esac
                 """
-            ),
+            ).lstrip(),
             encoding="utf-8",
         )
         git.chmod(0o755)
@@ -59,6 +59,18 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 args="$*"
                 pr="${PEEK_TEST_PR:-}"
                 if [[ "$1 $2" == "issue list" ]]; then
+                  if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label 🎯 milestone"* ]]; then
+                      printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]}]\n'
+                      exit 0
+                    fi
+                    if [[ "$args" == *"--jq"* ]]; then
+                      printf '  • #10 labels=[🔍 phase:design-solving] — ordinary issue\n'
+                      exit 0
+                    fi
+                    printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔍 phase:design-solving"}]}]\n'
+                    exit 0
+                  fi
                   printf '[]\\n'
                   exit 0
                 fi
@@ -71,6 +83,16 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$1 $2" == "pr list" ]]; then
+                  if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label 🎯 milestone"* ]]; then
+                      printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      exit 0
+                    fi
+                    if [[ "$args" == *"--state closed"* || "$args" == *"--state merged"* ]]; then
+                      printf '[]\n'
+                      exit 0
+                    fi
+                  fi
                   if [[ -z "$pr" ]]; then
                     if [[ "$args" == *"--jq"* ]]; then exit 0; fi
                     printf '[]\\n'
@@ -112,12 +134,12 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 printf '[]\\n'
                 exit 0
                 """
-            ),
+            ).lstrip(),
             encoding="utf-8",
         )
         gh.chmod(0o755)
 
-    def run_peek(self, *, pr: int | None = None) -> subprocess.CompletedProcess[str]:
+    def run_peek(self, *, pr: int | None = None, milestone_fixtures: bool = False) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
@@ -128,8 +150,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         )
         if pr is not None:
             env["PEEK_TEST_PR"] = str(pr)
+        if milestone_fixtures:
+            env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
         return subprocess.run(
-            ["bash", str(PEEK)],
+            [sys.executable, str(PEEK), "peek"],
             cwd=self.root,
             env=env,
             capture_output=True,
@@ -211,12 +235,24 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
 
     def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
-        text = PEEK.read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
 
-        self.assertIn("concurrency_monitor.py\" --count-only", text)
-        self.assertIn("concurrency_monitor.py\" --list-codex", text)
+        self.assertIn('"concurrency", "--count-only"', text)
+        self.assertIn('"concurrency", "--list-codex"', text)
         self.assertNotIn("ps -ef | awk", text)
         self.assertNotIn("ps -eo command= | awk", text)
+
+    def test_peek_lists_milestone_items_before_ordinary_open_issues(self) -> None:
+        result = self.run_peek(milestone_fixtures=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("▍Milestone (优先) issues:", result.stdout)
+        self.assertIn("issue #20", result.stdout)
+        self.assertIn("PR #30", result.stdout)
+        milestone_index = result.stdout.index("▍Milestone (优先) issues:")
+        ordinary_index = result.stdout.index("▍Open auto-loop issues:")
+        self.assertLess(milestone_index, ordinary_index)
+        self.assertLess(result.stdout.index("issue #20"), result.stdout.index("#10 labels="))
 
 
 if __name__ == "__main__":

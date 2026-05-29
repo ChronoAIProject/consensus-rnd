@@ -100,11 +100,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         required = (
             "host.env.example",
             ".refactor-loop/host.env",
-            "restart-daemons.sh",
+            "consensus-rnd-cli restart-daemons",
             "cron",
             "launchd",
             "statusLine",
-            "statusline.sh",
+            "consensus-rnd-cli statusline",
             ".git",
             "CI",
             "policy",
@@ -117,7 +117,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "scripts/install.sh",
             "scripts/installer.sh",
             "scripts/install-host-runtime.py",
-            "scripts/install-statusline.sh",
+            "scripts/install-consensus-rnd-cli statusline",
             "INSTALL.md",
         )
         for forbidden in forbidden_paths:
@@ -143,8 +143,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotIn("restart-cron.log", restart_helper)
 
         command_bodies = (
-            "source .refactor-loop/host.env && exec <skill-root>/scripts/restart-daemons.sh",
-            "source .refactor-loop/host.env && exec &lt;skill-root&gt;/scripts/restart-daemons.sh",
+            "source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
+            "source .refactor-loop/host.env && exec python3 &lt;skill-root&gt;/scripts/consensus-rnd-cli restart-daemons",
         )
         for body in command_bodies:
             with self.subTest(body=body):
@@ -200,7 +200,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertFalse((scripts_dir / "daemon-event-monitor-bridge.sh").exists())
 
     def test_skill_documents_phase9_router_daemon_boundary(self) -> None:
-        self.assertIn("phase9_router_daemon.py --daemon --repo-root", self.skill)
+        self.assertIn("consensus-rnd-cli phase9-router --daemon --repo-root", self.skill)
         self.assertIn("Allowlist(唯一 direct spawn authority)", self.skill)
         self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.skill)
         self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.skill)
@@ -215,8 +215,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
     def test_phase9_router_filename_identity_source_regression(self) -> None:
-        router = (SKILL_ROOT / "scripts" / "phase9_router_daemon.py").read_text(encoding="utf-8")
-        helper = (SKILL_ROOT / "scripts" / "restart-daemons.sh").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
         combined = "\n".join((self.skill, router, helper))
         for token in ("phase9-issue", "solver-issue", "meta-judge-issue"):
             with self.subTest(token=token):
@@ -226,8 +226,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactor (issue-100/router-filename-identity)", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
-        self.assertIn("phase9_router_daemon.py", helper)
-        self.assertIn('--daemon --repo-root \\"\\$REPO_ROOT\\"', helper)
+        self.assertIn("consensus-rnd-cli", helper)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
@@ -261,7 +260,7 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
     def test_statusline_contract_does_not_add_daemon_or_installer(self) -> None:
         scripts_dir = SKILL_ROOT / "scripts"
         self.assertFalse((scripts_dir / "installer.sh").exists())
-        self.assertFalse((scripts_dir / "install-statusline.sh").exists())
+        self.assertFalse((scripts_dir / "install-consensus-rnd-cli statusline").exists())
         combined = self.skill
         forbidden = (
             "StatuslineDaemon",
@@ -290,7 +289,7 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
                 self.assertIn(needle, section)
         scripts_dir = SKILL_ROOT / "scripts"
         self.assertFalse((scripts_dir / "installer.sh").exists())
-        self.assertFalse((scripts_dir / "install-statusline.sh").exists())
+        self.assertFalse((scripts_dir / "install-consensus-rnd-cli statusline").exists())
 
     def test_skill_documents_statusline_snapshot_schema(self) -> None:
         self.assertIn("### Statusline snapshot schema", self.skill)

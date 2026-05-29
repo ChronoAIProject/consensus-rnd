@@ -52,7 +52,7 @@ jobs:
           python-version: "3.12"
 
       - name: Check manifest version sync
-        run: python3 skills/codex-refactor-loop/scripts/check_manifest_version_sync.py
+        run: python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-manifest
 
   skill-degradation:
     name: skill-degradation
@@ -67,7 +67,7 @@ jobs:
           python-version: "3.12"
 
       - name: Check skill degradation
-        run: python3 skills/codex-refactor-loop/scripts/check_skill_degradation.py --static
+        run: python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-degradation --static
 
   lint-advisory:
     name: lint-advisory
@@ -100,9 +100,9 @@ jobs:
         shell: bash
         run: |
           set +e
-          shellcheck skills/codex-refactor-loop/scripts/*.sh
+          if compgen -G "skills/codex-refactor-loop/scripts/*.sh" > /dev/null; then shellcheck skills/codex-refactor-loop/scripts/*.sh; else true; fi
           SHELLCHECK_STATUS=$?
-          python3 -m ruff check --select E9,F63,F7,F82 skills/codex-refactor-loop/scripts/*.py
+          python3 -m ruff check --select E9,F63,F7,F82 skills/codex-refactor-loop/scripts/consensus-rnd-cli skills/codex-refactor-loop/scripts/codex_refactor_loop
           RUFF_STATUS=$?
           markdownlint-cli2 "**/*.md" "!node_modules" "!.git" "!.refactor-loop"
           MARKDOWNLINT_STATUS=$?
