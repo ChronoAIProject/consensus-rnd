@@ -180,7 +180,7 @@ class Phase9Router:
         # .refactor-loop/.controller-pending-events.log.
         self.pending_events_path = ctx.paths.pending_events
         self.lock_path = self.loop_dir / "phase9-router.lock"
-        self.spawn_codex = self.skill_root / "scripts" / "spawn-codex.sh"
+        self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
         # memory-only dedup was lost on daemon restart, re-emitting historical
@@ -502,7 +502,7 @@ class Phase9Router:
             return False
         target = str(log_path)
         for line in ps.stdout.splitlines():
-            if "spawn-codex.sh" in line and target in line and " -c " not in line:
+            if "consensus-rnd-cli" in line and "spawn-codex" in line and target in line and " -c " not in line:
                 return True
         return False
 
@@ -553,6 +553,7 @@ class Phase9Router:
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
         command = [
             str(self.spawn_codex),
+            "spawn-codex",
             "--cd",
             str(self.repo_root),
             "--prompt",
@@ -651,14 +652,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     mode.add_argument("--daemon", action="store_true", help="run persistently")
     mode.add_argument("--once", action="store_true", help="run one scan and exit")
     parser.add_argument("--dry-run", action="store_true", help="do not spawn codex workers")
-    parser.add_argument("--repo-root", required=True, help="absolute host repository root")
+    parser.add_argument("--repo-root", help="absolute host repository root")
     parser.add_argument("--interval", type=int, default=int(os.environ.get("INTERVAL", "30")))
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    repo_root = Path(args.repo_root)
+    repo_root = Path(args.repo_root) if args.repo_root else LoopContext.load(cwd=os.getcwd()).repo_root
     if not repo_root.is_absolute():
         raise SystemExit("--repo-root must be absolute")
     router = Phase9Router(repo_root, dry_run=args.dry_run, command_runner=command_runner)

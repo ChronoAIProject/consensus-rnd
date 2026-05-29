@@ -44,10 +44,11 @@ def copy_minimal_degradation_repo() -> tempfile.TemporaryDirectory[str]:
         ".github/workflows/release.yml",
         "skills/codex-refactor-loop/SKILL.md",
         "skills/codex-refactor-loop/host.env.example",
-        "skills/codex-refactor-loop/scripts/auto_release_gate.py",
-        "skills/codex-refactor-loop/scripts/check_skill_degradation.py",
-        "skills/codex-refactor-loop/scripts/concurrency_monitor.py",
-        "skills/codex-refactor-loop/scripts/peek.sh",
+        "skills/codex-refactor-loop/scripts/consensus-rnd-cli",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -123,7 +124,7 @@ class PackageChecksTests(unittest.TestCase):
             ".refactor-loop/.degradation-alert.log",
             ".refactor-loop/.controller-pending-events.log",
             "DEGRADATION_WATCH_INTERVAL_SECONDS",
-            "check_skill_degradation.py --static",
+            "consensus-rnd-cli check-degradation --static",
             "source mutation",
             "git reset/rebase/merge/push",
             "GitHub issue/PR/body/label lifecycle mutation",

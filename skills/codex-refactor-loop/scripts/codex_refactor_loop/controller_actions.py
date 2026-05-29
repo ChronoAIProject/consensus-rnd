@@ -48,7 +48,8 @@ class ControllerActions:
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         full = ["gh", *args]
         if self.ctx.gh_repo_slug:
-            full.extend(["--repo", self.ctx.gh_repo_slug])
+            insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
+            full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(args)} failed")
@@ -59,6 +60,102 @@ class ControllerActions:
         if check and result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
         return result
+
+    def apply_human_label_or_skip(self, pr_number: str, source_marker: str = "", reason: str = "") -> int:
+        if not pr_number:
+            sys.stderr.write("apply_human_label_or_skip: missing pr_number\n")
+            return 2
+        env_marker = os.environ.get("HUMAN_LABEL_SOURCE_MARKER", "")
+        if not source_marker.startswith("META_RESOLVED:escalate-human:") and env_marker.startswith(
+            "META_RESOLVED:escalate-human:"
+        ):
+            if not reason:
+                reason = source_marker
+            source_marker = env_marker
+        if not source_marker.startswith("META_RESOLVED:escalate-human:"):
+            sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
+            return 2
+
+        directive_dir = self.ctx.paths.runs / "maintainer-directives"
+        if directive_dir.is_dir():
+            target = pr_number.lstrip("#")
+            pr_pattern = re.compile(rf"(^|[^0-9])(PR[ -]?)?#?{re.escape(target)}([^0-9]|$)")
+            reason_pattern = (
+                re.compile(rf"(^|[^A-Za-z0-9_-]){re.escape(reason)}([^A-Za-z0-9_-]|$)") if reason else None
+            )
+            for path in directive_dir.glob("*.md"):
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                if pr_pattern.search(text) or (reason_pattern and reason_pattern.search(text)):
+                    print("skip-label: maintainer-directive already covers this; see .refactor-loop/runs/maintainer-directives/")
+                    return 1
+
+        result = self.gh(["pr", "edit", pr_number, "--add-label", "👤 human:需-maintainer-决策"], check=False)
+        return result.returncode
+
+    def _current_branch(self) -> str:
+        result = self.git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def safe_push(self, remote: str = "origin", branch: str = "") -> int:
+        branch = branch or self._current_branch()
+        if not branch or branch == "HEAD":
+            sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
+            return 2
+        fetch = self.git(["fetch", remote, branch], check=False)
+        if fetch.stdout:
+            print(fetch.stdout, end="")
+        if fetch.stderr:
+            print("\n".join(fetch.stderr.splitlines()[-3:]))
+        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
+        try:
+            behind_count = int((behind.stdout or "0").strip() or "0")
+        except ValueError:
+            behind_count = 0
+        if behind_count > 0:
+            print(f"safe_push: local behind {remote}/{branch} by {behind_count} commit(s); rebasing")
+            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
+            if pull.stdout:
+                print(pull.stdout, end="")
+            if pull.stderr:
+                sys.stderr.write(pull.stderr)
+            if pull.returncode != 0:
+                sys.stderr.write(f"safe_push: rebase conflict on {remote}/{branch} - resolve manually then push\n")
+                return 3
+        push = self.git(["push", remote, branch], check=False)
+        if push.stdout:
+            print(push.stdout, end="")
+        if push.stderr:
+            sys.stderr.write(push.stderr)
+        return push.returncode
+
+    def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
+        branch = branch or self._current_branch()
+        if not branch or branch == "HEAD":
+            sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
+            return 0
+        fetch = self.git(["fetch", remote, branch], check=False)
+        if fetch.stdout:
+            print(fetch.stdout, end="")
+        if fetch.stderr:
+            print("\n".join(fetch.stderr.splitlines()[-3:]))
+        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
+        try:
+            behind_count = int((behind.stdout or "0").strip() or "0")
+        except ValueError:
+            behind_count = 0
+        if behind_count > 0:
+            print(f"safe_sync_main: local behind {remote}/{branch} by {behind_count}; pulling --rebase --autostash")
+            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
+            if pull.stdout:
+                print(pull.stdout, end="")
+            if pull.stderr:
+                sys.stderr.write(pull.stderr)
+            return pull.returncode
+        print(f"safe_sync_main: already up to date with {remote}/{branch}")
+        return 0
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
         wt_path = self.ctx.repo_root / ".worktrees" / f"iter{iteration}-{cluster}"
@@ -145,7 +242,10 @@ class ControllerActions:
         merged_at = facts.get("mergedAt") if isinstance(facts, dict) else None
         pr_num = facts.get("number") or pr
         if not pr_num or not sha or not merged_at:
-            raise RuntimeError("merge_pr: recent-pr-merges projection failed: missing mergedAt or mergeCommit.oid after retry")
+            raise RuntimeError(
+                "merge_pr: recent-pr-merges projection failed: missing mergedAt or mergeCommit.oid after retry; "
+                "recover by writing .refactor-loop/state/recent-pr-merges.json"
+            )
         path = self.ctx.paths.recent_pr_merges
         now = datetime.now(timezone.utc)
         cutoff = now - timedelta(hours=2)
@@ -192,17 +292,17 @@ class ControllerActions:
             sys.stderr.write("apply_dev_sync_request_marker: invalid marker\n")
             return 2
         rel_path = marker[len(prefix):]
-        helper = self.ctx.skill_root / "scripts" / "apply_integration_sync_request.py"
-        return subprocess.call([sys.executable, str(helper), str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
+        cli = self.ctx.skill_root / "scripts" / "consensus-rnd-cli"
+        return subprocess.call([sys.executable, str(cli), "apply-sync", str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
 
     def apply_triage_decision_marker(self, marker: str) -> int:
         match = re.fullmatch(r"TRIAGE_DECISION_DONE:([0-9]+):(accept|reject):(\.refactor-loop/runs/.*\.json)", marker)
         if not match:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
-        helper = self.ctx.skill_root / "scripts" / "apply_triage_decision.py"
+        cli = self.ctx.skill_root / "scripts" / "consensus-rnd-cli"
         issue, verdict, rel_path = match.groups()
-        return subprocess.call([sys.executable, str(helper), issue, verdict, str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
+        return subprocess.call([sys.executable, str(cli), "apply-triage", issue, verdict, str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -259,6 +359,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     open_pr.add_argument("body_file")
     open_pr.add_argument("base", nargs="?")
     open_pr.add_argument("head", nargs="?")
+    human = sub.add_parser("apply-human-label")
+    human.add_argument("pr_number")
+    human.add_argument("source_marker", nargs="?")
+    human.add_argument("reason", nargs="?")
+    safe_push = sub.add_parser("safe-push")
+    safe_push.add_argument("remote", nargs="?", default="origin")
+    safe_push.add_argument("branch", nargs="?")
+    safe_sync = sub.add_parser("safe-sync-main")
+    safe_sync.add_argument("remote", nargs="?", default="origin")
+    safe_sync.add_argument("branch", nargs="?")
     args = parser.parse_args(argv)
     try:
         actions = ControllerActions(LoopContext.load(cwd=os.getcwd()))
@@ -269,6 +379,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             os.environ["PR_NUM"] = str(pr_num)
             print(url)
             return 0
+        if args.command == "apply-human-label":
+            return actions.apply_human_label_or_skip(args.pr_number, args.source_marker or "", args.reason or "")
+        if args.command == "safe-push":
+            return actions.safe_push(args.remote, args.branch or "")
+        if args.command == "safe-sync-main":
+            return actions.safe_sync_main(args.remote, args.branch or "")
     except (LoopContextError, RuntimeError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2

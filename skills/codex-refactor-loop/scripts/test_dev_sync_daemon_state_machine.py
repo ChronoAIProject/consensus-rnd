@@ -16,11 +16,13 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 os.environ.setdefault("REPO_ROOT", str(REPO_ROOT))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from dev_sync_daemon import IntegrationSyncDaemon
-from integration_sync_requests import validate_request_dict
+from codex_refactor_loop.sync.dev import IntegrationSyncDaemon
+from codex_refactor_loop.sync.requests import validate_request_dict
 
 SKILL_ROOT = REPO_ROOT / "skills" / "codex-refactor-loop"
-DEV_SYNC = SKILL_ROOT / "scripts" / "dev_sync_daemon.py"
+DEV_SYNC = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "sync" / "dev.py"
+SYNC_APPLY = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "sync" / "apply.py"
+SYNC_REQUESTS = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "sync" / "requests.py"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 
 
@@ -243,8 +245,8 @@ class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
             path.read_text(encoding="utf-8")
             for path in (
                 DEV_SYNC,
-                SKILL_ROOT / "scripts" / "integration_sync_requests.py",
-                SKILL_ROOT / "scripts" / "apply_integration_sync_request.py",
+                SYNC_REQUESTS,
+                SYNC_APPLY,
             )
         )
         for forbidden in ("ControllerLifecycleIntentV1", "ControllerCommand", "ControllerOrchestrator", "generic event bus"):

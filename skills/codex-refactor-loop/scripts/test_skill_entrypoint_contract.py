@@ -11,7 +11,8 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
-WAKEUP_PLAN = SKILL_ROOT / "scripts" / "wakeup_plan.py"
+WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
+PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
 
 
@@ -129,11 +130,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertGreater(index, cursor)
             cursor = index
         for daemon in (
-            "concurrency_monitor.py",
-            "codex-progress-reporter.sh",
-            "comment-monitor.sh",
-            "dev_sync_daemon.py",
-            "phase9_router_daemon.py",
+            "consensus-rnd-cli concurrency",
+            "consensus-rnd-cli progress-reporter",
+            "consensus-rnd-cli comment-monitor",
+            "consensus-rnd-cli dev-sync",
+            "consensus-rnd-cli phase9-router",
         ):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
@@ -162,11 +163,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
             r"^## Phase Index$",
         )
         self.assertTrue(skeleton)
-        self.assertIn("wakeup_plan.py", skeleton)
+        self.assertIn("consensus-rnd-cli wakeup-plan", skeleton)
         self.assertIn("every wakeup must mechanically call", skeleton)
         required_order = (
             "must arm or confirm the mounted persistent Monitor bridge before pending-event sweep",
-            "Run `python3 <skill-root>/scripts/wakeup_plan.py --repo-root \"$REPO_ROOT\"` first",
+            "Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"` first",
             "Arm or confirm the persistent daemon-event Monitor bridge",
             "Sweep GitHub comments and pending events",
             "Spawn the next codexes",
@@ -198,9 +199,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         combined = f"{skeleton}\n{checklist}"
         for needle in (
-            "wakeup_plan.py",
+            "consensus-rnd-cli wakeup-plan",
             "每次唤醒",
-            "Mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root \"$REPO_ROOT\"`",
+            "Mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
             "**Allowed**",
             "**Forbidden / no lifecycle authority**",
@@ -215,7 +216,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "`HARD_GATE:dispatch_required=N`",
             "structured `hard_gate`",
             "not advisory",
-            "`peek.sh` is a status lens",
+            "`consensus-rnd-cli peek` is a status lens",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
@@ -279,7 +280,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertRegex(self.skill, r"\(#[^)]+\)")
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
-        self.assertIn("phase9_router_daemon.py", self.skill)
+        self.assertIn("consensus-rnd-cli phase9-router", self.skill)
         self.assertIn("narrow Phase 9 allowlist", self.skill)
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Behavior tests for concurrency_monitor dispatch queue auto-topup."""
 
-import importlib
 import json
 import os
 import sys
@@ -12,6 +11,7 @@ from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 
 class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
@@ -21,20 +21,23 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.old_env = os.environ.copy()
         os.environ["REPO_ROOT"] = str(self.repo)
         os.environ["CODEX_FLOOR"] = "2"
-        sys.path.insert(0, str(SCRIPT_DIR))
-        import concurrency_monitor
-
-        self.monitor = importlib.reload(concurrency_monitor)
+        from codex_refactor_loop.context import LoopContext
+        from codex_refactor_loop.monitors import concurrency as concurrency_module
+        from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+        self.module = concurrency_module
+        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.monitor = ConcurrencyMonitor(self.ctx)
         self.refactor_loop = self.repo / ".refactor-loop"
 
     def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self.old_env)
-        try:
-            sys.path.remove(str(SCRIPT_DIR))
-        except ValueError:
-            pass
         self.tmp.cleanup()
+
+    def reload_monitor(self):
+        self.ctx = self.ctx.__class__.load(repo_root=self.repo)
+        self.monitor = self.monitor.__class__(self.ctx)
+        return self.monitor
 
     def write_dispatch(
         self,
@@ -53,7 +56,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         log.parent.mkdir(parents=True, exist_ok=True)
         prompt.write_text("prompt\n", encoding="utf-8")
         if cd is None:
-            cd = self.repo if task_id.startswith(self.monitor.MAIN_READONLY_DISPATCH_PREFIXES) else self.repo / ".worktrees" / task_id
+            cd = self.repo if task_id.startswith(self.module.MAIN_READONLY_DISPATCH_PREFIXES) else self.repo / ".worktrees" / task_id
         payload = {
             "cd": str(cd),
             "prompt": str(prompt),
@@ -92,7 +95,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.write_dispatch("p1", "audit-iter-5")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.top_up_from_dispatch_queue(actual=0, floor=2)
 
@@ -102,20 +105,20 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_to_repo_root(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "repo-root-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_missing_cd(self) -> None:
         path = self.write_dispatch("p0", "fix-pr44-round-3")
@@ -124,74 +127,74 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         path.write_text(json.dumps(payload), encoding="utf-8")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "missing-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_relative_cd(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=Path(".worktrees/fix-pr44-round-3"))
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "relative-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_dispatch_cd_outside_repo(self) -> None:
         outside_repo = self.repo.parent / "outside-repo"
         self.write_dispatch("p0", "fix-pr44-round-3", cd=outside_repo)
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "outside-repo", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_inside_repo_but_outside_worktrees(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / "tmp" / "fix-pr44-round-3")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "outside-worktrees", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejects_mutable_dispatch_to_worktrees_root(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo / ".worktrees")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertIsNone(fired)
         self.assert_dispatch_rejected("fix-pr44-round-3", "worktrees-root-cd", calls)
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_accepts_mutable_dispatch_inside_worktrees(self) -> None:
         worktree = self.repo / ".worktrees" / "fix-pr44-round-3"
         self.write_dispatch("p0", "fix-pr44-round-3", cd=worktree)
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("fix-pr44-round-3", "p0", "fix-pr44-round-3 needed"))
@@ -202,7 +205,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_allows_main_readonly_dispatch_prefixes(self) -> None:
         task_ids = ("audit-iter-5", "phase9-issue133-r4-minimal", "review-pr44-tests")
@@ -212,7 +215,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.write_dispatch("p0", task_id, cd=self.repo)
                 calls: list[list[str]] = []
 
-                with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
                     fired = self.monitor.dispatch_one_from_queue()
 
                 self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
@@ -220,14 +223,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
 
     # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree
+    #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_rejected_dispatch_does_not_block_next_queue_item(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", cd=self.repo)
         self.write_dispatch("p0", "fix-pr44-round-4", cd=self.repo / ".worktrees" / "fix-pr44-round-4")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("fix-pr44-round-4", "p0", "fix-pr44-round-4 needed"))
@@ -244,7 +247,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.write_dispatch("p0", "p0-task")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(len(calls), 1)
@@ -257,7 +260,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.write_dispatch("p1", f"task-{i}")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.top_up_from_dispatch_queue(actual=2, floor=2)
 
         self.assertEqual(calls, [])
@@ -276,7 +279,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.write_dispatch("p0", "fix-pr44-round-3", reason="PR #44 r3 fix needed")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.dispatch_one_from_queue()
 
         archive = self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-3.json"
@@ -294,7 +297,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         calls: list[list[str]] = []
         counts = [0, 1, 2]
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
                 with mock.patch.object(
                     self.monitor,
@@ -318,9 +321,9 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         calls: list[list[str]] = []
         counts = [2, 3, 4]
         os.environ["CODEX_FLOOR"] = "4"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
                 with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
                     self.monitor.tick()
@@ -340,7 +343,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         calls: list[list[str]] = []
         counts = [2, 3, 4]
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
                 with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=active_items):
                     self.monitor.tick()
@@ -357,7 +360,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         dispatch.write_text(json.dumps(payload), encoding="utf-8")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(len(calls), 1)
@@ -366,13 +369,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_configured_floor_invalid_falls_back(self) -> None:
         os.environ["CODEX_FLOOR"] = "abc"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
 
         self.assertEqual(self.monitor.configured_floor(), 5)
 
     def test_configured_floor_below_minimum_clamps(self) -> None:
         os.environ["CODEX_FLOOR"] = "0"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
 
         self.assertEqual(self.monitor.configured_floor(), 2)
 
@@ -383,8 +386,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         (dispatched / "collision-task.json").write_text("{}\n", encoding="utf-8")
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
-            with mock.patch.object(self.monitor, "utc_ts", return_value="2026-05-26T08:09:10Z"):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            with mock.patch.object(self.module, "utc_ts", return_value="2026-05-26T08:09:10Z"):
                 self.monitor.dispatch_one_from_queue()
 
         self.assertTrue((dispatched / "collision-task.json").exists())
@@ -397,7 +400,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.write_dispatch("p2", "filename-task", include_task_id=False)
         calls: list[list[str]] = []
 
-        with mock.patch.object(self.monitor.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("filename-task", "p2", "filename-task needed"))
@@ -408,7 +411,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(payload["task_id"], "filename-task")
 
     # Refactor (iter4/skill-count-cli-canonical): Old pattern: controller ran
-    # ps | grep manually and spawn-codex.sh reimplemented count_in_flight_codex,
+    # ps | grep manually and consensus-rnd-cli spawn-codex reimplemented count_in_flight_codex,
     # making drift from the daemon algorithm likely.
     # New principle: expose `--count-only` / `--list-codex` so the controller
     # can directly reuse the daemon's canonical algorithm
@@ -416,18 +419,18 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
     def test_count_only_cli_prints_canonical_in_flight_codex_count(self) -> None:
         import io
         fake_ps = (
-            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash -c spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
-            "bash spawn-codex.sh --cd /Users/other-host/repo --prompt /tmp/c.md --log /tmp/c.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash -c consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
+            "bash consensus-rnd-cli spawn-codex --cd /Users/other-host/repo --prompt /tmp/c.md --log /tmp/c.log\n"
         )
         captured = io.StringIO()
         with mock.patch.object(
-            self.monitor.subprocess,
+            self.module.subprocess,
             "run",
             return_value=mock.Mock(stdout=fake_ps, returncode=0),
         ), mock.patch.object(sys, "stdout", captured):
-            exit_code = self.monitor.main(["--count-only"])
+            exit_code = self.module.main(["--count-only"])
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(captured.getvalue().strip(), "2")
@@ -435,23 +438,23 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
     def test_list_codex_cli_prints_one_supervisor_per_line(self) -> None:
         import io
         fake_ps = (
-            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash -c spawn-codex.sh --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash spawn-codex.sh --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash -c consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {self.repo} --prompt /tmp/b.md --log /tmp/b.log\n"
         )
         captured = io.StringIO()
         with mock.patch.object(
-            self.monitor.subprocess,
+            self.module.subprocess,
             "run",
             return_value=mock.Mock(stdout=fake_ps, returncode=0),
         ), mock.patch.object(sys, "stdout", captured):
-            exit_code = self.monitor.main(["--list-codex"])
+            exit_code = self.module.main(["--list-codex"])
 
         self.assertEqual(exit_code, 0)
         lines = [line for line in captured.getvalue().splitlines() if line.strip()]
         self.assertEqual(len(lines), 2)
         for line in lines:
-            self.assertIn("spawn-codex.sh", line)
+            self.assertIn("consensus-rnd-cli spawn-codex", line)
             self.assertIn(str(self.repo), line)
             self.assertNotIn(" -c ", line)
 
@@ -468,11 +471,10 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         env.pop("ALLOW_GIT_ROOT_FALLBACK", None)
         env["PATH"] = os.environ.get("PATH", "")
 
-        script = Path(self.monitor.__file__)
         for flag in ("--count-only", "--list-codex"):
             with self.subTest(flag=flag):
                 result = real_subprocess.run(
-                    [sys.executable, str(script), flag],
+                    [sys.executable, str(CLI), "concurrency", flag],
                     cwd=str(self.repo),
                     env=env,
                     capture_output=True,
@@ -491,9 +493,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         env.pop("ALLOW_GIT_ROOT_FALLBACK", None)
         env["PATH"] = os.environ.get("PATH", "")
 
-        script = Path(self.monitor.__file__)
         result = real_subprocess.run(
-            [sys.executable, str(script)],
+            [sys.executable, str(CLI), "concurrency", "--daemon"],
             cwd="/tmp",
             env=env,
             capture_output=True,
@@ -505,9 +506,9 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_degradation_hook_writes_alert_and_existing_pending_event_only_on_failure(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
         state: dict[str, object] = {}
-        result = self.monitor.subprocess.CompletedProcess(["checker"], 1, stdout="bad drift\n", stderr="")
+        result = self.module.subprocess.CompletedProcess(["checker"], 1, stdout="bad drift\n", stderr="")
 
         with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
             self.monitor.maybe_run_skill_degradation_watch(state)
@@ -522,9 +523,9 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_maybe_run_skill_degradation_watch_emits_alert_on_timeout(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
         state: dict[str, object] = {}
-        timeout = self.monitor.subprocess.TimeoutExpired(cmd=["checker"], timeout=7)
+        timeout = self.module.subprocess.TimeoutExpired(cmd=["checker"], timeout=7)
 
         with mock.patch.object(self.monitor, "run_skill_degradation_check", side_effect=timeout):
             self.monitor.maybe_run_skill_degradation_watch(state)
@@ -537,7 +538,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_maybe_run_skill_degradation_watch_emits_alert_on_generic_exception(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
         state: dict[str, object] = {}
 
         with mock.patch.object(
@@ -555,10 +556,10 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_degradation_hook_is_throttled(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
         state = {"last_degradation_watch_at": 1_000}
 
-        with mock.patch.object(self.monitor.time, "time", return_value=1_030):
+        with mock.patch.object(self.module.time, "time", return_value=1_030):
             with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
                 self.monitor.maybe_run_skill_degradation_watch(state)
 
@@ -567,9 +568,9 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_degradation_hook_success_writes_no_alert(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
         state: dict[str, object] = {}
-        result = self.monitor.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
+        result = self.module.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
 
         with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
             self.monitor.maybe_run_skill_degradation_watch(state)
@@ -579,7 +580,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_degradation_hook_disabled_by_zero_interval(self) -> None:
         os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
-        self.monitor = importlib.reload(self.monitor)
+        self.reload_monitor()
 
         with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
             self.monitor.maybe_run_skill_degradation_watch({})
@@ -591,7 +592,7 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
     """Producer side of the statusline daemon-health extension.
 
     Daemon heartbeat staleness is collected by concurrency_monitor and surfaced
-    in the snapshot, so the consumer (statusline.sh) does not need to enumerate
+    in the snapshot, so the consumer (consensus-rnd-cli statusline) does not need to enumerate
     daemons itself. Discovery is dynamic via heartbeat file presence.
     """
 
@@ -601,20 +602,18 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
         self.old_env = os.environ.copy()
         os.environ["REPO_ROOT"] = str(self.repo)
         os.environ["CODEX_FLOOR"] = "2"
-        sys.path.insert(0, str(SCRIPT_DIR))
-        import concurrency_monitor
-
-        self.monitor = importlib.reload(concurrency_monitor)
+        from codex_refactor_loop.context import LoopContext
+        from codex_refactor_loop.monitors import concurrency as concurrency_module
+        from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+        self.module = concurrency_module
+        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.monitor = ConcurrencyMonitor(self.ctx)
         self.heartbeats = self.repo / ".refactor-loop" / "heartbeats"
         self.heartbeats.mkdir(parents=True, exist_ok=True)
 
     def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self.old_env)
-        try:
-            sys.path.remove(str(SCRIPT_DIR))
-        except ValueError:
-            pass
         self.tmp.cleanup()
 
     def _write_heartbeat(self, name: str, age_seconds: int, now: float) -> None:

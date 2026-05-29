@@ -24,9 +24,12 @@ def retain_logs(repo_root: Path, *, now: float | None = None) -> tuple[int, int,
     cutoff = int(now if now is not None else time.time()) - RETENTION_TTL_HOURS * 60 * 60
     deleted = 0
     kept = 0
-    for path in log_dir.glob("*.log"):
+    for path in log_dir.iterdir():
         try:
             if path.is_symlink() or not path.is_file():
+                kept += 1
+                continue
+            if path.suffix != ".log":
                 kept += 1
                 continue
             if int(path.stat().st_mtime) < cutoff:

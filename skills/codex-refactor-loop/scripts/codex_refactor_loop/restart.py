@@ -20,12 +20,14 @@ from .retention import retain_logs
 # singleton wrappers. New: Python keeps the same five-daemon static allowlist,
 # actor-owned heartbeat contract, and no lifecycle authority outside local
 # wrapper pid/heartbeat files.
+CLI_ENTRYPOINT_NAME = "consensus-rnd-cli"
+
 DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("concurrency_monitor", ("python3", "{skill_root}/scripts/concurrency_monitor.py")),
-    ("comment-monitor", ("python3", "-m", "codex_refactor_loop.monitors.comment")),
-    ("codex-progress-reporter", ("python3", "-m", "codex_refactor_loop.monitors.progress")),
-    ("dev_sync_daemon", ("python3", "{skill_root}/scripts/dev_sync_daemon.py")),
-    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/phase9_router_daemon.py", "--daemon", "--repo-root", "{repo_root}")),
+    ("concurrency_monitor", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "concurrency", "--daemon")),
+    ("comment-monitor", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "comment-monitor", "--daemon")),
+    ("codex-progress-reporter", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "progress-reporter", "--daemon")),
+    ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
+    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
 )
 
 FORBIDDEN_LIFECYCLE_AUTHORITY = (
@@ -69,7 +71,7 @@ class RestartDaemons:
             return
         self._stop_existing_daemon(name)
         command = [
-            part.format(skill_root=self.ctx.skill_root, repo_root=self.ctx.repo_root)
+            part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
             for part in command_template
         ]
         wrapper_code = WRAPPER_CODE

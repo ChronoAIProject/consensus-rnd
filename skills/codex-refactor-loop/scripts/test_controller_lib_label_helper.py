@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Behavior tests for controller_lib.sh human-label helper."""
+"""Behavior tests for codex_refactor_loop/controller_actions.py human-label helper."""
 
 from __future__ import annotations
 
 import os
 import json
-import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -15,8 +15,7 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-CONTROLLER_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "controller_lib.sh"
-REPO_SLUG_LIB = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "repo_slug.sh"
+CLI = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
 HUMAN_LABEL = "👤 human:需-maintainer-决策"
 VALID_MARKER = "META_RESOLVED:escalate-human:human-label-semantics-guard"
 
@@ -25,12 +24,9 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.controller = self.root / "controller_lib.sh"
         self.gh_log = self.root / "gh.log"
         self.directive_dir = self.root / ".refactor-loop" / "runs" / "maintainer-directives"
         self.directive_dir.mkdir(parents=True)
-        shutil.copy2(CONTROLLER_LIB, self.controller)
-        shutil.copy2(REPO_SLUG_LIB, self.root / "repo_slug.sh")
 
         fake_gh = self.root / "gh"
         fake_gh.write_text(
@@ -58,8 +54,8 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
             }
         )
         return subprocess.run(
-            ["bash", "-c", 'source "$CONTROLLER_LIB"; apply_human_label_or_skip "$@"', "bash", *args],
-            env={**env, "CONTROLLER_LIB": str(self.controller)},
+            [sys.executable, str(CLI), "apply-human-label", *args],
+            env=env,
             text=True,
             capture_output=True,
             check=False,
@@ -192,11 +188,8 @@ class ControllerLibRecentMergeProjectionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.controller = self.root / "controller_lib.sh"
         self.gh_log = self.root / "gh.log"
         self.git_log = self.root / "git.log"
-        shutil.copy2(CONTROLLER_LIB, self.controller)
-        shutil.copy2(REPO_SLUG_LIB, self.root / "repo_slug.sh")
         self._write_fake_gh(merge_exit=0, fact_json=json.dumps({
             "number": 55,
             "mergedAt": "2026-05-29T01:02:03Z",
@@ -261,8 +254,8 @@ exit 0
             }
         )
         return subprocess.run(
-            ["bash", "-c", 'source "$CONTROLLER_LIB"; merge_pr "$@"', "bash", *args],
-            env={**env, "CONTROLLER_LIB": str(self.controller)},
+            [sys.executable, str(CLI), "merge-pr", *args],
+            env=env,
             text=True,
             capture_output=True,
             check=False,

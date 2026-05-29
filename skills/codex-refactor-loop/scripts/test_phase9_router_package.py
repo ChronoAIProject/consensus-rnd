@@ -53,7 +53,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(self.router.logs_dir, self.ctx.paths.logs)
         self.assertEqual(self.router.prompts_dir, self.ctx.paths.prompts / "phase9")
         self.assertEqual(self.router.pending_events_path, self.ctx.paths.pending_events)
-        self.assertEqual(self.router.spawn_codex, self.ctx.skill_root / "scripts" / "spawn-codex.sh")
+        self.assertEqual(self.router.spawn_codex, self.ctx.skill_root / "scripts" / "consensus-rnd-cli")
 
     def test_package_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -65,7 +65,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(len(self.commands), 1)
         joined = " ".join(self.commands[0])
         self.assertIn("phase9-issue160-r3-judge.log", joined)
-        self.assertIn(str(self.ctx.skill_root / "scripts" / "spawn-codex.sh"), joined)
+        self.assertIn(str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"), joined)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
 
     def test_package_router_converge_accepts_chinese_body_and_dispatches_solver_triplet(self) -> None:

@@ -75,8 +75,9 @@ def applied_marker(repo: Path, request_path: Path) -> Path:
 def ensure_clean_or_merge(
     worktree: Path,
     *,
-    command_runner=run,
+    command_runner=None,
 ) -> tuple[bool, bool]:
+    command_runner = command_runner or run
     merge_head = command_runner(["git", "rev-parse", "--git-path", "MERGE_HEAD"], worktree)
     merge_in_progress = merge_head.returncode == 0 and Path(merge_head.stdout.strip()).exists()
     if merge_in_progress:
@@ -103,8 +104,9 @@ def validate_common(
     request_path: Path,
     *,
     env: dict[str, str] | None = None,
-    command_runner=run,
+    command_runner=None,
 ) -> IntegrationSyncRequest:
+    command_runner = command_runner or run
     request = load_request(request_path)
     if applied_marker(repo, request_path).exists() or request.applied:
         raise IntegrationSyncRequestError("already-applied")
@@ -127,8 +129,9 @@ def apply_push_local_ahead(
     request: IntegrationSyncRequest,
     worktree: Path,
     *,
-    command_runner=run,
+    command_runner=None,
 ) -> subprocess.CompletedProcess[str]:
+    command_runner = command_runner or run
     count = command_runner(["git", "rev-list", "--count", f"origin/{request.integration_branch}..HEAD"], worktree)
     if count.returncode != 0 or int((count.stdout or "0").strip() or "0") <= 0:
         raise IntegrationSyncRequestError("no local ahead commits")
@@ -140,8 +143,9 @@ def apply_continue_resolved_merge(
     worktree: Path,
     *,
     merge_in_progress: bool,
-    command_runner=run,
+    command_runner=None,
 ) -> subprocess.CompletedProcess[str]:
+    command_runner = command_runner or run
     if not merge_in_progress:
         raise IntegrationSyncRequestError("no merge in progress")
     result = command_runner(["git", "merge", "--continue"], worktree)
@@ -154,8 +158,9 @@ def apply_forward_sync_review_base(
     request: IntegrationSyncRequest,
     worktree: Path,
     *,
-    command_runner=run,
+    command_runner=None,
 ) -> subprocess.CompletedProcess[str]:
+    command_runner = command_runner or run
     ff = command_runner(["git", "merge", "--ff-only", f"origin/{request.review_base_branch}"], worktree)
     if ff.returncode == 0:
         return command_runner(["git", "push", "origin", f"HEAD:{request.integration_branch}"], worktree)
@@ -179,8 +184,9 @@ def apply_adopt_merged_rollup(
     request: IntegrationSyncRequest,
     worktree: Path,
     *,
-    command_runner=run,
+    command_runner=None,
 ) -> subprocess.CompletedProcess[str]:
+    command_runner = command_runner or run
     assert request.old_rollup_head is not None
     ancestor = command_runner(
         ["git", "merge-base", "--is-ancestor", request.old_rollup_head, f"origin/{request.integration_branch}"],
@@ -231,8 +237,9 @@ def apply_request(
     repo: Path,
     worktree: Path,
     env: dict[str, str] | None = None,
-    command_runner=run,
+    command_runner=None,
 ) -> int:
+    command_runner = command_runner or run
     try:
         request = validate_common(repo, worktree, request_path, env=env, command_runner=command_runner)
         clean, merge_in_progress = ensure_clean_or_merge(worktree, command_runner=command_runner)

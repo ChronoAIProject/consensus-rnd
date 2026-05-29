@@ -23,7 +23,7 @@ from typing import Callable
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
-from integration_sync_requests import IntegrationSyncRequest, write_request_artifact
+from .requests import IntegrationSyncRequest, write_request_artifact
 
 
 DEFAULT_INTERVAL_SECONDS = 600
@@ -84,7 +84,7 @@ class DevSyncConfig:
 
     @property
     def spawn_codex(self) -> Path:
-        return self.skill_root / "scripts" / "spawn-codex.sh"
+        return self.skill_root / "scripts" / "consensus-rnd-cli"
 
     @property
     def lock_file(self) -> Path:
@@ -142,7 +142,7 @@ def codex_resolve_in_flight(
     repo = str(main_repo)
     wt = str(worktree)
     for line in command_runner(["ps", "-eo", "command="]).stdout.splitlines():
-        if "spawn-codex.sh" not in line:
+        if "consensus-rnd-cli" not in line or "spawn-codex" not in line:
             continue
         if "dev-sync-codex-" not in line:
             continue
@@ -213,6 +213,7 @@ Write the marker to stdout when done so the daemon can read it from the log:
         [
             "nohup",
             str(spawn_codex),
+            "spawn-codex",
             "--cd",
             str(worktree),
             "--add-dir",
@@ -317,7 +318,7 @@ class IntegrationSyncDaemon:
             main_repo=self.main_repo,
             integration=self.integration,
             review_base=self.review_base,
-            spawn_codex=self.spawn_codex or self.main_repo / "skills" / "codex-refactor-loop" / "scripts" / "spawn-codex.sh",
+            spawn_codex=self.spawn_codex or self.main_repo / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli",
             logger=self.log,
         ))
         self.pending_events_file = pending_events_file or main_repo / ".refactor-loop" / ".controller-pending-events.log"
@@ -676,12 +677,20 @@ def tick(config: DevSyncConfig | None = None) -> None:
     IntegrationSyncDaemon.from_config(cfg).tick()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Run dev integration sync daemon")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--daemon", action="store_true", help="run persistently")
+    mode.add_argument("--once", action="store_true", help="run one tick and exit")
+    args = parser.parse_args(argv)
     try:
         config = load_dev_sync_config()
     except (LoopContextError, ValueError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
+    if args.once:
+        IntegrationSyncDaemon.from_config(config).tick()
+        return 0
     with singleton_lock(config.lock_file):
         log(
             "dev_sync_daemon (Python) started: "

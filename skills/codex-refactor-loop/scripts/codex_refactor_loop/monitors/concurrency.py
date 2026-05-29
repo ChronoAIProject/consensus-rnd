@@ -19,6 +19,7 @@ from ..state import read_json, write_json
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
+DEGRADATION_ALERT_LOG = ".refactor-loop/.degradation-alert.log"
 HEARTBEAT_STALE_SECONDS = 90
 PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
@@ -59,7 +60,7 @@ class ConcurrencyMonitor:
         self.gh_repo_slug = ctx.gh_repo_slug
         self.interval = int(interval or os.environ.get("INTERVAL", "60"))
         self.alert_log = ctx.paths.refactor_loop / ".concurrency-alert.log"
-        self.degradation_alert_log = ctx.paths.refactor_loop / ".degradation-alert.log"
+        self.degradation_alert_log = ctx.repo_root / DEGRADATION_ALERT_LOG
         self.pending_events = ctx.paths.pending_events
         self.statusline_snapshot = ctx.paths.statusline_snapshot
         self.heartbeats_dir = ctx.paths.heartbeats
@@ -67,8 +68,7 @@ class ConcurrencyMonitor:
         self.dispatch_dispatched = ctx.paths.dispatch_dispatched
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
-        self.spawn_codex = ctx.skill_root / "scripts" / "spawn-codex.sh"
-        self.check_skill_degradation = ctx.skill_root / "scripts" / "check_skill_degradation.py"
+        self.cli = ctx.skill_root / "scripts" / "consensus-rnd-cli"
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -170,14 +170,28 @@ class ConcurrencyMonitor:
         os.replace(tmp, self.statusline_snapshot)
 
     def list_in_flight_codex_lines(self) -> list[str]:
-        repo = str(self.repo_root)
         lines: list[str] = []
         for line in self.run(["ps", "-eo", "command="]).stdout.splitlines():
-            if "spawn-codex.sh" not in line:
-                continue
-            if repo not in line:
+            if "consensus-rnd-cli" not in line or "spawn-codex" not in line:
                 continue
             if " -c " in line:
+                continue
+            tokens = line.split()
+            try:
+                spawn_index = tokens.index("spawn-codex")
+            except ValueError:
+                continue
+            try:
+                cd_index = tokens.index("--cd", spawn_index + 1)
+            except ValueError:
+                continue
+            if cd_index + 1 >= len(tokens):
+                continue
+            try:
+                cd_path = Path(tokens[cd_index + 1]).expanduser().resolve()
+            except OSError:
+                continue
+            if not (cd_path == self.repo_root or self.repo_root in cd_path.parents):
                 continue
             lines.append(line)
         return lines
@@ -268,7 +282,8 @@ class ConcurrencyMonitor:
         return subprocess.run(
             [
                 sys.executable,
-                str(self.check_skill_degradation),
+                str(self.cli),
+                "check-degradation",
                 "--static",
                 "--repo-root",
                 str(self.repo_root),
@@ -399,7 +414,8 @@ class ConcurrencyMonitor:
         subprocess.Popen(
             [
                 "nohup",
-                str(self.spawn_codex),
+                str(self.cli),
+                "spawn-codex",
                 "--cd",
                 str(payload["cd"]),
                 "--prompt",
@@ -661,6 +677,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--count-only", action="store_true", help="print canonical in-flight codex count and exit")
     mode.add_argument("--list-codex", action="store_true", help="print one supervisor cmdline per line and exit")
     mode.add_argument("--once", action="store_true", help="run one tick and exit (no daemon loop)")
+    mode.add_argument("--daemon", action="store_true", help="run persistently")
     args = parser.parse_args(argv)
 
     read_only_fallback = args.count_only or args.list_codex or args.once

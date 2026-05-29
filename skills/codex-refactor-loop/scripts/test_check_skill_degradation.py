@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Behavior tests for check_skill_degradation.py."""
+"""Behavior tests for consensus-rnd-cli check-degradation."""
 
 from __future__ import annotations
 
-import importlib.util
 import shutil
 import subprocess
 import sys
@@ -14,16 +13,12 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-CHECKER_PATH = SCRIPT_PATH.with_name("check_skill_degradation.py")
+CHECKER_PATH = SCRIPT_PATH.with_name("consensus-rnd-cli")
 
 
 def load_checker_module():
-    spec = importlib.util.spec_from_file_location("check_skill_degradation", CHECKER_PATH)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    from codex_refactor_loop.checks import degradation
+    return degradation
 
 
 def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
@@ -34,10 +29,11 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         ".github/workflows/release.yml",
         "skills/codex-refactor-loop/SKILL.md",
         "skills/codex-refactor-loop/host.env.example",
-        "skills/codex-refactor-loop/scripts/auto_release_gate.py",
-        "skills/codex-refactor-loop/scripts/check_skill_degradation.py",
-        "skills/codex-refactor-loop/scripts/concurrency_monitor.py",
-        "skills/codex-refactor-loop/scripts/peek.sh",
+        "skills/codex-refactor-loop/scripts/consensus-rnd-cli",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -53,7 +49,7 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
 
     def test_static_checker_passes_current_repo(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(CHECKER_PATH), "--static", "--repo-root", str(REPO_ROOT)],
+            [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--repo-root", str(REPO_ROOT)],
             cwd=REPO_ROOT,
             text=True,
             capture_output=True,
@@ -93,7 +89,7 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
     def test_checker_detects_release_gate_missing_skill_degradation(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
-            gate = repo / "skills/codex-refactor-loop/scripts/auto_release_gate.py"
+            gate = repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py"
             gate.write_text(gate.read_text(encoding="utf-8").replace(', "skill-degradation"', ""), encoding="utf-8")
 
             findings = self.checker_module.SkillDriftChecker(repo).run_static()

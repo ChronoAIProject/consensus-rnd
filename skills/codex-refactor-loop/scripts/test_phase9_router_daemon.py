@@ -12,11 +12,12 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from phase9_router_daemon import Phase9Router, main, parse_phase9_log_identity
+from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.phase9.router import Phase9Router, main, parse_phase9_log_identity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "phase9_router_daemon.py"
+PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
 
 
 class Phase9RouterDaemonTests(unittest.TestCase):
@@ -25,7 +26,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
         self.commands: list[list[str]] = []
-        self.router = Phase9Router(self.repo, command_runner=self.commands.append)
+        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -111,7 +112,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     def test_phase9_router_singleton_lock_conflict_fail_closed_before_dispatch(self) -> None:
         self.solver_triplet()
 
-        with mock.patch("phase9_router_daemon.fcntl.flock", side_effect=BlockingIOError):
+        with mock.patch("codex_refactor_loop.phase9.router.fcntl.flock", side_effect=BlockingIOError):
             with self.assertRaises(SystemExit):
                 with self.router.singleton():
                     self.router.tick()
@@ -134,9 +135,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.setUp()
             self.solver_triplet(issue=38, round_no=5)
             target_log = self.router._log_path("38", 5, "judge")
-            ps_output = f"/bin/sh /tmp/spawn-codex.sh --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+            ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
 
-            with mock.patch("phase9_router_daemon.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+            with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
                 self.router.tick()
 
             self.assertEqual(self.commands, [])
@@ -167,7 +168,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_solver_triplet_accepts_non_ascii_summary(self) -> None:
         # Refactor (iter1/issue-149):
-        #   Old pattern: phase9_router_daemon marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
+        #   Old pattern: phase9_router marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
         #   New principle: 按 .refactor-loop/runs/phase9-issue149-r2-judge.md consensus(structural):route-specific marker-grammar parser fix,正确解析所有 route marker(含中文 body),不引入 Phase9RoundProjection 抽象。使 router 对所有 glob 可见的 3/3 SOLVER_DONE triplet 与 converge 可靠 dispatch。硬约束:不重建 REFERENCE.md;refactor 注释自含 Old/New;不超范围。
         for role in ("minimal", "structural", "delete"):
             self.write_log(
@@ -319,7 +320,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / "logs" / "phase9-issue90-r2-judge.log"
         body_pad = "\n".join(f"discussion line {i}" for i in range(60))
         body_echo = (
-            "skills/codex-refactor-loop/scripts/test_phase9_router_daemon.py:171: "
+            "skills/codex-refactor-loop/scripts/test_consensus-rnd-cli phase9-router:171: "
             '"META_JUDGE_DONE:converge:round-9:body-echo-from-test-fixture",'
         )
         actual_tail = "META_JUDGE_DONE:converge:round-3:real-tail-verdict"
@@ -552,7 +553,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 raise OSError("template unavailable ⟦AI:AUTO-LOOP⟧")
             return original_read_text(path, *args, **kwargs)
 
-        with mock.patch("phase9_router_daemon.Path.read_text", autospec=True, side_effect=read_text_or_fail_template):
+        with mock.patch("codex_refactor_loop.phase9.router.Path.read_text", autospec=True, side_effect=read_text_or_fail_template):
             self.router.tick()
 
         prompt_path = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue86-r3-reflector.md"
@@ -666,7 +667,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.assertNotIn(
                     forbidden,
                     src,
-                    f"phase9_router_daemon.py must not introduce forbidden boundary token: {forbidden}",
+                    f"consensus-rnd-cli phase9-router must not introduce forbidden boundary token: {forbidden}",
                 )
 
     def test_phase9_router_marker_grammar_is_route_specific_not_ascii_payload_gate(self) -> None:

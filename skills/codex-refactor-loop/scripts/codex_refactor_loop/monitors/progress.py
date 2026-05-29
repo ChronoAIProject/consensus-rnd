@@ -255,6 +255,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run codex progress reporter")
     parser.add_argument("--exit-status")
     parser.add_argument("--hash-body", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--daemon", action="store_true", help="run persistently")
+    mode.add_argument("--once", action="store_true", help="run one tick and exit")
     args = parser.parse_args(argv)
     if args.exit_status:
         print(exit_status(Path(args.exit_status)))
@@ -268,7 +271,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (LoopContextError, RuntimeError) as exc:
         sys.stderr.write(f"{exc}\n")
         return 2
-    if os.environ.get("TEST_NO_LOOP") == "1":
+    if args.once or os.environ.get("TEST_NO_LOOP") == "1":
         reporter.tick()
         return 0
     return reporter.run_forever()

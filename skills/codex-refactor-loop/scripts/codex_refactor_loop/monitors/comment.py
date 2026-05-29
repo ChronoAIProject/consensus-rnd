@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import argparse
 import subprocess
 import sys
 import time
@@ -129,7 +130,7 @@ class CommentMonitor:
 | 下一步 | controller 下次 wakeup(≤25 min)读 daemon log → 派 fresh codex round(maintainer-reply-resets-the-round)→ 更新本卡片 |
 | **是否需要人介入** | ❌ 否(自动响应中) |
 
-🤖 comment-monitor.sh daemon
+🤖 comment-monitor daemon
 
 {AI_SENTINEL}
 """
@@ -209,7 +210,11 @@ def _first_url(text: str) -> str:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    parser = argparse.ArgumentParser(description="Run maintainer comment monitor")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--daemon", action="store_true", help="run persistently")
+    mode.add_argument("--once", action="store_true", help="run one tick and exit")
+    parser.parse_args(argv)
     try:
         ctx = LoopContext.load(cwd=os.getcwd())
         monitor = CommentMonitor(ctx)

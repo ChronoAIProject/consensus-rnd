@@ -9,7 +9,9 @@ only.
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,9 +61,9 @@ FORBIDDEN_SURFACE_PATTERNS = (
 CHECKED_SURFACE_FILES = (
     SKILL_RELATIVE / "SKILL.md",
     SKILL_RELATIVE / "host.env.example",
-    SCRIPT_RELATIVE / "auto_release_gate.py",
-    SCRIPT_RELATIVE / "concurrency_monitor.py",
-    SCRIPT_RELATIVE / "peek.sh",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py",
     CI_WORKFLOW,
     RELEASE_WORKFLOW,
 )
@@ -85,7 +87,7 @@ DOC_FORBIDDEN_CONTEXT = (
 REQUIRED_SKILL_MARKERS = (
     "## Named runtime exception — skill degradation watch(per #66)",
     JUDGE_ARTIFACT,
-    "run `check_skill_degradation.py`",
+    "run `consensus-rnd-cli check-degradation`",
     "write `.refactor-loop/.degradation-alert.log`",
     "append existing-format pending events",
     "source mutation",
@@ -105,7 +107,7 @@ REQUIRED_DETAILED_REFERENCE_MARKERS = (
     ALERT_LOG,
     PENDING_EVENTS,
     INTERVAL_ENV,
-    "check_skill_degradation.py --static",
+    "consensus-rnd-cli check-degradation --static",
     "existing-format pending event",
     "no source mutation",
 )
@@ -123,7 +125,7 @@ REQUIRED_MONITOR_MARKERS = (
     "run_skill_degradation_check",
     "maybe_run_skill_degradation_watch",
     "skill-degradation-alert",
-    "check_skill_degradation.py",
+    "check-degradation",
 )
 
 REQUIRED_PEEK_MARKERS = (
@@ -135,7 +137,7 @@ REQUIRED_PEEK_MARKERS = (
 REQUIRED_CI_MARKERS = (
     "skill-degradation:",
     "name: skill-degradation",
-    "check_skill_degradation.py --static",
+    "consensus-rnd-cli check-degradation --static",
 )
 
 REQUIRED_RELEASE_MARKERS = (
@@ -196,7 +198,7 @@ class SkillDriftChecker:
 
     def required_files_exist(self) -> list[Finding]:
         findings: list[Finding] = []
-        expected = CHECKED_SURFACE_FILES + (SCRIPT_RELATIVE / "check_skill_degradation.py",)
+        expected = CHECKED_SURFACE_FILES + (SCRIPT_RELATIVE / "consensus-rnd-cli",)
         for relative in expected:
             if not (self.repo_root / relative).exists():
                 findings.append(Finding("required-file", str(relative), "required file is missing"))
@@ -215,14 +217,16 @@ class SkillDriftChecker:
                 )
         scripts = self.repo_root / SCRIPT_RELATIVE
         if scripts.exists():
-            for path in sorted(scripts.glob("*degradation*")):
-                if path.name in ("check_skill_degradation.py", "test_check_skill_degradation.py"):
+            for path in sorted(scripts.rglob("*degradation*")):
+                if "__pycache__" in path.parts:
+                    continue
+                if path.name == "test_check_skill_degradation.py" or path == scripts / "codex_refactor_loop" / "checks" / "degradation.py":
                     continue
                 findings.append(
                     Finding(
                         "forbidden-runtime-file",
                         self.relative(path),
-                        "only check_skill_degradation.py may use the degradation script surface",
+                        "only consensus-rnd-cli check-degradation may expose the degradation surface",
                     )
                 )
         return findings
@@ -266,16 +270,16 @@ class SkillDriftChecker:
 
     def release_gate_required_check_present(self) -> list[Finding]:
         findings = self.require_markers(
-            SCRIPT_RELATIVE / "auto_release_gate.py",
+            SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py",
             REQUIRED_RELEASE_GATE_MARKERS,
             "release-gate",
         )
-        text = self.read(SCRIPT_RELATIVE / "auto_release_gate.py")
-        if text and not re.search(r"required\s*=\s*\([^)]*skill-degradation", text, flags=re.DOTALL):
+        text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py")
+        if text and '"skill-degradation"' not in text:
             findings.append(
                 Finding(
                     "release-gate",
-                    str(SCRIPT_RELATIVE / "auto_release_gate.py"),
+                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py"),
                     "required_checks_recent_green must require skill-degradation",
                 )
             )
@@ -283,19 +287,19 @@ class SkillDriftChecker:
 
     def monitor_hook_present(self) -> list[Finding]:
         findings = self.require_markers(
-            SCRIPT_RELATIVE / "concurrency_monitor.py",
+            SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
             REQUIRED_MONITOR_MARKERS,
             "monitor-hook",
         )
-        text = self.read(SCRIPT_RELATIVE / "concurrency_monitor.py")
+        text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py")
         if not text:
             return findings
-        if "subprocess" + ".run(" not in text or "check_skill_degradation.py" not in text:
+        if "subprocess" + ".run(" not in text or "check-degradation" not in text:
             findings.append(
                 Finding(
                     "monitor-hook",
-                    str(SCRIPT_RELATIVE / "concurrency_monitor.py"),
-                    "monitor hook must invoke the single checker file",
+                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py"),
+                    "monitor hook must invoke the single CLI checker operation",
                 )
             )
         for forbidden in ("Popen", "launch_dispatch", "top_up_from_dispatch_queue"):
@@ -304,18 +308,18 @@ class SkillDriftChecker:
                 findings.append(
                     Finding(
                         "monitor-hook",
-                        str(SCRIPT_RELATIVE / "concurrency_monitor.py"),
+                        str(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py"),
                         f"degradation hook must not use {forbidden}",
                     )
                 )
         return findings
 
     def peek_status_present(self) -> list[Finding]:
-        return self.require_markers(SCRIPT_RELATIVE / "peek.sh", REQUIRED_PEEK_MARKERS, "peek-status")
+        return self.require_markers(SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py", REQUIRED_PEEK_MARKERS, "peek-status")
 
     def forbidden_surfaces_absent(self) -> list[Finding]:
         findings: list[Finding] = []
-        for relative in CHECKED_SURFACE_FILES + (SCRIPT_RELATIVE / "check_skill_degradation.py",):
+        for relative in CHECKED_SURFACE_FILES + (SCRIPT_RELATIVE / "codex_refactor_loop" / "checks" / "degradation.py",):
             path = self.repo_root / relative
             if not path.exists() or not path.is_file():
                 continue
@@ -336,7 +340,7 @@ class SkillDriftChecker:
 
     def checker_is_read_only(self) -> list[Finding]:
         findings: list[Finding] = []
-        relative = SCRIPT_RELATIVE / "check_skill_degradation.py"
+        relative = SCRIPT_RELATIVE / "codex_refactor_loop" / "checks" / "degradation.py"
         text = "\n".join(
             line
             for line in self.read(relative).splitlines()
@@ -451,3 +455,23 @@ def format_findings(findings: list[Finding], *, as_json: bool = False) -> str:
     lines = [f"skill-degradation: {len(findings)} finding(s)"]
     lines.extend(f"{finding.severity}: {finding.check}: {finding.path}: {finding.message}" for finding in findings)
     return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--static", action="store_true", help="run static degradation checks")
+    parser.add_argument("--repo-root", type=Path)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        root = args.repo_root or discover_repo_root(Path.cwd())
+        findings = run_static_check(root)
+    except Exception as exc:
+        sys.stderr.write(f"skill-degradation: {exc}\n")
+        return 2
+    print(format_findings(findings, as_json=args.json))
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

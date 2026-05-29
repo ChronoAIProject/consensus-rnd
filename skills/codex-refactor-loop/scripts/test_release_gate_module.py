@@ -115,7 +115,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertEqual(candidate["decision_artifact"], ".refactor-loop/state/release-decision.json")
             self.assertEqual(candidate["host_opt_in"], "RELEASE_AUTO_ENABLE=true")
             self.assertEqual(candidate["lifecycle_owner"], "controller-or-release.yml")
-            self.assertIn("auto_release_gate.py", candidate["next_step_hint"])
+            self.assertIn("consensus-rnd-cli release-gate", candidate["next_step_hint"])
             self.assertFalse((repo / ".refactor-loop/.controller-pending-events.log").exists())
             self.assertFalse((repo / ".refactor-loop/dispatch-queue").exists())
 
@@ -210,11 +210,11 @@ class ReleaseGateModuleTests(unittest.TestCase):
         self.assertEqual(gate.REQUIRED_CHECKS, ("contract-tests", "manifest-version-sync", "skill-degradation"))
         self.assertEqual(gate.HEARTBEAT_FRESH_SECONDS, 90)
         self.assertEqual(gate.DAEMON_NAMES, (
-            "concurrency_monitor.py",
-            "codex-progress-reporter.sh",
-            "comment-monitor.sh",
-            "dev_sync_daemon.py",
-            "phase9_router_daemon.py",
+            "concurrency_monitor",
+            "codex-progress-reporter",
+            "comment-monitor",
+            "dev_sync_daemon",
+            "phase9_router_daemon",
         ))
 
     def test_blocked_release_does_not_write_artifacts(self) -> None:

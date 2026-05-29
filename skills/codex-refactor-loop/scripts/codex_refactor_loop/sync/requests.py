@@ -9,7 +9,9 @@ legacy callers remain on the old script until the caller switch.
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 import re
 import time
 from dataclasses import asdict, dataclass, field
@@ -164,3 +166,27 @@ def write_request_artifact(repo_root: Path, request: IntegrationSyncRequest) -> 
     path = runs / f"integration-sync-request-{safe_kind}-{int(time.time() * 1000)}.json"
     path.write_text(json.dumps(request.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("request_path", nargs="?", help="validate an IntegrationSyncRequest artifact")
+    parser.add_argument("--json", action="store_true", help="print normalized JSON")
+    args = parser.parse_args(argv)
+    if not args.request_path:
+        parser.print_help()
+        return 0
+    try:
+        request = load_request(Path(args.request_path))
+    except IntegrationSyncRequestError as exc:
+        sys.stderr.write(f"INTEGRATION_SYNC_REQUEST_INVALID:{args.request_path}:{exc}\n")
+        return 2
+    if args.json:
+        print(json.dumps(request.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"INTEGRATION_SYNC_REQUEST_OK:{args.request_path}:{request.kind}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

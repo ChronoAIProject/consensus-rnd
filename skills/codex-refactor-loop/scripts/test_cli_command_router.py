@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for the codex_loop.py command router."""
+"""Behavior tests for the consensus-rnd-cli command router."""
 
 from __future__ import annotations
 
@@ -15,13 +15,21 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.cli import COMMANDS, RuntimeCommandRouter
 
 
-CODEX_LOOP = SCRIPT_DIR / "codex_loop.py"
+CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 
 class RuntimeCommandRouterTests(unittest.TestCase):
     def test_each_public_operation_is_registered(self) -> None:
         self.assertEqual(
             {
+                "apply-sync",
+                "apply-triage",
+                "check-degradation",
+                "check-manifest",
+                "concurrency",
+                "dev-sync",
+                "ensure-project-rules",
+                "log-retention",
                 "spawn-codex",
                 "peek",
                 "wakeup-plan",
@@ -29,15 +37,22 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "statusline",
                 "comment-monitor",
                 "progress-reporter",
+                "phase9-router",
+                "post-banner",
+                "release-gate",
                 "merge-pr",
                 "open-pr",
+                "apply-human-label",
+                "safe-push",
+                "safe-sync-main",
+                "sync-request",
             },
             set(COMMANDS),
         )
 
     def test_help_imports_lightly_and_does_not_run_legacy_scripts(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(CODEX_LOOP), "--help"],
+            [sys.executable, str(CLI), "--help"],
             capture_output=True,
             text=True,
             check=False,
@@ -47,7 +62,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
 
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
-            [sys.executable, str(CODEX_LOOP), "does-not-exist"],
+            [sys.executable, str(CLI), "does-not-exist"],
             capture_output=True,
             text=True,
             check=False,
@@ -60,6 +75,10 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertTrue(callable(spec.handler))
                 self.assertTrue(spec.handler.__module__.startswith("codex_refactor_loop"))
+
+    def test_single_entrypoint_name_is_checked_in(self) -> None:
+        self.assertTrue(CLI.is_file())
+        self.assertFalse((SCRIPT_DIR / "codex_loop.py").exists())
 
     def test_peek_command_uses_registered_python_handler(self) -> None:
         router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)

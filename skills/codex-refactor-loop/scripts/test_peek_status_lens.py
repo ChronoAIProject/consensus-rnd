@@ -15,7 +15,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
-PEEK = SKILL_ROOT / "scripts" / "peek.sh"
+PEEK = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 
 
 class PeekStatusLensBehaviorTests(unittest.TestCase):
@@ -45,7 +45,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                   *) exit 0 ;;
                 esac
                 """
-            ),
+            ).lstrip(),
             encoding="utf-8",
         )
         git.chmod(0o755)
@@ -134,7 +134,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 printf '[]\\n'
                 exit 0
                 """
-            ),
+            ).lstrip(),
             encoding="utf-8",
         )
         gh.chmod(0o755)
@@ -153,7 +153,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         if milestone_fixtures:
             env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
         return subprocess.run(
-            ["bash", str(PEEK)],
+            [sys.executable, str(PEEK), "peek"],
             cwd=self.root,
             env=env,
             capture_output=True,
@@ -235,10 +235,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
 
     def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
-        text = PEEK.read_text(encoding="utf-8")
+        text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
 
-        self.assertIn("concurrency_monitor.py\" --count-only", text)
-        self.assertIn("concurrency_monitor.py\" --list-codex", text)
+        self.assertIn('"concurrency", "--count-only"', text)
+        self.assertIn('"concurrency", "--list-codex"', text)
         self.assertNotIn("ps -ef | awk", text)
         self.assertNotIn("ps -eo command= | awk", text)
 

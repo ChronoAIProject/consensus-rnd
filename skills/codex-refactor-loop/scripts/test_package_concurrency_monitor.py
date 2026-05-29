@@ -99,10 +99,10 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
     def test_cli_count_and_list_use_canonical_spawn_filter(self) -> None:
         repo = self.ctx.repo_root
         fake_ps = (
-            f"bash spawn-codex.sh --cd {repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash -c spawn-codex.sh --cd {repo} --prompt /tmp/a.md --log /tmp/a.log\n"
-            f"bash spawn-codex.sh --cd {repo} --prompt /tmp/b.md --log /tmp/b.log\n"
-            "bash spawn-codex.sh --cd /Users/other-host/repo --prompt /tmp/c.md --log /tmp/c.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash -c consensus-rnd-cli spawn-codex --cd {repo} --prompt /tmp/a.md --log /tmp/a.log\n"
+            f"bash consensus-rnd-cli spawn-codex --cd {repo} --prompt /tmp/b.md --log /tmp/b.log\n"
+            "bash consensus-rnd-cli spawn-codex --cd /Users/other-host/repo --prompt /tmp/c.md --log /tmp/c.log\n"
         )
 
         with mock.patch.object(concurrency, "_run", return_value=SimpleNamespace(stdout=fake_ps, returncode=0)):

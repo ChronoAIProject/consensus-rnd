@@ -15,9 +15,9 @@ from unittest.mock import Mock, patch
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import apply_integration_sync_request
-import apply_triage_decision
-from triage_decisions import ACCEPT_LABELS
+from codex_refactor_loop.sync import apply as apply_integration_sync_request
+from codex_refactor_loop import triage as apply_triage_decision
+from codex_refactor_loop.triage import ACCEPT_LABELS
 
 
 class IntegrationSyncApplyHelperTests(unittest.TestCase):
@@ -57,9 +57,9 @@ class IntegrationSyncApplyHelperTests(unittest.TestCase):
         self.commands.append(cmd)
         if cmd[:2] == ["git", "fetch"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
-        if cmd[:3] == ["git", "rev-parse", "origin/auto-refact-dev"]:
+        if cmd[:2] == ["git", "rev-parse"] and cmd[-1] == "origin/auto-refact-dev":
             return subprocess.CompletedProcess(cmd, 0, "remote-sha\n", "")
-        if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+        if cmd[:2] == ["git", "rev-parse"] and cmd[-1] == "HEAD":
             return subprocess.CompletedProcess(cmd, 0, "head-sha\n", "")
         if cmd[:3] == ["git", "rev-parse", "--git-path"]:
             return subprocess.CompletedProcess(cmd, 0, str(self.worktree / ".git" / cmd[3]) + "\n", "")
@@ -273,13 +273,13 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
     def test_reject_happy_path_comments_removes_triage_label_and_records_applied(self) -> None:
         calls: list[list[str]] = []
 
-        def fake_gh(args: list[str], _repo: Path) -> subprocess.CompletedProcess[str]:
+        def fake_gh(args: list[str], *, repo: Path, repo_slug=None) -> subprocess.CompletedProcess[str]:
             calls.append(args)
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
             with patch.object(apply_triage_decision, "run_gh", fake_gh):
-                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 0)
+                self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 0)
 
         self.assertEqual(
             calls,
@@ -297,13 +297,13 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
         calls: list[list[str]] = []
 
-        def fake_gh(args: list[str], _repo: Path) -> subprocess.CompletedProcess[str]:
+        def fake_gh(args: list[str], *, repo: Path, repo_slug=None) -> subprocess.CompletedProcess[str]:
             calls.append(args)
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
             with patch.object(apply_triage_decision, "run_gh", fake_gh):
-                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="accept"), 0)
+                self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="accept"), 0)
 
         expected_edit = [
             "issue",
@@ -329,23 +329,23 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
 
     def test_reject_apply_requires_current_triage_label_and_same_issue(self) -> None:
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: []):
-            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: []):
+            self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
         self.write_decision(issue_number=54)
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
-            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+            self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
     def test_accept_requires_fixed_labels_and_reject_only_removes_triage_label(self) -> None:
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=["auto-loop"])
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
-            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="accept"), 2)
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+            self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="accept"), 2)
 
     def test_apply_triage_decision_rejects_path_traversal_and_does_not_mutate_github(self) -> None:
         self.write_decision(comment_artifact_path="../../../etc/passwd")
         mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
 
         with patch.object(apply_triage_decision, "run_gh", mock_gh):
-            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+            self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
         rejected = self.repo / ".refactor-loop" / "runs" / "triage-decisions-applied" / f"{self.decision_path.stem}.rejected.json"
         self.assertIn("artifact path outside repo", rejected.read_text(encoding="utf-8"))
@@ -355,9 +355,9 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text("comment without sentinel\n", encoding="utf-8")
         mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
             with patch.object(apply_triage_decision, "run_gh", mock_gh):
-                self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+                self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
         rejected = self.repo / ".refactor-loop" / "runs" / "triage-decisions-applied" / f"{self.decision_path.stem}.rejected.json"
         self.assertIn("comment artifact missing final sentinel", rejected.read_text(encoding="utf-8"))
@@ -365,8 +365,8 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
 
     def test_schema_rejects_close_and_command_like_fields(self) -> None:
         self.write_decision(close=True)
-        with patch.object(apply_triage_decision, "current_labels", lambda _repo, _issue: ["auto-loop-triage"]):
-            self.assertEqual(apply_triage_decision.apply_decision(self.decision_path, repo=self.repo, issue_number=53, verdict="reject"), 2)
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+            self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
 
 if __name__ == "__main__":

@@ -38,11 +38,11 @@ SIGNAL_NAMES = (
     "no_unresolved_human_escalation",
 )
 DAEMON_NAMES = (
-    "concurrency_monitor.py",
-    "codex-progress-reporter.sh",
-    "comment-monitor.sh",
-    "dev_sync_daemon.py",
-    "phase9_router_daemon.py",
+    "concurrency_monitor",
+    "codex-progress-reporter",
+    "comment-monitor",
+    "dev_sync_daemon",
+    "phase9_router_daemon",
 )
 REQUIRED_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
 HEARTBEAT_FRESH_SECONDS = 90
@@ -123,7 +123,7 @@ def repo_root_from_env() -> Path:
     env_root = os.environ.get("REPO_ROOT")
     if env_root:
         return Path(env_root).expanduser().resolve()
-    raise RuntimeError("REPO_ROOT is unset; auto_release_gate.py does not infer it with git")
+    raise RuntimeError("REPO_ROOT is unset; consensus-rnd-cli release-gate does not infer it with git")
 
 
 class AutoReleaseGate:
@@ -472,7 +472,7 @@ class AutoReleaseGate:
             "lifecycle_owner": "controller-or-release.yml",
             "next_step_hint": (
                 "Controller or release.yml may consume this artifact, re-check host opt-in, "
-                "then run the existing version bump/release pipeline. auto_release_gate.py "
+                "then run the existing version bump/release pipeline. consensus-rnd-cli release-gate "
                 "does not bump, commit, push, tag, publish, merge, or close."
             ),
         }
@@ -594,7 +594,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             write_json(gate.decision_path, decision)
     except Exception as exc:
-        print(f"auto_release_gate.py: {exc}", file=sys.stderr)
+        print(f"release-gate: {exc}", file=sys.stderr)
         return 1
     return 0
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for wakeup_plan.py prioritized next-action output."""
+"""Behavior tests for consensus-rnd-cli wakeup-plan prioritized next-action output."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
-WAKEUP_PLAN = SKILL_ROOT / "scripts" / "wakeup_plan.py"
+WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -27,7 +27,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.logs.mkdir(parents=True)
         self.fakebin.mkdir()
         (self.repo / ".refactor-loop" / "host.env").write_text(
-            "REPO_ROOT=/tmp/repo\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
             encoding="utf-8",
         )
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -112,8 +112,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 repo="${WAKEUP_PLAN_REPO_ROOT:?missing repo}"
                 i=0
                 while [[ "$i" -lt "$count" ]]; do
-                  printf 'bash /skill/spawn-codex.sh --cd %s/.worktrees/task-%s --log %s/.refactor-loop/logs/task-%s.log\n' "$repo" "$i" "$repo" "$i"
-                  printf 'bash -c echo /skill/spawn-codex.sh --cd %s/.worktrees/task-%s\n' "$repo" "$i"
+                  printf 'python3 /skill/consensus-rnd-cli spawn-codex --cd %s/.worktrees/task-%s --log %s/.refactor-loop/logs/task-%s.log\n' "$repo" "$i" "$repo" "$i"
+                  printf 'bash -c echo /skill/consensus-rnd-cli spawn-codex --cd %s/.worktrees/task-%s\n' "$repo" "$i"
                   i=$((i + 1))
                 done
                 """
@@ -151,7 +151,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             }
         )
         result = subprocess.run(
-            ["python3", str(WAKEUP_PLAN), "--repo-root", str(self.repo)],
+            ["python3", str(WAKEUP_PLAN), "wakeup-plan", "--repo-root", str(self.repo)],
             cwd=self.repo,
             env=env,
             capture_output=True,
@@ -270,7 +270,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan()
 
         health = plan["daemon_health"]
-        self.assertEqual(health["recommendation"], "restart-daemons.sh")
+        self.assertEqual(health["recommendation"], "consensus-rnd-cli restart-daemons")
         self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "stale" for item in health["items"]))
         self.assertTrue(any(item["status"] == "missing" for item in health["items"]))
 

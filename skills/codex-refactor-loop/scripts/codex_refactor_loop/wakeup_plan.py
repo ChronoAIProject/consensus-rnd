@@ -32,7 +32,6 @@ from pathlib import Path
 from typing import Any
 
 from codex_refactor_loop.context import LoopContext
-from repo_config import github_repo_slug
 
 
 STALE_SECONDS = 90
@@ -175,9 +174,9 @@ def canonical_actual_count(repo_root: Path, monitor: Any | None) -> int:
             pass
     env = os.environ.copy()
     env["REPO_ROOT"] = str(repo_root)
-    script_path = Path(__file__).resolve().parents[1] / "concurrency_monitor.py"
+    script_path = Path(__file__).resolve().parents[1] / "consensus-rnd-cli"
     result = subprocess.run(
-        [sys.executable, str(script_path), "--count-only"],
+        [sys.executable, str(script_path), "concurrency", "--count-only"],
         cwd=repo_root,
         env=env,
         capture_output=True,
@@ -286,7 +285,7 @@ def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
         "stale_seconds": STALE_SECONDS,
         "items": sorted(items, key=lambda item: item["name"]),
         "ok": not needs_restart,
-        "recommendation": "restart-daemons.sh" if needs_restart else None,
+        "recommendation": "consensus-rnd-cli restart-daemons" if needs_restart else None,
     }
 
 
@@ -412,7 +411,7 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "phase": "daemon-health",
                 "actor": "controller",
                 "reason": "daemon heartbeat stale-or-missing",
-                "suggested_command": "bash <skill-root>/scripts/restart-daemons.sh",
+                "suggested_command": "python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
                 "daemons": stale_names,
             }
         )
@@ -496,6 +495,20 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
 
 def gh_args(slug: str | None) -> list[str]:
     return ["--repo", slug] if slug else []
+
+
+def github_repo_slug() -> str | None:
+    slug = os.environ.get("GH_REPO_SLUG")
+    if slug:
+        return slug
+    repo = os.environ.get("GH_REPO")
+    if repo and "/" in repo:
+        return repo
+    owner = os.environ.get("GH_OWNER")
+    name = os.environ.get("GH_REPO_NAME") or repo
+    if owner and name:
+        return f"{owner}/{name}"
+    return None
 
 
 def load_github_items(repo_root: Path) -> list[GhItem]:

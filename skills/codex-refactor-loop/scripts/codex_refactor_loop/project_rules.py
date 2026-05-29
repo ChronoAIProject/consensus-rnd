@@ -161,7 +161,8 @@ class ProjectRulesFixedPointEnsurer:
                 tmp_path.unlink()
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    del argv
     try:
         status = ProjectRulesFixedPointEnsurer.from_env().ensure()
     except FixedPointError as exc:

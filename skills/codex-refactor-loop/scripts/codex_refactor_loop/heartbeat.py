@@ -1,8 +1,56 @@
-"""Compatibility imports for daemon heartbeat leases."""
+"""Actor-owned heartbeat lease helper for restart-helper-managed daemons."""
 
 from __future__ import annotations
 
-from daemon_heartbeat import DaemonHeartbeatLease, beat
+import os
+import sys
+import time
+from pathlib import Path
+
+
+class DaemonHeartbeatLease:
+    """Write and renew the daemon heartbeat from the actor process."""
+
+    def __init__(
+        self,
+        name: str | None = None,
+        repo_root: Path | str | None = None,
+        *,
+        heartbeat_file: Path | str | None = None,
+        heartbeat_interval: int | None = None,
+        clock=time.time,
+        sleeper=time.sleep,
+    ) -> None:
+        self.name = name or os.environ.get("RESTART_DAEMON_NAME") or Path(sys.argv[0]).stem
+        root = Path(repo_root or os.environ.get("REPO_ROOT", ".")).resolve()
+        self.heartbeat_file = Path(
+            heartbeat_file
+            or os.environ.get("RESTART_DAEMON_HEARTBEAT_FILE")
+            or root / ".refactor-loop" / "heartbeats" / f"{self.name}.ts"
+        )
+        self.heartbeat_interval = max(1, int(heartbeat_interval or os.environ.get("RESTART_DAEMON_HEARTBEAT_INTERVAL", "30")))
+        self.clock = clock
+        self.sleeper = sleeper
+
+    def beat(self) -> None:
+        """Atomically write the current integer epoch heartbeat."""
+        self.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.heartbeat_file.with_name(f".{self.heartbeat_file.name}.tmp.{os.getpid()}")
+        tmp.write_text(f"{int(self.clock())}\n", encoding="utf-8")
+        os.replace(tmp, self.heartbeat_file)
+
+    def sleep_with_lease(self, seconds: int | float) -> None:
+        """Sleep in bounded chunks and renew the actor-owned lease between chunks."""
+        remaining = max(0.0, float(seconds))
+        while remaining > 0:
+            chunk = min(remaining, float(self.heartbeat_interval))
+            self.sleeper(chunk)
+            self.beat()
+            remaining -= chunk
+
+
+def beat(name: str | None = None, repo_root: Path | str | None = None) -> None:
+    DaemonHeartbeatLease(name=name, repo_root=repo_root).beat()
+
 
 __all__ = ["DaemonHeartbeatLease", "beat"]
-

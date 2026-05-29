@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -115,3 +117,24 @@ def format_success(records: list[VersionRecord]) -> str:
     else:
         lines.append("MANIFEST_VERSION_SYNC_OK:no-records")
     return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo-root", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        root = args.repo_root or Path.cwd()
+        records = check_manifest_version_sync(root)
+    except ManifestVersionSyncError as exc:
+        sys.stderr.write(f"MANIFEST_VERSION_SYNC_ERROR: {exc}\n")
+        return 1
+    except Exception as exc:
+        sys.stderr.write(f"manifest-version-sync: {exc}\n")
+        return 2
+    print(format_success(records))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

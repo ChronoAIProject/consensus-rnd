@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for auto_release_gate.py."""
+"""Behavior tests for consensus-rnd-cli release-gate."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
-from auto_release_gate import AutoReleaseGate, CommitInfo, classify_bump
+from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
 
 
 def write_json(path: Path, data: object) -> None:
@@ -151,11 +151,11 @@ def write_live_state(repo: Path) -> None:
     heartbeat_dir = repo / ".refactor-loop/heartbeats"
     heartbeat_dir.mkdir(parents=True, exist_ok=True)
     for name in (
-        "concurrency_monitor.py",
-        "codex-progress-reporter.sh",
-        "comment-monitor.sh",
-        "dev_sync_daemon.py",
-        "phase9_router_daemon.py",
+        "concurrency_monitor",
+        "codex-progress-reporter",
+        "comment-monitor",
+        "dev_sync_daemon",
+        "phase9_router_daemon",
     ):
         (heartbeat_dir / f"{name}.ts").write_text(f"{now}\n", encoding="utf-8")
     write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
@@ -181,7 +181,8 @@ def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subpro
     return subprocess.run(
         [
             sys.executable,
-            str(SCRIPT_PATH.with_name("auto_release_gate.py")),
+            str(SCRIPT_PATH.with_name("consensus-rnd-cli")),
+            "release-gate",
             "--min-recent-merges",
             "1",
             *extra,
@@ -256,7 +257,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -333,7 +334,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -345,7 +346,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertIn("required_checks_recent_green", result.stdout)
             self.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
             score = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only", "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--score-only", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -493,7 +494,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                     }
                     result = subprocess.run(
-                        [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                        [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                         cwd=repo,
                         env=env,
                         capture_output=True,
@@ -505,7 +506,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                     self.assertIn(signal_name, result.stdout)
                     assert_no_release_artifacts(self, repo)
                     score = subprocess.run(
-                        [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only", "--min-recent-merges", "0"],
+                        [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--score-only", "--min-recent-merges", "0"],
                         cwd=repo,
                         env=env,
                         capture_output=True,
@@ -524,11 +525,11 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             stale = int((NOW - timedelta(seconds=91)).timestamp())
             write_heartbeat_files(repo, {name: stale for name in (
-                "concurrency_monitor.py",
-                "codex-progress-reporter.sh",
-                "comment-monitor.sh",
-                "dev_sync_daemon.py",
-                "phase9_router_daemon.py",
+                "concurrency_monitor",
+                "codex-progress-reporter",
+                "comment-monitor",
+                "dev_sync_daemon",
+                "phase9_router_daemon",
             )})
             state = repo / ".refactor-loop/state"
             write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
@@ -545,11 +546,11 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             fresh = int(NOW.timestamp())
             write_heartbeat_files(repo, {name: fresh for name in (
-                "concurrency_monitor.py",
-                "codex-progress-reporter.sh",
-                "comment-monitor.sh",
-                "dev_sync_daemon.py",
-                "phase9_router_daemon.py",
+                "concurrency_monitor",
+                "codex-progress-reporter",
+                "comment-monitor",
+                "dev_sync_daemon",
+                "phase9_router_daemon",
                 "extra-observer",
             )})
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
@@ -559,7 +560,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertTrue(signal["passed"])
             self.assertEqual(signal["source"], "heartbeats/*.ts")
             self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 6)
-            self.assertTrue(signal["heartbeats"]["concurrency_monitor.py"])
+            self.assertTrue(signal["heartbeats"]["concurrency_monitor"])
 
     def test_fail_closed_when_fewer_than_five_real_heartbeats_are_fresh(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -567,11 +568,11 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             fresh = int(NOW.timestamp())
             stale = int((NOW - timedelta(seconds=91)).timestamp())
             write_heartbeat_files(repo, {
-                "concurrency_monitor.py": fresh,
-                "codex-progress-reporter.sh": fresh,
-                "comment-monitor.sh": fresh,
-                "dev_sync_daemon.py": fresh,
-                "phase9_router_daemon.py": stale,
+                "concurrency_monitor": fresh,
+                "codex-progress-reporter": fresh,
+                "comment-monitor": fresh,
+                "dev_sync_daemon": fresh,
+                "phase9_router_daemon": stale,
             })
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
 
@@ -586,18 +587,18 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             fresh = int(NOW.timestamp())
             write_heartbeat_files(repo, {
-                "concurrency_monitor.py": fresh,
-                "codex-progress-reporter.sh": fresh,
-                "comment-monitor.sh": fresh,
-                "dev_sync_daemon.py": fresh,
-                "phase9_router_daemon.py": "not-an-epoch",
+                "concurrency_monitor": fresh,
+                "codex-progress-reporter": fresh,
+                "comment-monitor": fresh,
+                "dev_sync_daemon": fresh,
+                "phase9_router_daemon": "not-an-epoch",
             })
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
 
             signal = gate.fresh_heartbeats()
 
             self.assertFalse(signal["passed"])
-            self.assertFalse(signal["heartbeats"]["phase9_router_daemon.py"])
+            self.assertFalse(signal["heartbeats"]["phase9_router_daemon"])
 
     def test_fail_closed_when_phase8_reject_churn_reaches_limit(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -795,7 +796,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             before = (repo / "package.json").read_text(encoding="utf-8")
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -838,7 +839,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             before = (repo / "package.json").read_text(encoding="utf-8")
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--dispatch", "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -878,7 +879,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             before = (repo / "package.json").read_text(encoding="utf-8")
             env = {**os.environ, "REPO_ROOT": str(repo)}
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--score-only"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--score-only"],
                 cwd=repo,
                 env=env,
                 capture_output=True,
@@ -929,7 +930,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             result = subprocess.run(
-                [sys.executable, str(SCRIPT_PATH.with_name("auto_release_gate.py")), "--min-recent-merges", "0"],
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
                 env=env,
                 capture_output=True,

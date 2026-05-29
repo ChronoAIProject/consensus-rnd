@@ -198,9 +198,9 @@ class SyncDevBehaviorTests(unittest.TestCase):
         def command_runner(line: str):
             return lambda _cmd: subprocess.CompletedProcess(_cmd, 0, line + "\n", "")
 
-        in_scope = f"bash {repo}/skill/scripts/spawn-codex.sh --cd {worktree} --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"
-        sibling = "bash /tmp/other/skill/scripts/spawn-codex.sh --log /tmp/other/.refactor-loop/logs/dev-sync-codex-1.log"
-        wrapped = f"bash -c {repo}/skill/scripts/spawn-codex.sh --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"
+        in_scope = f"bash {repo}/skill/scripts/consensus-rnd-cli spawn-codex --cd {worktree} --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"
+        sibling = "bash /tmp/other/skill/scripts/consensus-rnd-cli spawn-codex --log /tmp/other/.refactor-loop/logs/dev-sync-codex-1.log"
+        wrapped = f"bash -c {repo}/skill/scripts/consensus-rnd-cli spawn-codex --log {repo}/.refactor-loop/logs/dev-sync-codex-1.log"
 
         self.assertTrue(codex_resolve_in_flight(main_repo=repo, worktree=worktree, command_runner=command_runner(in_scope)))
         self.assertFalse(codex_resolve_in_flight(main_repo=repo, worktree=worktree, command_runner=command_runner(sibling)))

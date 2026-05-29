@@ -15,6 +15,7 @@ from .context import LoopContext, LoopContextError
 
 
 REVIEW_MARKER_TAIL_LINES = 30
+DEGRADATION_ALERT_LOG = ".refactor-loop/.degradation-alert.log"
 
 
 class PeekStatusLens:
@@ -36,7 +37,7 @@ class PeekStatusLens:
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
         lines.append("  Skill degradation alerts:")
         tail_count = int(os.environ.get("DEGRADATION_ALERT_TAIL_LINES", "10"))
-        lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / ".degradation-alert.log", tail_count, "    "))
+        lines.extend(_prefixed_tail(self.ctx.repo_root / DEGRADATION_ALERT_LOG, tail_count, "    "))
         lines.extend(["", "▍Milestone (优先) issues:"])
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])
@@ -64,8 +65,12 @@ class PeekStatusLens:
 
     def _maintainer_comments(self) -> list[str]:
         output: list[str] = []
-        targets = [("i", str(item.get("number"))) for item in self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])]
-        targets.extend(("p", str(item.get("number"))) for item in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], []))
+        issues = self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
+        prs = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
+        issues = issues if isinstance(issues, list) else []
+        prs = prs if isinstance(prs, list) else []
+        targets = [("i", str(item.get("number"))) for item in issues if isinstance(item, dict)]
+        targets.extend(("p", str(item.get("number"))) for item in prs if isinstance(item, dict))
         now = datetime.now(timezone.utc)
         for kind, num in targets:
             data = self.gh_json([("issue" if kind == "i" else "pr"), "view", num, "--json", "comments"], {})
@@ -99,14 +104,14 @@ class PeekStatusLens:
         return output
 
     def _count_loop_codex(self) -> int:
-        result = subprocess.run([sys.executable, str(self.ctx.skill_root / "scripts" / "concurrency_monitor.py"), "--count-only"], cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
+        result = subprocess.run([sys.executable, str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"), "concurrency", "--count-only"], cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         try:
             return int(result.stdout.strip() or "0")
         except ValueError:
             return 0
 
     def _list_loop_codex(self) -> list[str]:
-        result = subprocess.run([sys.executable, str(self.ctx.skill_root / "scripts" / "concurrency_monitor.py"), "--list-codex"], cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
+        result = subprocess.run([sys.executable, str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"), "concurrency", "--list-codex"], cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         names = []
         for line in result.stdout.splitlines():
             match = re.search(r"--log [^ ]*/([^ /]+)\.log", line)
@@ -298,6 +303,8 @@ class PeekStatusLens:
 
     def _checks(self, pr_num: str) -> tuple[int, int, int]:
         data = self.gh_json(["pr", "checks", pr_num, "--json", "bucket"], [])
+        if not isinstance(data, list):
+            return 0, 0, 0
         buckets = [item.get("bucket") for item in data if isinstance(item, dict)]
         return buckets.count("fail"), buckets.count("pending"), buckets.count("pass")
 
@@ -318,9 +325,10 @@ class PeekStatusLens:
     def gh_json(self, args: Sequence[str], default):
         text = self.gh_text(args)
         try:
-            return json.loads(text or "null")
+            parsed = json.loads(text or "null")
         except Exception:
             return default
+        return default if parsed is None else parsed
 
 
 def extract_review_verdict_tail(log_path: Path, pr_num: str, role: str) -> str:

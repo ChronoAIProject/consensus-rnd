@@ -15,14 +15,14 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
-STATUSLINE_SH = SKILL_ROOT / "scripts" / "statusline.sh"
-CONCURRENCY_MONITOR = SKILL_ROOT / "scripts" / "concurrency_monitor.py"
+STATUSLINE = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "statusline.py"
+CONCURRENCY_MONITOR = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py"
 
 
 class StatuslineDaemonHealthSourceRegressionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.skill_md = SKILL_MD.read_text(encoding="utf-8")
-        self.statusline_sh = STATUSLINE_SH.read_text(encoding="utf-8")
+        self.statusline_py = STATUSLINE.read_text(encoding="utf-8")
         self.monitor_py = CONCURRENCY_MONITOR.read_text(encoding="utf-8")
 
     def test_skill_md_documents_daemon_health_in_statusline_section(self) -> None:
@@ -31,7 +31,7 @@ class StatuslineDaemonHealthSourceRegressionTests(unittest.TestCase):
         self.assertIn("daemons_healthy", self.skill_md)
         self.assertIn("daemons_total", self.skill_md)
         self.assertIn("heartbeats/*.ts", self.skill_md)
-        # Display format example must match what statusline.sh prints so future
+        # Display format example must match what the statusline operation prints so future
         # readers do not invent a different schema.
         self.assertIn("d:5/5", self.skill_md)
 
@@ -46,14 +46,14 @@ class StatuslineDaemonHealthSourceRegressionTests(unittest.TestCase):
 
     def test_producer_function_name_present(self) -> None:
         self.assertIn("def read_daemon_heartbeats(", self.monitor_py)
-        self.assertIn("HEARTBEATS_DIR", self.monitor_py)
+        self.assertIn("self.heartbeats_dir", self.monitor_py)
         self.assertIn("HEARTBEAT_STALE_SECONDS = 90", self.monitor_py)
 
     def test_consumer_reads_daemon_fields(self) -> None:
-        self.assertIn(".daemons_healthy", self.statusline_sh)
-        self.assertIn(".daemons_total", self.statusline_sh)
+        self.assertIn('"daemons_healthy"', self.statusline_py)
+        self.assertIn('"daemons_total"', self.statusline_py)
         # Display segment format and warning behavior are locked.
-        self.assertIn(' d:${d_healthy}/${d_total}', self.statusline_sh)
+        self.assertIn(' d:{d_healthy}/{d_total}', self.statusline_py)
 
 
 if __name__ == "__main__":

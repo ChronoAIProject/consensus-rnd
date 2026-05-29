@@ -8,12 +8,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import spawn, statusline
+from . import banners, project_rules, spawn, statusline
 from .controller_actions import main as controller_actions_main
+from .checks.degradation import main as degradation_main
+from .checks.manifest import main as manifest_main
 from .monitors.comment import main as comment_monitor_main
+from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
+from .release.gate import main as release_gate_main
 from .restart import main as restart_main
+from .retention import main as retention_main
+from .sync.apply import main as sync_apply_main
+from .sync.dev import main as dev_sync_main
+from .sync.requests import main as sync_requests_main
+from .phase9.router import main as phase9_router_main
+from .triage import main as triage_main
 from .wakeup_plan import main as wakeup_plan_main
 
 
@@ -34,9 +44,24 @@ COMMANDS: dict[str, CommandSpec] = {
     "restart-daemons": CommandSpec(restart_main, "run the Python daemon restart helper"),
     "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", read_only=True),
     "comment-monitor": CommandSpec(comment_monitor_main, "run the Python comment monitor daemon"),
+    "concurrency": CommandSpec(concurrency_main, "run the Python concurrency monitor or read-only counter"),
     "progress-reporter": CommandSpec(progress_reporter_main, "run the Python progress reporter daemon"),
+    "dev-sync": CommandSpec(dev_sync_main, "run the Python integration sync daemon"),
+    "phase9-router": CommandSpec(phase9_router_main, "run the Python Phase 9 router"),
+    "release-gate": CommandSpec(release_gate_main, "run the Python auto release gate"),
     "merge-pr": CommandSpec(controller_actions_main, "invoke Python controller action merge_pr"),
     "open-pr": CommandSpec(controller_actions_main, "invoke Python controller action open_pr_with_label"),
+    "apply-human-label": CommandSpec(controller_actions_main, "apply maintainer-decision label after guard checks"),
+    "safe-push": CommandSpec(controller_actions_main, "push after bounded fetch/rebase catch-up"),
+    "safe-sync-main": CommandSpec(controller_actions_main, "catch current branch up to the remote tip"),
+    "post-banner": CommandSpec(banners.main, "post a controller status banner"),
+    "check-degradation": CommandSpec(degradation_main, "run the static skill degradation check", read_only=True),
+    "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", read_only=True),
+    "apply-sync": CommandSpec(sync_apply_main, "apply an IntegrationSyncRequest artifact"),
+    "apply-triage": CommandSpec(triage_main, "apply a ManualIssueTriageDecision artifact"),
+    "log-retention": CommandSpec(retention_main, "run daemonless log retention"),
+    "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points"),
+    "sync-request": CommandSpec(sync_requests_main, "validate or emit IntegrationSyncRequest artifacts"),
 }
 
 
@@ -48,7 +73,7 @@ class RuntimeCommandRouter:
 
     def main(self, argv: Sequence[str] | None = None) -> int:
         parser = argparse.ArgumentParser(
-            prog="codex_loop.py",
+            prog="consensus-rnd-cli",
             description="codex-refactor-loop controller command router",
         )
         parser.add_argument("command", nargs="?")
@@ -64,10 +89,8 @@ class RuntimeCommandRouter:
         if spec is None:
             sys.stderr.write(f"unknown command: {command}\n")
             return 2
-        if command == "merge-pr":
-            return spec.handler(["merge-pr", *args])
-        if command == "open-pr":
-            return spec.handler(["open-pr", *args])
+        if command in {"merge-pr", "open-pr", "apply-human-label", "safe-push", "safe-sync-main"}:
+            return spec.handler([command, *args])
         return spec.handler(args)
 
 
