@@ -18,7 +18,11 @@ You explicitly resist adding code. If after honest evaluation the feature must s
 ## Inputs
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments.
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md`.
+2. Work-unit scope source, by precedence:
+   - Read the prompt header `WORK_UNIT_SOURCE_REF` / `source_ref` first.
+   - If it points to an existing local artifact or audit section, read that source and verify it.
+   - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
+   - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "删除优先" clause; "Deletion-first" principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
 4. If deletion requires changing PROJECT_RULES/AGENTS.md, L0/L1/L2 clauses, Tier boundaries, SPEC/conformance/trusted_base wording, or architecture vocabulary, treat that change as part of the deletion plan rather than a reason to escalate.
 5. Call sites of the violating code:
@@ -34,7 +38,7 @@ You explicitly resist adding code. If after honest evaluation the feature must s
 
 ## Procedure
 
-1. **Trace the value chain backwards**: who calls the code? who calls them? What user-facing or system-facing capability vanishes if this whole code path is deleted?
+1. **Trace the value chain backwards** from the current work-unit source: cited files, cited symbols, problem statement, issue body/comments, local artifact, audit evidence, or repo rules. Who calls the code? who calls them? What user-facing or system-facing capability vanishes if this whole code path is deleted? If no local audit artifact exists, do not fail into invented audit content.
 2. **Classify**:
    - **(a) Dead code** — no caller, no test, no test that asserts it works. → propose deletion.
    - **(b) Orphan feature** — has callers but capability is unused/disabled (feature flag off, old endpoint not in routes, etc.). → propose deletion + remove unused entry points.

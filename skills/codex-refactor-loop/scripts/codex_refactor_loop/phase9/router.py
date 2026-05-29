@@ -635,8 +635,33 @@ class Phase9Router:
 
     def _solver_prompt(self, issue: str, round_no: int, role: str, marker: str) -> str:
         return (
-            f"# Phase 9 {role} solver\n\nIssue: #{issue}\nRound: {round_no}\n"
+            f"# Phase 9 {role} solver\n\n"
+            f"{self._solver_work_unit_header(issue, round_no, role)}\n\n"
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
+        )
+
+    # Refactor (issue-114/phase9-issue-source-header):
+    #   Old pattern: converge-dispatched solver prompts had issue and round only,
+    #   so issue-driven Path A depended on hidden prompt-template fallback and
+    #   could be mistaken for a mandatory audit-backed cluster.
+    #   New principle: render a router-private source header from known issue
+    #   identity only; do not add state, producer registries, or lifecycle
+    #   authority.
+    def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
+        output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
+        return (
+            f"Issue: #{issue}\n"
+            f"Round: {round_no}\n"
+            f"Role: {role}\n"
+            f"WORK_UNIT_ID=issue-{issue}\n"
+            f"CLUSTER_ID=issue-{issue} (compatibility alias only; not an audit cluster_id)\n"
+            "WORK_UNIT_KIND=manual-work-unit\n"
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)\n"
+            f"WORK_UNIT_SOURCE_REF=gh-issue-{issue}\n"
+            f"SOLVER_OUTPUT_PATH={output_path}\n"
+            f"Read `gh issue view {issue}` for the issue body/comments. "
+            "The issue body/comments are the scope spec when no local audit artifact is provided; "
+            "do not fabricate audit artifacts."
         )
 
     # Refactor (iter5/issue-85-stalled-reflector-template):

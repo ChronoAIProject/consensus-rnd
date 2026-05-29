@@ -118,6 +118,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
+    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+        top = "\n".join(self.skill.splitlines()[:200])
+        for needle in (
+            "## Two entry modes",
+            "audit-driven",
+            "issue-driven / Path A",
+            "phase9-auto-solve",
+            "Audit is a seed producer, not the only entry",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, top)
+
+    def test_skill_documents_phase9_solver_source_contract(self) -> None:
+        phase9 = section_after_heading(self.skill, "Phase 9 — Multi-solver design consensus (sole authorization gate)")
+        for needle in (
+            "### Solver source contract",
+            "WORK_UNIT_SOURCE_REF",
+            "source_ref",
+            "gh-issue-<N>",
+            "gh issue view <N>",
+            "issue body/comments are the scope source",
+            "must not be fabricated",
+            "A missing audit `evidence:` block is not by itself a defect for manual issues",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, phase9)
+
     def test_downstream_install_walkthrough_contract(self) -> None:
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.

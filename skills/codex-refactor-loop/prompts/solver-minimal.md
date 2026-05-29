@@ -7,13 +7,17 @@ Your bias: **smallest viable change** that resolves the audit's flagged violatio
 ## Inputs
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` — cluster spec.
+2. Work-unit scope source, by precedence:
+   - Read the prompt header `WORK_UNIT_SOURCE_REF` / `source_ref` first.
+   - If it points to an existing local artifact or audit section, read that source and verify it.
+   - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
+   - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
-4. The actual source files cited in the audit `evidence:` block (open them; do NOT trust line numbers without verifying).
+4. The actual source files cited by the current work-unit source (issue body/comments, local artifact, audit evidence, or repo rules). Open them; do NOT trust line numbers without verifying.
 
 ## Procedure
 
-1. **Verify the violation is real** at the cited file:line. If audit evidence is stale (file refactored, line moved, behavior already fixed) → emit `SOLVER_DONE:minimal:false-positive:<reason>`. Do not propose a fix.
+1. **Verify the violation is real** against the current work-unit source. For audit-backed sources, verify the cited audit `evidence:` file:line. For issue-driven sources, verify the cited files, symbols, problem statement, or repo rule from the issue body/comments. If the source evidence is stale, missing, or already fixed → emit `SOLVER_DONE:minimal:false-positive:<reason>` or `SOLVER_DONE:minimal:escalate:no-plan:<reason>` as appropriate. Do not invent audit evidence.
 2. **Locate the minimum-change boundary**. For each piece of evidence:
    - What is the smallest code edit that removes the specific violation?
    - Does it require any new abstraction (new type, new interface, new contract)? If yes, your "minimal" framing might not fit — re-evaluate before output.

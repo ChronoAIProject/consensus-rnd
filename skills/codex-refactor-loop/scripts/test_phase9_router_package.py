@@ -86,6 +86,32 @@ class Phase9RouterPackageTests(unittest.TestCase):
             ["149-3-delete", "149-3-minimal", "149-3-structural"],
         )
 
+    def test_converge_solver_prompt_declares_issue_source_ref(self) -> None:
+        self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        self.router.tick()
+
+        prompt = (
+            self.repo
+            / ".refactor-loop"
+            / "prompts"
+            / "phase9"
+            / "phase9-issue114-r2-minimal.md"
+        ).read_text(encoding="utf-8")
+        required = (
+            "WORK_UNIT_ID=issue-114",
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-114",
+            "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-minimal.md",
+            "gh issue view 114",
+            "issue body/comments are the scope spec when no local audit artifact is provided",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
+        self.assertNotIn("cluster spec", prompt)
+
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")
 

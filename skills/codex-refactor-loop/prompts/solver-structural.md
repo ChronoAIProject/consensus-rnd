@@ -7,14 +7,18 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 ## Inputs
 
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
-2. `$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md` — cluster spec.
+2. Work-unit scope source, by precedence:
+   - Read the prompt header `WORK_UNIT_SOURCE_REF` / `source_ref` first.
+   - If it points to an existing local artifact or audit section, read that source and verify it.
+   - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
+   - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 4. `$REPO_ROOT/$REPO_ROOT 的架构/词汇文档(若有)` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).
-5. The actual source files cited in the audit `evidence:` block (open them; verify line numbers).
+5. The actual source files cited by the current work-unit source (issue body/comments, manual-issue reshaped fields, local artifact, audit evidence, or repo rules). Open them; verify line numbers.
 
 ## Procedure
 
-1. **Restate the violation** in PROJECT_RULES-clause-precise terms. Which clause is it, exactly? Quote it.
+1. **Restate the violation** in PROJECT_RULES-clause-precise terms. Which clause is it, exactly? Quote it. PROJECT_RULES clauses and evidence may come from the issue body/comments, manual-issue reshaped fields, a local source artifact, audit evidence, or repo rules. Require an audit `evidence:` block only for audit-backed sources; do not fabricate one for issue-driven work.
 2. **Map the clean structural solution**:
    - Which existing repo primitives apply (`IAsyncEnumerable`, `Channel`, actor inbox, projection pipeline, event envelope, etc.)?
    - What new abstraction is required, IF any (named precisely)?

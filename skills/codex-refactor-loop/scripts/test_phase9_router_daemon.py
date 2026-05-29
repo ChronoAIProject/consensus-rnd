@@ -443,6 +443,35 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
 
+    def test_solver_prompt_for_issue_driven_converge_has_source_header(self) -> None:
+        self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        self.router.tick()
+
+        prompt = (
+            self.repo
+            / ".refactor-loop"
+            / "prompts"
+            / "phase9"
+            / "phase9-issue114-r2-structural.md"
+        ).read_text(encoding="utf-8")
+        required = (
+            "WORK_UNIT_ID=issue-114",
+            "CLUSTER_ID=issue-114 (compatibility alias only; not an audit cluster_id)",
+            "WORK_UNIT_KIND=manual-work-unit",
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-114",
+            "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-structural.md",
+            "gh issue view 114",
+            "issue body/comments are the scope spec when no local audit artifact is provided",
+            "do not fabricate audit artifacts",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
+        self.assertNotIn("cluster spec", prompt)
+
     def test_phase9_router_converge_accepts_non_ascii_reason(self) -> None:
         self.write_log(
             "phase9-issue149-r2-judge.log",
