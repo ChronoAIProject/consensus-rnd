@@ -863,7 +863,11 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             assert isinstance(decision, dict)
             self.assertTrue(decision["ready"])
             self.assertEqual(decision["bump_type"], "patch")
-            self.assertEqual(decision["from_version"], "1.0.0-beta.1")
+            # Version-agnostic: from_version must equal the current package.json
+            # version (decision dispatch is artifact-only and does not bump it),
+            # so this assertion survives every release bump without edits.
+            current_version = read_json(repo / "package.json")["version"]
+            self.assertEqual(decision["from_version"], current_version)
             self.assertEqual(decision["to_version"], "1.0.1")
             self.assertNotEqual(decision["to_version"], decision["from_version"])
             candidate = read_json(candidate_path)

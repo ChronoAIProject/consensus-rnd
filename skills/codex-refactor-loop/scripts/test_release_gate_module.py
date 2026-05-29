@@ -120,8 +120,11 @@ class ReleaseGateModuleTests(unittest.TestCase):
             release_gate.dispatch_release(decision)
 
             self.assertTrue(decision["ready"])
-            self.assertEqual(decision["from_version"], "1.0.0-beta.1")
-            self.assertEqual(decision["to_version"], "1.0.1")
+            # Version-agnostic: from_version tracks the real package.json version
+            # (dispatch is artifact-only, no bump), surviving every release.
+            current_version = read_json(repo / "package.json")["version"]
+            self.assertEqual(decision["from_version"], current_version)
+            self.assertEqual(decision["to_version"], gate.bump_semver(current_version, "patch"))
             self.assertEqual(decision["bump_type"], "patch")
             self.assertEqual(list(decision["signals"].keys()), list(gate.SIGNAL_NAMES))
             candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
