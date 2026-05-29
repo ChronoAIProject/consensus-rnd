@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import unittest
 import re
+import sys
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
+
+from codex_refactor_loop.cli import COMMANDS
 
 DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
@@ -137,6 +141,27 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
                 self.assertIn("⟦AI:AUTO-LOOP⟧", body)
                 for snippet in AFFIRMATIVE_DIRECT_POST_SNIPPETS:
                     self.assertNotIn(snippet, body)
+
+    def test_worker_prompt_authority_is_not_cli_command_authority(self) -> None:
+        prompt_roles = {
+            "audit",
+            "implement",
+            "meta-judge",
+            "meta-reflector-stalled",
+            "remote-ci-fix",
+            "review-fix",
+            "reviewer-architect",
+            "reviewer-quality",
+            "reviewer-tests",
+            "solver-delete",
+            "solver-minimal",
+            "solver-structural",
+            "test-add",
+            "triage-external-issue",
+            "verify",
+        }
+        self.assertTrue(prompt_roles)
+        self.assertFalse(prompt_roles & set(COMMANDS))
 
 
 if __name__ == "__main__":
