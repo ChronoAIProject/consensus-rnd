@@ -6,14 +6,16 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from codex_refactor_loop.heartbeat import DaemonHeartbeatLease
-
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from codex_refactor_loop.heartbeat import DaemonHeartbeatLease
 
 
 class DaemonHeartbeatLeaseTests(unittest.TestCase):
