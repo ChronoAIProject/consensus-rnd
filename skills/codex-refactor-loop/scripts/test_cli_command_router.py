@@ -80,19 +80,7 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 }
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
-    "dev-sync": {"git-fetch", "git-worktree"},
-}
-
-CONTROLLER_LIFECYCLE_COMMANDS = {
-    "apply-human-label",
-    "apply-sync",
-    "apply-triage",
-    "merge-pr",
-    "open-pr",
-    "open-release-rollup-pr",
-    "post-banner",
-    "safe-push",
-    "safe-sync-main",
+    "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
 }
 
 LIFECYCLE_TOKENS = {
@@ -113,8 +101,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_each_public_operation_is_registered(self) -> None:
         self.assertEqual(
             {
-                "apply-sync",
-                "apply-triage",
                 "check-degradation",
                 "check-manifest",
                 "labels",
@@ -134,13 +120,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
-                "merge-pr",
-                "open-pr",
-                "open-release-rollup-pr",
-                "apply-human-label",
-                "safe-push",
-                "safe-sync-main",
-                "sync-request",
             },
             set(COMMANDS),
         )
@@ -192,7 +171,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "sync-request", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
@@ -205,48 +184,43 @@ class RuntimeCommandRouterTests(unittest.TestCase):
 
     def test_dev_sync_declares_integration_worktree_git_carveout(self) -> None:
         self.assertEqual(
-            {"git-fetch", "git-worktree"},
-            set(COMMANDS["dev-sync"].authority) & {"git-fetch", "git-worktree"},
+            {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+            set(COMMANDS["dev-sync"].authority)
+            & {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
         )
 
-    def test_handler_live_surfaces_are_declared_in_command_authority(self) -> None:
-        handler_surface_requirements = {
-            "merge-pr": {
-                "source": SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py",
-                "needles": ("record_recent_pr_merge", "recent-pr-merges.json"),
-                "authority": {"write-state"},
-            },
-            "apply-triage": {
-                "source": SCRIPT_DIR / "codex_refactor_loop" / "triage.py",
-                "needles": ('["issue", "view", str(issue_number), "--json", "labels"]',),
-                "authority": {"read-gh"},
-            },
-        }
-        for command, requirement in handler_surface_requirements.items():
+    def test_public_lifecycle_cli_commands_are_removed(self) -> None:
+        for command in {
+            "apply-human-label",
+            "apply-sync",
+            "apply-triage",
+            "merge-pr",
+            "open-pr",
+            "open-release-rollup-pr",
+            "safe-push",
+            "safe-sync-main",
+            "sync-request",
+        }:
             with self.subTest(command=command):
-                source = requirement["source"].read_text(encoding="utf-8")
-                for needle in requirement["needles"]:
-                    self.assertIn(needle, source)
-                self.assertTrue(requirement["authority"].issubset(COMMANDS[command].authority))
+                self.assertNotIn(command, COMMANDS)
 
-    def test_lifecycle_tokens_stay_on_controller_apply_surfaces(self) -> None:
+    def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():
             with self.subTest(command=name):
                 lifecycle_tokens = set(spec.authority) & LIFECYCLE_TOKENS
                 allowed = DAEMON_LIFECYCLE_CARVEOUTS.get(name, set())
-                if lifecycle_tokens - allowed:
-                    self.assertIn(name, CONTROLLER_LIFECYCLE_COMMANDS)
+                self.assertFalse(lifecycle_tokens - allowed)
 
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
         for token in (
-            "Refactor (iter1/issue-166)",
-            "Old pattern: CommandSpec exposed a coarse",
-            "read_only boolean",
-            "New principle:",
-            "inline closed-token authority tuple",
-            "mechanical CLI authority fact source",
-            "dev-sync's integration-worktree carveout",
+            "Refactor (iter201/issue-201)",
+            "public consensus-rnd-cli exposed",
+            "lifecycle commands",
+            "generic lifecycle authority surface",
+            "only public non-lifecycle CLI primitives",
+            "controller lifecycle actions stay",
+            "dev-sync's narrow integration-worktree carveout",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, cli)
@@ -277,12 +251,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         handler.assert_called_once_with(["check-github", "--plan"])
         self.assertEqual(set(COMMANDS["labels"].authority), {"read-source", "read-gh"})
 
-    def test_controller_actions_dispatch_to_python_action_handler(self) -> None:
+    def test_removed_lifecycle_commands_fail_closed_without_handler_dispatch(self) -> None:
         router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
         handler = mock.Mock(return_value=0)
-        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"merge-pr": COMMANDS["merge-pr"].__class__(handler, "merge", ("gh-merge",))}):
-            self.assertEqual(0, router.run("merge-pr", ["123", "45"]))
-        handler.assert_called_once_with(["merge-pr", "123", "45"])
+        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", dict(COMMANDS), clear=True):
+            for command in ("merge-pr", "apply-sync", "apply-triage", "safe-push"):
+                with self.subTest(command=command):
+                    self.assertEqual(2, router.run(command, ["123"]))
+        handler.assert_not_called()
 
 
 if __name__ == "__main__":

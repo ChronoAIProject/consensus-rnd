@@ -15,7 +15,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 ## Controller Contract Index
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
-| Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, `consensus-rnd-cli controller actions` |
+| Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
@@ -28,7 +28,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
-| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | `consensus-rnd-cli controller actions`, GitHub labels |
+| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
@@ -200,14 +200,15 @@ Stability requires all signals green and fail-closed handling on missing or red 
 The release lifecycle surface consumes decision-artifact-only output: a scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, call the existing version bump command, commit/push mapped manifests, and let `release.yml` publish; or `release.yml` may read `.refactor-loop/state/release-decision.json` directly, re-check the same opt-in, bump/publish through guarded jobs, and record the result. `consensus-rnd-cli release-gate` remains decider only; controller/workflow owns lifecycle operations and must re-validate host opt-in. Forbidden: per-release maintainer emoji ratification, approval-ticket gating, or release-candidate JSON authorization.
 
 <!-- Refactor (iter1/issue-166): Old pattern: CLI command authority was represented by coarse read_only metadata and prose-only runtime exception text, so the matrix could under-report command surfaces. New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source, including named narrow carveouts such as dev-sync's integration-worktree git surface, and SKILL prose cannot grant missing runtime authority. -->
+<!-- Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed merge-pr/open-pr/safe-push/apply-sync/apply-triage lifecycle commands and wakeup_plan/peek rendered copyable suggested_command, forming generic lifecycle authority. New principle: delete public lifecycle CLI surface; COMMANDS covers public non-lifecycle commands only, controller lifecycle primitives stay internal, wakeup-plan emits fixed controller_action facts with no_lifecycle_authority:true, and dev-sync keeps only the #53 carveout. -->
 ## CLI runtime authority fact source(per #166)
-`skills/codex-refactor-loop/scripts/codex_refactor_loop/cli.py::COMMANDS[*].authority` is the unique mechanical fact source for CLI runtime command authority. Each `CommandSpec.authority` is an inline closed-token tuple that states the command's maximum git/gh/spawn/write-artifact/label/merge capability. SKILL prose explains the human contract, narrow allowlist, durable authorization source, and no lifecycle authority by default; it must not grant a CLI capability missing from `CommandSpec.authority`. Worker prompt authority remains in prompt contracts and prompt tests, not as pseudo-commands in `COMMANDS`. New or expanded CLI runtime authority requires matching behavior test and source-regression anchor coverage.
+`skills/codex-refactor-loop/scripts/codex_refactor_loop/cli.py::COMMANDS[*].authority` is the unique mechanical fact source for CLI runtime command authority for worker-visible, non-lifecycle public commands. Each `CommandSpec.authority` is an inline closed-token tuple that states a public command's maximum git/gh/spawn/write-artifact/label/merge capability. Controller lifecycle primitives such as `merge_pr`, `open_pr_with_label`, `open_release_rollup_pr_from_pending_event`, `apply_human_label_or_skip`, `safe_push`, `safe_sync_main`, and triage apply stay outside `COMMANDS`; their authorization comes from controller-owned decisions/action facts and direct internal call boundaries. `wakeup-plan` may emit only fixed facts such as `controller_action: "safe_push"` with `no_lifecycle_authority: true`; `peek` may display those facts but must not render executable lifecycle commands. SKILL prose explains the human contract, narrow allowlist, durable authorization source, and no lifecycle authority by default; it must not grant a CLI capability missing from `CommandSpec.authority`. Worker prompt authority remains in prompt contracts and prompt tests, not as pseudo-commands in `COMMANDS`. New or expanded public CLI runtime authority requires matching behavior test and source-regression anchor coverage.
 
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
 ## Named runtime exception — integration sync daemon(per #53)
-Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: detect-and-emit only in the dedicated integration worktree. The daemon may fetch refs, run read-only `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` for remote integration branch existence only, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, and emit integration sync request artifacts. Controller apply helpers consume those artifacts, re-check live state, and own git apply lifecycle. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no direct branch update, no generic lifecycle actor, and no lifecycle mutation verbs from the daemon. Implement/fix workers still never commit, push, or open PRs.
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
@@ -267,6 +268,21 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Consensus-rnd Phase design-consensus r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
+## Dogfood anti-rules(per #205)
+
+<!-- Refactor (iter205/issue-205):
+  Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+  New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+-->
+
+These are local controller contract rules learned from dogfood incidents:
+
+1. Audit fallback may have only one active `audit-iter-N` for the same `N` at a time; never start parallel audit runs that reuse `audit-iter-N.md`, `audit-iter-N-candidates.ndjson`, or `audit-iter-N.log`.
+2. Audit prompt rendering fails closed when `ITERATION` is empty; do not write `audit-iter-.md`, `audit-iter--candidates.ndjson`, or similarly empty-identity artifacts.
+3. Any new role prompt under `skills/codex-refactor-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
+4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; only missing or invalid review artifacts fall back to clean log-tail `REVIEW_DONE` markers.
+5. Daemon recovery goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
@@ -310,7 +326,7 @@ The workflow stage index is the local routing map. It intentionally links to hea
 | Consensus-rnd Phase verification | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
 | Consensus-rnd Phase publish | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](#merge-and-push-details) |
 | Consensus-rnd Phase ci-watch | Watch remote CI after push; classify failures and route fix/test-add work immediately. | [remote CI details](#remote-ci-details) |
-| Consensus-rnd Phase integration-sync | Integration sync is daemon-owned detect-and-emit plus controller-owned git apply. | [daemon command bodies](#daemon-command-bodies) |
+| Consensus-rnd Phase integration-sync | Integration sync is daemon-owned autonomous integration-branch git apply through the #53 allowlist. | [daemon command bodies](#daemon-command-bodies) |
 | Consensus-rnd Phase design-intake | Sweep design issues and maintainer comments every wakeup. External issues enter through explicit labels or triage. | [design issue details](#design-issue-details) |
 | Consensus-rnd Phase review-gate | Three independent PR reviewers; fixes loop until reviewer consensus or meta-layer reflection. | [review-gate details](#review-gate-details) |
 | Consensus-rnd Phase design-consensus | Three solvers plus meta-judge. Sole authorization gate for concrete plans. | [design-consensus details](#design-consensus-details) |
@@ -644,7 +660,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [prompts/meta-judge.md](prompts/meta-judge.md) — Consensus-rnd Phase design-consensus meta-judge.
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
-- [scripts/consensus-rnd-cli controller actions](scripts/consensus-rnd-cli controller actions) — shared controller helpers.
+- `scripts/codex_refactor_loop/controller_actions.py` — controller-internal lifecycle primitives; not a public CLI command surface.
 - [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
 - [scripts/consensus-rnd-cli ensure-project-rules](scripts/consensus-rnd-cli ensure-project-rules) — Consensus-rnd Phase bootstrap fixed-point helper.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
@@ -755,7 +771,7 @@ Producer rules:
 Consensus-rnd Phase work-intake guardrails:
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
-2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`.
+2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`; `N` must be nonempty and unique among currently active audit fallback runs.
 3. Convert accepted units into work-unit items before dispatch.
 4. Clean stale worktrees before audit pollution can affect decisions.
 5. For `requires_design`, open or update GitHub design issues and label them `crnd:phase:design-solving` plus `crnd:human:auto`.
@@ -792,10 +808,10 @@ Consensus-rnd Phase ci-watch guardrails:
 4. Codecov patch failures route to test-add work.
 5. Repeated same-check failure routes through meta-layer policy before human escalation.
 
-Consensus-rnd Phase integration-sync guardrails: integration sync is daemon-owned detect-and-emit plus controller-owned git apply. The daemon emits integration sync request artifacts and `DEV_SYNC_REQUEST:<path>`; controller apply helpers consume those artifacts and re-check live state before git lifecycle. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
+Consensus-rnd Phase integration-sync guardrails: integration sync is daemon-owned autonomous integration-branch git apply through the #53 allowlist. The daemon writes integration sync operation artifacts, re-checks live state before git mutation, and records execution results under `.refactor-loop/runs/integration-sync-executions/`. Daemon command details live in [daemon command bodies](#daemon-command-bodies).
 
 ## Named runtime exception — integration sync daemon integration-sync controller boundary
-The integration sync daemon owns read-only detection, conflict detection, resolver dispatch, heartbeat, pending-event append, and integration sync request artifact emission only. Controller helpers own git apply and must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, malformed, or already-applied requests. Resolver codexes resolve conflicts only; they never push, reset, or abort.
+The integration sync daemon owns detection, conflict detection, resolver dispatch, heartbeat, pending-event append, integration sync operation artifact emission, and autonomous #53 git apply in its dedicated integration worktree. The executor must reject stale SHA, branch mismatch, dirty non-merge worktrees, invalid rollup ancestry, unresolved merges, malformed operations, or already-executed operations. Resolver codexes resolve and stage conflicts only; they never push, reset, continue, or abort.
 
 Consensus-rnd Phase design-intake guardrails:
 
@@ -990,8 +1006,8 @@ Narrow allowlist: run `consensus-rnd-cli check-degradation`, write `.refactor-lo
 nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli <operation> --daemon' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
-Integration sync requests use integration sync request artifacts; controller sweep consumes `DEV_SYNC_REQUEST:<path>` and applies it through `python3 <skill-root>/scripts/consensus-rnd-cli apply-sync` after live-state validation.
-**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync detection/request)、`consensus-rnd-cli phase9-router`(30s narrow Consensus-rnd Phase design-consensus deterministic routing)。
+Integration sync uses integration sync operation artifacts; the daemon writes `.refactor-loop/runs/integration-sync-operation-<kind>-<ts>.json` and records `.refactor-loop/runs/integration-sync-executions/<operation-stem>.(applied|rejected).json` after live-state validation.
+**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync operation executor)、`consensus-rnd-cli phase9-router`(30s narrow Consensus-rnd Phase design-consensus deterministic routing)。
 
 `consensus-rnd-cli restart-daemons` also runs daemonless log retention before daemon freshness checks. `consensus-rnd-cli log-retention` has no lifecycle authority: it reads `$REPO_ROOT/.refactor-loop/host.env`, targets only `$REPO_ROOT/.refactor-loop/logs/*.log`, and directly removes regular log files older than 24h. It must not create archive/index state, scan or delete `.refactor-loop/runs/` or prompts, call GitHub, run git, spawn codex, or become a daemon. Verification lives in `test_log_retention.py`.
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
@@ -1262,26 +1278,30 @@ disown
 - ❌ 看到 concurrency-alert.log 有 entry 但 controller 不读
 - ❌ active issue 0 codex 跑 >= 1 wakeup 周期(说明 controller 漏派)
 
-### Controller helper 库:`<skill-root>/scripts/consensus-rnd-cli controller actions`(强制)
+### Controller-internal lifecycle primitives(强制)
 
-7 个曾发生的 bug 都来自 controller boilerplate 重复 + bash 变量传值 bug。统一抽 helper:
+<!-- Refactor (iter201/issue-201): Old pattern: lifecycle helpers were
+documented as public consensus-rnd-cli/controller-actions shell commands.
+New principle: lifecycle operations are controller-internal ControllerActions
+methods/direct package calls, never worker-visible public CLI verbs. -->
 
-```bash
-source <skill-root>/scripts/consensus-rnd-cli controller actions
+7 个曾发生的 bug 都来自 controller boilerplate 重复 + shell 变量传值 bug。统一用 controller-internal `ControllerActions` primitives, not public CLI commands:
 
-safe_worktree iterN cluster-026 origin/auto-refact-dev   # → exports WT_PATH + BRANCH
-open_pr_with_label "iterN cluster-XXX: title" body.md    # → exports PR_NUM(原地传值,无 grep subshell bug)
-merge_pr <pr>                                             # auto-close linked issue + cleanup labels
-render_template implement.md out.md                       # 处理 {{var}} 和 $VAR 两种语法
-sweep_stale_labels                                        # 清 closed but 仍挂 in-flight label
-validate_prompt out.md                                    # check 0 unresolved {{var}}
+```python
+actions = ControllerActions(LoopContext.load(cwd=os.getcwd()))
+actions.safe_worktree(iteration, cluster, base)
+actions.open_pr_with_label(title, body_file, base=base, head=head)
+actions.merge_pr(pr)
+actions.render_template(input_path, output_path)
+actions.apply_human_label_or_skip(pr_number, source_marker, reason)
 ```
 
 **强制**:
-- 派 codex 前必须 `validate_prompt` — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 `merge_pr <pr>` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
-- worktree 创建必须用 `safe_worktree` — 处理 "already exists" race
-- PR 号捕获必须用 `open_pr_with_label`(直接 export PR_NUM)— **禁止** `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- 派 codex 前必须 validate rendered prompt output — 防 codex blocked on unresolved placeholder
+- merge PR 必须用 internal `merge_pr(pr)` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
+- worktree 创建必须用 internal `safe_worktree(iteration, cluster, base)` — 处理 "already exists" race
+- PR 号捕获必须用 internal `open_pr_with_label(...)` returned tuple — **禁止** shell `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- `safe_push`, `safe_sync_main`, triage apply, and human-label apply are internal primitives/direct package calls only; `consensus-rnd-cli merge-pr/open-pr/open-release-rollup-pr/apply-human-label/safe-push/safe-sync-main/apply-sync/apply-triage` must fail closed as unknown public commands.
 
 **Label 生命周期(强制状态机)**:
 <!--
@@ -1810,15 +1830,15 @@ disown
 
 Daemon 工作流由 `integration sync daemon` 命名状态机表达:
 1. `FETCH`: fetch origin in the daemon worktree.
-2. `CHECK_MERGE`: if a merge is in progress, observe or dispatch exactly one resolver codex. Resolver codexes resolve files and run `git merge --continue`; they never push, reset, or abort.
+2. `CHECK_MERGE`: if a merge is in progress with unresolved paths, observe or dispatch exactly one resolver codex. Resolver codexes resolve and stage files only; they never continue, push, reset, or abort. If all paths are resolved, the daemon executes a `continue-resolved-merge` operation and pushes through the #53 allowlist.
 3. `CHECK_DIRTY`: dirty non-merge worktrees skip without reset.
-4. `PRESERVE_LOCAL_AHEAD`: before any controller-side alignment, compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for the controller apply helper. This preserves resolver continuation commits without daemon-side git lifecycle authority.
-5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side adoption. The controller helper re-checks ancestry and live SHAs before applying.
-6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side remote alignment.
-7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, emit an integration sync request artifact plus `DEV_SYNC_REQUEST:<path>` marker for controller-side forward sync. The controller helper owns branch update mechanics and re-checks live state before applying.
+4. `PRESERVE_LOCAL_AHEAD`: compute `local_ahead_count` with `git rev-list --count origin/$INTEGRATION_BRANCH..HEAD`; if the daemon worktree is clean and ahead, write and execute a `push-local-ahead` integration sync operation. This preserves resolver continuation commits without controller side-channel latency.
+5. `ADOPT_MERGED_ROLLUP`: if a merged rollup PR from `$INTEGRATION_BRANCH` to `$REVIEW_BASE_BRANCH` is provable, capture the old rollup head and current expected remote SHA, then write and execute an `adopt-merged-rollup` operation. The executor re-checks ancestry and live SHAs before force-with-lease adoption.
+6. `RESET_TO_REMOTE`: after local-ahead preservation and rollup adoption checks, write and execute a `reset-to-remote` operation for remote alignment when local HEAD differs from `origin/$INTEGRATION_BRANCH`.
+7. `FORWARD_SYNC`: when review base needs to be incorporated into integration, write and execute a `forward-sync-review-base` operation. The executor re-checks live state before merge and push.
 8. `DETECT_RELEASE_ROLLUP_NEEDED`: if `origin/$INTEGRATION_BRANCH` is ahead of `origin/$REVIEW_BASE_BRANCH` by at least `RELEASE_ROLLUP_MIN_COMMITS` and no open rollup PR already covers that integration SHA, append `DEV_SYNC_PENDING:release-rollup-needed:<json>` with branch names, SHAs, ahead count, timestamp, and reason. Cooldown only suppresses duplicate same-SHA events; it grants no lifecycle authority.
 9. `MISSING_INTEGRATION_BRANCH_ALERT`: daemon startup/tick verifies `origin/$INTEGRATION_BRANCH` exists via `git ls-remote --exit-code --heads origin "$INTEGRATION_BRANCH"`. If missing, append `DEV_SYNC_PENDING:missing-integration-branch:<branch>` and stop the tick without guessing or recreating the branch.
-Ambiguous rollup metadata, failed request emission, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
+Ambiguous rollup metadata, failed operation construction, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
 ### Consensus-rnd Phase design-consensus router daemon command body
 `consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
@@ -2189,7 +2209,7 @@ When reviewer evidence conflicts with maintainer prior session directive, encode
 
 If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `crnd:human:maintainer-decision`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
-Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `consensus-rnd-cli controller actions`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+Controller label application must use internal `ControllerActions.apply_human_label_or_skip(pr_number, source_marker, reason)` with the full `META_RESOLVED:escalate-human:<reason>` marker as `source_marker`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the primitive. If it finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
 ### Historical anti-pattern:`crnd:human:maintainer-decision` 误用 (2026-05-26)
 

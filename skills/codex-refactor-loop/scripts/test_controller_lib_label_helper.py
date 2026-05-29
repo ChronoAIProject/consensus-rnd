@@ -9,15 +9,19 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from datetime import datetime, timedelta, timezone
+from io import StringIO
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-CLI = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SCRIPT_PATH.parent))
+
 from codex_refactor_loop import labels
+from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.controller_actions import ControllerActions
 
 HUMAN_LABEL = labels.HUMAN_MAINTAINER_DECISION
 VALID_MARKER = "META_RESOLVED:escalate-human:human-label-semantics-guard"
@@ -56,12 +60,26 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
                 "HUMAN_LABEL_SOURCE_MARKER": marker_env,
             }
         )
-        return subprocess.run(
-            [sys.executable, str(CLI), "apply-human-label", *args],
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        stdout = StringIO()
+        stderr = StringIO()
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            os.environ.update(env)
+            actions = ControllerActions(LoopContext.load(env=env, cwd=self.root))
+            pr_number = args[0] if len(args) > 0 else ""
+            source_marker = args[1] if len(args) > 1 else ""
+            reason = args[2] if len(args) > 2 else ""
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                returncode = actions.apply_human_label_or_skip(pr_number, source_marker, reason)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        return subprocess.CompletedProcess(
+            ["controller-internal", "apply_human_label_or_skip", *args],
+            returncode,
+            stdout.getvalue(),
+            stderr.getvalue(),
         )
 
     def write_directive(self, name: str, body: str) -> None:
@@ -256,12 +274,29 @@ exit 0
                 "RECENT_PR_MERGE_RETRY_SLEEP_SECONDS": "0",
             }
         )
-        return subprocess.run(
-            [sys.executable, str(CLI), "merge-pr", *args],
-            env=env,
-            text=True,
-            capture_output=True,
-            check=False,
+        stdout = StringIO()
+        stderr = StringIO()
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            os.environ.update(env)
+            actions = ControllerActions(LoopContext.load(env=env, cwd=self.root))
+            pr = args[0] if len(args) > 0 else ""
+            issue = args[1] if len(args) > 1 else ""
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                try:
+                    returncode = actions.merge_pr(pr, issue)
+                except RuntimeError as exc:
+                    print(str(exc), file=sys.stderr)
+                    returncode = 2
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        return subprocess.CompletedProcess(
+            ["controller-internal", "merge_pr", *args],
+            returncode,
+            stdout.getvalue(),
+            stderr.getvalue(),
         )
 
     def gh_calls(self) -> list[str]:

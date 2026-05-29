@@ -294,6 +294,42 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
         self.assertNotIn("phase9-evidence", prompt)
         self.assertNotIn("Dispatch ledger:", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_durable_artifacts_store_relative_paths_but_spawn_argv_absolute(self) -> None:
+        self.solver_triplet(issue=202, round_no=1)
+
+        self.router.tick()
+
+        ledger = self.ledger_entries()[0]
+        self.assertEqual(".refactor-loop/logs/phase9-issue202-r1-judge.log", ledger["log_path"])
+        self.assertNotIn(str(self.repo), json.dumps(ledger, ensure_ascii=False))
+        command = self.commands[0]
+        self.assertIn(str((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue202-r1-judge.md").resolve()), command)
+        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue202-r1-judge.log").resolve()), command)
+
+        self.write_log("phase9-issue202-r2-judge.log", "META_RESOLVED:re-design:scope")
+        self.router.tick()
+
+        events = self.pending_events()
+        self.assertIn('"log_path": ".refactor-loop/logs/phase9-issue202-r2-judge.log"', events)
+        self.assertNotIn(str(self.repo), events)
+
+    def test_phase9_router_fallback_restart_dedupe_reads_legacy_absolute_and_writes_relative(self) -> None:
+        legacy_log = self.repo / ".refactor-loop" / "logs" / "phase9-issue203-r1-judge.log"
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text(
+            "2026-05-29T00:00:00Z phase9-router-fallback "
+            + json.dumps({"log_path": str(legacy_log), "marker": "META_RESOLVED:old"}, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.write_log("phase9-issue203-r1-judge.log", "META_RESOLVED:old")
+
+        fresh_router = Phase9Router(self.repo, command_runner=self.commands.append)
+        fresh_router.tick()
+
+        self.assertEqual(self.pending_events().count("META_RESOLVED:old"), 1)
 
     def test_phase9_router_peer_solver_prompt_reference_fails_closed(self) -> None:
         self.solver_triplet(issue=170, round_no=3)
@@ -723,9 +759,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         for round_no in (1, 2, 3):
             for role in ("minimal", "structural", "delete"):
-                expected = str(self.repo / ".refactor-loop" / "logs" / f"phase9-issue85-r{round_no}-{role}.log")
+                expected = f".refactor-loop/logs/phase9-issue85-r{round_no}-{role}.log"
                 with self.subTest(expected=expected):
                     self.assertIn(expected, prompt)
+        self.assertNotIn(str(self.repo), prompt)
 
         self.assertNotEqual(
             prompt.strip(),
@@ -764,11 +801,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "META_RESOLVED:escalate-human:missing-stalled-reflector-template",
             "template unavailable",
             stalled_marker,
-            str(self.repo / ".refactor-loop" / "logs" / "phase9-issue86-r3-minimal.log"),
+            ".refactor-loop/logs/phase9-issue86-r3-minimal.log",
             "⟦AI:AUTO-LOOP⟧",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
+        self.assertNotIn(str(self.repo), prompt)
 
     def test_phase9_router_stalled_rejects_changed_recent_verdict_text(self) -> None:
         for round_no, verdict in ((1, "same"), (2, "changed"), (3, "same")):
@@ -880,6 +918,19 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("class Phase9RoundProjection", src)
         self.assertNotIn("Phase9RoundProjection(", src)
         self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
+
+    def test_phase9_router_source_regression_uses_loop_context_artifact_path_boundary(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        self.assertIn("self.ctx.durable_artifact_path(path)", src)
+        self.assertIn("self.ctx.artifact_execution_path(text)", src)
+        for forbidden in (
+            '"log_path": self._artifact_path(log_path) if extra else str(log_path)',
+            '"log_path": str(marker.log_path)',
+            "f\"- {m.role}: {m.log_path}\"",
+            "str(path) for path in self._solver_history_log_paths",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, src)
 
     def test_main_once_dispatches_via_temp_repo_root(self) -> None:
         self.solver_triplet(issue=37, round_no=4)

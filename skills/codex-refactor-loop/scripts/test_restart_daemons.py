@@ -58,8 +58,12 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
         self.config = RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1)
+        self.helpers: list[RestartDaemons] = []
 
     def tearDown(self) -> None:
+        for helper in self.helpers:
+            for proc in helper._wrappers:
+                self.terminate_proc(proc)
         for pid_file in (self.repo / ".refactor-loop" / "locks").glob("*.pid"):
             try:
                 pid = int(pid_file.read_text(encoding="utf-8").strip())
@@ -72,7 +76,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
-                RestartDaemons(self.ctx, self.config).run()
+                helper = RestartDaemons(self.ctx, self.config)
+                self.helpers.append(helper)
+                helper.run()
         return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
 
     def start_count(self, name: str) -> int:
@@ -92,6 +98,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             return
         deadline = time.time() + 2
         while time.time() < deadline:
+            if restart._reap_child_if_exited(pid):
+                return
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
@@ -100,6 +108,21 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         try:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
+            pass
+        restart._reap_child_if_exited(pid)
+
+    def terminate_proc(self, proc: subprocess.Popen[bytes]) -> None:
+        if proc.poll() is not None:
+            return
+        proc.terminate()
+        try:
+            proc.wait(timeout=2)
+            return
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
             pass
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:

@@ -611,11 +611,10 @@ def safe_head_ref(value: str | None) -> str | None:
 
 
 def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
-    # Refactor (issue-190/unpushed-worker-output):
-    #   Old pattern: FIX_DONE/IMPLEMENT_DONE could leave committed worker output
-    #   only in a local worktree branch, so reviewers and CI read stale origin.
-    #   New principle: wakeup-plan owns a local read-only topology check; peek
-    #   may reuse this helper as status, but controller push remains external.
+    # Refactor (iter201/issue-201): Old pattern: wakeup_plan rendered a copyable
+    # consensus-rnd-cli safe-push suggested_command, exposing public lifecycle
+    # reachability. New principle: emit only a fixed controller_action fact with
+    # no_lifecycle_authority; controller maps it to an internal primitive.
     prs = [item for item in gh_items if item.kind == "PR" and safe_head_ref(item.head_ref)]
     if not prs:
         return []
@@ -660,7 +659,7 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
                 "local_head": local.stdout.strip(),
                 "remote_head": remote.stdout.strip(),
                 "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
-                "suggested_command": f"python3 <skill-root>/scripts/consensus-rnd-cli safe-push origin {head_ref}",
+                "controller_action": "safe_push",
                 "no_lifecycle_authority": True,
             }
         )

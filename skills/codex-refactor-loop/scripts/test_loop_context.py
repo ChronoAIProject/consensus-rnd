@@ -85,6 +85,41 @@ class LoopContextTests(unittest.TestCase):
         with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
             LoopContext.load(env={}, cwd=self.repo)
 
+    def test_durable_artifact_path_writes_posix_repo_relative_text(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        path = self.repo / ".refactor-loop" / "logs" / "x.log"
+        self.assertEqual(".refactor-loop/logs/x.log", ctx.durable_artifact_path(path))
+        self.assertNotIn(str(self.repo), ctx.durable_artifact_path(path))
+
+    def test_durable_artifact_path_rejects_repo_outside_paths(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        outside = self.tmp_root / "outside.log"
+        with self.assertRaisesRegex(LoopContextError, "outside REPO_ROOT"):
+            ctx.durable_artifact_path(outside)
+
+    def test_artifact_execution_path_resolves_against_repo_root(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        self.assertEqual(
+            self.repo.resolve() / ".refactor-loop" / "logs" / "x.log",
+            ctx.artifact_execution_path(".refactor-loop/logs/x.log"),
+        )
+
+    def test_artifact_execution_path_rejects_absolute_or_parent_escape(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        for text in ("/tmp/x", "../x", ".refactor-loop/../outside", r".refactor-loop\\logs\\x.log", ""):
+            with self.subTest(text=text):
+                with self.assertRaisesRegex(LoopContextError, "repo-relative POSIX"):
+                    ctx.artifact_execution_path(text)
+
+    def test_artifact_execution_path_rejects_symlink_escape_after_resolve(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        outside_dir = self.tmp_root / "outside"
+        outside_dir.mkdir()
+        (self.repo / "link").symlink_to(outside_dir, target_is_directory=True)
+
+        with self.assertRaisesRegex(LoopContextError, "escapes REPO_ROOT"):
+            ctx.artifact_execution_path("link/out.log")
+
 
 if __name__ == "__main__":
     unittest.main()

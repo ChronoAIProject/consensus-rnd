@@ -1,10 +1,10 @@
-"""Dev integration sync detector.
+"""Dev integration sync daemon.
 
 Refactor (issue160/p3-dev-sync-daemon):
 Old pattern: `dev_sync_daemon.py` owned the integration sync state machine as a
 top-level script with import-time host resolution.
-New principle: expose the same detect-and-emit behavior from an import-safe
-package module; legacy callers remain on the old script until the caller switch.
+New principle: expose the same daemon behavior from an import-safe package
+module; legacy callers remain on the old script until the caller switch.
 """
 
 from __future__ import annotations
@@ -24,7 +24,8 @@ from typing import Callable
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
-from .requests import IntegrationSyncRequest, write_request_artifact
+from .executor import IntegrationSyncExecutor
+from .operations import IntegrationSyncOperation, write_operation_artifact
 
 
 DEFAULT_INTERVAL_SECONDS = 600
@@ -178,22 +179,38 @@ def dispatch_codex_resolve(
     spawn_codex: Path,
     logger: Callable[[str], None] = log,
 ) -> None:
-    """Spawn a codex to resolve the in-progress merge conflicts in worktree."""
+    """Spawn a codex to resolve the in-progress merge conflicts in worktree.
+
+    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
+    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+    """
+    ctx = LoopContext.load(repo_root=main_repo)
     ts = int(time.time())
     prompt_file = main_repo / ".refactor-loop" / "prompts" / f"dev-sync-conflict-{ts}.md"
     log_file = main_repo / ".refactor-loop" / "logs" / f"dev-sync-codex-{ts}.log"
+    worktree_display = ctx.durable_artifact_path(worktree)
+    main_repo_display = "."
+    prompt_file_display = ctx.durable_artifact_path(prompt_file)
+    log_file_display = ctx.durable_artifact_path(log_file)
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
     prompt_body = f"""# Task: resolve merge conflict on {integration} from origin/{review_base} sync
 
 ## Context
 
 dev_sync_daemon (Python) detected a conflict in the dedicated worktree
-`{worktree}`. Resolve conflicts and stage files in that worktree, then emit the
-marker. The controller apply helper owns the later fixed lifecycle apply.
+`{worktree_display}`. The worker is launched with --cd already set to that
+dedicated worktree. Resolve conflicts and stage files in that worktree, then emit the
+marker. The daemon owns the later narrow #53 integration-branch apply after it
+detects a resolved merge state.
+
+Durable artifact paths in this prompt are repo-relative text:
+- main repo: `{main_repo_display}`
+- prompt artifact: `{prompt_file_display}`
+- resolver log artifact: `{log_file_display}`
 
 ## Task
 
-1. `cd {worktree}`
+1. Confirm `pwd` is the dedicated worktree.
 2. Run `git status` to find conflicted files.
 3. Read each conflicted file and understand `origin/{review_base}` changes
    versus `{integration}` changes.
@@ -205,8 +222,8 @@ marker. The controller apply helper owns the later fixed lifecycle apply.
 
 ## Hard Constraints
 
-- No branch lifecycle apply, abort, or destructive checkout/reset. The
-  controller owns those actions.
+- No branch lifecycle apply, abort, or destructive checkout/reset. The daemon
+  owns only the later typed #53 continuation when the merge is fully resolved.
 - Do not delete substantive changes from either side: tests, production code,
   docs, or proto changes.
 - Do not commit. Only resolve, stage, and emit the marker.
@@ -214,7 +231,7 @@ marker. The controller apply helper owns the later fixed lifecycle apply.
   resolution and build verification.
 - Proto field conflicts with the same field number and different semantics
   must emit `DEV_SYNC_BLOCKED:proto-schema-conflict`.
-- Do all work in the worktree and do not modify main repo `{main_repo}`.
+- Do all work in the worktree and do not modify main repo `{main_repo_display}`.
 
 Write the marker to stdout when done so the daemon can read it from the log:
 - Success: `DEV_SYNC_RESOLVED:<file1>,<file2>,...`
@@ -223,7 +240,7 @@ Write the marker to stdout when done so the daemon can read it from the log:
 ⟦AI:AUTO-LOOP⟧
 """
     prompt_file.write_text(prompt_body)
-    logger(f"dispatching codex: prompt={prompt_file} log={log_file}")
+    logger(f"dispatching codex: prompt={prompt_file_display} log={log_file_display}")
     subprocess.Popen(
         [
             "nohup",
@@ -277,15 +294,20 @@ class RollupDetection:
 # Refactor (iter4/skill-dev-sync-state-machine): Old pattern: scattered active
 # controller-owned sync recipe + implicit daemon transition. New principle:
 # named IntegrationSyncDaemon state machine boundary.
-# Refactor (iter5/issue70-structural-delete-controller-apply): Old pattern:
-# daemon-owned lifecycle apply. New principle: daemon detects and emits
-# IntegrationSyncRequest; controller owns apply.
+# Refactor (iter/issue-199):
+# Old pattern: daemon emitted request artifacts and a controller side-channel
+# marker. New principle: daemon writes IntegrationSyncOperation evidence and
+# executes the #53 integration-branch git allowlist itself.
 # Refactor (iter5/issue107-python-identifier-rename): Old pattern: version
 # suffix in daemon class/schema names. New principle: naked responsibility names
 # carry stable artifact intent; compatibility/version policy lives in
 # contracts/tests, not identifier suffixes.
 class IntegrationSyncDaemon:
-    """Narrow detector for integration-branch sync transitions."""
+    """Narrow detector and executor for integration-branch sync transitions.
+
+    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
+    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+    """
 
     def __init__(
         self,
@@ -306,6 +328,7 @@ class IntegrationSyncDaemon:
         release_rollup_min_commits: int = DEFAULT_RELEASE_ROLLUP_MIN_COMMITS,
         release_rollup_cooldown_seconds: int = DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS,
         now_provider: Callable[[], datetime] | None = None,
+        executor: IntegrationSyncExecutor | None = None,
     ) -> None:
         self.worktree = worktree
         self.main_repo = main_repo
@@ -340,6 +363,7 @@ class IntegrationSyncDaemon:
         self.release_rollup_min_commits = release_rollup_min_commits
         self.release_rollup_cooldown_seconds = release_rollup_cooldown_seconds
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.executor = executor or IntegrationSyncExecutor()
 
     @classmethod
     def from_config(cls, config: DevSyncConfig, *, command_runner=run, logger=log) -> "IntegrationSyncDaemon":
@@ -381,13 +405,22 @@ class IntegrationSyncDaemon:
         with self.pending_events_file.open("a", encoding="utf-8") as fh:
             fh.write(f"DEV_SYNC_PENDING:{reason}:{detail}\n")
 
-    def emit_sync_request(self, request: IntegrationSyncRequest) -> Path:
-        path = write_request_artifact(self.main_repo, request)
+    def execute_sync_operation(self, operation: IntegrationSyncOperation) -> Path:
+        path = write_operation_artifact(self.main_repo, operation)
         rel = path.relative_to(self.main_repo)
-        self.pending_events_file.parent.mkdir(parents=True, exist_ok=True)
-        with self.pending_events_file.open("a", encoding="utf-8") as fh:
-            fh.write(f"DEV_SYNC_REQUEST:{rel.as_posix()}\n")
-        self.log(f"emitted IntegrationSyncRequest {rel.as_posix()}")
+        self.log(f"executing IntegrationSyncOperation {rel.as_posix()}")
+        executor = self.executor if self.executor.record_stem else IntegrationSyncExecutor(record_stem=path.stem)
+        result = executor.execute(
+            operation,
+            repo=self.main_repo,
+            worktree=self.worktree,
+            env={
+                "INTEGRATION_BRANCH": self.integration,
+                "REVIEW_BASE_BRANCH": self.review_base,
+            },
+            command_runner=self.run,
+        )
+        self.log(f"integration sync {operation.kind}: {result.status}:{result.reason}")
         return path
 
     def local_ahead_count(self, cwd: Path) -> int:
@@ -518,17 +551,17 @@ class IntegrationSyncDaemon:
         self.append_pending_event("release-rollup-needed", json.dumps(event, sort_keys=True))
         return True
 
-    def request_clean_local_ahead(self, cwd: Path) -> bool:
+    def execute_clean_local_ahead(self, cwd: Path) -> bool:
         ahead_n = self.local_ahead_count(cwd)
         if ahead_n <= 0:
             return False
         head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
         expected = self.remote_integration_sha(cwd)
         if head.returncode != 0 or not expected:
-            self.append_pending_event("local-ahead-request-ambiguous", "missing-head-or-remote")
+            self.append_pending_event("local-ahead-operation-ambiguous", "missing-head-or-remote")
             return True
-        self.emit_sync_request(
-            IntegrationSyncRequest(
+        self.execute_sync_operation(
+            IntegrationSyncOperation(
                 kind="push-local-ahead",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -604,7 +637,7 @@ class IntegrationSyncDaemon:
             ),
         )
 
-    def request_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
+    def execute_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
         if not adoption.expected_remote_sha:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-expected-remote-sha")
             return True
@@ -620,8 +653,8 @@ class IntegrationSyncDaemon:
         if head.returncode != 0:
             self.append_pending_event("rollup-adoption-ambiguous", "head-unknown")
             return True
-        self.emit_sync_request(
-            IntegrationSyncRequest(
+        self.execute_sync_operation(
+            IntegrationSyncOperation(
                 kind="adopt-merged-rollup",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -635,7 +668,7 @@ class IntegrationSyncDaemon:
         )
         return True
 
-    def forward_sync_review_base(self, cwd: Path) -> None:
+    def execute_forward_sync_review_base(self, cwd: Path) -> None:
         behind = self.run(["git", "rev-list", "--count", f"HEAD..origin/{self.review_base}"], cwd=cwd).stdout.strip()
         try:
             behind_n = int(behind)
@@ -647,14 +680,14 @@ class IntegrationSyncDaemon:
             self.log(f"up-to-date with origin/{self.review_base}")
             return
 
-        self.log(f"behind origin/{self.review_base} by {behind_n} commits, emitting controller request")
+        self.log(f"behind origin/{self.review_base} by {behind_n} commits, executing daemon operation")
         head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
         expected = self.remote_integration_sha(cwd)
         if head.returncode != 0 or not expected:
-            self.append_pending_event("forward-sync-request-ambiguous", "missing-head-or-remote")
+            self.append_pending_event("forward-sync-operation-ambiguous", "missing-head-or-remote")
             return
-        self.emit_sync_request(
-            IntegrationSyncRequest(
+        self.execute_sync_operation(
+            IntegrationSyncOperation(
                 kind="forward-sync-review-base",
                 integration_branch=self.integration,
                 review_base_branch=self.review_base,
@@ -663,6 +696,26 @@ class IntegrationSyncDaemon:
                 evidence={"behind_count": behind_n, "reason": "review-base-ahead-of-integration"},
             )
         )
+
+    def execute_reset_to_remote(self, cwd: Path) -> bool:
+        head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+        expected = self.remote_integration_sha(cwd)
+        if head.returncode != 0 or not expected:
+            self.append_pending_event("reset-to-remote-ambiguous", "missing-head-or-remote")
+            return True
+        if head.stdout.strip() == expected:
+            return False
+        self.execute_sync_operation(
+            IntegrationSyncOperation(
+                kind="reset-to-remote",
+                integration_branch=self.integration,
+                review_base_branch=self.review_base,
+                worktree_head=head.stdout.strip(),
+                expected_remote_sha=expected,
+                evidence={"reason": "local-head-diverged-from-integration"},
+            )
+        )
+        return True
 
     def tick(self) -> None:
         cwd = self.worktree
@@ -685,25 +738,46 @@ class IntegrationSyncDaemon:
             if self.codex_resolve_in_flight():
                 self.log("skip: merge in progress + codex resolving")
             else:
-                self.log("WARN: merge in progress but no codex running - dispatching")
-                self.dispatch_codex_resolve()
+                unresolved = self.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
+                if unresolved.returncode == 0 and not unresolved.stdout.strip():
+                    head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
+                    expected = self.remote_integration_sha(cwd)
+                    if head.returncode != 0 or not expected:
+                        self.append_pending_event("continue-merge-ambiguous", "missing-head-or-remote")
+                    else:
+                        self.execute_sync_operation(
+                            IntegrationSyncOperation(
+                                kind="continue-resolved-merge",
+                                integration_branch=self.integration,
+                                review_base_branch=self.review_base,
+                                worktree_head=head.stdout.strip(),
+                                expected_remote_sha=expected,
+                                evidence={"reason": "resolved-merge-continuation"},
+                            )
+                        )
+                else:
+                    self.log("WARN: merge in progress but no codex running - dispatching")
+                    self.dispatch_codex_resolve()
             return
 
         if self.working_tree_dirty(cwd):
             self.log("skip: worktree dirty (no merge in progress)")
             return
 
-        if self.request_clean_local_ahead(cwd):
+        if self.execute_clean_local_ahead(cwd):
             return
 
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
-            self.request_merged_rollup_adoption(cwd, rollup.adoption)
+            self.execute_merged_rollup_adoption(cwd, rollup.adoption)
             return
         if rollup and rollup.status == "ambiguous":
             return
 
-        self.forward_sync_review_base(cwd)
+        if self.execute_reset_to_remote(cwd):
+            return
+
+        self.execute_forward_sync_review_base(cwd)
 
 
 def local_ahead_count(cwd: Path, config: DevSyncConfig | None = None) -> int:
