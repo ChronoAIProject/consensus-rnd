@@ -139,7 +139,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "## Two entry modes",
             "audit-driven",
             "issue-driven / Path A",
-            "phase9-auto-solve",
+            "catalog-derived design issue label bundle",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "Legacy issue-entry labels are migration aliases only",
             "Audit is a seed producer, not the only entry",
         ):
             with self.subTest(needle=needle):

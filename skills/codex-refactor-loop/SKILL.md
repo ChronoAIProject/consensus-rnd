@@ -38,7 +38,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 The loop has two supported entry modes:
 
 - `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Consensus-rnd Phase design-consensus.
-- `issue-driven / Path A`: create or reuse a concrete GitHub issue, add `auto-loop`, `phase9-auto-solve`, `🔍 phase:design-solving`, and `🤖 human:auto-推进`, then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly.
+- `issue-driven / Path A`: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
 
 Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
@@ -295,7 +295,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
 - **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup. There is no `AUDIT_DONE:none:0` exemption.
-- Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
+- Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `crnd:milestone:current` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
 - If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
 
 ## Workflow Stage Index
@@ -452,8 +452,8 @@ The floor is local because it prevents loop stalls.
 - If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
-- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open `auto-loop` issue/PR lacking in-flight codex coverage of its phase label; when any open `auto-loop` issue/PR carries `🎯 milestone`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
-- **Stale-issue revival(3h)**: Open `auto-loop` issue/PR with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
+- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
+- **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
 
 More detail is in [concurrency floor details](#concurrency-floor-details).
 
@@ -461,15 +461,15 @@ More detail is in [concurrency floor details](#concurrency-floor-details).
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md`.
 
-GitHub label `🎯 milestone` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes.
+GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Legacy milestone labels are migration aliases only and must be normalized through `codex_refactor_loop.labels`.
 
-Milestone active means at least one open `auto-loop` issue/PR carries `🎯 milestone`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
+Milestone active means at least one open catalog-managed issue/PR carries `crnd:milestone:current`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
 
 Only these actions stay above milestone priority: bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation. Correctness still wins: no-gap violation means an active item has no required worker and must be repaired before discretionary prioritization.
 
 When no milestone is active, behavior is unchanged: existing-issue priority runs before audit fallback, then ordinary audit fallback may run only under the existing fixed-point rules.
 
-Fact source is unique: milestone members = GitHub `🎯 milestone` label. Do not add a parallel state file, queue, marker, local cache, or work-unit field to track milestone membership.
+Fact source is unique: milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`. Do not add a parallel state file, queue, marker, local cache, or work-unit field to track milestone membership.
 
 ## Named runtime exception — concurrency_monitor auto-topup(per #57)
 
@@ -596,7 +596,7 @@ Loop rules:
 1. Last cluster merged means roll up state and dispatch next audit/producer pass.
 2. Stop only on explicit maintainer stop, unrecoverable bootstrap failure, or approved human-needed escalation.
 3. Sync to remote promptly after controller-owned commits.
-4. Each wakeup checks CI status for open auto-loop PRs before sleeping.
+4. Each wakeup checks CI status for open catalog-managed PRs before sleeping.
 5. Each wakeup checks pending daemon events.
 6. Each wakeup verifies daemon singleton health.
 7. Each wakeup enforces the concurrency floor.
@@ -684,9 +684,9 @@ Priority order when multiple actions are possible:
 1. Bootstrap failure or missing wake source.
 2. Maintainer comment that changes design framing.
 3. Completed worker marker ready for same-wakeup route.
-4. CI red on open auto-loop PR.
+4. CI red on open catalog-managed PR.
 5. No-gap violation.
-6. Milestone-labeled open `auto-loop` issue/PR next-step dispatch.
+6. Milestone-labeled open catalog-managed issue/PR next-step dispatch.
 7. Non-milestone existing-issue next-step dispatch.
 8. Floor deficit.
 9. Producer dispatch for next work unit.
@@ -720,7 +720,7 @@ State rules:
 3. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
 4. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
 5. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
-6. Public operational names remain stable: `cluster`, `refactor`, `auto-loop`, `*_DONE`, branch prefixes, marker names, and label names.
+6. Public operational names remain stable: `cluster`, `refactor`, `*_DONE`, branch prefixes, marker names, and catalog-owned canonical label names. Legacy label names remain migration aliases only.
 7. Specialized artifact examples live in [specialized state artifacts](#specialized-state-artifacts).
 
 State write timing:
@@ -786,7 +786,7 @@ Consensus-rnd Phase publish guardrails:
 
 Consensus-rnd Phase ci-watch guardrails:
 
-1. Every wakeup checks all open auto-loop PR CI before sleeping.
+1. Every wakeup checks all open catalog-managed PR CI before sleeping.
 2. Red CI routes immediately to classification and fix/test-add dispatch.
 3. Pre-existing failures are reported, not blindly fixed in the PR.
 4. Codecov patch failures route to test-add work.
@@ -1372,7 +1372,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
      #   New principle: Consensus-rnd Phase bootstrap ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
-2. **建全套 labels**:跑「Label 系统」节的 Bootstrap —— 9 个 phase label + 2 个 human label 创建循环。**漏建 = 后续 phase transition 无 label 可挂、comment-monitor 查 `--label auto-loop` 漏掉 PR**。
+2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
@@ -1699,7 +1699,7 @@ For each `pass` cluster, serially:
 
     Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
 
-7b. **立刻给 PR 加 `auto-loop` label**:`gh pr edit <PR> --add-label "auto-loop"`。**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked 在 `gh pr create` 成功后立刻 chain 这条 `gh pr edit`,不能延后到下一 turn。
+7b. **立刻给 PR 加 catalog-managed label**:`gh pr edit <PR> --add-label "crnd:lifecycle:managed"` via the label catalog helper. **漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked 在 `gh pr create` 成功后立刻 chain 这条 catalog-backed label sync,不能延后到下一 turn。
 
 7b. Record the PR number in the GitHub banner/comment and run artifact for the active work unit.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
@@ -2477,7 +2477,7 @@ Concretely, this means:
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label. If any such open item carries `🎯 milestone`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
 - `crnd:phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
 - `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
@@ -2486,11 +2486,11 @@ Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-is
 - `crnd:phase:pr-open` with 0 codex → dispatch reviewers
 - `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
 
-Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex matching its phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open `auto-loop` issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
 Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
 
@@ -2831,7 +2831,7 @@ Controller 读 marker 后路由:
 <a id="ci-progress-and-reporting"></a>
 ## CI progress and reporting
 
-CI sweep contract: every controller wakeup checks open auto-loop PR checks, immediately classifies red checks, dispatches fix/test-add for real or codecov failures, reports pre-existing failures, and routes repeated same-check failures through the meta-layer before human escalation.
+CI sweep contract: every controller wakeup checks open catalog-managed PR checks, immediately classifies red checks, dispatches fix/test-add for real or codecov failures, reports pre-existing failures, and routes repeated same-check failures through the meta-layer before human escalation.
 
 ## Codex 进展实时上报 — 强制
 
@@ -3075,13 +3075,13 @@ Fields:
 
 - `ts`: UTC snapshot generation time.
 - `actual`: current this-loop `consensus-rnd-cli spawn-codex` process count.
-- `expected`: current no-gap expected worker count from active auto-loop issues/PRs.
+- `expected`: current no-gap expected worker count from active catalog-managed issues/PRs.
 - `floor`: host `CODEX_FLOOR`, with the existing hard lower bound of 2.
 - `p0_streak`: consecutive no-gap violation tick count.
 - `last_p0_at`: UTC timestamp of the latest P0 no-gap violation, or `null`.
 - `freeze_minutes`: whole minutes since the newest local PHASE/REVIEW/FIX/META marker file mtime; 0 when no marker exists.
-- `open_pr_count`: open auto-loop PR count from the same GitHub scan used by the monitor.
-- `open_issue_count`: open auto-loop issue count from the same GitHub scan used by the monitor.
+- `open_pr_count`: open catalog-managed PR count from the same GitHub scan used by the monitor.
+- `open_issue_count`: open catalog-managed issue count from the same GitHub scan used by the monitor.
 
 Other named surfaces include `.refactor-loop/state/phase8-review-state.json`,
 `.refactor-loop/state/recent-pr-merges.json`, `.refactor-loop/codex-progress-state.json`,
