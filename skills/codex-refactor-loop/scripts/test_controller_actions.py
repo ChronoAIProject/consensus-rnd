@@ -48,8 +48,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
 
-    def test_apply_marker_rejects_unbounded_paths(self) -> None:
-        self.assertEqual(2, self.actions.apply_dev_sync_request_marker("DEV_SYNC_REQUEST:/tmp/out.json"))
+    def test_triage_apply_marker_rejects_unbounded_paths(self) -> None:
         self.assertEqual(2, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:x:accept:/tmp/out.json"))
 
     def test_open_release_rollup_pr_uses_throwaway_head_and_preserves_integration_ref(self) -> None:
@@ -216,10 +215,16 @@ class ControllerActionsTests(unittest.TestCase):
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_dev_sync_request_marker", "apply_triage_decision_marker", "render_template"):
+        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
+
+    def test_legacy_dev_sync_request_controller_apply_is_removed(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertNotIn("apply_dev_sync_request_marker", text)
+        self.assertNotIn("DEV_SYNC_REQUEST:", text)
+        self.assertNotIn("apply-sync", text)
 
     def test_rollup_helper_uses_throwaway_head_ref(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

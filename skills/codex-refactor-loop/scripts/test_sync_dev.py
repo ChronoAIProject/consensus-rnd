@@ -37,6 +37,9 @@ class FakeGit:
         old_head_is_ancestor: bool = True,
         replay_count: int = 0,
         integration_ref_exists: bool = True,
+        dirty: bool = False,
+        unresolved: bool = False,
+        ff_fails: bool = False,
     ) -> None:
         self.ahead = ahead
         self.release_ahead = release_ahead
@@ -50,6 +53,9 @@ class FakeGit:
         self.old_head_is_ancestor = old_head_is_ancestor
         self.replay_count = replay_count
         self.integration_ref_exists = integration_ref_exists
+        self.dirty = dirty
+        self.unresolved = unresolved
+        self.ff_fails = ff_fails
         self.commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -79,13 +85,22 @@ class FakeGit:
             stdout = f"{self.remote_sha}\n"
         elif cmd[:3] == ["git", "rev-parse", "origin/dev"]:
             stdout = f"{self.review_base_sha}\n"
+        elif cmd[:3] == ["git", "rev-parse", "--git-path"]:
+            stdout = f"{(cwd or Path('/tmp')) / '.git' / cmd[3]}\n"
+        elif cmd[:3] == ["git", "diff", "--quiet"]:
+            returncode = 1 if self.dirty else 0
+        elif cmd[:3] == ["git", "diff", "--cached"]:
+            returncode = 0
+        elif cmd[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+            stdout = "conflict.txt\n" if self.unresolved else ""
         elif cmd[:3] == ["git", "merge-base", "--is-ancestor"]:
             returncode = 0 if (self.merge_base_adopted if cmd[3] == "origin/dev" else self.old_head_is_ancestor) else 1
+        elif cmd[:3] == ["git", "merge", "--ff-only"] and self.ff_fails:
+            returncode = 1
+            stdout = ""
         elif cmd[:3] == ["gh", "pr", "list"]:
             rows = self.open_gh_rows if "--state" in cmd and cmd[cmd.index("--state") + 1] == "open" else self.gh_rows
             stdout = json.dumps(rows)
-        elif cmd[:3] == ["git", "-C", "wt"]:
-            stdout = "/tmp/no-merge-state\n"
         elif cmd[:3] == ["ps", "-eo", "command="]:
             stdout = ""
         return subprocess.CompletedProcess(cmd, returncode, stdout, "")
@@ -123,40 +138,47 @@ class SyncDevBehaviorTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
 
-    def request_jsons(self) -> list[dict]:
-        paths = sorted((self.repo / ".refactor-loop" / "runs").glob("integration-sync-request-*.json"))
+    def operation_jsons(self) -> list[dict]:
+        paths = sorted((self.repo / ".refactor-loop" / "runs").glob("integration-sync-operation-*.json"))
         return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
 
-    def test_clean_local_ahead_emits_same_request_and_pending_marker(self) -> None:
+    def execution_jsons(self, status: str = "applied") -> list[dict]:
+        paths = sorted((self.repo / ".refactor-loop" / "runs" / "integration-sync-executions").glob(f"*.{status}.json"))
+        return [json.loads(path.read_text(encoding="utf-8")) for path in paths]
+
+    def test_clean_local_ahead_executes_push_without_dev_sync_request(self) -> None:
         fake = FakeGit(ahead=2)
         self.daemon(fake).tick()
 
-        request = self.request_jsons()[0]
-        self.assertEqual("IntegrationSyncRequest", request["schema"])
-        self.assertEqual("push-local-ahead", request["kind"])
-        self.assertEqual("auto-refact-dev", request["integration_branch"])
-        self.assertEqual("dev", request["review_base_branch"])
-        self.assertEqual("head-sha", request["worktree_head"])
-        self.assertEqual("remote-sha", request["expected_remote_sha"])
-        self.assertEqual("controller", request["lifecycle_owner"])
-        self.assertFalse(request["lifecycle_authority"])
-        self.assertIn("DEV_SYNC_REQUEST:.refactor-loop/runs/integration-sync-request-push_local_ahead", self.pending_events()[0])
-        self.assertFalse(any(command[:2] == ["git", "push"] for command in fake.commands))
+        operation = self.operation_jsons()[0]
+        self.assertEqual("IntegrationSyncOperation", operation["schema"])
+        self.assertEqual("push-local-ahead", operation["kind"])
+        self.assertEqual("auto-refact-dev", operation["integration_branch"])
+        self.assertEqual("dev", operation["review_base_branch"])
+        self.assertEqual("head-sha", operation["worktree_head"])
+        self.assertEqual("remote-sha", operation["expected_remote_sha"])
+        self.assertEqual("dev_sync_daemon", operation["executor"])
+        self.assertEqual("integration-branch-git-allowlist", operation["authority"])
+        self.assertNotIn("lifecycle_owner", operation)
+        self.assertEqual([], [line for line in self.pending_events() if line.startswith("DEV_SYNC_REQUEST:")])
+        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
         self.assertFalse(any(command[:2] == ["git", "reset"] for command in fake.commands))
+        self.assertEqual("applied", self.execution_jsons()[0]["status"])
 
-    def test_merged_rollup_adoption_emits_same_artifact_shape(self) -> None:
+    def test_merged_rollup_adoption_executes_operation(self) -> None:
         fake = FakeGit(
             gh_rows=[{"number": 45, "headRefName": "auto-refact-dev", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
             replay_count=2,
         )
         self.daemon(fake).tick()
 
-        request = self.request_jsons()[0]
-        self.assertEqual("adopt-merged-rollup", request["kind"])
-        self.assertEqual("old-head", request["old_rollup_head"])
-        self.assertEqual(2, request["old_rollup_ahead_count"])
-        self.assertEqual(45, request["pr_number"])
-        self.assertEqual({"reason": "merged-rollup-adoption", "replay_count": 2}, request["evidence"])
+        operation = self.operation_jsons()[0]
+        self.assertEqual("adopt-merged-rollup", operation["kind"])
+        self.assertEqual("old-head", operation["old_rollup_head"])
+        self.assertEqual(2, operation["old_rollup_ahead_count"])
+        self.assertEqual(45, operation["pr_number"])
+        self.assertEqual({"reason": "merged-rollup-adoption", "replay_count": 2}, operation["evidence"])
+        self.assertIn(["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
     def test_merged_throwaway_rollup_head_emits_adoption_request(self) -> None:
         fake = FakeGit(
@@ -165,22 +187,32 @@ class SyncDevBehaviorTests(unittest.TestCase):
         )
         self.daemon(fake).tick()
 
-        request = self.request_jsons()[0]
-        self.assertEqual("adopt-merged-rollup", request["kind"])
-        self.assertEqual(46, request["pr_number"])
-        self.assertEqual("old-head", request["old_rollup_head"])
+        operation = self.operation_jsons()[0]
+        self.assertEqual("adopt-merged-rollup", operation["kind"])
+        self.assertEqual(46, operation["pr_number"])
+        self.assertEqual("old-head", operation["old_rollup_head"])
 
-    def test_forward_sync_review_base_emits_same_artifact_shape(self) -> None:
-        fake = FakeGit(behind=3, merge_base_adopted=True)
+    def test_forward_sync_review_base_executes_merge_or_push(self) -> None:
+        fake = FakeGit(behind=3, merge_base_adopted=True, remote_sha="head-sha")
         self.daemon(fake).tick()
 
-        request = self.request_jsons()[0]
-        self.assertEqual("forward-sync-review-base", request["kind"])
-        self.assertEqual({"behind_count": 3, "reason": "review-base-ahead-of-integration"}, request["evidence"])
-        self.assertFalse(any(command[:2] in (["git", "merge"], ["git", "push"]) for command in fake.commands))
+        operation = self.operation_jsons()[0]
+        self.assertEqual("forward-sync-review-base", operation["kind"])
+        self.assertEqual({"behind_count": 3, "reason": "review-base-ahead-of-integration"}, operation["evidence"])
+        self.assertIn(["git", "merge", "--ff-only", "origin/dev"], fake.commands)
+        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
+
+    def test_daemon_reset_to_remote_rejects_dirty_non_merge(self) -> None:
+        fake = FakeGit(remote_sha="remote-sha", head_sha="old-local", dirty=True, merge_base_adopted=True)
+        self.daemon(fake, dirty_detector=lambda _cwd: False).tick()
+
+        operation = self.operation_jsons()[0]
+        self.assertEqual("reset-to-remote", operation["kind"])
+        self.assertEqual("rejected", self.execution_jsons("rejected")[0]["status"])
+        self.assertFalse(any(command[:3] == ["git", "reset", "--hard"] for command in fake.commands))
 
     def test_merge_in_progress_dispatches_resolver_without_request_apply(self) -> None:
-        fake = FakeGit()
+        fake = FakeGit(unresolved=True)
         dispatched: list[bool] = []
         self.daemon(
             fake,
@@ -190,10 +222,22 @@ class SyncDevBehaviorTests(unittest.TestCase):
         ).tick()
 
         self.assertEqual([True], dispatched)
-        self.assertEqual([], self.request_jsons())
+        self.assertEqual([], self.operation_jsons())
+
+    def test_daemon_continue_resolved_merge_pushes(self) -> None:
+        fake = FakeGit()
+        merge_head = self.worktree / ".git" / "MERGE_HEAD"
+        merge_head.parent.mkdir(parents=True, exist_ok=True)
+        merge_head.write_text("merge\n", encoding="utf-8")
+        self.daemon(fake, merge_detector=lambda _cwd: True, resolver_in_flight=lambda: False).tick()
+
+        operation = self.operation_jsons()[0]
+        self.assertEqual("continue-resolved-merge", operation["kind"])
+        self.assertIn(["git", "merge", "--continue"], fake.commands)
+        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
     def test_release_rollup_needed_appends_existing_pending_event_format(self) -> None:
-        fake = FakeGit(merge_base_adopted=True, release_ahead=3, remote_sha="integration-sha", review_base_sha="base-sha")
+        fake = FakeGit(merge_base_adopted=True, release_ahead=3, remote_sha="head-sha", review_base_sha="base-sha")
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
         prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
@@ -201,38 +245,38 @@ class SyncDevBehaviorTests(unittest.TestCase):
         event = json.loads(self.pending_events()[0][len(prefix):])
         self.assertEqual("auto-refact-dev", event["integration_branch"])
         self.assertEqual("dev", event["review_base_branch"])
-        self.assertEqual("integration-sha", event["integration_sha"])
+        self.assertEqual("head-sha", event["integration_sha"])
         self.assertEqual("base-sha", event["review_base_sha"])
         self.assertEqual(3, event["ahead_count"])
         self.assertEqual("2026-05-27T00:00:00Z", event["detected_at"])
         self.assertEqual("integration-ahead-review-base-without-open-rollup-pr", event["reason"])
-        self.assertEqual([], self.request_jsons())
+        self.assertEqual([], self.operation_jsons())
 
     def test_release_rollup_open_same_sha_throwaway_head_suppresses_duplicate_event(self) -> None:
         fake = FakeGit(
             merge_base_adopted=True,
             release_ahead=3,
-            remote_sha="integration-sha",
+            remote_sha="head-sha",
             review_base_sha="base-sha",
-            open_gh_rows=[{"number": 77, "headRefName": "rollup/integration-sha", "headRefOid": "integration-sha"}],
+            open_gh_rows=[{"number": 77, "headRefName": "rollup/head-sha", "headRefOid": "head-sha"}],
         )
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
         self.assertEqual([], self.pending_events())
-        self.assertEqual([], self.request_jsons())
+        self.assertEqual([], self.operation_jsons())
 
     def test_release_rollup_open_stale_throwaway_head_does_not_suppress_event(self) -> None:
         fake = FakeGit(
             merge_base_adopted=True,
             release_ahead=3,
-            remote_sha="integration-sha",
+            remote_sha="head-sha",
             review_base_sha="base-sha",
             open_gh_rows=[{"number": 77, "headRefName": "rollup/old-sha", "headRefOid": "old-sha"}],
         )
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
         self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
-        self.assertEqual([], self.request_jsons())
+        self.assertEqual([], self.operation_jsons())
 
     def test_missing_integration_branch_appends_alert_event_and_stops(self) -> None:
         fake = FakeGit(integration_ref_exists=False)
@@ -281,24 +325,21 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual("ok", result.stdout.strip())
 
-    def test_dev_sync_module_has_no_git_lifecycle_mutation_tokens(self) -> None:
+    def test_dev_sync_module_has_only_named_git_lifecycle_mutation_tokens(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
-        for token in ("git push", "git merge", "git rebase", "git reset --hard", "--force-with-lease"):
-            with self.subTest(token=token):
-                self.assertNotIn(token, src)
-        for token in ('["git", "push"', '["git", "merge"', '["git", "rebase"', '["git", "reset"'):
+        for token in ("git commit", "gh pr create", "gh pr merge", "gh issue close", "git tag", "release publish"):
             with self.subTest(token=token):
                 self.assertNotIn(token, src)
 
     def test_narrow_allowlist_contract_is_visible_in_module_source(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
-        self.assertIn("daemon detects and emits", src)
-        self.assertIn("IntegrationSyncRequest; controller owns apply", src)
+        self.assertIn("daemon writes IntegrationSyncOperation", src)
+        self.assertIn("executes the #53 integration-branch git allowlist itself", src)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed:", src)
         self.assertIn('["git", "ls-remote", "--exit-code", "--heads", "origin", branch]', src)
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
-        self.assertIn("DEV_SYNC_REQUEST:", src)
+        self.assertNotIn("DEV_SYNC_REQUEST:", src)
 
 
 if __name__ == "__main__":

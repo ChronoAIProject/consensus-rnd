@@ -341,15 +341,6 @@ class ControllerActions:
             tmp = handle.name
         Path(tmp).replace(path)
 
-    def apply_dev_sync_request_marker(self, marker: str) -> int:
-        prefix = "DEV_SYNC_REQUEST:"
-        if not marker.startswith(prefix) or not re.fullmatch(r"\.refactor-loop/runs/.*\.json", marker[len(prefix):]):
-            sys.stderr.write("apply_dev_sync_request_marker: invalid marker\n")
-            return 2
-        rel_path = marker[len(prefix):]
-        cli = self.ctx.skill_root / "scripts" / "consensus-rnd-cli"
-        return subprocess.call([sys.executable, str(cli), "apply-sync", str(self.ctx.repo_root / rel_path)], env=self.ctx.env_for_subprocess())
-
     def apply_triage_decision_marker(self, marker: str) -> int:
         match = re.fullmatch(r"TRIAGE_DECISION_DONE:([0-9]+):(accept|reject):(\.refactor-loop/runs/.*\.json)", marker)
         if not match:
