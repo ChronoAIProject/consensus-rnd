@@ -1615,7 +1615,7 @@ Verify output marker: `VERIFY_DONE:<cluster-id>:<verdict>` where verdict ∈ `{p
 ```bash
 cd $REPO_ROOT
 git pull --ff-only origin auto-refact-dev
-$BUILD_CMD
+bash -lc "$BUILD_CMD"
 ```
 
 若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):

@@ -368,6 +368,19 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 if "TEST_CMD" in text:
                     self.assertIn('bash -lc "$TEST_CMD"', text)
 
+        bare_host_command_lines: list[str] = []
+        bare_host_command_re = re.compile(r"^\s*\$(BUILD_CMD|TEST_CMD)\s*$")
+        for path, text in docs.items():
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if bare_host_command_re.match(line):
+                    bare_host_command_lines.append(f"{path}:{lineno}:{line.strip()}")
+
+        self.assertEqual(
+            bare_host_command_lines,
+            [],
+            "Host command strings must be executed via bash -lc, not as bare lines",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
