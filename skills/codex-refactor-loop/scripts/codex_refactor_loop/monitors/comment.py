@@ -14,6 +14,7 @@ from typing import Iterable, Mapping, Sequence
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
+from .. import labels as label_catalog
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -70,14 +71,14 @@ class CommentMonitor:
 
     def targets(self) -> list[str]:
         numbers: set[str] = set()
-        commands = (
-            ["issue", "list", "--state", "open", "--label", "refactor-design-needed", "--json", "number", "-q", ".[].number"],
-            ["pr", "list", "--state", "open", "--label", "auto-loop", "--json", "number", "-q", ".[].number"],
-        )
-        for args in commands:
-            result = self.gh(args, check=False)
-            if result.returncode == 0:
-                numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        for kind in ("issue", "pr"):
+            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+                result = self.gh(
+                    [kind, "list", "--state", "open", "--label", query_label, "--json", "number", "-q", ".[].number"],
+                    check=False,
+                )
+                if result.returncode == 0:
+                    numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:

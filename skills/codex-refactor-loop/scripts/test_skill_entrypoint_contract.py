@@ -93,11 +93,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
             "## Milestone priority",
-            "🎯 milestone",
+            "crnd:milestone:current",
             "orthogonal third axis",
+            "Legacy milestone labels are migration aliases only",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
-            "milestone members = GitHub `🎯 milestone` label",
+            "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
         )
         for needle in required:

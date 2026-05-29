@@ -19,6 +19,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 NOW = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.release import gate
 
 
@@ -78,6 +79,7 @@ def write_live_state(repo: Path) -> None:
 class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.label_results: dict[str, list[dict[str, int]]] = {}
 
     def __call__(self, cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         self.commands.append(cmd)
@@ -89,7 +91,8 @@ class FakeRunner:
             ]
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"check_runs": runs}), stderr="")
         if len(cmd) >= 2 and cmd[0] == "gh" and cmd[2:3] == ["list"]:
-            return subprocess.CompletedProcess(cmd, 0, stdout="[]", stderr="")
+            label = cmd[cmd.index("--label") + 1]
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(self.label_results.get(label, [])), stderr="")
         return subprocess.CompletedProcess(cmd, 99, stdout="", stderr="unexpected command")
 
 
@@ -167,11 +170,41 @@ class ReleaseGateModuleTests(unittest.TestCase):
                 self.assertIn("--paginate", cmd)
             label_commands = [cmd for cmd in runner.commands if cmd[:2] in (["gh", "issue"], ["gh", "pr"]) and cmd[2:3] == ["list"]]
             labels = [cmd[cmd.index("--label") + 1] for cmd in label_commands]
-            self.assertIn("⏸️ phase:blocked", labels)
-            self.assertIn("👤 human:需-maintainer-决策", labels)
+            self.assertIn(label_catalog.PHASE_BLOCKED, labels)
+            self.assertIn(label_catalog.HUMAN_MAINTAINER_DECISION, labels)
             heartbeat_signal = stability.signals["fresh_heartbeats"]
             self.assertEqual(heartbeat_signal["source"], "heartbeats/*.ts")
             self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 5)
+
+    def test_release_gate_blocks_on_legacy_blocked_and_human_labels(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_live_state(repo)
+            runner = FakeRunner()
+            runner.label_results["⏸️ phase:blocked"] = [{"number": 10}]
+            runner.label_results["👤 human:需-maintainer-决策"] = [{"number": 11}]
+            release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
+            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH")}
+            try:
+                gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
+                gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
+                gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
+                stability = release_gate.compute_stability(min_recent_merges=1)
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        gate.os.environ.pop(key, None)
+                    else:
+                        gate.os.environ[key] = value
+
+            self.assertFalse(stability.ready)
+            blocked_signal = stability.signals["no_open_blocked_pr"]
+            human_signal = stability.signals["no_human_decision_label"]
+            self.assertFalse(blocked_signal["passed"])
+            self.assertEqual(blocked_signal["reason"], "no_open_blocked_pr:label_present:⏸️ phase:blocked")
+            self.assertFalse(human_signal["passed"])
+            self.assertEqual(human_signal["reason"], "no_human_decision_label:failed")
+            self.assertEqual(human_signal["issue"]["reason"], "label_present:👤 human:需-maintainer-决策")
 
     def test_host_env_precedence_and_opt_in_literals_are_unchanged(self) -> None:
         with copy_repo_fixture() as tmp:

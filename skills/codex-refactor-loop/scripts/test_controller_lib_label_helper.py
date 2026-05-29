@@ -17,13 +17,18 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-sys.path.insert(0, str(REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts"))
+sys.path.insert(0, str(SCRIPT_PATH.parent))
 
+from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 
-HUMAN_LABEL = "👤 human:需-maintainer-决策"
+HUMAN_LABEL = labels.HUMAN_MAINTAINER_DECISION
 VALID_MARKER = "META_RESOLVED:escalate-human:human-label-semantics-guard"
+
+
+def flattened_gh_command(args: list[str]) -> str:
+    return " ".join(args)
 
 
 class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
@@ -342,7 +347,28 @@ exit 0
         self.assertEqual(merges[0]["merged_at"], "2026-05-29T01:02:03Z")
         calls = self.gh_calls()
         self.assertIn("pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch", calls)
-        self.assertIn("pr edit 55 --repo test-owner/test-repo --remove-label 🚀 phase:pr-open --remove-label 👀 phase:reviewing --remove-label 🔧 phase:fixing --remove-label ⏸️ phase:blocked --remove-label auto-loop-stuck --remove-label 👤 human:需-maintainer-决策 --remove-label 🆘 human:卡死 --remove-label 🆘 human:卡死-需-rework --add-label 🎉 phase:merged", calls)
+        expected_pr_edit = ["pr", "edit", "55", "--repo", "test-owner/test-repo"]
+        for label in (
+            *labels.labels_for_group("phase"),
+            labels.HUMAN_MAINTAINER_DECISION,
+            labels.STUCK,
+            *labels.cleanup_aliases(),
+        ):
+            expected_pr_edit.extend(["--remove-label", label])
+        expected_pr_edit.extend(["--add-label", labels.PHASE_MERGED])
+        self.assertIn(flattened_gh_command(expected_pr_edit), calls)
+
+        expected_issue_edit = ["issue", "edit", "145", "--repo", "test-owner/test-repo"]
+        for label in (
+            *labels.labels_for_group("phase"),
+            labels.HUMAN_AUTO,
+            labels.HUMAN_MAINTAINER_DECISION,
+            labels.STUCK,
+            *labels.cleanup_aliases(),
+        ):
+            expected_issue_edit.extend(["--remove-label", label])
+        expected_issue_edit.extend(["--add-label", labels.PHASE_MERGED])
+        self.assertIn(flattened_gh_command(expected_issue_edit), calls)
         joined_calls = "\n".join(calls)
         self.assertIn("issue close 145 --repo test-owner/test-repo --reason completed --comment", joined_calls)
         self.assertIn("Auto-merged via PR #55", joined_calls)

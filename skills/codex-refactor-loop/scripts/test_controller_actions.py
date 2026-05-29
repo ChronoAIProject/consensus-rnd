@@ -16,6 +16,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 
@@ -67,7 +68,7 @@ class ControllerActionsTests(unittest.TestCase):
                     "body_artifact_path": "",
                     "comment_artifact_path": ".refactor-loop/runs/triage-comment.md",
                     "add_labels": [],
-                    "remove_labels": ["auto-loop-triage"],
+                    "remove_labels": [labels.TRIAGE_PENDING],
                     "sentinel_present": True,
                     "lifecycle_owner": "controller",
                     "lifecycle_authority": False,
@@ -265,6 +266,16 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+        edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
+        self.assertEqual("77", edit_call[2])
+        self.assertEqual(
+            ",".join((labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO)),
+            edit_call[edit_call.index("--add-label") + 1],
+        )
+        self.assertNotIn("auto-loop", edit_call)
+        self.assertNotIn("🚀 phase:pr-open", edit_call)
+        self.assertNotIn("👀 phase:reviewing", edit_call)
+        self.assertNotIn("🤖 human:auto-推进", edit_call)
 
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
