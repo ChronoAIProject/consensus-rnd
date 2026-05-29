@@ -1,5 +1,7 @@
 # Role: Code quality reviewer (readability + simplicity angle)
 
+Artifact profile: phase8-reviewer
+
 <!--
 Refactor (iter1/issue-126):
   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
@@ -98,8 +100,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

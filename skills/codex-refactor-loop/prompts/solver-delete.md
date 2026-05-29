@@ -1,5 +1,7 @@
 # Role: Solver — delete framing(no defer)
 
+Artifact profile: phase9-delete-solver
+
 <!-- Refactor (iter213/cluster-213-006-delete-solver-defer-escape):
   Old pattern: delete solver forbids defer, then defines Deferrable and asks for a tracking issue creation suggestion(prompt 内部矛盾,且 gh issue create 后被禁)
   New principle: delete solver 单 terminal vocabulary:delete/collapse/abstain/escalate;无 deferred side-channel、无 issue-create 命令建议;'not now' map 到 abstain/false-positive,lifecycle 决策归 controller/maintainer。 -->
@@ -139,8 +141,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

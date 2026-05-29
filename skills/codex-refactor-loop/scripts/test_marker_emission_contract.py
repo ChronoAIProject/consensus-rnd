@@ -52,7 +52,6 @@ PROMPT_ALLOWLISTS = {
         "REMOTE_CI_FIX_DONE:${CHECK_NAME}:<status>",
     ),
     "review-fix.md": (
-        "SCOPE_EXTEND:<file>:<reason>",
         "FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>",
         "FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>",
     ),
@@ -108,6 +107,54 @@ PROMPT_ALLOWLISTS = {
     ),
 }
 
+KNOWN_ARTIFACT_PROFILES = {
+    "phase9-solver",
+    "phase9-delete-solver",
+    "phase9-meta-judge",
+    "phase8-reviewer",
+    "review-fix",
+    "marker-only-work-unit",
+    "github-ai-post-body",
+}
+
+PROMPT_ARTIFACT_PROFILES = {
+    "audit.md": "marker-only-work-unit",
+    "implement.md": "marker-only-work-unit",
+    "verify.md": "marker-only-work-unit",
+    "remote-ci-fix.md": "marker-only-work-unit",
+    "review-fix.md": "review-fix",
+    "reviewer-architect.md": "phase8-reviewer",
+    "reviewer-tests.md": "phase8-reviewer",
+    "reviewer-quality.md": "phase8-reviewer",
+    "solver-minimal.md": "phase9-solver",
+    "solver-structural.md": "phase9-solver",
+    "solver-delete.md": "phase9-delete-solver",
+    "meta-judge.md": "phase9-meta-judge",
+    "meta-reflector-stalled.md": "marker-only-work-unit",
+    "test-add.md": "marker-only-work-unit",
+    "triage-external-issue.md": "marker-only-work-unit",
+}
+
+PROFILE_TERMINAL_MARKER_TOKENS = {
+    "marker-only-work-unit": {
+        "AUDIT_DONE",
+        "AUDIT_INCOMPLETE",
+        "SCOPE_EXTEND",
+        "IMPLEMENT_DONE",
+        "VERIFY_DONE",
+        "REMOTE_CI_FIX_DONE",
+        "META_RESOLVED",
+        "TEST_BLOCKED",
+        "TEST_ADD_DONE",
+        "TRIAGE_DECISION_DONE",
+    },
+    "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
+    "phase8-reviewer": {"REVIEW_DONE"},
+    "phase9-solver": {"SOLVER_DONE"},
+    "phase9-delete-solver": {"SOLVER_DONE"},
+    "phase9-meta-judge": {"META_JUDGE_DONE"},
+}
+
 
 def allowlist_section(body: str) -> str:
     start = body.find(SECTION_HEADING)
@@ -122,6 +169,10 @@ def allowlist_section(body: str) -> str:
 
 def marker_token(marker: str) -> str:
     return marker.split(":", 1)[0]
+
+
+def artifact_profile_anchors(body: str) -> list[str]:
+    return re.findall(r"(?m)^Artifact profile: ([a-z0-9-]+)$", body)
 
 
 class MarkerEmissionContractTests(unittest.TestCase):
@@ -184,6 +235,33 @@ class MarkerEmissionContractTests(unittest.TestCase):
                     offenders.append(f"{path.name}: {pattern}")
 
         self.assertEqual(offenders, [])
+
+    def test_each_marker_prompt_declares_exactly_one_known_artifact_profile(self) -> None:
+        self.assertEqual(set(PROMPT_ARTIFACT_PROFILES), set(PROMPT_ALLOWLISTS))
+        for filename, expected_profile in PROMPT_ARTIFACT_PROFILES.items():
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+                anchors = artifact_profile_anchors(body)
+
+                self.assertEqual(anchors, [expected_profile])
+                self.assertIn(expected_profile, KNOWN_ARTIFACT_PROFILES)
+
+    def test_prompt_artifact_profile_terminal_marker_policy_matches_allowlist(self) -> None:
+        for filename, allowed_markers in PROMPT_ALLOWLISTS.items():
+            with self.subTest(prompt=filename):
+                profile = PROMPT_ARTIFACT_PROFILES[filename]
+                profile_tokens = PROFILE_TERMINAL_MARKER_TOKENS[profile]
+                allowed_tokens = {marker_token(marker) for marker in allowed_markers}
+
+                self.assertLessEqual(
+                    allowed_tokens,
+                    profile_tokens,
+                    f"{filename} allowlist tokens must fit profile {profile}",
+                )
+
+    def test_github_post_rules_declares_post_body_artifact_profile(self) -> None:
+        body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+        self.assertEqual(artifact_profile_anchors(body), ["github-ai-post-body"])
 
 
 if __name__ == "__main__":
