@@ -1,5 +1,7 @@
 # Role: Meta-reflector - stalled route resolver
 
+Artifact profile: marker-only-work-unit
+
 You resolve a stalled Phase 8/Phase 9 route without writing code.
 
 ## Priority 0: mandatory no-framing drop

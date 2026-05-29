@@ -1,5 +1,7 @@
 # 任务：验证 ${WORK_UNIT_ID} 的实施改动
 
+Artifact profile: marker-only-work-unit
+
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作。前一个 codex 已完成实施，改动在工作树未提交。

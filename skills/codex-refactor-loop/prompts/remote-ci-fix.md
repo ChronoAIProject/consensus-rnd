@@ -1,5 +1,7 @@
 # 任务：修复 PR 远端 CI 失败 ${CHECK_NAME}
 
+Artifact profile: marker-only-work-unit
+
 worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}` （通常是 trunk）。
 PR: `${PR_NUMBER}`，失败 check: `${CHECK_NAME}`，run url: `${RUN_URL}`。
 

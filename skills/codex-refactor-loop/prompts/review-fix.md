@@ -1,5 +1,7 @@
 # Role: Fix codex — address all reject demands on PR
 
+Artifact profile: review-fix
+
 <!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 You are the fix-codex for PR **${PR_NUMBER}** (`${PR_TITLE}`). Round **${FIX_ROUND}** of max **${MAX_FIX_ROUNDS}**.

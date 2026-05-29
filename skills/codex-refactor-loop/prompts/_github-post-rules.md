@@ -1,5 +1,7 @@
 # GitHub post rules (shared 共享规则,各 codex prompt 引用本文件)
 
+Artifact profile: github-ai-post-body
+
 任何 codex(solver / meta-judge / fix / reviewer / clarifier / investigator / analyst 等)产出 user-facing 内容时,**自己直接调 `gh`** post 到 GitHub,不需要 controller 中转、不需要 dedicated writer-codex。
 
 ## Body 结构(强制)

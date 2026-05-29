@@ -1,5 +1,7 @@
 # Role: Code quality reviewer (readability + simplicity angle)
 
+Artifact profile: phase8-reviewer
+
 <!--
 Refactor (iter1/issue-126):
   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。

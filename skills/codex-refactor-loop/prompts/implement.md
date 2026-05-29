@@ -1,5 +1,7 @@
 # 任务：实施 ${WORK_UNIT_ID}
 
+Artifact profile: marker-only-work-unit
+
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。

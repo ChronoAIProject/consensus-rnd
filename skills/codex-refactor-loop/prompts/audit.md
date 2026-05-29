@@ -1,5 +1,7 @@
 # 任务：审计 `$REPO_ROOT` 仓库中违反软件工程哲学的位置
 
+Artifact profile: marker-only-work-unit
+
 你是审计员，不是问题确认器。先**发现违规**再做 cluster 筛选，**两个产物分别落盘**。
 
 ## 必读
