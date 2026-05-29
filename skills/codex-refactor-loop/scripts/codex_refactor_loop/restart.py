@@ -51,6 +51,7 @@ class RestartDaemons:
         self.ctx = ctx
         self.config = config or RestartConfig()
         self.lock_dir = ctx.paths.refactor_loop / "locks" / "restart-daemons.lock"
+        self._wrappers: list[subprocess.Popen[bytes]] = []
 
     def run(self) -> int:
         self._prepare_dirs()
@@ -105,6 +106,7 @@ class RestartDaemons:
             start_new_session=True,
             close_fds=True,
         )
+        self._wrappers.append(proc)
         log_handle.close()
         for _ in range(50):
             if _read_pid(pid_file) == proc.pid and hb_file.exists():
@@ -260,6 +262,8 @@ def _terminate_pid(pid: int, grace: int) -> None:
         return
     deadline = time.time() + grace
     while time.time() < deadline:
+        if _reap_child_if_exited(pid):
+            return
         if not pid_alive(pid):
             return
         time.sleep(0.1)
@@ -267,6 +271,15 @@ def _terminate_pid(pid: int, grace: int) -> None:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
+    _reap_child_if_exited(pid)
+
+
+def _reap_child_if_exited(pid: int) -> bool:
+    try:
+        waited, _status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return False
+    return waited == pid
 
 
 def main(argv: Sequence[str] | None = None) -> int:

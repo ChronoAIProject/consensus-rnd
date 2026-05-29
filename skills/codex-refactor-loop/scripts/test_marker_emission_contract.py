@@ -34,6 +34,8 @@ ROLE_MARKER_TOKENS = (
     "TEST_BLOCKED",
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
+    "REBASE_RESOLVE_DONE",
+    "REBASE_RESOLVE_BLOCKED",
 )
 
 PROMPT_ALLOWLISTS = {
@@ -105,6 +107,10 @@ PROMPT_ALLOWLISTS = {
         "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:accept:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
         "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:reject:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
     ),
+    "rebase-resolve.md": (
+        "REBASE_RESOLVE_DONE:${PR_NUMBER}:<status>",
+        "REBASE_RESOLVE_BLOCKED:${PR_NUMBER}:<conflict|human-decision|build-broken|other>:<short>",
+    ),
 }
 
 KNOWN_ARTIFACT_PROFILES = {
@@ -133,6 +139,7 @@ PROMPT_ARTIFACT_PROFILES = {
     "meta-reflector-stalled.md": "marker-only-work-unit",
     "test-add.md": "marker-only-work-unit",
     "triage-external-issue.md": "marker-only-work-unit",
+    "rebase-resolve.md": "marker-only-work-unit",
 }
 
 PROFILE_TERMINAL_MARKER_TOKENS = {
@@ -147,6 +154,8 @@ PROFILE_TERMINAL_MARKER_TOKENS = {
         "TEST_BLOCKED",
         "TEST_ADD_DONE",
         "TRIAGE_DECISION_DONE",
+        "REBASE_RESOLVE_DONE",
+        "REBASE_RESOLVE_BLOCKED",
     },
     "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
     "phase8-reviewer": {"REVIEW_DONE"},
