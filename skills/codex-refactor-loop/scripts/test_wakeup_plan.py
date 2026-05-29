@@ -67,6 +67,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       done
                       printf ']\n'
                       ;;
+                    non_action_statuses)
+                      printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
@@ -92,6 +95,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       ;;
                     milestone)
                       printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    non_action_statuses)
+                      printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
                       ;;
                     *)
                       printf '[]\n'
@@ -339,6 +345,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
         self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
+
+    def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
+        plan = self.run_plan(fixture="non_action_statuses")
+
+        self.assertEqual([action for action in plan["actions"] if action["kind"] == "existing-issue"], [])
+
+        red_plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in red_plan["actions"]}
+        self.assertEqual(by_kind["ci-red"]["item"], "PR #31")
+        self.assertEqual([action for action in red_plan["actions"] if action["kind"] == "existing-issue"], [])
 
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
