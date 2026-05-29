@@ -11,6 +11,7 @@ from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 
@@ -47,6 +48,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         *,
         include_task_id: bool = True,
         cd: Path | None = None,
+        github_target: dict[str, object] | None = None,
     ) -> Path:
         priority_dir = self.refactor_loop / "dispatch-queue" / priority
         priority_dir.mkdir(parents=True, exist_ok=True)
@@ -67,6 +69,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         }
         if include_task_id:
             payload["task_id"] = task_id
+        if github_target is not None:
+            payload["github_target"] = github_target
         path = priority_dir / f"{task_id}.dispatch.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
@@ -203,6 +207,53 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(calls[0][cd_index + 1], str(worktree))
         self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-3.json").exists())
         self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
+
+    def test_dispatch_queue_skips_fresh_foreign_and_unknown_github_target_without_spawning_or_archiving(self) -> None:
+        from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
+
+        cases = (
+            OwnershipDecision(False, "foreign-fresh", WorkTarget("pr", 44), "other", "alice", 1.0),
+            OwnershipDecision(False, "unknown-current-login", WorkTarget("pr", 44)),
+        )
+        for decision in cases:
+            with self.subTest(reason=decision.reason):
+                if self.refactor_loop.exists():
+                    import shutil
+
+                    shutil.rmtree(self.refactor_loop)
+                self.refactor_loop.mkdir(parents=True, exist_ok=True)
+                self.monitor.gh_repo_slug = "owner/repo"
+                task_id = "fix-pr44-round-3"
+                self.write_dispatch("p0", task_id, cd=self.repo / ".worktrees" / task_id, github_target={"kind": "pr", "number": 44})
+                calls: list[list[str]] = []
+
+                with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                    with mock.patch.object(self.module.GitHubWorkOwnership, "decide", return_value=decision):
+                        fired = self.monitor.dispatch_one_from_queue()
+
+                self.assertIsNone(fired)
+                self.assertEqual(calls, [])
+                self.assertTrue((self.refactor_loop / "dispatch-queue" / "p0" / f"{task_id}.dispatch.json").exists())
+                self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+                events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+                self.assertIn("DISPATCH_SKIPPED_FOREIGN_OWNER:fix-pr44-round-3:p0:ownership-not-allowed", events)
+
+    def test_dispatch_queue_allows_stale_takeover_github_target(self) -> None:
+        from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
+
+        self.monitor.gh_repo_slug = "owner/repo"
+        task_id = "fix-pr45-round-3"
+        self.write_dispatch("p0", task_id, cd=self.repo / ".worktrees" / task_id, github_target={"kind": "pr", "number": 45})
+        calls: list[list[str]] = []
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 45), "other", "alice", 4.0)
+
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            with mock.patch.object(self.module.GitHubWorkOwnership, "decide", return_value=stale):
+                fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
+        self.assertEqual(len(calls), 1)
+        self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree

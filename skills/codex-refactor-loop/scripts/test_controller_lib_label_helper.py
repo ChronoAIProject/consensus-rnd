@@ -220,6 +220,14 @@ if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json body"* ]]; then
   printf '%s\\n' {json.dumps(body)}
   exit 0
 fi
+if [[ "$1 $2" == "api user" ]]; then
+  printf '{{"login":"alice"}}\\n'
+  exit 0
+fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json author,updatedAt"* ]]; then
+  printf '{{"author":{{"login":"alice"}},"updatedAt":"2026-05-29T01:02:03Z"}}\\n'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr merge 55" ]]; then
   printf 'merge output\\n'
   exit {merge_exit}

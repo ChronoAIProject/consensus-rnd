@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 from codex_refactor_loop.phase9.router import Phase9Router, main, parse_phase9_log_identity
 
 
@@ -171,6 +172,34 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn(str(self.repo.resolve()), command)
         self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
+
+    def test_phase9_router_unknown_ownership_ledgers_skip_before_direct_dispatch(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
+        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.solver_triplet(issue=37, round_no=4)
+        unknown = OwnershipDecision(False, "unknown-current-login", WorkTarget("issue", 37))
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = unknown
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertEqual([entry["key"] for entry in entries], ["37-4-judge-ownership-skip"])
+        self.assertEqual(entries[0]["ownership"], "unknown-current-login")
+
+    def test_phase9_router_stale_ownership_allows_direct_dispatch(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
+        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.solver_triplet(issue=38, round_no=4)
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 38), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)

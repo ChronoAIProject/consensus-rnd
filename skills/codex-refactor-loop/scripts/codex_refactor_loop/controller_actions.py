@@ -182,12 +182,13 @@ class ControllerActions:
         #   reached controller lifecycle.
         #   New principle: PR author.login owns merge side effects until
         #   updatedAt is older than the 3 hour stale takeover cutoff.
-        decision = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.ctx.repo_root).decide(WorkTarget("pr", int(pr)))
-        if decision.reason == "foreign-fresh":
-            sys.stderr.write(f"merge_pr: skipped fresh foreign owner for PR #{pr}\n")
+        ownership = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.ctx.repo_root)
+        decision = ownership.decide(WorkTarget("pr", int(pr)))
+        if not decision.allowed:
+            sys.stderr.write(f"merge_pr: skipped {decision.reason} ownership for PR #{pr}\n")
             return 0
         if decision.reason == "stale-takeover":
-            self.gh(["pr", "comment", pr, "--body", GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.ctx.repo_root).takeover_comment(decision)], check=False)
+            self.gh(["pr", "comment", pr, "--body", ownership.takeover_comment(decision)], check=False)
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
             match = re.search(r"Closes #([0-9]+)", body)

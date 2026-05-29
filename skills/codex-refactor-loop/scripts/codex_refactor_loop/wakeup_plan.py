@@ -573,8 +573,6 @@ def ownership_decision_for_item(repo_root: Path, item: GhItem) -> OwnershipDecis
     ownership = GitHubWorkOwnership(github_repo_slug(), cwd=repo_root)
     current_login = ownership.current_login() or ""
     updated_at = _parse_time(item.updated_at)
-    if not item.author_login and not item.updated_at:
-        return OwnershipDecision(True, "owned", target, current_login=current_login)
     if current_login and item.author_login and updated_at:
         age_hours = max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds() / 3600)
         if item.author_login == current_login:
@@ -582,10 +580,7 @@ def ownership_decision_for_item(repo_root: Path, item: GhItem) -> OwnershipDecis
         if datetime.now(timezone.utc) - updated_at >= STALE_AFTER:
             return OwnershipDecision(True, "stale-takeover", target, item.author_login, current_login, age_hours)
         return OwnershipDecision(False, "foreign-fresh", target, item.author_login, current_login, age_hours)
-    decision = ownership.decide(target)
-    if decision.reason in {"unknown-current-login", "unknown-target"}:
-        return OwnershipDecision(True, "owned", target, current_login=current_login)
-    return decision
+    return ownership.decide(target)
 
 
 def _parse_time(value: str) -> datetime | None:

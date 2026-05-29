@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
+from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 
 
 class ControllerActionsTests(unittest.TestCase):
@@ -211,6 +212,55 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+
+    def test_merge_pr_fresh_foreign_or_unknown_ownership_noops_before_merge(self) -> None:
+        cases = (
+            OwnershipDecision(False, "foreign-fresh", WorkTarget("pr", 77), "other", "alice", 1.0),
+            OwnershipDecision(False, "unknown-current-login", WorkTarget("pr", 77)),
+        )
+        for decision in cases:
+            with self.subTest(reason=decision.reason):
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with mock.patch("codex_refactor_loop.controller_actions.GitHubWorkOwnership") as ownership_cls:
+                        ownership_cls.return_value.decide.return_value = decision
+                        result = self.actions.merge_pr("77")
+
+                self.assertEqual(result, 0)
+                self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
+
+    def test_merge_pr_stale_takeover_posts_visibility_comment_before_merge(self) -> None:
+        gh_calls: list[list[str]] = []
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "view"]:
+                if "body" in args:
+                    return mock.Mock(returncode=0, stdout="Closes #55\n", stderr="")
+                if "headRefName" in args:
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "record_recent_pr_merge") as record:
+                with mock.patch("codex_refactor_loop.controller_actions.GitHubWorkOwnership") as ownership_cls:
+                    ownership_cls.return_value.decide.return_value = stale
+                    ownership_cls.return_value.takeover_comment.return_value = "takeover\n⟦AI:AUTO-LOOP⟧\n"
+                    result = self.actions.merge_pr("77")
+
+        self.assertEqual(result, 0)
+        comment_index = next(i for i, call in enumerate(gh_calls) if call[:2] == ["pr", "comment"])
+        merge_index = next(i for i, call in enumerate(gh_calls) if call[:2] == ["pr", "merge"])
+        self.assertLess(comment_index, merge_index)
+        record.assert_called_once_with("77")
 
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):

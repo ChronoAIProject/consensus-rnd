@@ -444,7 +444,7 @@ class ConcurrencyMonitor:
         if target is None or not self.gh_repo_slug or "github_target" not in payload:
             return True
         decision = GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root).decide(target)
-        return decision.reason != "foreign-fresh"
+        return decision.allowed
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
@@ -464,7 +464,7 @@ class ConcurrencyMonitor:
                 log(event)
                 continue
             if not self.dispatch_ownership_allowed(payload):
-                event = f"DISPATCH_SKIPPED_FOREIGN_OWNER:{task_id}:{priority}:fresh-foreign-owner"
+                event = f"DISPATCH_SKIPPED_FOREIGN_OWNER:{task_id}:{priority}:ownership-not-allowed"
                 self.write_pending_event(event)
                 log(event)
                 continue

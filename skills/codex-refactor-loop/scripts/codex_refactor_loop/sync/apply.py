@@ -251,8 +251,8 @@ def apply_request(
         if request.pr_number is not None:
             ctx = LoopContext.load(repo_root=repo, env=env)
             decision = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo).decide(WorkTarget("pr", request.pr_number))
-            if decision.reason == "foreign-fresh":
-                raise IntegrationSyncRequestError("fresh foreign owner")
+            if not decision.allowed:
+                raise IntegrationSyncRequestError(f"ownership not allowed: {decision.reason}")
         clean, merge_in_progress = ensure_clean_or_merge(worktree, command_runner=command_runner)
         if not clean:
             raise IntegrationSyncRequestError("dirty non-merge worktree")

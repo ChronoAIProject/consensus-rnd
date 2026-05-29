@@ -50,16 +50,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$1 $2" == "issue list" ]]; then
                   case "$fixture" in
                     milestone)
-                      printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      printf '[{"number":20,"title":"milestone issue","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
                     existing)
-                      printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      printf '[{"number":10,"title":"ordinary issue","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      ;;
+                    foreign_fresh)
+                      printf '[{"number":10,"title":"foreign issue","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      ;;
+                    foreign_stale)
+                      printf '[{"number":10,"title":"stale issue","author":{"login":"bob"},"updatedAt":"2000-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      ;;
+                    unknown_owner)
+                      printf '[{"number":10,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      ;;
+                    unknown_login)
+                      printf '[{"number":10,"title":"unknown login issue","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
                     many_active)
                       printf '['
                       for i in 1 2 3 4 5 6; do
                         [[ "$i" != "1" ]] && printf ','
-                        printf '{"number":%s,"title":"active issue %s","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
+                        printf '{"number":%s,"title":"active issue %s","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
                       done
                       printf ']\n'
                       ;;
@@ -72,22 +84,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$1 $2" == "pr list" ]]; then
                   case "$fixture" in
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
-                      printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      printf '[{"number":77,"title":"worker output PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
                     unpushed_head_dash)
-                      printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      printf '[{"number":78,"title":"unsafe dash head","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
                     unpushed_head_space)
-                      printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      printf '[{"number":79,"title":"unsafe space head","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
                     unpushed_head_control)
-                      printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      printf '[{"number":80,"title":"unsafe control head","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
                     ci_red)
-                      printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      printf '[{"number":31,"title":"red PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
                       ;;
                     milestone)
-                      printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      printf '[{"number":30,"title":"milestone PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
                     *)
                       printf '[]\n'
@@ -103,8 +115,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   fi
                   exit 0
                 fi
+                if [[ "$1 $2" == "api user" ]]; then
+                  [[ "$fixture" == "unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
+                  exit 0
+                fi
                 if [[ "$1 $2" == "issue view" || "$1 $2" == "pr view" ]]; then
-                  printf '{"comments":[]}\n'
+                  if [[ "$fixture" == "unknown_owner" ]]; then
+                    printf '{"comments":[]}\n'
+                  else
+                    printf '{"author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z"}\n'
+                  fi
                   exit 0
                 fi
                 printf '[]\n'
@@ -335,6 +355,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
         self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
+
+    def test_existing_issue_skips_fresh_foreign_and_unknown_ownership(self) -> None:
+        for fixture in ("foreign_fresh", "unknown_owner", "unknown_login"):
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+                self.assertNotIn("existing-issue", [action["kind"] for action in plan["actions"]])
+
+    def test_existing_issue_includes_stale_takeover_metadata(self) -> None:
+        plan = self.run_plan(fixture="foreign_stale")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "existing-issue"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["item"], "issue #10")
+        self.assertEqual(actions[0]["ownership"], "stale-takeover")
+        self.assertGreaterEqual(actions[0]["stale_hours"], 3)
 
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

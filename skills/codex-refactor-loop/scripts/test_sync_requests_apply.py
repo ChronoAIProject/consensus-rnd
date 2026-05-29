@@ -9,12 +9,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.sync import apply as sync_apply
+from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 from codex_refactor_loop.sync.requests import (
     IntegrationSyncRequest,
     IntegrationSyncRequestError,
@@ -309,6 +311,37 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
         self.write_request({"applied": True})
         self.assertEqual(2, self.apply(FakeGit()))
         self.assertIn("already-applied", self.rejected_record().read_text(encoding="utf-8"))
+
+    def test_pr_targeted_apply_fresh_foreign_or_unknown_ownership_rejects_before_git_push(self) -> None:
+        cases = (
+            OwnershipDecision(False, "foreign-fresh", WorkTarget("pr", 77), "other", "alice", 1.0),
+            OwnershipDecision(False, "unknown-target", WorkTarget("pr", 77), current_login="alice"),
+        )
+        for decision in cases:
+            with self.subTest(reason=decision.reason):
+                self.write_request({"pr_number": 77})
+                rejected = self.rejected_record()
+                if rejected.exists():
+                    rejected.unlink()
+                fake = FakeGit()
+
+                with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+                    ownership_cls.return_value.decide.return_value = decision
+                    self.assertEqual(2, self.apply(fake))
+
+                self.assertIn(f"ownership not allowed: {decision.reason}", self.rejected_record().read_text(encoding="utf-8"))
+                self.assertNotIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
+
+    def test_pr_targeted_apply_stale_takeover_allows_apply(self) -> None:
+        self.write_request({"pr_number": 77})
+        fake = FakeGit()
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            self.assertEqual(0, self.apply(fake))
+
+        self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):

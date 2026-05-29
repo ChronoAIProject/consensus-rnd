@@ -37,10 +37,17 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.env.start()
         from codex_refactor_loop.context import LoopContext
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+        from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
         self.ctx = LoopContext.load(repo_root=self.repo)
         self.monitor = ConcurrencyMonitor(self.ctx)
+        self.ownership = mock.patch(
+            "codex_refactor_loop.monitors.concurrency.GitHubWorkOwnership.decide",
+            return_value=OwnershipDecision(True, "owned", WorkTarget("issue", 1), "alice", "alice", 1.0),
+        )
+        self.ownership.start()
 
     def tearDown(self) -> None:
+        self.ownership.stop()
         self.env.stop()
         self.tmp.cleanup()
 
@@ -60,6 +67,13 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         return json.loads(self.snapshot_path().read_text(encoding="utf-8"))
 
     def fake_gh(self, cmd: list[str]) -> SimpleNamespace:
+        if cmd[:3] == ["gh", "api", "user"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"login": "alice"}))
+        if cmd[:3] in (["gh", "issue", "view"], ["gh", "pr", "view"]):
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"author": {"login": "alice"}, "updatedAt": "2026-05-29T00:00:00Z"}),
+            )
         if cmd[:3] == ["gh", "issue", "list"]:
             return SimpleNamespace(
                 returncode=0,
@@ -143,6 +157,13 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         )
 
         def fake_non_p0(cmd: list[str]) -> SimpleNamespace:
+            if cmd[:3] == ["gh", "api", "user"]:
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"login": "alice"}))
+            if cmd[:3] in (["gh", "issue", "view"], ["gh", "pr", "view"]):
+                return SimpleNamespace(
+                    returncode=0,
+                    stdout=json.dumps({"author": {"login": "alice"}, "updatedAt": "2026-05-29T00:00:00Z"}),
+                )
             if cmd[:3] == ["gh", "issue", "list"]:
                 return SimpleNamespace(returncode=0, stdout=json.dumps([]))
             if cmd[:3] == ["gh", "pr", "list"]:

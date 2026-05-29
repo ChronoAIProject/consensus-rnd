@@ -113,8 +113,8 @@ class CommentMonitor:
         #   any node that saw the event first.
         #   New principle: fresh foreign author.login targets are not marked
         #   seen and produce no GitHub side effects.
-        if decision.reason == "foreign-fresh":
-            print(f"new-team-comment: {number} {author} {comment_id} skipped-foreign-owner", flush=True)
+        if not decision.allowed:
+            print(f"new-team-comment: {number} {author} {comment_id} skipped-ownership:{decision.reason}", flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:
