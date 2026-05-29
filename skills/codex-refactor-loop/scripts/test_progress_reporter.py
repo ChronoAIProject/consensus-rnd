@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+"""Behavior tests for the Python progress reporter."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import sys
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.monitors.progress import ProgressReporter, exit_status
+
+
+class ProgressReporterTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="progress-reporter-test-"))
+        (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True)
+        (self.tmp / ".refactor-loop" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        self.ctx = LoopContext.load(repo_root=self.tmp)
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_exit_status_is_terminal_tail_tristate(self) -> None:
+        cases = {
+            "in_flight": "EXIT=0\nfiller\nfiller\nfiller\nfiller\nfiller\n",
+            "exit_ok": "work\nEXIT=0\nDONE_AT=now\n",
+            "exit_failed": "work\nEXIT=17\nDONE_AT=now\n",
+        }
+        for expected, text in cases.items():
+            path = self.tmp / f"{expected}.log"
+            path.write_text(text, encoding="utf-8")
+            self.assertEqual(expected, exit_status(path))
+
+    def test_exit_failed_posts_and_keeps_failed_state(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
+        log.write_text("important failure\nEXIT=17\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            text = " ".join(command)
+            if "pr view 47" in text:
+                return mock.Mock(returncode=0, stdout="{}", stderr="")
+            if "pr comment 47" in text:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/47#issuecomment-24680\n", stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress._run", side_effect=fake_run):
+            reporter.post_or_update("fix-pr47-round2", log)
+            reporter.post_or_update("fix-pr47-round2", log)
+
+        state = json.loads((self.tmp / ".refactor-loop" / "codex-progress-state.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
+        self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
+
+    def test_orphan_delete_retry_keeps_state_when_delete_fails_and_comment_exists(self) -> None:
+        state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
+        state_file.write_text(json.dumps({"fix-pr47-r1": {"target": "47", "kind": "pr", "comment_id": 123, "last_md5": "x", "finished": "false"}}), encoding="utf-8")
+        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-r1.log"
+        log.write_text("done\nEXIT=0\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            text = " ".join(command)
+            if "-X DELETE" in text:
+                return mock.Mock(returncode=1, stdout="", stderr="rate limit")
+            if "issues/comments/123" in text:
+                return mock.Mock(returncode=0, stdout="{}", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress._run", side_effect=fake_run):
+            reporter.post_or_update("fix-pr47-r1", log)
+
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        self.assertEqual(state["fix-pr47-r1"]["comment_id"], 123)
+        self.assertEqual(state["fix-pr47-r1"]["finished"], "false")
+
+
+class ProgressReporterSourceRegressionTests(unittest.TestCase):
+    def test_forbidden_lifecycle_tokens_are_absent(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "progress.py").read_text(encoding="utf-8")
+        for token in ("git commit", "git push", "pr merge", "issue close", "create release"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, text)
+        self.assertIn("TEST_NO_LOOP", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

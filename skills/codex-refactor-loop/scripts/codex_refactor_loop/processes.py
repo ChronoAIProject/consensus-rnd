@@ -24,7 +24,7 @@ class ProcessSupervisor:
     clock: callable = time.time
     sleeper: callable = time.sleep
 
-    def supervise(self, command: Sequence[str], *, stdin: Path, log: Path, stall: int) -> int:
+    def supervise(self, command: Sequence[str], *, stdin: Path, log: Path, stall: int, preamble: str = "") -> int:
         if not stdin.is_file():
             raise ValueError(f"prompt file not found: {stdin}")
         if stall <= 0:
@@ -32,7 +32,7 @@ class ProcessSupervisor:
         log.parent.mkdir(parents=True, exist_ok=True)
         if log.exists() and not _has_exit_marker(log):
             raise RuntimeError(f"refusing to reuse unfinished log without EXIT=: {log}")
-        log.write_text("", encoding="utf-8")
+        log.write_text(preamble, encoding="utf-8")
 
         with stdin.open("rb") as in_handle, log.open("ab", buffering=0) as log_handle:
             proc = subprocess.Popen(
@@ -108,4 +108,3 @@ def _append(path: Path, text: str) -> None:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-

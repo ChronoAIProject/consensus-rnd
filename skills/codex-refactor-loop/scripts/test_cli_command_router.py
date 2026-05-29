@@ -54,20 +54,25 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertEqual(2, result.returncode)
         self.assertIn("unknown command: does-not-exist", result.stderr)
 
-    def test_shell_commands_delegate_to_existing_scripts(self) -> None:
-        router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
-        with mock.patch("codex_refactor_loop.cli.subprocess.call", return_value=0) as call:
-            self.assertEqual(0, router.run("peek", ["--flag"]))
-        call.assert_called_once_with(["bash", str(SCRIPT_DIR / "peek.sh"), "--flag"])
+    def test_registered_commands_are_python_handlers_not_shell_scripts(self) -> None:
+        for name, spec in COMMANDS.items():
+            with self.subTest(command=name):
+                self.assertTrue(callable(spec.handler))
+                self.assertTrue(spec.handler.__module__.startswith("codex_refactor_loop"))
 
-    def test_controller_lib_commands_delegate_to_existing_functions(self) -> None:
+    def test_peek_command_uses_registered_python_handler(self) -> None:
         router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
-        with mock.patch("codex_refactor_loop.cli.subprocess.call", return_value=0) as call:
+        handler = mock.Mock(return_value=0)
+        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"peek": COMMANDS["peek"].__class__(handler, "peek", True), **{k: v for k, v in COMMANDS.items() if k != "peek"}}):
+            self.assertEqual(0, router.run("peek", ["--flag"]))
+        handler.assert_called_once_with(["--flag"])
+
+    def test_controller_actions_dispatch_to_python_action_handler(self) -> None:
+        router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
+        handler = mock.Mock(return_value=0)
+        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"merge-pr": COMMANDS["merge-pr"].__class__(handler, "merge")}):
             self.assertEqual(0, router.run("merge-pr", ["123", "45"]))
-        argv = call.call_args.args[0]
-        self.assertEqual(["bash", "-c"], argv[:2])
-        self.assertIn("controller_lib.sh", argv[2])
-        self.assertIn("merge_pr '123' '45'", argv[2])
+        handler.assert_called_once_with(["merge-pr", "123", "45"])
 
 
 if __name__ == "__main__":
