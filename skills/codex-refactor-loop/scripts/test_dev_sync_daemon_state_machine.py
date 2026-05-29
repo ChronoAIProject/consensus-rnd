@@ -205,6 +205,7 @@ class IntegrationSyncDaemonBehaviorTests(unittest.TestCase):
         self.daemon(fake).tick()
 
         self.assertEqual(["DEV_SYNC_PENDING:missing-integration-branch:auto-refact-dev"], self.pending_events())
+        self.assertEqual(["git", "ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], fake.commands[0])
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in fake.commands))
 
 

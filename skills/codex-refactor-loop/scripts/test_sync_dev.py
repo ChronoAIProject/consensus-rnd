@@ -239,6 +239,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.daemon(fake).tick()
 
         self.assertEqual(["DEV_SYNC_PENDING:missing-integration-branch:auto-refact-dev"], self.pending_events())
+        self.assertEqual(["git", "ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], fake.commands[0])
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in fake.commands))
 
     def test_resolver_in_flight_scopes_to_repo_or_worktree_and_skips_shell_wrappers(self) -> None:
@@ -294,6 +295,7 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn("daemon detects and emits", src)
         self.assertIn("IntegrationSyncRequest; controller owns apply", src)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed:", src)
+        self.assertIn('["git", "ls-remote", "--exit-code", "--heads", "origin", branch]', src)
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
         self.assertIn("DEV_SYNC_REQUEST:", src)
