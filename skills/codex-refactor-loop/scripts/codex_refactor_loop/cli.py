@@ -10,6 +10,7 @@ from typing import Callable, Sequence
 
 from . import banners, project_rules, spawn, statusline
 from .controller_actions import main as controller_actions_main
+from .coordination.leases import main as lease_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
 from .monitors.comment import main as comment_monitor_main
@@ -54,15 +55,20 @@ COMMANDS: dict[str, CommandSpec] = {
         ("spawn-daemon", "write-state", "delete-log"),
     ),
     "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", ("read-state", "read-git")),
+    "lease": CommandSpec(
+        lease_main,
+        "inspect or acquire multi-device coordination leases",
+        ("read-git", "git-lease-ref-cas"),
+    ),
     "comment-monitor": CommandSpec(
         comment_monitor_main,
         "run the Python comment monitor daemon",
-        ("read-gh", "gh-reaction", "gh-comment", "write-state", "write-event"),
+        ("read-gh", "gh-reaction", "gh-comment", "write-state", "write-event", "git-lease-ref-cas"),
     ),
     "concurrency": CommandSpec(
         concurrency_main,
         "run the Python concurrency monitor or read-only counter",
-        ("read-process", "read-gh", "write-state", "write-event", "spawn", "write-artifact"),
+        ("read-process", "read-gh", "write-state", "write-event", "spawn", "write-artifact", "git-lease-ref-cas"),
     ),
     "progress-reporter": CommandSpec(
         progress_reporter_main,
@@ -72,12 +78,12 @@ COMMANDS: dict[str, CommandSpec] = {
     "dev-sync": CommandSpec(
         dev_sync_main,
         "run the Python integration sync daemon",
-        ("read-git", "read-gh", "git-fetch", "git-worktree", "write-event", "write-artifact", "spawn"),
+        ("read-git", "read-gh", "git-fetch", "git-worktree", "write-event", "write-artifact", "spawn", "git-lease-ref-cas"),
     ),
     "phase9-router": CommandSpec(
         phase9_router_main,
         "run the Python Phase 9 router",
-        ("read-log", "write-event", "write-artifact", "spawn"),
+        ("read-log", "write-event", "write-artifact", "spawn", "git-lease-ref-cas"),
     ),
     "release-gate": CommandSpec(
         release_gate_main,
@@ -92,7 +98,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "merge-pr": CommandSpec(
         controller_actions_main,
         "invoke Python controller action merge_pr",
-        ("read-gh", "gh-merge", "gh-label", "gh-close", "git-worktree", "write-state"),
+        ("read-gh", "gh-merge", "gh-label", "gh-close", "git-worktree", "write-state", "git-lease-ref-cas"),
     ),
     "open-pr": CommandSpec(
         controller_actions_main,
@@ -124,7 +130,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "apply-sync": CommandSpec(
         sync_apply_main,
         "apply an IntegrationSyncRequest artifact",
-        ("read-artifact", "write-artifact", "git-fetch", "git-merge", "git-rebase", "git-reset", "git-push"),
+        ("read-artifact", "write-artifact", "git-fetch", "git-merge", "git-rebase", "git-reset", "git-push", "git-lease-ref-cas"),
     ),
     "apply-triage": CommandSpec(
         triage_main,

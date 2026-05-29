@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from ..coordination.leases import GitRefLeaseRegistry, LeaseGate
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from ..state import read_json, write_json
@@ -69,6 +70,7 @@ class ConcurrencyMonitor:
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
         self.cli = ctx.skill_root / "scripts" / "consensus-rnd-cli"
+        self.lease_gate = LeaseGate.from_context(ctx)
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -164,6 +166,8 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        if self.ctx.multi_device_coordination:
+            payload["leases"] = self.read_lease_snapshot()
         self.statusline_snapshot.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
@@ -336,6 +340,18 @@ class ConcurrencyMonitor:
             self.write_degradation_alert(result)
             log(f"skill-degradation-alert returncode={result.returncode}; see {self.degradation_alert_log}")
 
+    def read_lease_snapshot(self) -> list[dict[str, str]]:
+        records = GitRefLeaseRegistry(self.ctx).list_records(limit=8)
+        return [
+            {
+                "scope": record.scope,
+                "owner_device_id": record.owner_device_id,
+                "expires_at": record.expires_at,
+                "target": record.target,
+            }
+            for record in records
+        ]
+
     def dispatch_queue_files(self) -> list[tuple[str, Path]]:
         files: list[tuple[str, Path]] = []
         for priority in PRIORITIES:
@@ -447,6 +463,13 @@ class ConcurrencyMonitor:
                 self.write_pending_event(event)
                 log(event)
                 continue
+            lease = self.lease_gate.work_claim(f"dispatch:{task_id}", reason=reason, target=str(path))
+            if not lease.acquired:
+                owner = lease.owner_device_id or "unknown"
+                event = f"DISPATCH_LEASE_LOST:{task_id}:{priority}:{lease.reason}:owner={owner}"
+                self.write_pending_event(event)
+                log(event)
+                return None
             self.launch_dispatch(payload)
             self.archive_dispatched(path, payload, task_id)
             self.write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")

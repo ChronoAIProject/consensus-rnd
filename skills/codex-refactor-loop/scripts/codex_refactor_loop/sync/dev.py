@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from ..coordination.leases import LeaseGate, LeaseToken
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .requests import IntegrationSyncRequest, write_request_artifact
@@ -292,6 +293,7 @@ class IntegrationSyncDaemon:
         release_rollup_min_commits: int = DEFAULT_RELEASE_ROLLUP_MIN_COMMITS,
         release_rollup_cooldown_seconds: int = DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS,
         now_provider: Callable[[], datetime] | None = None,
+        lease_gate: LeaseGate | None = None,
     ) -> None:
         self.worktree = worktree
         self.main_repo = main_repo
@@ -326,6 +328,8 @@ class IntegrationSyncDaemon:
         self.release_rollup_min_commits = release_rollup_min_commits
         self.release_rollup_cooldown_seconds = release_rollup_cooldown_seconds
         self.now_provider = now_provider or (lambda: datetime.now(timezone.utc))
+        self.lease_gate = lease_gate
+        self.lease_token: LeaseToken | None = None
 
     @classmethod
     def from_config(cls, config: DevSyncConfig, *, command_runner=run, logger=log) -> "IntegrationSyncDaemon":
@@ -360,6 +364,7 @@ class IntegrationSyncDaemon:
             ),
             release_rollup_min_commits=config.release_rollup_min_commits,
             release_rollup_cooldown_seconds=config.release_rollup_cooldown_seconds,
+            lease_gate=LeaseGate.from_context(config.context),
         )
 
     def append_pending_event(self, reason: str, detail: str) -> None:
@@ -635,6 +640,8 @@ class IntegrationSyncDaemon:
         )
 
     def tick(self) -> None:
+        if self.lease_gate is not None and not self._hold_sync_lease():
+            return
         cwd = self.worktree
         if not cwd.exists():
             self.log(f"worktree {cwd} missing, attempting create")
@@ -666,6 +673,22 @@ class IntegrationSyncDaemon:
             return
 
         self.forward_sync_review_base(cwd)
+
+    def _hold_sync_lease(self) -> bool:
+        key = f"integration-sync:{self.integration}"
+        if self.lease_token is not None:
+            renewed = self.lease_gate.renew(self.lease_token)
+            if renewed.acquired:
+                if renewed.token:
+                    self.lease_token = renewed.token
+                return True
+            self.lease_token = None
+        decision = self.lease_gate.singleton(key, reason="integration-sync", target=self.integration)
+        if decision.acquired:
+            self.lease_token = decision.token
+            return True
+        self.log(f"skip: integration-sync lease held by {decision.owner_device_id or 'unknown'} reason={decision.reason}")
+        return False
 
 
 def local_ahead_count(cwd: Path, config: DevSyncConfig | None = None) -> int:

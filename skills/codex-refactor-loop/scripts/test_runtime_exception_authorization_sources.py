@@ -22,6 +22,7 @@ TARGET_ANCHORS = {
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
     "skill-degradation-watch-66": "## Named runtime exception — skill degradation watch(per #66)",
+    "multi-device-coordination-193": "## Named runtime exception — multi-device coordination lease(per #193)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
 }
@@ -129,6 +130,42 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(grant=grant):
                 self.assertNotIn(grant, self.mirror)
+
+    def test_multi_device_coordination_runtime_exception_literals(self) -> None:
+        entry = mirror_entry(self.mirror, "multi-device-coordination-193")
+        skill_section = self.skill[
+            self.skill.index("## Named runtime exception — multi-device coordination lease(per #193)") :
+            self.skill.index("## Claude Code statusline(per #51 consensus)")
+        ]
+        for token in (
+            "refs/heads/auto-loop/leases/*",
+            "work-claim",
+            "singleton",
+            "git ref CAS",
+            "Authoritative lease truth is the git ref payload only",
+            "no source/work branch push",
+            "no worker diff commit",
+            "no issue/PR create/merge/close/edit",
+            "no label lifecycle",
+            "no marker/work-unit/schema changes",
+            "no local `.refactor-loop` coordination files",
+            "no generic lifecycle actor",
+            "Lease miss or failed renew must noop before spawn",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, skill_section)
+        for token in (
+            "source_issue: `#193`",
+            "source_round: `r2`",
+            "git-ref-CAS",
+            "refs/heads/auto-loop/leases/*",
+            "optional AI-sentinel projection comments",
+            "comments and labels remain projection only",
+            "test_git_ref_lease_registry.py",
+            "test_multi_device_coordination.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
 
 
 if __name__ == "__main__":

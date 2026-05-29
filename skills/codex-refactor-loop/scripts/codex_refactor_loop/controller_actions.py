@@ -14,6 +14,7 @@ from pathlib import Path
 from string import Template
 from typing import Mapping, Sequence
 
+from .coordination.leases import LeaseGate
 from .context import LoopContext, LoopContextError
 
 
@@ -44,6 +45,7 @@ class ControllerActions:
         self.ctx = ctx
         self.integration_branch = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
         self.review_base_branch = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
+        self.lease_gate = LeaseGate.from_context(ctx)
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         full = ["gh", *args]
@@ -175,6 +177,10 @@ class ControllerActions:
         if not pr:
             sys.stderr.write("merge_pr: missing pr number\n")
             return 1
+        lease = self.lease_gate.singleton(f"merge-pr:{pr}", reason="merge-pr", target=f"PR #{pr}")
+        if not lease.acquired:
+            sys.stderr.write(f"merge_pr: lease miss {lease.reason}\n")
+            return 3
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
             match = re.search(r"Closes #([0-9]+)", body)
@@ -185,6 +191,8 @@ class ControllerActions:
         elif merge.stderr:
             print(merge.stderr.splitlines()[-1])
         if merge.returncode != 0:
+            if lease.token:
+                self.lease_gate.release(lease.token)
             return merge.returncode
         self.record_recent_pr_merge(pr)
         args = ["pr", "edit", pr]
@@ -207,6 +215,8 @@ class ControllerActions:
             wt = self._worktree_for_branch(head)
             if wt and wt != self.ctx.repo_root:
                 self.git(["worktree", "remove", str(wt), "--force"], check=False)
+        if lease.token:
+            self.lease_gate.release(lease.token)
         return 0
 
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:

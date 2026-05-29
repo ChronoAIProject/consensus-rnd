@@ -84,6 +84,19 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_statusline.py`, `test_skill_reference_anchors.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
+<a id="multi-device-coordination-193"></a>
+## multi-device-coordination-193
+
+- surface: `multi-device coordination lease`
+- source_issue: `#193`
+- source_round: `r2`
+- source_marker: `META_JUDGE_DONE:consensus:structural:3/3 choose git-ref-CAS refs/heads/auto-loop/leases/* as authoritative multi-device lease source`
+- skill_anchor: `#named-runtime-exception--multi-device-coordination-leaseper-193`
+- allowed: read/create/renew/release/expired-takeover refs/heads/auto-loop/leases/* for work-claim and singleton via git ref CAS; optional AI-sentinel projection comments; read-only peek/statusline projection.
+- forbidden: no source/work branch push, worker diff commit, issue lifecycle, PR lifecycle, label lifecycle, tag, release, merge decision, marker schema, work-unit schema, local coordination files, or generic lifecycle authority.
+- verification: `test_git_ref_lease_registry.py`, `test_multi_device_coordination.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This mirror only records the #193 narrow lease-ref coordination exception; comments and labels remain projection only.
+
 <a id="anti-stop-restart-helper-49"></a>
 ## anti-stop-restart-helper-49
 

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from .coordination.leases import GitRefLeaseRegistry
 from .context import LoopContext, LoopContextError
 
 
@@ -39,6 +40,8 @@ class PeekStatusLens:
         lines.append("  Skill degradation alerts:")
         tail_count = int(os.environ.get("DEGRADATION_ALERT_TAIL_LINES", "10"))
         lines.extend(_prefixed_tail(self.ctx.repo_root / DEGRADATION_ALERT_LOG, tail_count, "    "))
+        lines.extend(["", "▍Multi-device leases:"])
+        lines.extend(self._leases())
         lines.extend(["", "▍Milestone (优先) issues:"])
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])
@@ -132,6 +135,17 @@ class PeekStatusLens:
                     title = str(item.get("title") or "")[:55]
                     lines.append(f"  • {kind} #{item.get('number')} labels=[{', '.join(visible)}] — {title}")
         return lines
+
+    def _leases(self) -> list[str]:
+        if not self.ctx.multi_device_coordination:
+            return ["  disabled"]
+        rows = GitRefLeaseRegistry(self.ctx).list_records(limit=10)
+        if not rows:
+            return ["  none"]
+        return [
+            f"  • {record.scope} owner={record.owner_device_id} expires={record.expires_at} target={record.target}"
+            for record in rows
+        ]
 
     def _open_prs(self) -> list[str]:
         lines = []

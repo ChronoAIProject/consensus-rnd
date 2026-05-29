@@ -16,6 +16,7 @@ class LoopContextError(RuntimeError):
 
 
 _ASSIGNMENT_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
+DEVICE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,31}$")
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,10 @@ class LoopContext:
     host_env: dict[str, str]
     read_only: bool = False
     repo_root_source: str = "env"
+    device_id: str | None = None
+    multi_device_coordination: bool = False
+    lease_ttl_seconds: int = 900
+    lease_renew_seconds: int = 300
 
     @classmethod
     def load(
@@ -76,6 +81,13 @@ class LoopContext:
             _validate_repo_override(repo, host_env["REPO_ROOT"], "host.env")
 
         slug = _github_repo_slug(merged)
+        device_id = _device_id(merged)
+        multi_device = _truthy(merged.get("MULTI_DEVICE_COORDINATION"))
+        if multi_device and device_id is None:
+            raise LoopContextError(
+                "MULTI_DEVICE_COORDINATION=true requires AUTO_LOOP_DEVICE_ID matching "
+                "^[a-z0-9][a-z0-9-]{1,31}$"
+            )
         paths = _paths(repo)
         return cls(
             repo_root=repo,
@@ -85,6 +97,10 @@ class LoopContext:
             host_env=host_env,
             read_only=read_only,
             repo_root_source=repo_source,
+            device_id=device_id,
+            multi_device_coordination=multi_device,
+            lease_ttl_seconds=_positive_int(merged.get("AUTO_LOOP_LEASE_TTL_SECONDS"), 900),
+            lease_renew_seconds=_positive_int(merged.get("AUTO_LOOP_LEASE_RENEW_SECONDS"), 300),
         )
 
     def env_for_subprocess(self) -> dict[str, str]:
@@ -202,6 +218,27 @@ def _github_repo_slug(env: Mapping[str, str]) -> str | None:
     if owner and name:
         return f"{owner}/{name}"
     return None
+
+
+def _device_id(env: Mapping[str, str]) -> str | None:
+    raw = (env.get("AUTO_LOOP_DEVICE_ID") or "").strip()
+    if not raw:
+        return None
+    if not DEVICE_ID_RE.fullmatch(raw):
+        return None
+    return raw
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _positive_int(value: str | None, default: int) -> int:
+    try:
+        parsed = int(str(value or "").strip() or default)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _paths(repo_root: Path) -> LoopPaths:

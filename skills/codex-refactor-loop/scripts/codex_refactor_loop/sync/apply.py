@@ -24,6 +24,7 @@ import time
 from pathlib import Path
 from typing import Sequence
 
+from ..coordination.leases import LeaseGate
 from ..context import LoopContext
 from .requests import IntegrationSyncRequest, IntegrationSyncRequestError, load_request
 
@@ -241,6 +242,16 @@ def apply_request(
 ) -> int:
     command_runner = command_runner or run
     try:
+        ctx = LoopContext.load(repo_root=repo, env=env or os.environ, read_only=False)
+        gate = LeaseGate.from_context(ctx)
+        expected_integration, _expected_review_base = expected_branches(env)
+        lease = gate.singleton(
+            f"integration-sync:{expected_integration}",
+            reason="integration-sync-apply",
+            target=str(request_path),
+        )
+        if not lease.acquired:
+            raise IntegrationSyncRequestError(f"lease-miss:{lease.reason}")
         request = validate_common(repo, worktree, request_path, env=env, command_runner=command_runner)
         clean, merge_in_progress = ensure_clean_or_merge(worktree, command_runner=command_runner)
         if not clean:

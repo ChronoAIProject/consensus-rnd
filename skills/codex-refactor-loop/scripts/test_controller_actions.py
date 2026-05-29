@@ -17,6 +17,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
+from codex_refactor_loop.coordination.leases import LeaseDecision
 
 
 class ControllerActionsTests(unittest.TestCase):
@@ -49,6 +50,13 @@ class ControllerActionsTests(unittest.TestCase):
     def test_apply_marker_rejects_unbounded_paths(self) -> None:
         self.assertEqual(2, self.actions.apply_dev_sync_request_marker("DEV_SYNC_REQUEST:/tmp/out.json"))
         self.assertEqual(2, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:x:accept:/tmp/out.json"))
+
+    def test_merge_pr_lease_miss_skips_gh_merge_and_label_side_effects(self) -> None:
+        self.actions.lease_gate = mock.Mock()
+        self.actions.lease_gate.singleton.return_value = LeaseDecision(False, "leased-by:other")
+        with mock.patch.object(self.actions, "gh") as gh:
+            self.assertEqual(3, self.actions.merge_pr("12"))
+        gh.assert_not_called()
 
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):

@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from ..coordination.leases import LeaseGate
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 
@@ -56,6 +57,7 @@ class CommentMonitor:
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
         self.heartbeat = DaemonHeartbeatLease("comment-monitor", ctx.repo_root)
+        self.lease_gate = LeaseGate.from_context(ctx)
 
     def run_forever(self) -> int:
         while True:
@@ -106,6 +108,11 @@ class CommentMonitor:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
             return
+        lease = self.lease_gate.work_claim(f"comment:{comment_id}", reason="maintainer-comment", target=f"issue-or-pr:{number}")
+        if not lease.acquired:
+            self.mark_seen(comment_id, f"lease-lost:{lease.owner_device_id or 'unknown'}")
+            print(f"new-team-comment: {number} {author} {comment_id} lease-lost:{lease.reason}", flush=True)
+            return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:
             ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -149,9 +156,9 @@ class CommentMonitor:
     def seen(self, comment_id: str) -> bool:
         return comment_id in self._state()
 
-    def mark_seen(self, comment_id: str) -> None:
+    def mark_seen(self, comment_id: str, value: str = "seen") -> None:
         state = self._state()
-        state[comment_id] = "seen"
+        state[comment_id] = value
         tmp = self.state_file.with_name(f".{self.state_file.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, self.state_file)

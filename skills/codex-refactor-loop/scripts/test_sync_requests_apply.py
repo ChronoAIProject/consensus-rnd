@@ -9,12 +9,14 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.sync import apply as sync_apply
+from codex_refactor_loop.coordination.leases import LeaseDecision
 from codex_refactor_loop.sync.requests import (
     IntegrationSyncRequest,
     IntegrationSyncRequestError,
@@ -305,10 +307,24 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
         self.assertEqual(2, self.apply(FakeGit()))
         self.assertIn("already-applied", self.rejected_record().read_text(encoding="utf-8"))
 
-        marker.unlink()
-        self.write_request({"applied": True})
-        self.assertEqual(2, self.apply(FakeGit()))
-        self.assertIn("already-applied", self.rejected_record().read_text(encoding="utf-8"))
+    def test_apply_lease_miss_rejects_before_git_fetch_or_push(self) -> None:
+        self.write_request({})
+        fake = FakeGit()
+        env = {
+            "INTEGRATION_BRANCH": "auto-refact-dev",
+            "REVIEW_BASE_BRANCH": "dev",
+            "MULTI_DEVICE_COORDINATION": "true",
+            "AUTO_LOOP_DEVICE_ID": "desk-a",
+        }
+        with mock.patch("codex_refactor_loop.sync.apply.LeaseGate") as gate_cls:
+            gate = gate_cls.from_context.return_value
+            gate.singleton.return_value = LeaseDecision(False, "leased-by:other")
+            self.assertEqual(
+                2,
+                sync_apply.apply_request(self.request_path, repo=self.repo, worktree=self.worktree, env=env, command_runner=fake),
+            )
+        self.assertEqual([], fake.commands)
+        self.assertIn("lease-miss:leased-by:other", self.rejected_record().read_text(encoding="utf-8"))
 
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):

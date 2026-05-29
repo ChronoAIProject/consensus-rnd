@@ -85,6 +85,31 @@ class LoopContextTests(unittest.TestCase):
         with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
             LoopContext.load(env={}, cwd=self.repo)
 
+    def test_multi_device_device_id_parse_and_fail_closed(self) -> None:
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            env={
+                "MULTI_DEVICE_COORDINATION": "true",
+                "AUTO_LOOP_DEVICE_ID": "desk-a",
+                "AUTO_LOOP_LEASE_TTL_SECONDS": "120",
+                "AUTO_LOOP_LEASE_RENEW_SECONDS": "30",
+            },
+        )
+        self.assertTrue(ctx.multi_device_coordination)
+        self.assertEqual("desk-a", ctx.device_id)
+        self.assertEqual(120, ctx.lease_ttl_seconds)
+        self.assertEqual(30, ctx.lease_renew_seconds)
+
+        with self.assertRaisesRegex(LoopContextError, "AUTO_LOOP_DEVICE_ID"):
+            LoopContext.load(repo_root=self.repo, env={"MULTI_DEVICE_COORDINATION": "true"})
+
+        disabled = LoopContext.load(
+            repo_root=self.repo,
+            env={"MULTI_DEVICE_COORDINATION": "false", "AUTO_LOOP_DEVICE_ID": "Bad_Hostname"},
+        )
+        self.assertFalse(disabled.multi_device_coordination)
+        self.assertIsNone(disabled.device_id)
+
 
 if __name__ == "__main__":
     unittest.main()

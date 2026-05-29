@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Literal, cast
 
+from ..coordination.leases import LeaseGate
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
 
@@ -182,6 +183,7 @@ class Phase9Router:
         self.lock_path = self.loop_dir / "phase9-router.lock"
         self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
+        self.lease_gate = LeaseGate.from_context(ctx)
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
         # memory-only dedup was lost on daemon restart, re-emitting historical
         # fallback events and flooding Monitor. New principle: __init__ scans
@@ -379,6 +381,8 @@ class Phase9Router:
             if violation is not None:
                 self._append_invalid_triplet_event(issue, round_no, violation)
                 continue
+            if not self._lease_route(key, "solver_triplet_to_judge"):
+                continue
             prompt = self._write_prompt(issue, round_no, "judge", self._meta_judge_prompt(issue, round_no, role_markers.values()))
             if self._spawn(prompt, log_path):
                 self._append_ledger(
@@ -413,6 +417,8 @@ class Phase9Router:
                     log_path = self._log_path(marker.issue, target_round, role)
                     if key in ledger or self._in_flight(log_path):
                         continue
+                    if not self._lease_route(key, "converge_to_solver"):
+                        continue
                     prompt = self._write_prompt(
                         marker.issue,
                         target_round,
@@ -432,6 +438,8 @@ class Phase9Router:
                 if key in ledger or self._in_flight(log_path):
                     continue
                 if not self._stalled_predicate_holds(marker.issue, marker.round):
+                    continue
+                if not self._lease_route(key, "stalled_to_reflector"):
                     continue
                 prompt = self._write_prompt(marker.issue, marker.round, "reflector", self._reflector_prompt(marker))
                 if self._spawn(prompt, log_path):
@@ -574,6 +582,22 @@ class Phase9Router:
         }
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _lease_route(self, key: str, route: str) -> bool:
+        decision = self.lease_gate.work_claim(f"phase9:{key}", reason=route, target=key)
+        if decision.acquired:
+            return True
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": key,
+            "route": route,
+            "reason": decision.reason,
+            "owner_device_id": decision.owner_device_id or "",
+            "dispatched_at": self._now(),
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-lease-lost {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+        return False
 
     def _append_invalid_triplet_event(self, issue: str, round_no: int, violation: dict[str, str]) -> None:
         event_key = f"phase9-triplet-evidence-invalid:{issue}-{round_no}"
