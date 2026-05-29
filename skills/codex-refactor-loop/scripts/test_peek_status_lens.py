@@ -42,12 +42,19 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             textwrap.dedent(
                 """\
                 #!/usr/bin/env bash
-                case "$1" in
-                  fetch) exit 0 ;;
-                  worktree) exit 0 ;;
-                  rev-parse) printf '%s\\n' "$REPO_ROOT"; exit 0 ;;
-                  *) exit 0 ;;
-                esac
+                args="$*"
+                if [[ "$args" == *"fetch origin --quiet"* ]]; then exit 0; fi
+                if [[ "$args" == *"worktree list --porcelain"* ]]; then
+                  if [[ "${PEEK_TEST_UNPUSHED:-}" == "1" ]]; then
+                    printf 'worktree %s/.worktrees/pr%s\nbranch refs/heads/refactor/iter%s-worker\n\n' "$REPO_ROOT" "$PEEK_TEST_PR" "$PEEK_TEST_PR"
+                  fi
+                  exit 0
+                fi
+                if [[ "$args" == *"rev-parse --verify HEAD"* ]]; then printf 'local-sha\n'; exit 0; fi
+                if [[ "$args" == *"rev-parse --verify refs/remotes/origin/refactor/iter"* ]]; then printf 'remote-sha\n'; exit 0; fi
+                if [[ "$args" == *"rev-list --count refs/remotes/origin/refactor/iter"* ]]; then printf '3\n'; exit 0; fi
+                if [[ "$1" == "rev-parse" ]]; then printf '%s\\n' "$REPO_ROOT"; exit 0; fi
+                exit 0
                 """
             ).lstrip(),
             encoding="utf-8",
@@ -121,6 +128,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     printf '{"number":%s,"title":"stub PR"}\\n' "$pr"
                     exit 0
                   fi
+                  if [[ "${PEEK_TEST_UNPUSHED:-}" == "1" ]]; then
+                    printf '[{"number":%s,"title":"stub PR","headRefName":"refactor/iter%s-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\\n' "$pr" "$pr"
+                    exit 0
+                  fi
                   printf '[{"number":%s,"title":"stub PR","labels":[]}]\\n' "$pr"
                   exit 0
                 fi
@@ -147,7 +158,14 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         )
         gh.chmod(0o755)
 
-    def run_peek(self, args: list[str] | None = None, *, pr: int | None = None, milestone_fixtures: bool = False) -> subprocess.CompletedProcess[str]:
+    def run_peek(
+        self,
+        args: list[str] | None = None,
+        *,
+        pr: int | None = None,
+        milestone_fixtures: bool = False,
+        unpushed: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
             {
@@ -160,6 +178,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_PR"] = str(pr)
         if milestone_fixtures:
             env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
+        if unpushed:
+            env["PEEK_TEST_UNPUSHED"] = "1"
         return subprocess.run(
             [sys.executable, str(PEEK), "peek", *(args or [])],
             cwd=self.root,
@@ -255,6 +275,17 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MERGE_READY approve=2 comment=1 reject=0", result.stdout)
         self.assertNotIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
+
+    def test_peek_displays_unpushed_worker_output_as_status_only(self) -> None:
+        result = self.run_peek(pr=77, unpushed=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("▍Unpushed worker output:", result.stdout)
+        self.assertIn("UNPUSHED_WORKER_OUTPUT:77:3", result.stdout)
+        self.assertIn("head=refactor/iter77-worker", result.stdout)
+        self.assertIn("safe-push origin refactor/iter77-worker", result.stdout)
+        self.assertNotIn('"actions"', result.stdout)
+        self.assertNotIn('"schema": "wakeup-plan"', result.stdout)
 
     def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
         text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")

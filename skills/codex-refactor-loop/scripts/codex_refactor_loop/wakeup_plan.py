@@ -10,11 +10,18 @@ Refactor (iter1/wakeup-plan-script):
   action to the controller.
 
 Allowed: read `.refactor-loop` files, read daemon heartbeats, run read-only
-GitHub list/check/view commands, and print JSON recommendations.
-Forbidden: no restart/spawn, no git, no GitHub lifecycle mutation, no commit,
-push, merge, label, issue/PR create/close/edit, tag, release, or worker
-dispatch. Authorization source:
+GitHub list/check/view commands, observe git topology with the issue-190
+allowlist (`git fetch origin --quiet`, `git worktree list --porcelain`,
+`git rev-parse --verify HEAD`, `git rev-parse --verify refs/remotes/origin/<head>`,
+and `git rev-list --count refs/remotes/origin/<head>..HEAD`), and print JSON
+recommendations. Forbidden: no restart/spawn, no git lifecycle or mutation
+commands, no GitHub lifecycle mutation, no commit, push, checkout/switch,
+branch create/delete/update, worktree add/remove/prune, reset, rebase, merge,
+label, issue/PR create/close/edit, tag, release, or worker dispatch.
+Authorization source:
 `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md`.
+Issue-190 consensus source:
+`.refactor-loop/runs/phase9-issue190-r3-judge.md`.
 """
 
 from __future__ import annotations
@@ -82,6 +89,7 @@ class GhItem:
     number: int
     title: str
     labels: tuple[str, ...]
+    head_ref: str | None = None
 
     @property
     def item(self) -> str:
@@ -520,7 +528,7 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
     items: list[GhItem] = []
     for kind, command in (
         ("issue", ["gh", "issue", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels"]),
-        ("PR", ["gh", "pr", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels"]),
+        ("PR", ["gh", "pr", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,headRefName"]),
     ):
         data = run_json(command, cwd=repo_root)
         if not isinstance(data, list):
@@ -537,8 +545,99 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
                 for label in raw.get("labels", [])
                 if isinstance(label, dict) and label.get("name")
             )
-            items.append(GhItem(kind=kind, number=number, title=str(raw.get("title") or ""), labels=labels))
+            items.append(
+                GhItem(
+                    kind=kind,
+                    number=number,
+                    title=str(raw.get("title") or ""),
+                    labels=labels,
+                    head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
+                )
+            )
     return items
+
+
+def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+
+
+def parse_worktree_branches(porcelain: str) -> dict[str, Path]:
+    worktrees: dict[str, Path] = {}
+    current: Path | None = None
+    for line in porcelain.splitlines():
+        if line.startswith("worktree "):
+            current = Path(line.removeprefix("worktree "))
+            continue
+        if not line.startswith("branch ") or current is None:
+            continue
+        branch = line.removeprefix("branch refs/heads/")
+        if branch and not branch.startswith("refs/"):
+            worktrees[branch] = current
+    return worktrees
+
+
+def safe_head_ref(value: str | None) -> str | None:
+    if not value or value.startswith("-"):
+        return None
+    if any(ch.isspace() or ord(ch) < 32 for ch in value):
+        return None
+    return value
+
+
+def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
+    # Refactor (issue-190/unpushed-worker-output):
+    #   Old pattern: FIX_DONE/IMPLEMENT_DONE could leave committed worker output
+    #   only in a local worktree branch, so reviewers and CI read stale origin.
+    #   New principle: wakeup-plan owns a local read-only topology check; peek
+    #   may reuse this helper as status, but controller push remains external.
+    prs = [item for item in gh_items if item.kind == "PR" and safe_head_ref(item.head_ref)]
+    if not prs:
+        return []
+    fetch = git_text(["git", "-C", str(repo_root), "fetch", "origin", "--quiet"], cwd=repo_root)
+    if fetch.returncode != 0:
+        return []
+    listed = git_text(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"], cwd=repo_root)
+    if listed.returncode != 0:
+        return []
+    worktrees = parse_worktree_branches(listed.stdout)
+    actions: list[dict[str, Any]] = []
+    for item in prs:
+        head_ref = safe_head_ref(item.head_ref)
+        if not head_ref:
+            continue
+        worktree = worktrees.get(head_ref)
+        if worktree is None:
+            continue
+        local = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"], cwd=repo_root)
+        remote_ref = f"refs/remotes/origin/{head_ref}"
+        remote = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref], cwd=repo_root)
+        count = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"], cwd=repo_root)
+        if local.returncode != 0 or remote.returncode != 0 or count.returncode != 0:
+            continue
+        try:
+            ahead_count = int(count.stdout.strip())
+        except ValueError:
+            continue
+        if ahead_count <= 0:
+            continue
+        actions.append(
+            {
+                "priority": 3,
+                "kind": "unpushed-worker-output",
+                "item": item.item,
+                "phase": "controller-push-required",
+                "actor": "controller",
+                "head_ref": head_ref,
+                "worktree": str(worktree),
+                "ahead_count": ahead_count,
+                "local_head": local.stdout.strip(),
+                "remote_head": remote.stdout.strip(),
+                "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
+                "suggested_command": f"python3 <skill-root>/scripts/consensus-rnd-cli safe-push origin {head_ref}",
+                "no_lifecycle_authority": True,
+            }
+        )
+    return actions
 
 
 def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]:
@@ -641,6 +740,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions: list[dict[str, Any]] = []
     actions.extend(pending_bootstrap_actions(repo_root, health))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
+    actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
