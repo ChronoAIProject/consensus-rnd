@@ -819,7 +819,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         """#37 consensus exception allows only private ledger plus fallback event."""
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
         for forbidden in (
-            "WorkUnitV2",
+            "WorkUnitReplacement",
             "ControllerOrchestrator",
             "ControllerEvent",
             "ControllerCommand",

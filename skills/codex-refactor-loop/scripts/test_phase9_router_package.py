@@ -184,7 +184,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
                 self.assertIn(required, src)
 
         for forbidden in (
-            "WorkUnitV2",
+            "WorkUnitReplacement",
             "phase9-evidence",
             "Phase9RoundEvidence",
             "evidence.py",
