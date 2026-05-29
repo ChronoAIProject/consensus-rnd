@@ -44,40 +44,38 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
   schema or runtime contract.
 -->
 These variables are injected by the host project. The skill must not hardcode project facts.
-| Variable | Meaning | Default / example |
-|---|---|---|
-| `$REPO_ROOT` | host repository root | required in `host.env` |
-| `$GH_REPO_SLUG` | GitHub `OWNER/REPO` slug | required for `gh --repo` |
-| `$GH_OWNER` / `$GH_REPO_NAME` | compatibility fields for slug construction | optional compatibility exports |
-| `$BUILD_CMD` | shell command string for build; execute with `bash -lc "$BUILD_CMD"` after sourcing `host.env` | host-specific |
-| `$TEST_CMD` | shell command string for tests; execute with `bash -lc "$TEST_CMD"` after sourcing `host.env` | host-specific |
-| `$INTEGRATION_BRANCH` | integration branch | `auto-refact-dev` |
-| `$REVIEW_BASE_BRANCH` | review base branch | `dev` |
-| `$PROJECT_RULES` | project rules file and Phase 0 fixed-point target | `CLAUDE.md` |
-| `$RELEASE_AUTO_ENABLE` | host opt-in for autonomous release decision artifacts | `false`; noop unless `true` |
-| `$RELEASE_AUTO_MIN_MERGES` | minimum recent merges for the release gate stability signal | `1` |
-| `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | minimum hours since the last release decision | `2` |
-| `$RELEASE_ROLLUP_MIN_COMMITS` | minimum integration-ahead commits before release-rollup pending event | `1` |
-| `$RELEASE_ROLLUP_COOLDOWN_SECONDS` | duplicate pending-event cooldown for the same integration SHA | `21600` |
-| `$CI_GUARDS` | optional CI guard script | host-specific; guard only when non-empty |
-| `$CODEX_FLOOR` | host-scoped codex concurrency floor | default `5`; hard lower bound `2` |
-| `$DEGRADATION_WATCH_INTERVAL_SECONDS` | optional skill degradation runtime hook interval | `1800`; `0` disables runtime hook |
-| `$DEGRADATION_WATCH_TIMEOUT_SECONDS` | skill degradation checker timeout | `30` |
-| `$DEGRADATION_ALERT_TAIL_LINES` | alert tail lines included for degradation failures | `10` |
-| `$SOURCE_GLOBS` | source globs for review diffs | host-specific |
-| `$MAINTAINER_WHITELIST` | handles allowed for comment-monitor/direct-mention maintainer decisions | optional for hosts without that surface; fail-closed requirement when comment-monitor/direct-mention is enabled |
+### Host env surface matrix
+This matrix is the only manually maintained host.env contract. `host.env.example` is a copyable template view; tests derive its expected exports, categories, defaults, and prompt placeholders from this table.
 
-### Host language policy
-These optional fields carry host language, test-layout, comment, schema, and architecture-review policy into prompt text. Their default is empty. Empty means the prompt must infer from existing repository evidence plus `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$TEST_CMD`, `$BUILD_CMD`, and the actual diff; it must not invent C#, .NET, protobuf, or any other host-specific default.
-
-| Variable | Prompt meaning | Empty behavior |
-|---|---|---|
-| `$HOST_TEST_FILE_GLOBS` | writable test file glob or location hints for test-writing/review prompts | infer from existing tests; fail closed if unsafe |
-| `$HOST_TEST_NAMING_RULE` | host test file and test method naming rule | mirror existing tests; do not assume a suffix or extension |
-| `$HOST_COMMENT_RULE` | refactor/self-documentation comment syntax and applicability | match surrounding file style or mark not applicable |
-| `$HOST_CODE_FENCE_LANG` | language tag for illustrative code fences in generated prompt text | omit the language tag |
-| `$HOST_PROTO_POLICY` | schema/protocol review and regeneration policy when applicable | treat schema checks as diff/project-rule driven only |
-| `$HOST_ARCHITECTURE_GREP_CHECKS` | host-specific architecture anti-pattern grep hints for reviewers | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only |
+| Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |
+|---|---|---|---|---|---|---|
+| `$REPO_ROOT` | required | LoopContext | host absolute repo path | fail closed; do not infer from cwd unless an explicit read-only fallback test allows it | LoopContext | `test_loop_context.py` |
+| `$GH_REPO_SLUG` | required | LoopContext | `OWNER/REPO` | fail closed for GitHub operations when absent or not `OWNER/REPO`; preferred slug | LoopContext, release-gate | `test_loop_context.py`, `test_auto_release_gate.py` |
+| `$GH_OWNER` | compatibility | LoopContext | optional owner fallback | noop when `$GH_REPO_SLUG` is present; used only with `$GH_REPO_NAME` compatibility construction | LoopContext | `test_loop_context.py` |
+| `$GH_REPO_NAME` | compatibility | LoopContext | optional repo-name fallback | noop when `$GH_REPO_SLUG` is present; used only with `$GH_OWNER` compatibility construction | LoopContext | `test_loop_context.py` |
+| `$BUILD_CMD` | required | LoopContext | host shell command string | fail closed for build-required work; callers must execute with `bash -lc "$BUILD_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
+| `$TEST_CMD` | required | LoopContext | host shell command string | fail closed for test-required work; callers must execute with `bash -lc "$TEST_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
+| `$INTEGRATION_BRANCH` | defaulted | sync helpers | `auto-refact-dev` | default to `auto-refact-dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` for Phase 0 fixed-point and prompt evidence | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
+| `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
+| `$RELEASE_AUTO_MIN_MERGES` | defaulted | release-gate | `1` | default to `1` recent merge for stability scoring | release-gate | `test_auto_release_gate.py` |
+| `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | defaulted | release-gate | `2` | default to `2` hours since last release decision | release-gate | `test_auto_release_gate.py` |
+| `$RELEASE_ROLLUP_MIN_COMMITS` | defaulted | sync helpers | `1` | default to `1` integration-ahead commit before release-rollup pending event | sync helpers | `test_sync_dev.py` |
+| `$RELEASE_ROLLUP_COOLDOWN_SECONDS` | defaulted | sync helpers | `21600` | default to `21600` seconds before duplicate release-rollup event for the same integration SHA | sync helpers | `test_sync_dev.py` |
+| `$CI_GUARDS` | optional-noop | prompt templates | empty or host guard script | empty skips with reported noop reason `guards skipped: CI_GUARDS unset` | prompt templates | `test_skill_entrypoint_contract.py` |
+| `$CODEX_FLOOR` | defaulted | concurrency floor | `5` | missing or invalid defaults to `5`; values below hard min `2` clamp to `2` | concurrency monitor, wakeup plan | `test_concurrency_monitor.py`, `test_wakeup_plan.py` |
+| `$DEGRADATION_WATCH_INTERVAL_SECONDS` | defaulted | degradation watch | `1800` | missing or invalid defaults to `1800`; `0` disables runtime hook | concurrency monitor | `test_concurrency_monitor.py`, `test_check_skill_degradation.py` |
+| `$DEGRADATION_WATCH_TIMEOUT_SECONDS` | defaulted | degradation watch | `30` | missing or invalid defaults to `30`; values below `1` clamp to `1` | concurrency monitor | `test_concurrency_monitor.py`, `test_check_skill_degradation.py` |
+| `$DEGRADATION_ALERT_TAIL_LINES` | defaulted | degradation watch | `10` | missing defaults to `10` alert tail lines for degradation status surfaces | peek, degradation check | `test_check_skill_degradation.py`, `test_peek_status_lens.py` |
+| `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
+| `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
+| `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_TEST_NAMING_RULE` | prompt-empty-infer | prompt templates | empty | mirror existing tests; do not assume suffix, extension, or framework | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_COMMENT_RULE` | prompt-empty-infer | prompt templates | empty | match surrounding file style or mark not applicable; do not invent a host comment syntax | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_CODE_FENCE_LANG` | prompt-empty-infer | prompt templates | empty | omit language tag; do not invent a host language default | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_PROTO_POLICY` | prompt-empty-infer | prompt templates | empty | treat schema/protocol checks as diff/project-rule driven only; do not invent protobuf or schema defaults | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_ARCHITECTURE_GREP_CHECKS` | prompt-empty-infer | prompt templates | empty | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only | prompt templates | `test_host_env_surface_matrix.py` |
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
@@ -129,7 +127,7 @@ cp <skill-root>/host.env.example .refactor-loop/host.env
 $EDITOR .refactor-loop/host.env
 ```
 
-Fill the required host values in `.refactor-loop/host.env`, including `REPO_ROOT`, `GH_REPO_SLUG`, `BUILD_CMD`, `TEST_CMD`, `SOURCE_GLOBS`, and `MAINTAINER_WHITELIST`. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject.
+Fill `.refactor-loop/host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject.
 
 ### Keep existing daemons alive
 

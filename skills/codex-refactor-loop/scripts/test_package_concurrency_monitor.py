@@ -35,6 +35,7 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 "REPO_ROOT": str(self.repo),
                 "GH_REPO_SLUG": "owner/repo",
                 "CODEX_FLOOR": "2",
+                "DEGRADATION_WATCH_INTERVAL_SECONDS": "0",
             },
             clear=False,
         )

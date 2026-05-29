@@ -292,6 +292,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("DISPATCH_FIRED:fix-pr44-round-3:p0:PR #44 r3 fix needed", events)
 
     def test_tick_p0_no_gap_with_queued_dispatch_fires_topup(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
         self.write_dispatch("p0", "fix-pr57-round-1-a")
         self.write_dispatch("p0", "fix-pr57-round-1-b")
         calls: list[list[str]] = []
@@ -321,6 +323,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         calls: list[list[str]] = []
         counts = [2, 3, 4]
         os.environ["CODEX_FLOOR"] = "4"
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
         self.reload_monitor()
 
         with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
@@ -334,6 +337,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
     def test_tick_dispatches_toward_expected_count_not_just_floor(self) -> None:
         """When expected > floor, tick fires deficit toward expected (not just floor)."""
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
         for i in range(4):
             self.write_dispatch("p1", f"expected-task-{i}")
         active_items = [

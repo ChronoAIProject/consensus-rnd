@@ -381,6 +381,23 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Host command strings must be executed via bash -lc, not as bare lines",
         )
 
+    def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
+        host_config = section_between(
+            self.skill,
+            r"^## Host .+$",
+            r"^## Skill Root Contract$",
+        )
+        self.assertIn("### Host env surface matrix", host_config)
+        self.assertIn("`host.env.example` is a copyable template view", host_config)
+        self.assertIn("the only manually maintained host.env contract", host_config)
+        self.assertIn(
+            "| Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |",
+            host_config,
+        )
+        self.assertIn("host.env` is the only runtime fact injection point", host_config)
+        self.assertNotIn("| Variable | Meaning | Default / example |", host_config)
+        self.assertNotIn("| Variable | Prompt meaning | Empty behavior |", host_config)
+
 
 if __name__ == "__main__":
     unittest.main()
