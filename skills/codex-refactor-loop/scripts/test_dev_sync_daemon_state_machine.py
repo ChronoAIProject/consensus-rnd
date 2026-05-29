@@ -41,6 +41,7 @@ class FakeGit:
         merge_base_adopted: bool = False,
         old_head_is_ancestor: bool = True,
         replay_count: int = 0,
+        integration_ref_exists: bool = True,
     ) -> None:
         self.ahead = ahead
         self.release_ahead = release_ahead
@@ -53,13 +54,17 @@ class FakeGit:
         self.merge_base_adopted = merge_base_adopted
         self.old_head_is_ancestor = old_head_is_ancestor
         self.replay_count = replay_count
+        self.integration_ref_exists = integration_ref_exists
         self.commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess:
         self.commands.append(cmd)
         stdout = ""
         returncode = 0
-        if cmd[:2] == ["git", "fetch"]:
+        if cmd[:5] == ["git", "ls-remote", "--exit-code", "--heads", "origin"]:
+            returncode = 0 if self.integration_ref_exists else 2
+            stdout = f"{self.remote_sha}\trefs/heads/auto-refact-dev\n" if self.integration_ref_exists else ""
+        elif cmd[:2] == ["git", "fetch"]:
             pass
         elif cmd[:3] == ["git", "rev-list", "--count"]:
             spec = cmd[3]
@@ -134,7 +139,7 @@ class IntegrationSyncDaemonBehaviorTests(unittest.TestCase):
 
     def test_merged_rollup_adoption_emits_request_with_ancestry_facts(self) -> None:
         fake = FakeGit(
-            gh_rows=[{"number": 45, "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
+            gh_rows=[{"number": 45, "headRefName": "auto-refact-dev", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
             replay_count=2,
         )
         self.daemon(fake).tick()
@@ -145,6 +150,18 @@ class IntegrationSyncDaemonBehaviorTests(unittest.TestCase):
         self.assertEqual(request["old_rollup_ahead_count"], 2)
         self.assertEqual(request["lifecycle_owner"], "controller")
         self.assertFalse(request["lifecycle_authority"])
+
+    def test_merged_throwaway_rollup_head_emits_adoption_request(self) -> None:
+        fake = FakeGit(
+            gh_rows=[{"number": 46, "headRefName": "rollup/old-head", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
+            replay_count=0,
+        )
+        self.daemon(fake).tick()
+
+        request = self.request_jsons()[0]
+        self.assertEqual(request["kind"], "adopt-merged-rollup")
+        self.assertEqual(request["pr_number"], 46)
+        self.assertEqual(request["old_rollup_head"], "old-head")
 
     def test_forward_sync_review_base_emits_request_without_merge_or_push(self) -> None:
         fake = FakeGit(behind=3, merge_base_adopted=True)
@@ -182,6 +199,13 @@ class IntegrationSyncDaemonBehaviorTests(unittest.TestCase):
         self.assertEqual(event["ahead_count"], 3)
         self.assertEqual(event["reason"], "integration-ahead-review-base-without-open-rollup-pr")
         self.assertEqual(self.request_jsons(), [])
+
+    def test_missing_integration_branch_alerts_and_skips_sync_work(self) -> None:
+        fake = FakeGit(integration_ref_exists=False)
+        self.daemon(fake).tick()
+
+        self.assertEqual(["DEV_SYNC_PENDING:missing-integration-branch:auto-refact-dev"], self.pending_events())
+        self.assertFalse(any(command[:2] == ["git", "fetch"] for command in fake.commands))
 
 
 class IntegrationSyncRequestSchemaTests(unittest.TestCase):
@@ -252,6 +276,13 @@ class IntegrationSyncDaemonSourceRegressionTests(unittest.TestCase):
         for forbidden in ("ControllerLifecycleIntentV1", "ControllerCommand", "ControllerOrchestrator", "generic event bus"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)
+
+    def test_missing_ref_guard_is_literal_and_ls_remote_based(self) -> None:
+        src = DEV_SYNC.read_text(encoding="utf-8")
+        self.assertIn("remote_branch_exists", src)
+        self.assertIn('"ls-remote", "--exit-code", "--heads", "origin"', src)
+        self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
+        self.assertIn('head_name.startswith("rollup/")', src)
 
 
 if __name__ == "__main__":

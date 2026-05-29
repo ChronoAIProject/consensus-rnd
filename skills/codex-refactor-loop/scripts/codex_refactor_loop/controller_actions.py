@@ -222,6 +222,49 @@ class ControllerActions:
         self.gh(["pr", "edit", str(pr_num), "--add-label", "auto-loop,🚀 phase:pr-open,👀 phase:reviewing,🤖 human:auto-推进"], check=False)
         return pr_num, match.group(0)
 
+    def open_release_rollup_pr_from_pending_event(
+        self,
+        event_json: str,
+        body_file: str,
+        title: str = "Release rollup",
+    ) -> tuple[int, str]:
+        # Refactor (issue174-rollup-throwaway-head):
+        # Old pattern: the rollup PR used the shared integration branch as
+        # its head, so GitHub merge/delete-branch flows could delete the
+        # integration branch itself. New principle: re-check the pending-event
+        # SHA, push a controller-owned rollup/<integration_sha> head, and open
+        # the PR from that disposable head only.
+        try:
+            event = json.loads(event_json)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"open_release_rollup_pr_from_pending_event: invalid event json: {exc}") from exc
+        if not isinstance(event, dict):
+            raise RuntimeError("open_release_rollup_pr_from_pending_event: event must be a JSON object")
+
+        integration_branch = str(event.get("integration_branch") or self.integration_branch).strip()
+        review_base_branch = str(event.get("review_base_branch") or self.review_base_branch).strip()
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        if not integration_branch or not review_base_branch or not integration_sha:
+            raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")
+        if not re.fullmatch(r"[0-9A-Za-z._-]+", integration_sha):
+            raise RuntimeError("open_release_rollup_pr_from_pending_event: unsafe integration sha for rollup branch")
+
+        remote = self.git(["ls-remote", "--exit-code", "--heads", "origin", integration_branch], check=False)
+        if remote.returncode != 0 or not remote.stdout.strip():
+            raise RuntimeError(f"open_release_rollup_pr_from_pending_event: missing remote integration branch {integration_branch}")
+        remote_sha = remote.stdout.split()[0]
+        if remote_sha != integration_sha:
+            raise RuntimeError(
+                "open_release_rollup_pr_from_pending_event: stale integration sha "
+                f"{integration_sha}; origin/{integration_branch} is {remote_sha}"
+            )
+
+        rollup_head = f"rollup/{integration_sha}"
+        pushed = self.git(["push", "origin", f"{integration_sha}:refs/heads/{rollup_head}"], check=False)
+        if pushed.returncode != 0:
+            raise RuntimeError(pushed.stderr.strip() or pushed.stdout.strip() or f"failed to push {rollup_head}")
+        return self.open_pr_with_label(title, body_file, base=review_base_branch, head=rollup_head)
+
     def record_recent_pr_merge(self, pr: str) -> None:
         fact_json = ""
         for attempt in range(3):
@@ -359,6 +402,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     open_pr.add_argument("body_file")
     open_pr.add_argument("base", nargs="?")
     open_pr.add_argument("head", nargs="?")
+    rollup_pr = sub.add_parser("open-release-rollup-pr")
+    rollup_pr.add_argument("event_json")
+    rollup_pr.add_argument("body_file")
+    rollup_pr.add_argument("title", nargs="?", default="Release rollup")
     human = sub.add_parser("apply-human-label")
     human.add_argument("pr_number")
     human.add_argument("source_marker", nargs="?")
@@ -376,6 +423,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             return actions.merge_pr(args.pr, args.issue or "")
         if args.command == "open-pr":
             pr_num, url = actions.open_pr_with_label(args.title, args.body_file, args.base, args.head or "")
+            os.environ["PR_NUM"] = str(pr_num)
+            print(url)
+            return 0
+        if args.command == "open-release-rollup-pr":
+            pr_num, url = actions.open_release_rollup_pr_from_pending_event(args.event_json, args.body_file, args.title)
             os.environ["PR_NUM"] = str(pr_num)
             print(url)
             return 0

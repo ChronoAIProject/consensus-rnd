@@ -36,6 +36,7 @@ class FakeGit:
         merge_base_adopted: bool = False,
         old_head_is_ancestor: bool = True,
         replay_count: int = 0,
+        integration_ref_exists: bool = True,
     ) -> None:
         self.ahead = ahead
         self.release_ahead = release_ahead
@@ -48,13 +49,17 @@ class FakeGit:
         self.merge_base_adopted = merge_base_adopted
         self.old_head_is_ancestor = old_head_is_ancestor
         self.replay_count = replay_count
+        self.integration_ref_exists = integration_ref_exists
         self.commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
         self.commands.append(cmd)
         stdout = ""
         returncode = 0
-        if cmd[:2] == ["git", "fetch"]:
+        if cmd[:5] == ["git", "ls-remote", "--exit-code", "--heads", "origin"]:
+            returncode = 0 if self.integration_ref_exists else 2
+            stdout = f"{self.remote_sha}\trefs/heads/auto-refact-dev\n" if self.integration_ref_exists else ""
+        elif cmd[:2] == ["git", "fetch"]:
             pass
         elif cmd[:3] == ["git", "rev-list", "--count"]:
             spec = cmd[3]
@@ -141,7 +146,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
     def test_merged_rollup_adoption_emits_same_artifact_shape(self) -> None:
         fake = FakeGit(
-            gh_rows=[{"number": 45, "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
+            gh_rows=[{"number": 45, "headRefName": "auto-refact-dev", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
             replay_count=2,
         )
         self.daemon(fake).tick()
@@ -152,6 +157,18 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual(2, request["old_rollup_ahead_count"])
         self.assertEqual(45, request["pr_number"])
         self.assertEqual({"reason": "merged-rollup-adoption", "replay_count": 2}, request["evidence"])
+
+    def test_merged_throwaway_rollup_head_emits_adoption_request(self) -> None:
+        fake = FakeGit(
+            gh_rows=[{"number": 46, "headRefName": "rollup/old-head", "headRefOid": "old-head", "mergedAt": "2026-05-25T00:00:00Z"}],
+            replay_count=0,
+        )
+        self.daemon(fake).tick()
+
+        request = self.request_jsons()[0]
+        self.assertEqual("adopt-merged-rollup", request["kind"])
+        self.assertEqual(46, request["pr_number"])
+        self.assertEqual("old-head", request["old_rollup_head"])
 
     def test_forward_sync_review_base_emits_same_artifact_shape(self) -> None:
         fake = FakeGit(behind=3, merge_base_adopted=True)
@@ -190,6 +207,39 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual("2026-05-27T00:00:00Z", event["detected_at"])
         self.assertEqual("integration-ahead-review-base-without-open-rollup-pr", event["reason"])
         self.assertEqual([], self.request_jsons())
+
+    def test_release_rollup_open_same_sha_throwaway_head_suppresses_duplicate_event(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="integration-sha",
+            review_base_sha="base-sha",
+            open_gh_rows=[{"number": 77, "headRefName": "rollup/integration-sha", "headRefOid": "integration-sha"}],
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual([], self.pending_events())
+        self.assertEqual([], self.request_jsons())
+
+    def test_release_rollup_open_stale_throwaway_head_does_not_suppress_event(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="integration-sha",
+            review_base_sha="base-sha",
+            open_gh_rows=[{"number": 77, "headRefName": "rollup/old-sha", "headRefOid": "old-sha"}],
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
+        self.assertEqual([], self.request_jsons())
+
+    def test_missing_integration_branch_appends_alert_event_and_stops(self) -> None:
+        fake = FakeGit(integration_ref_exists=False)
+        self.daemon(fake).tick()
+
+        self.assertEqual(["DEV_SYNC_PENDING:missing-integration-branch:auto-refact-dev"], self.pending_events())
+        self.assertFalse(any(command[:2] == ["git", "fetch"] for command in fake.commands))
 
     def test_resolver_in_flight_scopes_to_repo_or_worktree_and_skips_shell_wrappers(self) -> None:
         repo = Path("/tmp/repo")
@@ -244,9 +294,10 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn("daemon detects and emits", src)
         self.assertIn("IntegrationSyncRequest; controller owns apply", src)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed:", src)
+        self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
+        self.assertIn('head_name.startswith("rollup/")', src)
         self.assertIn("DEV_SYNC_REQUEST:", src)
 
 
 if __name__ == "__main__":
     unittest.main()
-
