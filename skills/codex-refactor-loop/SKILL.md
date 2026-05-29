@@ -267,6 +267,21 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Consensus-rnd Phase design-consensus r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
 
+## Dogfood anti-rules(per #205)
+
+<!-- Refactor (iter205/issue-205):
+  Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+  New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+-->
+
+These are local controller contract rules learned from dogfood incidents:
+
+1. Audit fallback may have only one active `audit-iter-N` for the same `N` at a time; never start parallel audit runs that reuse `audit-iter-N.md`, `audit-iter-N-candidates.ndjson`, or `audit-iter-N.log`.
+2. Audit prompt rendering fails closed when `ITERATION` is empty; do not write `audit-iter-.md`, `audit-iter--candidates.ndjson`, or similarly empty-identity artifacts.
+3. Any new role prompt under `skills/codex-refactor-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
+4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; only missing or invalid review artifacts fall back to clean log-tail `REVIEW_DONE` markers.
+5. Daemon recovery goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
+
 ## Wakeup Skeleton
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
@@ -764,7 +779,7 @@ Producer rules:
 Consensus-rnd Phase work-intake guardrails:
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
-2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`.
+2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`; `N` must be nonempty and unique among currently active audit fallback runs.
 3. Convert accepted units into work-unit items before dispatch.
 4. Clean stale worktrees before audit pollution can affect decisions.
 5. For `requires_design`, open or update GitHub design issues and label them `🔍 phase:design-solving` plus `🤖 human:auto-推进`.

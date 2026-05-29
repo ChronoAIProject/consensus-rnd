@@ -172,6 +172,9 @@ class PeekStatusLens:
         return out
 
     def _mergeable_prs(self) -> list[str]:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
         out = []
         for num in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], []):
             pr_num = str(num.get("number")) if isinstance(num, dict) else ""
@@ -185,7 +188,12 @@ class PeekStatusLens:
                 continue
             approve = comment = reject = 0
             for role in ("architect", "tests", "quality"):
-                verdict = extract_review_verdict_tail(self.ctx.paths.logs / f"review-pr{pr_num}-{role}-r{max_round}.log", pr_num, role)
+                verdict = extract_review_verdict(
+                    self.ctx.paths.runs / f"review-pr{pr_num}-{role}-r{max_round}.md",
+                    self.ctx.paths.logs / f"review-pr{pr_num}-{role}-r{max_round}.log",
+                    pr_num,
+                    role,
+                )
                 if verdict == "approve":
                     approve += 1
                 elif verdict == "comment":
@@ -354,6 +362,33 @@ def extract_review_verdict_tail(log_path: Path, pr_num: str, role: str) -> str:
         if match:
             verdict = match.group(1)
     return verdict
+
+
+def extract_review_verdict(artifact_path: Path, log_path: Path, pr_num: str, role: str) -> str:
+    # Refactor (iter205/issue-205):
+    #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+    #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+    verdict = _review_artifact_frontmatter_verdict(artifact_path)
+    if verdict:
+        return verdict
+    return extract_review_verdict_tail(log_path, pr_num, role)
+
+
+def _review_artifact_frontmatter_verdict(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if not text.startswith("---\n"):
+        return ""
+    end = text.find("\n---", 4)
+    if end == -1:
+        return ""
+    for line in text[4:end].splitlines():
+        match = re.match(r"\s*verdict\s*:\s*(approve|comment|reject)\s*$", line)
+        if match:
+            return match.group(1)
+    return ""
 
 
 def _tail(path: Path, count: int) -> list[str]:
