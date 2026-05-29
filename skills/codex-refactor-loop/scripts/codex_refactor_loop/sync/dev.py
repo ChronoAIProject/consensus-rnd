@@ -179,23 +179,38 @@ def dispatch_codex_resolve(
     spawn_codex: Path,
     logger: Callable[[str], None] = log,
 ) -> None:
-    """Spawn a codex to resolve the in-progress merge conflicts in worktree."""
+    """Spawn a codex to resolve the in-progress merge conflicts in worktree.
+
+    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
+    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+    """
+    ctx = LoopContext.load(repo_root=main_repo)
     ts = int(time.time())
     prompt_file = main_repo / ".refactor-loop" / "prompts" / f"dev-sync-conflict-{ts}.md"
     log_file = main_repo / ".refactor-loop" / "logs" / f"dev-sync-codex-{ts}.log"
+    worktree_display = ctx.durable_artifact_path(worktree)
+    main_repo_display = "."
+    prompt_file_display = ctx.durable_artifact_path(prompt_file)
+    log_file_display = ctx.durable_artifact_path(log_file)
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
     prompt_body = f"""# Task: resolve merge conflict on {integration} from origin/{review_base} sync
 
 ## Context
 
 dev_sync_daemon (Python) detected a conflict in the dedicated worktree
-`{worktree}`. Resolve conflicts and stage files in that worktree, then emit the
+`{worktree_display}`. The worker is launched with --cd already set to that
+dedicated worktree. Resolve conflicts and stage files in that worktree, then emit the
 marker. The daemon owns the later narrow #53 integration-branch apply after it
 detects a resolved merge state.
 
+Durable artifact paths in this prompt are repo-relative text:
+- main repo: `{main_repo_display}`
+- prompt artifact: `{prompt_file_display}`
+- resolver log artifact: `{log_file_display}`
+
 ## Task
 
-1. `cd {worktree}`
+1. Confirm `pwd` is the dedicated worktree.
 2. Run `git status` to find conflicted files.
 3. Read each conflicted file and understand `origin/{review_base}` changes
    versus `{integration}` changes.
@@ -216,7 +231,7 @@ detects a resolved merge state.
   resolution and build verification.
 - Proto field conflicts with the same field number and different semantics
   must emit `DEV_SYNC_BLOCKED:proto-schema-conflict`.
-- Do all work in the worktree and do not modify main repo `{main_repo}`.
+- Do all work in the worktree and do not modify main repo `{main_repo_display}`.
 
 Write the marker to stdout when done so the daemon can read it from the log:
 - Success: `DEV_SYNC_RESOLVED:<file1>,<file2>,...`
@@ -225,7 +240,7 @@ Write the marker to stdout when done so the daemon can read it from the log:
 ⟦AI:AUTO-LOOP⟧
 """
     prompt_file.write_text(prompt_body)
-    logger(f"dispatching codex: prompt={prompt_file} log={log_file}")
+    logger(f"dispatching codex: prompt={prompt_file_display} log={log_file_display}")
     subprocess.Popen(
         [
             "nohup",
@@ -288,7 +303,11 @@ class RollupDetection:
 # carry stable artifact intent; compatibility/version policy lives in
 # contracts/tests, not identifier suffixes.
 class IntegrationSyncDaemon:
-    """Narrow detector and executor for integration-branch sync transitions."""
+    """Narrow detector and executor for integration-branch sync transitions.
+
+    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
+    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+    """
 
     def __init__(
         self,
