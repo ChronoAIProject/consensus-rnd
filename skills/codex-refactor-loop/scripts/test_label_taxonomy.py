@@ -40,6 +40,12 @@ class LabelTaxonomyTests(unittest.TestCase):
         self.assertEqual(labels.phase_expected_workers(labels.PHASE_FIXING), 1)
         self.assertEqual(labels.actor_for_phase(labels.PHASE_REVIEWING), "reviewer-codex")
 
+    def test_managed_query_labels_include_canonical_and_legacy_aliases(self) -> None:
+        self.assertEqual(
+            labels.query_labels_for(labels.MANAGED),
+            (labels.MANAGED, "auto-loop", "phase9-auto-solve", "refactor-design-needed"),
+        )
+
     def test_exactly_one_phase_and_human_invariant(self) -> None:
         ok, errors = labels.validate_exactly_one_phase_human(
             [labels.MANAGED, labels.PHASE_DESIGN_SOLVING, labels.HUMAN_AUTO]

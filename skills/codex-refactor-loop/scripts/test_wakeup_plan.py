@@ -19,6 +19,7 @@ SKILL_ROOT = SCRIPT_PATH.parents[1]
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
+from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 
 
@@ -51,8 +52,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 #!/usr/bin/env bash
                 fixture="${WAKEUP_PLAN_GH_FIXTURE:-empty}"
                 args="$*"
-                if [[ "$1 $2" == "issue list" ]]; then
+                cmd1="$1"
+                cmd2="$2"
+                label=""
+                while [[ "$#" -gt 0 ]]; do
+                  if [[ "$1" == "--label" ]]; then
+                    label="$2"
+                    break
+                  fi
+                  shift
+                done
+                if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" && "$args" == *" list "* && -n "$label" ]]; then
+                  printf '%s %s\n' "$cmd1" "$label" >> "$WAKEUP_PLAN_GH_QUERY_LOG"
+                fi
+                if [[ "$cmd1 $cmd2" == "issue list" ]]; then
                   case "$fixture" in
+                    managed_dual_read)
+                      case "$label" in
+                        crnd:lifecycle:managed)
+                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        auto-loop)
+                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"legacy issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"🤖 human:codex"}]}]\n'
+                          ;;
+                        phase9-auto-solve|refactor-design-needed)
+                          printf '[]\n'
+                          ;;
+                        *)
+                          printf '[]\n'
+                          ;;
+                      esac
+                      ;;
                     milestone)
                       printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
@@ -76,8 +106,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   esac
                   exit 0
                 fi
-                if [[ "$1 $2" == "pr list" ]]; then
+                if [[ "$cmd1 $cmd2" == "pr list" ]]; then
                   case "$fixture" in
+                    managed_dual_read)
+                      case "$label" in
+                        crnd:lifecycle:managed)
+                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        auto-loop)
+                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        phase9-auto-solve)
+                          printf '[]\n'
+                          ;;
+                        refactor-design-needed)
+                          printf '[{"number":92,"title":"legacy PR","headRefName":"impl/legacy","labels":[{"name":"refactor-design-needed"},{"name":"🔍 phase:design-solving"},{"name":"🤖 human:auto-推进"}]}]\n'
+                          ;;
+                        *)
+                          printf '[]\n'
+                          ;;
+                      esac
+                      ;;
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
                       printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
@@ -105,7 +154,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   esac
                   exit 0
                 fi
-                if [[ "$1 $2" == "pr checks" ]]; then
+                if [[ "$cmd1 $cmd2" == "pr checks" ]]; then
                   if [[ "$fixture" == "ci_red" && "$args" == *"31"* ]]; then
                     printf '[{"bucket":"fail"}]\n'
                   else
@@ -113,7 +162,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   fi
                   exit 0
                 fi
-                if [[ "$1 $2" == "issue view" || "$1 $2" == "pr view" ]]; then
+                if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
                   printf '{"comments":[]}\n'
                   exit 0
                 fi
@@ -215,6 +264,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
                 "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
+                "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
             }
         )
         result = subprocess.run(
@@ -345,6 +395,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
         self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
+
+    def test_load_github_items_queries_canonical_and_legacy_managed_labels_once(self) -> None:
+        plan = self.run_plan(fixture="managed_dual_read")
+
+        existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
+        self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
+        query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8").splitlines()
+        expected = [
+            f"{kind} {label}"
+            for kind in ("issue", "pr")
+            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+        ]
+        self.assertEqual(query_log, expected)
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
         plan = self.run_plan(fixture="non_action_statuses")
