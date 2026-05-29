@@ -85,6 +85,16 @@
 
 改版本号时,`.version-bump.json` 列出的所有文件必须同步为同一版本:`package.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、`.codex-plugin/plugin.json`、`.cursor-plugin/plugin.json`、`gemini-extension.json`。漏改任一份会让某个平台装到旧版。
 
+## 版本迭代(规范)
+
+发版坐标走 semver,迭代有固定阶梯与触发,**不临时拍版本、不在红信号上发**:
+
+- **预发布阶梯**:`X.Y.Z-beta.N` → `X.Y.Z-rc.N` → `X.Y.Z`(GA)。同阶位只递增 `N`;升阶位(beta→rc→GA)需 release gate 连续达标且无回归证据。
+- **gate 驱动,不手动选号**:发版由 release gate 全绿(信号全过)+ host opt-in(`RELEASE_AUTO_ENABLE=true`)触发;版本号由上一发布坐标机械递推,禁止临时手选或跳号。
+- **不在红信号上发版**:双分支(`$REVIEW_BASE_BRANCH` + `$INTEGRATION_BRANCH`)required checks 全绿、稳定性信号(含 P0 streak)已清才发;gate 红即不发,先修再发。
+- **坏版即弃,不动已发 tag**:已发布 tag 不可移动 / 复用 / 回填;发版提交若有缺陷,修复后以**下一个预发布号取代**(坏 `beta.N` → `beta.N+1`),旧 tag 保留为历史。
+- **tag 必须指向绿提交**:tag 只能打在 required checks 已绿的提交上,且该提交的 manifest 版本与 tag 号一致(承「版本同步」)。
+
 ## 工程约定(精简)
 
 - **文档分层**:`README.md` 是仓库定位与共识引擎设计哲学权威源;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 放重型参考。三者职责不重叠,改动只更新对应一处。
