@@ -210,9 +210,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("daemon-owned output logs remain `phase9-issue...`", self.skill)
         self.assertIn("clean `^EXIT=0`", self.skill)
         self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.skill)
+        for token in (
+            "route",
+            "target_actor",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_path",
+            "independence_check",
+            "phase9-triplet-evidence-invalid",
+            "Router recovery/idempotency reads only `key`",
+            "meta-judge decisions read solver logs, not ledger evidence",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+
+    def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        for token in (
+            "Refactor (iter1/issue-167)",
+            "Old pattern: solver triplet handoff recorded only the base dispatch row",
+            "durable triplet provenance",
+            "visible same-round peer artifact reference failure",
+            "New principle: keep row-level router-private ledger provenance",
+            "narrow fail-closed peer artifact token check",
+            "do not add a",
+            "standalone evidence file",
+            "hash",
+            "lifecycle authority",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
 
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
