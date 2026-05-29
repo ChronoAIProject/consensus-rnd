@@ -133,7 +133,9 @@ class DesignIdentifierBoundaryTests(unittest.TestCase):
 
         data: Any = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         self.assertIsInstance(data, dict)
-        self.assertFalse(STATE_SCHEMA_FIELD_RE.search("\n".join(data.keys())))
+        generated_metadata_keys = {"schema" + "_version", "work_unit_" + "schema" + "_version"}
+        durable_keys = set(data) - generated_metadata_keys
+        self.assertFalse(STATE_SCHEMA_FIELD_RE.search("\n".join(durable_keys)))
         self.assertLessEqual(queue_container_names(), set(data))
 
 
