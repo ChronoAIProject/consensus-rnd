@@ -257,20 +257,31 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Phase 9 router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
-`peek.sh` is a status lens, not routing authority; route actions still come from Phase Routing, clean-exit sweep, and the Phase 9 router daemon.
+`wakeup_plan.py` is the prioritized-next-action reader. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `wakeup_plan.py`,据其输出执行。Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md`. `wakeup_plan.py` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒,除非已到 `AUDIT_DONE:none:0` fixed point 并输出 `CONCURRENCY_LOW:no-work-after-audit-none`.
 
-1. Run `bash <skill-root>/scripts/peek.sh | tail -80` first.
-2. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-3. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
-4. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
-5. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
-6. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
-7. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
-8. Post GitHub banner and sync labels for each state transition.
-9. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
-10. Spawn the next codexes with harness background tasks if actionable work exists.
-11. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
-12. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
+`peek.sh` is a status lens, not routing authority; it remains useful for human-readable ambient state after the plan. `wakeup_plan.py` outputs prioritized routing recommendations from local evidence plus GitHub labels; `peek.sh` displays status and does not decide next action.
+
+1. Run `python3 <skill-root>/scripts/wakeup_plan.py --repo-root "$REPO_ROOT"` first and follow its prioritized `actions` / `recommendation` output.
+2. Run `bash <skill-root>/scripts/peek.sh | tail -80` as the status lens.
+3. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
+4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `bash <skill-root>/scripts/restart-daemons.sh`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+5. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
+6. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
+7. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
+8. Apply phase routing in the same turn; do not leave an actionable marker for the next wakeup.
+9. Post GitHub banner and sync labels for each state transition.
+10. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
+11. Spawn the next codexes with harness background tasks if actionable work exists.
+12. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
+13. Run `peek.sh | tail -80` again after spawn, merge, banner, or close actions.
+
+`wakeup_plan.py` named read-only surface:
+
+- **Allowed**: read `.refactor-loop` files, scan `.refactor-loop/heartbeats/*.ts`, read clean-exit log tails, run read-only GitHub list/check/view commands, and print JSON recommendations.
+- **Forbidden / no lifecycle authority**: no restart, no spawn, no git, no commit, no push, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
+- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup, except at the `AUDIT_DONE:none:0` fixed point.
+- Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, completed `EXIT=0` marker, CI red, no-gap violation, `🎯 milestone` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
+- If no actionable work exists before the latest controller-validated `AUDIT_DONE:none:0`, it emits `RECOMMEND:audit`; after that fixed point it emits `CONCURRENCY_LOW:no-work-after-audit-none`.
 
 ## Phase Index
 
@@ -643,23 +654,24 @@ Operational details live in [language policy details](#language-policy-details);
 
 Use this checklist literally on each wakeup:
 
-1. Peek first.
-2. Load host config.
-3. Check pending daemon events.
-4. Sweep GitHub comments with sentinel/bot filters.
-5. Sweep log tails for `EXIT=0`.
-6. Parse markers only after clean exit.
-7. Route all actionable completions.
-8. Post GitHub status before or with spawned work.
-9. Sync phase and human labels.
-10. Check open PR CI failures.
-11. Verify daemon singleton health.
-12. Enforce floor before sleep.
-13. Spawn next codexes with harness tracking.
-14. Commit/push only when controller-owned lifecycle requires it.
-15. Confirm wake source, including maintaining the daemon-event Monitor bridge.
-16. Peek again after visible actions.
-17. End only when GitHub reflects the current state.
+1. Mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root "$REPO_ROOT"` and execute from its prioritized output.
+2. Peek for human-readable status.
+3. Load host config.
+4. Check pending daemon events.
+5. Sweep GitHub comments with sentinel/bot filters.
+6. Sweep log tails for `EXIT=0`.
+7. Parse markers only after clean exit.
+8. Route all actionable completions.
+9. Post GitHub status before or with spawned work.
+10. Sync phase and human labels.
+11. Check open PR CI failures.
+12. Verify daemon singleton health.
+13. Enforce floor before sleep.
+14. Spawn next codexes with harness tracking.
+15. Commit/push only when controller-owned lifecycle requires it.
+16. Confirm wake source, including maintaining the daemon-event Monitor bridge.
+17. Peek again after visible actions.
+18. End only when GitHub reflects the current state.
 
 Priority order when multiple actions are possible:
 

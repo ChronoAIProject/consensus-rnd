@@ -11,6 +11,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+WAKEUP_PLAN = SKILL_ROOT / "scripts" / "wakeup_plan.py"
 
 
 def read(path: Path) -> str:
@@ -160,8 +161,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
             r"^## Phase Index$",
         )
         self.assertTrue(skeleton)
+        self.assertIn("wakeup_plan.py", skeleton)
+        self.assertIn("every wakeup must mechanically call", skeleton)
         required_order = (
             "must arm or confirm the mounted persistent Monitor bridge before pending-event sweep",
+            "Run `python3 <skill-root>/scripts/wakeup_plan.py --repo-root \"$REPO_ROOT\"` first",
             "Arm or confirm the persistent daemon-event Monitor bridge",
             "Sweep GitHub comments and pending events",
             "Spawn the next codexes",
@@ -179,6 +183,56 @@ class SkillEntrypointContractTests(unittest.TestCase):
             skeleton,
             r"Confirm a wake source: an active daemon-event Monitor bridge,.*or.*ScheduleWakeup",
         )
+
+    def test_wakeup_plan_entrypoint_contract_is_read_only_and_authorized(self) -> None:
+        skeleton = section_between(
+            self.skill,
+            r"^## Wakeup Skeleton$",
+            r"^## Phase Index$",
+        )
+        checklist = section_between(
+            self.skill,
+            r"^## Controller Wakeup Checklist$",
+            r"^## ",
+        )
+        combined = f"{skeleton}\n{checklist}"
+        for needle in (
+            "wakeup_plan.py",
+            "每次唤醒",
+            "Mechanically call `python3 <skill-root>/scripts/wakeup_plan.py --repo-root \"$REPO_ROOT\"`",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+            "**Allowed**",
+            "**Forbidden / no lifecycle authority**",
+            "no restart",
+            "no spawn",
+            "no git",
+            "no GitHub lifecycle mutation",
+            "`RECOMMEND:audit`",
+            "`CONCURRENCY_LOW:no-work-after-audit-none`",
+            "deficit hard-gate",
+            "controller 不得带 `deficit>0` 结束唤醒",
+            "`HARD_GATE:dispatch_required=N`",
+            "structured `hard_gate`",
+            "not advisory",
+            "`peek.sh` is a status lens",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
+        script = read(WAKEUP_PLAN)
+        for needle in (
+            "Allowed: read `.refactor-loop` files",
+            "Forbidden: no restart/spawn, no git",
+            "no GitHub lifecycle mutation",
+            "no_lifecycle_authority",
+            "count_in_flight_codex",
+            "HARD_GATE:dispatch_required",
+            "hard_gate",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, script)
 
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(
