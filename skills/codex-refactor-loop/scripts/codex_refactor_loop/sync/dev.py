@@ -9,6 +9,7 @@ package module; legacy callers remain on the old script until the caller switch.
 
 from __future__ import annotations
 
+import argparse
 import fcntl
 import json
 import os
