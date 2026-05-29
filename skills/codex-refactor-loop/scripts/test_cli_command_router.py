@@ -132,6 +132,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "post-banner",
                 "release-gate",
                 "release-required-checks",
+                "render-github-body",
                 "merge-pr",
                 "open-pr",
                 "open-release-rollup-pr",
@@ -185,7 +186,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "statusline", "sync-request", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "sync-request", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 

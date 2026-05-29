@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.github_body import render_github_body
 from codex_refactor_loop.triage import ACCEPT_LABELS, TriageApplyConfig, apply_decision
 
 
@@ -33,6 +34,13 @@ class PackageTriageDecisionTests(unittest.TestCase):
         )
         (runs / "comment.md").write_text("comment\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
         (runs / "body.md").write_text("body\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        (runs / "authority.md").write_text("完整授权内容\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        self.self_contained_triage_body = render_github_body(
+            kind="triage",
+            title="triage accepted",
+            artifact_paths=[runs / "authority.md"],
+            debug_paths=[".refactor-loop/runs/authority.md"],
+        )
         self.decision_path = runs / "triage-issue-53.json"
         self.config = TriageApplyConfig(LoopContext.load(repo_root=self.repo))
         self.write_decision()
@@ -89,6 +97,8 @@ class PackageTriageDecisionTests(unittest.TestCase):
 
     def test_accept_happy_path_comments_edits_body_adds_fixed_labels_and_records_applied(self) -> None:
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text(self.self_contained_triage_body, encoding="utf-8")
+        (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(self.self_contained_triage_body, encoding="utf-8")
         calls: list[list[str]] = []
 
         def fake_gh(args: list[str], *, repo: Path, repo_slug: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -161,6 +171,20 @@ class PackageTriageDecisionTests(unittest.TestCase):
         self.assertIn("comment artifact missing final sentinel", self.rejected_record().read_text(encoding="utf-8"))
         self.assertEqual(mock_gh.call_count, 0)
 
+    def test_accept_rejects_path_only_authority_before_github_mutation(self) -> None:
+        self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        path_only = "## 🤖 triage\n\n授权:.refactor-loop/runs/phase9-issue192-r1-judge.md\n\n⟦AI:AUTO-LOOP⟧\n"
+        (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text(path_only, encoding="utf-8")
+        (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(path_only, encoding="utf-8")
+        mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
+
+        with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+            with patch("codex_refactor_loop.triage.run_gh", mock_gh):
+                self.assertEqual(apply_decision(self.config, self.decision_path, issue_number=53, verdict="accept"), 2)
+
+        self.assertIn("local .refactor-loop artifact path", self.rejected_record().read_text(encoding="utf-8"))
+        self.assertEqual(mock_gh.call_count, 0)
+
     def test_schema_rejects_command_like_lifecycle_fields(self) -> None:
         self.write_decision(close=True)
         with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
@@ -188,6 +212,7 @@ class PackageTriageSourceRegressionTests(unittest.TestCase):
             "controller",
             "host.env",
             "⟦AI:AUTO-LOOP⟧",
+            "validate_self_contained_github_body",
             "--body-file",
             "--remove-label",
             "--add-label",

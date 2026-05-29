@@ -28,6 +28,8 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp))
+        self.pr_body = self.tmp / "pr-body.md"
+        self.pr_body.write_text("## 🤖 PR ready\n\n自包含正文。\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
@@ -74,7 +76,7 @@ class ControllerActionsTests(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(self.actions, "git", side_effect=fake_git), mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-            pr_num, _url = self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), "body.md")
+            pr_num, _url = self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(self.pr_body))
 
         self.assertEqual(77, pr_num)
         self.assertIn(["push", "origin", "abc123:refs/heads/rollup/abc123"], git_calls)
@@ -154,6 +156,36 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(["push", "origin", "abc123:refs/heads/rollup/abc123"], git_calls)
         self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
 
+    def test_open_pr_with_label_fails_closed_before_create_for_path_only_authority(self) -> None:
+        bad_body = self.tmp / "bad-pr-body.md"
+        bad_body.write_text("## 🤖 PR ready\n\n授权:.refactor-loop/runs/phase9-issue192-r1-judge.md\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77\n", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "local .refactor-loop artifact path"):
+                self.actions.open_pr_with_label("title", str(bad_body), head="refactor/branch")
+
+        self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+
+    def test_open_pr_with_label_accepts_self_contained_body(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            pr_num, _url = self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+        self.assertEqual(77, pr_num)
+        self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
@@ -161,6 +193,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_dev_sync_request_marker", "apply_triage_decision_marker", "render_template"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
+        self.assertIn("validate_self_contained_github_body", text)
 
     def test_rollup_helper_uses_throwaway_head_ref(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

@@ -15,6 +15,7 @@ from string import Template
 from typing import Mapping, Sequence
 
 from .context import LoopContext, LoopContextError
+from .github_body import GitHubBodyError, validate_self_contained_github_body
 
 
 PR_LABELS_REMOVE = (
@@ -213,6 +214,13 @@ class ControllerActions:
         base = base or self.integration_branch
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        try:
+            validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=False)
+        except GitHubBodyError as exc:
+            raise RuntimeError(str(exc)) from exc
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)

@@ -1697,7 +1697,8 @@ For each `pass` cluster, serially:
 
     <N files changed (+X/-Y). Targeted test pass counts. Architecture guards green.>
 
-    See [implement summary](./.refactor-loop/runs/implement-<cluster-id>.md) and [audit](./.refactor-loop/runs/audit-iter-<N>.md#<cluster-anchor>).
+    Inline the implement summary and audit excerpt with `consensus-rnd-cli render-github-body`.
+    Local `.refactor-loop/runs/*.md` paths may appear only under `<details><summary>本机调试线索</summary>` and never as the authority source.
 
     ## Stacked-PR
 
@@ -2015,7 +2016,7 @@ Escalation action:
 
 ### GitHub traceability (mandatory — every Phase 8 action posts to the PR)
 
-All review/fix/consensus/escalation behavior MUST be observable on GitHub so the whole loop is traceable without reading local `.refactor-loop/` artifacts. Natural-language GitHub posts follow the skill language rule.
+All review/fix/consensus/escalation behavior MUST be observable on GitHub so the whole loop is traceable without reading local `.refactor-loop/` artifacts. Authority-bearing GitHub bodies(PR description, design issue body, consensus/authorization comment, escalation comment, triage body-comment) must inline the cited artifact text; local `.refactor-loop/runs/*.md` paths are allowed only under `<details><summary>本机调试线索</summary>` and never as the only source. Natural-language GitHub posts follow the skill language rule.
 
 **Hard rule**: all natural-language GitHub posts go through the codex role that produced the artifact, NOT directly composed by controller.
 
