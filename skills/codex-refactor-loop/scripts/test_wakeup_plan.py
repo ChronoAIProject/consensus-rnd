@@ -74,6 +74,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
                       printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
+                    unpushed_head_dash)
+                      printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    unpushed_head_space)
+                      printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    unpushed_head_control)
+                      printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
                     ci_red)
                       printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
                       ;;
@@ -255,24 +264,33 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 plan = self.run_plan(fixture=fixture)
                 self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
 
+    def test_unpushed_worker_output_ignores_unsafe_head_ref_before_worktree_git_probes(self) -> None:
+        for fixture in ("unpushed_head_dash", "unpushed_head_space", "unpushed_head_control"):
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+                command_log = self.repo / "git-commands.log"
+                commands = command_log.read_text(encoding="utf-8").splitlines() if command_log.exists() else []
+
+                self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
+                self.assertFalse(any("rev-parse --verify HEAD" in command for command in commands))
+                self.assertFalse(any("rev-list --count" in command for command in commands))
+
     def test_unpushed_worker_output_uses_only_allowlisted_git_topology_probes(self) -> None:
         self.run_plan(fixture="unpushed")
 
         commands = (self.repo / "git-commands.log").read_text(encoding="utf-8").splitlines()
-        allowed_fragments = (
-            "-C",
-            "fetch origin --quiet",
-            "worktree list --porcelain",
-            "rev-parse --verify HEAD",
-            "rev-parse --verify refs/remotes/origin/refactor/iter77-worker",
-            "rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD",
+        repo_root = str(self.repo.resolve())
+        worktree = f"{repo_root}/.worktrees/pr77"
+        allowed_commands = (
+            f"-C {repo_root} fetch origin --quiet",
+            f"-C {repo_root} worktree list --porcelain",
+            f"-C {worktree} rev-parse --verify HEAD",
+            f"-C {worktree} rev-parse --verify refs/remotes/origin/refactor/iter77-worker",
+            f"-C {worktree} rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD",
         )
-        self.assertTrue(any("fetch origin --quiet" in command for command in commands))
-        self.assertTrue(any("worktree list --porcelain" in command for command in commands))
-        self.assertTrue(any("rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD" in command for command in commands))
+        self.assertEqual(commands, list(allowed_commands))
         for command in commands:
             with self.subTest(command=command):
-                self.assertTrue(any(fragment in command for fragment in allowed_fragments))
                 self.assertNotRegex(command, r"\b(push|commit|checkout|switch|reset|rebase|merge|tag)\b")
                 self.assertNotRegex(command, r"\b(add|remove|prune)\b")
 
