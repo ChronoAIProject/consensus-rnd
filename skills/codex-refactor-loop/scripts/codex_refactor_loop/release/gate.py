@@ -23,9 +23,9 @@ from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProje
 #   New principle: keep every gate signal and artifact byte-for-byte compatible,
 #   but expose package functions/classes from codex_refactor_loop.release.gate.
 #   This module remains decision-artifact-only per
-#   .refactor-loop/runs/phase9-issue56-r2-judge.md; it has no lifecycle
-#   authority and does not bump, commit, push, tag, publish, merge, close, or
-#   mutate issue/PR labels.
+#   skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56;
+#   it has no lifecycle authority and does not bump, commit, push, tag,
+#   publish, merge, close, or mutate issue/PR labels.
 
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"

@@ -35,6 +35,7 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
+        "skills/codex-refactor-loop/authorizations/runtime-exceptions.md",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
