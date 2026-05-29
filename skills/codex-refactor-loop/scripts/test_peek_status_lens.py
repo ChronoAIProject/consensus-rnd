@@ -24,8 +24,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.fakebin = self.root / "fakebin"
         self.logs = self.root / ".refactor-loop" / "logs"
+        self.runs = self.root / ".refactor-loop" / "runs"
         self.fakebin.mkdir(parents=True)
         self.logs.mkdir(parents=True)
+        self.runs.mkdir(parents=True)
         self.write_fake_git()
         self.write_fake_gh()
 
@@ -252,6 +254,9 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(alert.read_text(encoding="utf-8"), "[2026-05-27T00:00:00Z] skill-degradation-alert returncode=1\n")
 
     def test_peek_review_merge_readiness_uses_tail_only_review_done(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
         pr = 123
         (self.logs / f"review-pr{pr}-architect-r1.log").write_text(
             f"REVIEW_DONE:{pr}:architect:approve\nEXIT=0\n",
@@ -275,6 +280,35 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("MERGE_READY approve=2 comment=1 reject=0", result.stdout)
         self.assertNotIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
+
+    def test_peek_review_merge_readiness_prefers_artifact_frontmatter_verdict(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+        pr = 124
+        for role in ("architect", "tests", "quality"):
+            (self.logs / f"review-pr{pr}-{role}-r1.log").write_text(
+                f"quoted prompt REVIEW_DONE:{pr}:{role}:approve\n"
+                f"REVIEW_DONE:{pr}:{role}:reject\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (self.runs / f"review-pr{pr}-{role}-r1.md").write_text(
+                "---\n"
+                f"pr: {pr}\n"
+                f"role: {role}\n"
+                "verdict: approve\n"
+                "---\n"
+                "\n"
+                f"Body may quote REVIEW_DONE:{pr}:{role}:reject without authority.\n",
+                encoding="utf-8",
+            )
+
+        result = self.run_peek(pr=pr)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("MERGE_READY approve=3 comment=0 reject=0", result.stdout)
+        self.assertNotIn("reject=3", result.stdout)
 
     def test_peek_displays_unpushed_worker_output_as_status_only(self) -> None:
         result = self.run_peek(pr=77, unpushed=True)

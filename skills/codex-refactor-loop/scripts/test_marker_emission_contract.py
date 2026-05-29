@@ -185,6 +185,9 @@ def artifact_profile_anchors(body: str) -> list[str]:
 
 
 class MarkerEmissionContractTests(unittest.TestCase):
+    # Refactor (iter205/issue-205):
+    #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+    #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
     def test_each_prompt_declares_exact_allowlist_section(self) -> None:
         for filename, allowed_markers in PROMPT_ALLOWLISTS.items():
             with self.subTest(prompt=filename):
@@ -225,6 +228,7 @@ class MarkerEmissionContractTests(unittest.TestCase):
         }
 
         self.assertEqual(role_prompt_files, set(PROMPT_ALLOWLISTS))
+        self.assertEqual(role_prompt_files, set(PROMPT_ARTIFACT_PROFILES))
 
     def test_active_prompts_do_not_require_parallel_language_sections(self) -> None:
         forbidden_patterns = (
@@ -271,6 +275,17 @@ class MarkerEmissionContractTests(unittest.TestCase):
     def test_github_post_rules_declares_post_body_artifact_profile(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
         self.assertEqual(artifact_profile_anchors(body), ["github-ai-post-body"])
+
+    def test_skill_documents_prompt_inventory_sync_for_new_role_prompts(self) -> None:
+        skill = (PROMPTS_DIR.parents[0] / "SKILL.md").read_text(encoding="utf-8")
+        section_start = skill.find("## Dogfood anti-rules(per #205)")
+        section_end = skill.find("## Wakeup Skeleton", section_start)
+        section = skill[section_start:section_end]
+
+        self.assertIn("Any new role prompt", section)
+        self.assertIn("test_marker_emission_contract.py", section)
+        self.assertIn("PROMPT_ALLOWLISTS", section)
+        self.assertIn("PROMPT_ARTIFACT_PROFILES", section)
 
 
 if __name__ == "__main__":
