@@ -86,6 +86,20 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
+    def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
+        required = (
+            "## Milestone priority",
+            "🎯 milestone",
+            "orthogonal third axis",
+            "Before any non-milestone existing-issue work or ordinary audit fallback",
+            "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
+            "milestone members = GitHub `🎯 milestone` label",
+            ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
         phase0 = section_between(
             self.skill,

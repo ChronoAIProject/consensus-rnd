@@ -426,10 +426,24 @@ The floor is local because it prevents loop stalls.
 - Ordinary audit fallback is valid only before the latest controller-validated audit reaches `AUDIT_DONE:none:0`. Before that fixed point, the guarded fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `spawn-codex.sh` 用 harness background task 启动。
 - After the latest controller-validated audit is `AUDIT_DONE:none:0` and no real queued/actionable work exists, emit `CONCURRENCY_LOW:no-work-after-audit-none` and do not fabricate ordinary audit, profile, planner, or synthetic producer work just to satisfy `$CODEX_FLOOR`.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由 before the validated `AUDIT_DONE:none:0` fixed point; after that fixed point, the correct visible state is `CONCURRENCY_LOW:no-work-after-audit-none`, not fake work.
-- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open `auto-loop` issue/PR lacking in-flight codex coverage of its phase label; concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
+- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open `auto-loop` issue/PR lacking in-flight codex coverage of its phase label; when any open `auto-loop` issue/PR carries `🎯 milestone`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
 - **Stale-issue revival(3h)**: Open `auto-loop` issue/PR with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
 
 More detail is in [concurrency floor details](#concurrency-floor-details).
+
+## Milestone priority(强制)
+
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md`.
+
+GitHub label `🎯 milestone` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes.
+
+Milestone active means at least one open `auto-loop` issue/PR carries `🎯 milestone`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
+
+Only these actions stay above milestone priority: bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation. Correctness still wins: no-gap violation means an active item has no required worker and must be repaired before discretionary prioritization.
+
+When no milestone is active, behavior is unchanged: existing-issue priority runs before audit fallback, then ordinary audit fallback may run only under the existing fixed-point rules.
+
+Fact source is unique: milestone members = GitHub `🎯 milestone` label. Do not add a parallel state file, queue, marker, local cache, or work-unit field to track milestone membership.
 
 ## Named runtime exception — concurrency_monitor auto-topup(per #57)
 
@@ -654,9 +668,12 @@ Priority order when multiple actions are possible:
 3. Completed worker marker ready for same-wakeup route.
 4. CI red on open auto-loop PR.
 5. No-gap violation.
-6. Floor deficit.
-7. Producer dispatch for next work unit.
-8. Routine ScheduleWakeup.
+6. Milestone-labeled open `auto-loop` issue/PR next-step dispatch.
+7. Non-milestone existing-issue next-step dispatch.
+8. Floor deficit.
+9. Producer dispatch for next work unit.
+10. Ordinary audit fallback.
+11. Routine ScheduleWakeup.
 
 When uncertain:
 
@@ -2490,7 +2507,7 @@ Concretely, this means:
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label:
+Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label. If any such open item carries `🎯 milestone`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
 - `🔍 phase:design-solving` with 0 codex → dispatch Phase 9 solver triplet (round = current_round_or_1) for that issue
 - `👀 phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA

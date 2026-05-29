@@ -36,6 +36,31 @@ count_loop_codex() {
   python3 "$SKILL_ROOT/scripts/concurrency_monitor.py" --count-only
 }
 
+format_milestone_items() {
+  local kind="$1"
+  python3 -c "
+import json, sys
+kind = sys.argv[1]
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+for item in data:
+    labels = [label.get('name', '') for label in item.get('labels', []) if isinstance(label, dict)]
+    emergency_label_prefix = chr(0x1F198)
+    visible = [
+        label for label in labels
+        if label.startswith(('🎯', '🔍', '🛠', '⚙', '⏸', '👤', '🤖', '👀', '🔧', '🚀', '✅'))
+        or label.startswith(emergency_label_prefix)
+    ]
+    title = (item.get('title') or '')[:55]
+    number = item.get('number')
+    if number is None:
+        continue
+    print(f'  • {kind} #{number} labels=[{\", \".join(visible)}] — {title}')
+" "$kind"
+}
+
 REVIEW_MARKER_TAIL_LINES=30
 extract_review_verdict_tail() {
   local log_path="$1"
@@ -122,7 +147,14 @@ tail -10 .refactor-loop/.controller-pending-events.log 2>/dev/null | sed 's/^/  
 echo "  Skill degradation alerts:"
 tail -n "${DEGRADATION_ALERT_TAIL_LINES:-10}" .refactor-loop/.degradation-alert.log 2>/dev/null | sed 's/^/    /' || true
 
-# 3. Open auto-loop PRs + state
+# 3. Milestone open issues/PRs. Read-only priority lens; GitHub label is the
+# only fact source.
+echo ""
+echo "▍Milestone (优先) issues:"
+gh issue list "${gh_repo_args[@]}" --label "auto-loop" --label "🎯 milestone" --state open --json number,title,labels 2>/dev/null | format_milestone_items "issue"
+gh pr list "${gh_repo_args[@]}" --label "auto-loop" --label "🎯 milestone" --state open --json number,title,labels 2>/dev/null | format_milestone_items "PR"
+
+# 4. Open auto-loop PRs + state
 echo ""
 echo "▍Open auto-loop PRs:"
 gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,title --jq '.[]' | while IFS= read -r line; do
@@ -136,7 +168,7 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,t
   echo "  • PR #${num} [${state}] CI: fail=${fail} pending=${pending} pass=${pass} — ${title}"
 done
 
-# 4. Monitor recent zero_streak max
+# 5. Monitor recent zero_streak max
 echo ""
 echo "▍Monitor zero_streak (last 10 ticks):"
 tail -10 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | \
@@ -144,7 +176,7 @@ tail -10 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | \
 zero_now=$(tail -1 .refactor-loop/logs/concurrency-monitor.log 2>/dev/null | grep -oE "zero_streak=[0-9]+" | head -1)
 [ -n "$zero_now" ] && echo "  current: ${zero_now}"
 
-# 5. Mergeable PRs (per reviewer consensus + CI green)
+# 6. Mergeable PRs (per reviewer consensus + CI green)
 # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge
 # gate + contradictory Phase 8 wording. New principle: fixed truth table
 # reject=0 && approve>=1 -> MERGE; comments are advisory (#26 minimal option B consensus).
@@ -184,7 +216,7 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,t
   fi
 done
 
-# 5b. Stale-label detection on CLOSED issues/PRs
+# 6b. Stale-label detection on CLOSED issues/PRs
 echo ""
 echo "▍Stale labels (CLOSED but still carrying in-flight phase labels):"
 gh issue list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 30 --json number,labels --jq '.[] | "\(.number)|\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("🔧") or startswith("👀") or startswith("⏸") or startswith("auto-loop-stuck") or startswith("🆘"))) | join(","))"' 2>/dev/null | while IFS='|' read -r num labels; do
@@ -196,7 +228,7 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state closed --limit 30 --
   echo "  ⚠️ closed PR #${num} still has: ${labels}"
 done
 
-# 5c. Linkage check: open issues in phase:implementing without matching
+# 6c. Linkage check: open issues in phase:implementing without matching
 # in-flight PR / open PRs without matching design issue.
 echo ""
 echo "▍Issue/PR linkage mismatch:"
@@ -215,7 +247,7 @@ gh issue list "${gh_repo_args[@]}" --label "🛠️ phase:implementing" --state 
   fi
 done
 
-# 5d. Spawn drop detection: 3 solver artifacts complete but matching judge log absent.
+# 6d. Spawn drop detection: 3 solver artifacts complete but matching judge log absent.
 echo ""
 echo "▍Spawn drop (N solvers complete but judge was not dispatched):"
 for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
@@ -234,7 +266,7 @@ for f in .refactor-loop/runs/phase9-issue*-r*-minimal.md; do
   fi
 done
 
-# 6. Drift detection: phase:* label set but no log file being actively written for that issue/PR
+# 7. Drift detection: phase:* label set but no log file being actively written for that issue/PR
 echo ""
 echo "▍Drift (label vs codex mismatch):"
 active_logs_file=$(mktemp)
@@ -266,7 +298,7 @@ gh pr list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,l
   check_drift pr "$num" "$phase"
 done
 
-# 7. Stale worktree (branch was merged but worktree remains)
+# 8. Stale worktree (branch was merged but worktree remains)
 echo ""
 echo "▍Stale worktree (branch merged and should be cleaned):"
 git worktree list --porcelain | grep "^worktree " | sed 's/^worktree //' | while read wt; do
@@ -285,7 +317,7 @@ git worktree list --porcelain | grep "^worktree " | sed 's/^worktree //' | while
   fi
 done
 
-# 8. Stuck too long (issue/PR has stuck label and last non-AI comment > 6h)
+# 9. Stuck too long (issue/PR has stuck label and last non-AI comment > 6h)
 echo ""
 echo "▍Stuck too long (>6h without maintainer reply; consider 4h reflector re-evaluation):"
 gh issue list "${gh_repo_args[@]}" --label "auto-loop-stuck" --state open --json number,title 2>/dev/null | GH_REPO_SLUG_FOR_PEEK="${GH_REPO_SLUG:-}" python3 -c "
@@ -320,7 +352,7 @@ for it in data:
         print(f'  ⚠️ #{num} last maintainer comment {delta_h:.1f}h ago — {it[\"title\"][:50]}')
 " 2>/dev/null
 
-# 9. Open auto-loop issues + label state
+# 10. Open auto-loop issues + label state
 echo ""
 echo "▍Open auto-loop issues:"
 gh issue list "${gh_repo_args[@]}" --label "auto-loop" --state open --json number,title,labels --jq '.[] | "  • #\(.number) labels=[\(.labels | map(.name) | map(select(. | startswith("🔍") or startswith("🛠") or startswith("⚙") or startswith("⏸") or startswith("🆘") or startswith("👤") or startswith("🤖"))) | join(", "))] — \(.title | .[0:55])"' 2>/dev/null

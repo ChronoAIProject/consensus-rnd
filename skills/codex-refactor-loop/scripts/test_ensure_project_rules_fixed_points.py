@@ -3240,6 +3240,7 @@ class SkillContractSourceRegressionTests(unittest.TestCase):
             "<<EOF",
             "## 📊",
             "human:",
+            "▍Milestone (优先) issues:",
             "stale = [",
         )
         issue126_self_doc_contexts = (
