@@ -100,7 +100,7 @@ decision: consensus | converge | escalate
 - Implement plan (verbatim copy from the winning solver's "Concrete plan" section)
 - Philosophy/CLAUDE.md/SPEC/Tier changes included: <none OR exact agreed clause/file changes from the winning plan>
 - Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>
-- Add `auto-loop-resume` label to issue ${ISSUE_NUMBER}
+- Add `crnd:triage:resume-requested` label to issue ${ISSUE_NUMBER}
 
 ## If converge
 - Convergence question (specific): <one sentence>
@@ -121,7 +121,7 @@ decision: consensus | converge | escalate
 End with EXACTLY ONE marker:
 - `META_JUDGE_DONE:consensus:<framing>:<summary>` — controller auto-dispatches implement
 - `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question
-- `META_JUDGE_DONE:escalate:stalled:<short>` — controller adds `auto-loop-stuck` label + PushNotification
+- `META_JUDGE_DONE:escalate:stalled:<short>` — controller adds `crnd:lifecycle:stuck` label + PushNotification
 
 ## Marker emission allowlist(强制)
 

@@ -16,7 +16,10 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
 CLI = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
-HUMAN_LABEL = "👤 human:需-maintainer-决策"
+sys.path.insert(0, str(SCRIPT_PATH.parent))
+from codex_refactor_loop import labels
+
+HUMAN_LABEL = labels.HUMAN_MAINTAINER_DECISION
 VALID_MARKER = "META_RESOLVED:escalate-human:human-label-semantics-guard"
 
 
@@ -305,7 +308,12 @@ exit 0
         self.assertEqual(merges[0]["merged_at"], "2026-05-29T01:02:03Z")
         calls = self.gh_calls()
         self.assertIn("pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch", calls)
-        self.assertIn("pr edit 55 --repo test-owner/test-repo --remove-label 🚀 phase:pr-open --remove-label 👀 phase:reviewing --remove-label 🔧 phase:fixing --remove-label ⏸️ phase:blocked --remove-label auto-loop-stuck --remove-label 👤 human:需-maintainer-决策 --remove-label 🆘 human:卡死 --remove-label 🆘 human:卡死-需-rework --add-label 🎉 phase:merged", calls)
+        pr_edit = next(call for call in calls if call.startswith("pr edit 55 "))
+        self.assertIn(f"--add-label {labels.PHASE_MERGED}", pr_edit)
+        self.assertIn(f"--remove-label {labels.PHASE_PR_OPEN}", pr_edit)
+        self.assertIn(f"--remove-label {labels.PHASE_REVIEWING}", pr_edit)
+        self.assertIn(f"--remove-label {labels.HUMAN_MAINTAINER_DECISION}", pr_edit)
+        self.assertIn("--remove-label auto-loop-stuck", pr_edit)
         joined_calls = "\n".join(calls)
         self.assertIn("issue close 145 --repo test-owner/test-repo --reason completed --comment", joined_calls)
         self.assertIn("Auto-merged via PR #55", joined_calls)

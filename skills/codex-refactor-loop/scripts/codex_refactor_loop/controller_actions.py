@@ -14,29 +14,23 @@ from pathlib import Path
 from string import Template
 from typing import Mapping, Sequence
 
+from . import labels
 from .context import LoopContext, LoopContextError
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 
 
 PR_LABELS_REMOVE = (
-    "🚀 phase:pr-open",
-    "👀 phase:reviewing",
-    "🔧 phase:fixing",
-    "⏸️ phase:blocked",
-    "auto-loop-stuck",
-    "👤 human:需-maintainer-决策",
-    "🆘 human:卡死",
-    "🆘 human:卡死-需-rework",
+    *labels.labels_for_group("phase"),
+    labels.HUMAN_MAINTAINER_DECISION,
+    labels.STUCK,
+    *labels.cleanup_aliases(),
 )
 ISSUE_LABELS_REMOVE = (
-    "🔍 phase:design-solving",
-    "🛠️ phase:implementing",
-    "🤖 human:auto-推进",
-    "👤 human:需-maintainer-决策",
-    "⏸️ phase:blocked",
-    "auto-loop-stuck",
-    "🆘 human:卡死",
-    "🆘 human:卡死-需-rework",
+    *labels.labels_for_group("phase"),
+    labels.HUMAN_AUTO,
+    labels.HUMAN_MAINTAINER_DECISION,
+    labels.STUCK,
+    *labels.cleanup_aliases(),
 )
 
 
@@ -93,7 +87,7 @@ class ControllerActions:
                     print("skip-label: maintainer-directive already covers this; see .refactor-loop/runs/maintainer-directives/")
                     return 1
 
-        result = self.gh(["pr", "edit", pr_number, "--add-label", "👤 human:需-maintainer-决策"], check=False)
+        result = self.gh(["pr", "edit", pr_number, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
     def _current_branch(self) -> str:
@@ -191,7 +185,7 @@ class ControllerActions:
         args = ["pr", "edit", pr]
         for label in PR_LABELS_REMOVE:
             args.extend(["--remove-label", label])
-        args.extend(["--add-label", "🎉 phase:merged"])
+        args.extend(["--add-label", labels.PHASE_MERGED])
         self.gh(args, check=False)
         if linked_issue:
             comment = f"✅ Auto-merged via PR #{pr}.\n\n⟦AI:AUTO-LOOP⟧"
@@ -201,7 +195,7 @@ class ControllerActions:
             args = ["issue", "edit", linked_issue]
             for label in ISSUE_LABELS_REMOVE:
                 args.extend(["--remove-label", label])
-            args.extend(["--add-label", "🎉 phase:merged"])
+            args.extend(["--add-label", labels.PHASE_MERGED])
             self.gh(args, check=False)
         head = self.gh(["pr", "view", pr, "--json", "headRefName", "--jq", ".headRefName"], check=False).stdout.strip()
         if head:
@@ -221,7 +215,16 @@ class ControllerActions:
         if not match:
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
         pr_num = int(match.group(1))
-        self.gh(["pr", "edit", str(pr_num), "--add-label", "auto-loop,🚀 phase:pr-open,👀 phase:reviewing,🤖 human:auto-推进"], check=False)
+        self.gh(
+            [
+                "pr",
+                "edit",
+                str(pr_num),
+                "--add-label",
+                ",".join((labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO)),
+            ],
+            check=False,
+        )
         return pr_num, match.group(0)
 
     def _validate_pr_body_file(self, body_file: str) -> None:

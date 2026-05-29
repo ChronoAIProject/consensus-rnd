@@ -32,7 +32,7 @@ ${WHY_NEEDS_DESIGN}
 
 ## 4. 需要你的回答
 
-加 `auto-loop-resume` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
+加 `crnd:triage:resume-requested` 标签前请回答以下问题。Implement codex 会**原样**读取你的最新评论作为设计输入，所以请具体。
 
 - [ ] **模式选择**：${DESIGN_QUESTION}
 - [ ] **Schema 影响**：若 `${HOST_PROTO_POLICY}` 非空,按该 host schema/protocol 策略回答。如需新增 typed field 或 schema/protocol 变更,按 host 约定列出；无变更请明确说明。
@@ -47,8 +47,8 @@ ${WHY_NEEDS_DESIGN}
 
 - Controller 在此 issue 是仅剩工作时大约每 1 小时轮询一次。
 - Issue 打开后**首次**新评论触发 PushNotification 通知 operator；后续评论不重复推送（防打扰）。
-- 加 `auto-loop-resume` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
-- 不加 `auto-loop-resume` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 在 GitHub / run artifact 记录 `design-rejected:closed`。
+- 加 `crnd:triage:resume-requested` 标签 → controller 把你的最新评论作为 `## Design decision (from issue #${ISSUE_NUMBER})` 段拼到新 implement codex prompt 前面 dispatch。Implement 在独立 worktree 跑，开 PR 回到 `auto-refact-dev`，PR 一开自动关闭本 issue。
+- 不加 `crnd:triage:resume-requested` 标签直接关闭 → 判定"设计被拒绝；cluster 永久搁置"，controller 在 GitHub / run artifact 记录 `design-rejected:closed`。
 
 ---
 

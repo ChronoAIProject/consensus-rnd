@@ -117,6 +117,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "apply-triage",
                 "check-degradation",
                 "check-manifest",
+                "labels",
                 "concurrency",
                 "dev-sync",
                 "ensure-project-rules",

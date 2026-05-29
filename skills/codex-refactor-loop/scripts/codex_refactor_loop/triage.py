@@ -22,18 +22,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from . import labels as label_catalog
 from .context import LoopContext
 from .github_body import validate_self_contained_github_body
 
 
 ACCEPT_LABELS = [
-    "auto-loop",
-    "phase9-auto-solve",
-    "🔍 phase:design-solving",
-    "🤖 human:auto-推进",
-    "refactor-design-needed",
+    label_catalog.MANAGED,
+    label_catalog.PHASE_DESIGN_SOLVING,
+    label_catalog.HUMAN_AUTO,
 ]
-REMOVE_LABELS = ["auto-loop-triage"]
+REMOVE_LABELS = [label_catalog.TRIAGE_PENDING]
+TRIAGE_READ_LABELS = label_catalog.query_labels_for(label_catalog.TRIAGE_PENDING)
 ALLOWED_VERDICTS = {"accept", "reject"}
 COMMAND_LIKE_FIELDS = {"argv", "args", "shell", "command", "commands", "cmd", "close", "assignee", "milestone"}
 FINAL_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -131,7 +131,7 @@ def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None =
         raise ManualIssueTriageDecisionError("invalid verdict")
     remove_labels = data.get("remove_labels")
     if remove_labels != REMOVE_LABELS:
-        raise ManualIssueTriageDecisionError("remove_labels must be fixed auto-loop-triage")
+        raise ManualIssueTriageDecisionError("remove_labels must be fixed crnd:triage:pending")
     add_labels = data.get("add_labels")
     body_artifact_path = _repo_artifact_path(data.get("body_artifact_path"), allow_empty=(verdict == "reject"))
     comment_artifact_path = _repo_artifact_path(data.get("comment_artifact_path"))
@@ -234,9 +234,10 @@ def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_numb
         decision = load_decision(decision_path, expected_issue=issue_number)
         if decision.verdict != verdict:
             raise ManualIssueTriageDecisionError("verdict mismatch")
-        labels = current_labels(config, issue_number)
-        if "auto-loop-triage" not in labels:
-            raise ManualIssueTriageDecisionError("auto-loop-triage label missing")
+        live_labels = current_labels(config, issue_number)
+        triage_remove_labels = [label for label in TRIAGE_READ_LABELS if label in live_labels]
+        if not triage_remove_labels:
+            raise ManualIssueTriageDecisionError("crnd:triage:pending label missing")
 
         comment_file = path_under_repo(config.repo, decision.comment_artifact_path)
         if not _artifact_has_final_sentinel(comment_file):
@@ -256,11 +257,14 @@ def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_numb
                 raise ManualIssueTriageDecisionError("body artifact missing final sentinel")
             _validate_github_body_artifact(body_file, authority_required=True)
             args = ["issue", "edit", str(issue_number), "--body-file", str(body_file)]
-            args += ["--remove-label", "auto-loop-triage"]
+            for label in triage_remove_labels:
+                args += ["--remove-label", label]
             for label in ACCEPT_LABELS:
                 args += ["--add-label", label]
         else:
-            args = ["issue", "edit", str(issue_number), "--remove-label", "auto-loop-triage"]
+            args = ["issue", "edit", str(issue_number)]
+            for label in triage_remove_labels:
+                args += ["--remove-label", label]
 
         edit = run_gh(args, repo=config.repo, repo_slug=config.gh_repo_slug)
         if edit.returncode != 0:

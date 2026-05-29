@@ -19,6 +19,7 @@ from codex_refactor_loop.sync import apply as apply_integration_sync_request
 from codex_refactor_loop import triage as apply_triage_decision
 from codex_refactor_loop.github_body import render_github_body
 from codex_refactor_loop.triage import ACCEPT_LABELS
+from codex_refactor_loop import labels
 
 
 class IntegrationSyncApplyHelperTests(unittest.TestCase):
@@ -267,7 +268,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
             "body_artifact_path": "",
             "comment_artifact_path": ".refactor-loop/runs/comment.md",
             "add_labels": [],
-            "remove_labels": ["auto-loop-triage"],
+            "remove_labels": [labels.TRIAGE_PENDING],
             "sentinel_present": True,
             "lifecycle_owner": "controller",
             "lifecycle_authority": False,
@@ -285,7 +286,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
             calls.append(args)
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             with patch.object(apply_triage_decision, "run_gh", fake_gh):
                 self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 0)
 
@@ -293,7 +294,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
             calls,
             [
                 ["issue", "comment", "53", "--body-file", str((self.repo / ".refactor-loop" / "runs" / "comment.md").resolve())],
-                ["issue", "edit", "53", "--remove-label", "auto-loop-triage"],
+                ["issue", "edit", "53", "--remove-label", labels.TRIAGE_PENDING],
             ],
         )
         applied = json.loads(self.applied_record().read_text(encoding="utf-8"))
@@ -311,7 +312,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
             calls.append(args)
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             with patch.object(apply_triage_decision, "run_gh", fake_gh):
                 self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="accept"), 0)
 
@@ -322,7 +323,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
             "--body-file",
             str((self.repo / ".refactor-loop" / "runs" / "body.md").resolve()),
             "--remove-label",
-            "auto-loop-triage",
+            labels.TRIAGE_PENDING,
         ]
         for label in ACCEPT_LABELS:
             expected_edit += ["--add-label", label]
@@ -342,12 +343,12 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: []):
             self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
         self.write_decision(issue_number=54)
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
     def test_accept_requires_fixed_labels_and_reject_only_removes_triage_label(self) -> None:
-        self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=["auto-loop"])
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=[labels.MANAGED])
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="accept"), 2)
 
     def test_apply_triage_decision_rejects_path_traversal_and_does_not_mutate_github(self) -> None:
@@ -365,7 +366,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
         (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text("comment without sentinel\n", encoding="utf-8")
         mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
 
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             with patch.object(apply_triage_decision, "run_gh", mock_gh):
                 self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
@@ -375,7 +376,7 @@ class TriageDecisionApplyHelperTests(unittest.TestCase):
 
     def test_schema_rejects_close_and_command_like_fields(self) -> None:
         self.write_decision(close=True)
-        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch.object(apply_triage_decision, "current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             self.assertEqual(apply_triage_decision.apply_decision(apply_triage_decision.load_triage_apply_config(repo_root=self.repo), self.decision_path, issue_number=53, verdict="reject"), 2)
 
 

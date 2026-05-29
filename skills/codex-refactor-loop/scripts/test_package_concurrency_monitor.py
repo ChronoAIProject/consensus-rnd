@@ -20,6 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import labels
 from codex_refactor_loop.monitors import concurrency
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 
@@ -92,8 +93,8 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
         self.assertEqual(
             breakdown,
             [
-                {"id": "#160", "kind": "issue", "phase": "🛠️ phase:implementing", "expected": 1},
-                {"id": "#161", "kind": "pr", "phase": "👀 phase:reviewing", "expected": 1},
+                {"id": "#160", "kind": "issue", "phase": labels.PHASE_IMPLEMENTING, "expected": 1},
+                {"id": "#161", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1},
             ],
         )
 

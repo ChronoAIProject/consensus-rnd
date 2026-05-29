@@ -12,6 +12,7 @@ from . import banners, github_body, project_rules, spawn, statusline
 from .controller_actions import main as controller_actions_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
+from .labels import main as labels_main
 from .monitors.comment import main as comment_monitor_main
 from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
@@ -93,6 +94,11 @@ COMMANDS: dict[str, CommandSpec] = {
         github_body.main,
         "render a self-contained GitHub body from local artifacts",
         ("read-artifact",),
+    ),
+    "labels": CommandSpec(
+        labels_main,
+        "validate or plan loop-owned GitHub labels",
+        ("read-source", "read-gh"),
     ),
     "merge-pr": CommandSpec(
         controller_actions_main,

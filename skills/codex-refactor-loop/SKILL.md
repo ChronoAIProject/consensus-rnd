@@ -28,7 +28,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
-| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `👤 human:需-maintainer-决策` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | `consensus-rnd-cli controller actions`, GitHub labels |
+| Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | `consensus-rnd-cli controller actions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
@@ -192,7 +192,7 @@ Command contract:
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller or `release.yml` owns bump/commit/push. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
 
-Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `⏸️ phase:blocked` PRs; zero `👤 human:需-maintainer-决策` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
+Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `crnd:phase:blocked` PRs; zero `crnd:human:maintainer-decision` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
 
 `release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, host opt-in name, and lifecycle owner.
 
@@ -355,7 +355,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
-| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `👤 human:需-maintainer-决策`, passing the full marker source; the helper fails closed without that marker and posts the reason banner only if not skipped by maintainer-directive. |
+| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `crnd:human:maintainer-decision`, passing the full marker source; the helper fails closed without that marker and posts the reason banner only if not skipped by maintainer-directive. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Consensus-rnd Phase review-gate reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Consensus-rnd Phase design-consensus depending on reason. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
@@ -508,30 +508,21 @@ Mainline spawn contract:
 
 ## Label 系统 — 强制
 
-Every issue/PR has exactly one phase label and exactly one human label.
+Loop-owned GitHub labels are protocol state. Canonical labels use
+`crnd:<group>:<slug>`, where group is exactly
+`phase|human|lifecycle|triage|milestone`. The sole fact source is
+`codex_refactor_loop.labels` (`scripts/codex_refactor_loop/labels.py`);
+do not maintain parallel label truth tables in SKILL.md or prompts.
 
-Phase labels:
+Managed issues/PRs must have exactly one canonical `crnd:phase:*` label and
+exactly one canonical `crnd:human:*` label after migration. GitHub
+`external_defaults` may remain for editorial use, but they never satisfy
+phase/human/lifecycle/triage/milestone routing semantics. Migration is
+controller-owned: add canonical labels first, re-read live labels, validate
+exactly-one phase/human, then remove aliases. Workers and daemons must not
+mutate labels.
 
-| Label | Meaning |
-|---|---|
-| `🔍 phase:design-solving` | Consensus-rnd Phase design-consensus solvers/judge active. |
-| `✅ phase:consensus-reached` | Consensus accepted and ready for implementation. |
-| `🛠️ phase:implementing` | Implement codex active. |
-| `🚀 phase:pr-open` | PR exists and is waiting for review/CI route. |
-| `👀 phase:reviewing` | Consensus-rnd Phase review-gate reviewers active. |
-| `🔧 phase:fixing` | Fix codex active. |
-| `⚙️ phase:ci-running` | Remote CI watch/fix active. |
-| `🎉 phase:merged` | Work landed. |
-| `⏸️ phase:blocked` | Dependency or explicit wait. |
-
-Human labels:
-
-| Label | Meaning |
-|---|---|
-| `🤖 human:auto-推进` | Fully automatic; no maintainer action needed. |
-| `👤 human:需-maintainer-决策` | Meta-layer exhausted or explicit maintainer decision needed. |
-
-## `👤 human:需-maintainer-决策` 严格语义(强制) <a id="human-label-strict-semantics"></a>
+## `crnd:human:maintainer-decision` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 
 # Refactor (iter4/human-label-semantics-guard): Old pattern: label 当 architect reject workaround. New principle: 严语义 + reflector self-check + controller helper guard + source-regression test.
 
@@ -552,10 +543,10 @@ Hard label rules:
 
 1. Label transition and banner post happen together.
 2. Same group only allows one active label.
-3. `👤 human:需-maintainer-决策` is not a shortcut for controller uncertainty.
-4. Legacy `🆘 human:` labels may be removed as cleanup targets only.
-5. PRs must carry `auto-loop` or comment monitoring will miss them.
-6. Bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
+3. `crnd:human:maintainer-decision` is not a shortcut for controller uncertainty.
+4. Legacy human escalation aliases may be removed as cleanup targets only.
+5. PRs must carry `crnd:lifecycle:managed` or comment monitoring will miss them after migration.
+6. Label protocol details live in [label bootstrap loops](#label-bootstrap-loops).
 
 ## Consensus-rnd Phase review-gate — Multi-Codex PR Review
 
@@ -612,7 +603,7 @@ Loop rules:
 8. Transient stream disconnects route to log sweep and wake-source confirmation, not panic re-dispatch.
 9. Recovery cases are in [recovery playbook](#recovery-playbook).
 
-Policy:the loop continues until an explicit stop condition or a visible `👤 human:需-maintainer-决策` reason surface is reached.
+Policy:the loop continues until an explicit stop condition or a visible `crnd:human:maintainer-decision` reason surface is reached.
 
 ## Hard rules (controller-level, propagated into every codex prompt)
 
@@ -767,7 +758,7 @@ Consensus-rnd Phase work-intake guardrails:
 2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`.
 3. Convert accepted units into work-unit items before dispatch.
 4. Clean stale worktrees before audit pollution can affect decisions.
-5. For `requires_design`, open or update GitHub design issues and label them `🔍 phase:design-solving` plus `🤖 human:auto-推进`.
+5. For `requires_design`, open or update GitHub design issues and label them `crnd:phase:design-solving` plus `crnd:human:auto`.
 
 Consensus-rnd Phase implementation guardrails:
 
@@ -948,8 +939,8 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 | Signal key | Pass condition |
 |---|---|
 | `required_checks_recent_green` | Shared Checks API projection sees exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours. |
-| `no_open_blocked_pr` | No open PR has `⏸️ phase:blocked`. |
-| `no_human_decision_label` | No open issue or PR has `👤 human:需-maintainer-决策`. |
+| `no_open_blocked_pr` | No open PR has `crnd:phase:blocked`. |
+| `no_human_decision_label` | No open issue or PR has `crnd:human:maintainer-decision`. |
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
 | `p0_alert_streak_ok` | `.refactor-loop/.concurrency-monitor-state.json` zero streak and recent P0 alert lines are both at most 3 in the last 30 minutes. |
 | `recent_pr_merges_min` | `.refactor-loop/state/recent-pr-merges.json` reports at least `RELEASE_AUTO_MIN_MERGES` commits in the last two hours(default 1). `merge_pr` produces the controller-owned projection after successful `gh pr merge`; schema fields are `count/window_hours/updated_at/merges[]`; the decider only reads this artifact. |
@@ -1189,7 +1180,7 @@ gh issue view <N> --json comments --jq '
 **Controller wakeup 第一动作**:`bash <skill-root>/scripts/consensus-rnd-cli peek`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
 2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
-3. 如果所有 active issue/PR 都真在等 maintainer(全是 `👤 human:需-maintainer-决策` / `⏸️ phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
+3. 如果所有 active issue/PR 都真在等 maintainer(全是 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
 
 **consensus-rnd-cli concurrency** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
@@ -1219,19 +1210,19 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 -->
 
-controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/round 多 / 触及 Tier 或哲学"等理由直接 label `👤 human:需-maintainer-决策`。
+controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/round 多 / 触及 Tier 或哲学"等理由直接 label `crnd:human:maintainer-decision`。
 
 **判定铁律**:
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
 | `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
-| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `👤 human` |
+| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
 | `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
 | 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
 
-**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `👤 human:需-maintainer-决策` + ASCII A/B/C reason banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
+**正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `crnd:human:maintainer-decision` + ASCII A/B/C reason banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
 
 结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、`stalled`、`philosophy` 三类 judge marker。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver,`stalled` 先派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
 
@@ -1303,21 +1294,21 @@ validate_prompt out.md                                    # check 0 unresolved {
 issue/PR 状态 → 期望 label
 
 design issue:
-  open + 🤖 ai → 🔍 design-solving       (solver/judge 跑)
-  open + 🤖 ai → 🛠 implementing         (implement 派出)
-  open + 👤 human:需-maintainer-决策     (rework/deadlock reason in banner/comment)
-  closed       → 🎉 phase:merged          (via PR merge)
+  open + crnd:human:auto → crnd:phase:design-solving   (solver/judge running)
+  open + crnd:human:auto → crnd:phase:implementing      (implement dispatched)
+  open + crnd:human:maintainer-decision                 (rework/deadlock reason in banner/comment)
+  closed       → crnd:phase:merged                      (via PR merge)
   closed       → wontfix                  (per maintainer drop directive)
 
 cluster PR:
-  open + 🤖 ai → 🚀 phase:pr-open + 👀 reviewing  (reviewer 派出)
-  open + 🤖 ai → 🚀 phase:pr-open + 🔧 fixing     (fix codex)
-  open + 👤 human:需-maintainer-决策              (reflector escalate-human with reason banner)
-  closed merged → 🎉 phase:merged                  (via merge_pr)
+  open + crnd:human:auto → crnd:phase:pr-open + crnd:phase:reviewing  (reviewer dispatched)
+  open + crnd:human:auto → crnd:phase:pr-open + crnd:phase:fixing     (fix codex)
+  open + crnd:human:maintainer-decision                              (reflector escalate-human with reason banner)
+  closed merged → crnd:phase:merged                                  (via merge_pr)
   closed       → (no phase, branch deleted)
 
 rollup PR:
-  open → 🚀 phase:pr-open + 🤖 human:auto-推进     (passive integration)
+  open → crnd:phase:pr-open + crnd:human:auto     (passive integration)
   注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
 ```
 
@@ -1491,8 +1482,7 @@ the work-unit fields documented in [work-unit contract](#work-unit-contract) (`w
 - Preserve existing cluster fields for audit section lookup, markers, artifact filenames, branch
   names, and GitHub issue routing during compatibility.
 - Stable operational tokens are public routing tokens, not names to migrate in this contract:
-  `[refactor-design]`, `refactor-design-needed`, `auto-loop`, `phase9-auto-solve`,
-  `auto-loop-resume`, `refactor/iterN-<cluster-id>`, `.refactor-loop/.../<cluster-id>`,
+  `[refactor-design]`, `refactor/iterN-<cluster-id>`, `.refactor-loop/.../<cluster-id>`,
   `IMPLEMENT_DONE:${CLUSTER_ID}`, `VERIFY_DONE:${CLUSTER_ID}`, `SOLVER_DONE`, and
   `META_JUDGE_DONE`.
 - Do not rename, dual-write, alias, or replace those tokens with `work-unit-*` forms; do not add
@@ -1513,7 +1503,7 @@ For every cluster with `requires_design: true`:
    ```bash
    gh issue create \
      --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
-     --label "refactor-design-needed,auto-loop" \
+     --label "crnd:lifecycle:managed,crnd:phase:design-solving,crnd:human:auto" \
      --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
    ```
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
@@ -1896,21 +1886,21 @@ Runs **after Consensus-rnd Phase integration-sync sync** and **before** any new 
 
 ### 外部 issue 接入(强制)
 
-**问题**:audit codex 自动产生的 design issue 走完 Consensus-rnd Phase design-consensus 链路;但 maintainer 或其他人手动开的 issue(无 `auto-loop` label)不接入,controller 看不见。
+**问题**:audit codex 自动产生的 design issue 走完 Consensus-rnd Phase design-consensus 链路;但 maintainer 或其他人手动开的 issue(无 `crnd:lifecycle:managed` label)不接入,controller 看不见。
 
 **两条 onboarding path**:
 
 #### Path A — 手动 label opt-in(已现成支持)
 
-maintainer 在外部 issue 上加 **4 label**:`auto-loop` + `phase9-auto-solve` + `🔍 phase:design-solving` + `🤖 human:auto-推进`
+maintainer 在外部 issue 上加 canonical loop labels:`crnd:lifecycle:managed` + `crnd:phase:design-solving` + `crnd:human:auto`
 
-Controller 下次 wakeup sweep `gh issue list --label "auto-loop,phase9-auto-solve" --state open`,把它当 Consensus-rnd Phase design-consensus candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
+Controller 下次 wakeup sweep reads `crnd:lifecycle:managed` and normalizes via `codex_refactor_loop.labels`,把它当 Consensus-rnd Phase design-consensus candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
 
 **前提**:issue body 至少要描述 "what's broken + relevant file paths"。Body 越结构化(evidence / fix boundary / decision questions)solver 越准。
 
 #### Path B — Triage codex / `manual-issue` producer(推荐,更安全)
 
-maintainer 只加 1 label:`auto-loop-triage`
+maintainer 只加 1 label:`crnd:triage:pending`
 
 This path is the `manual-issue` producer. The triage codex accepts only concrete repository
 work units suitable for consensus, reshapes the issue into a work-unit-backed design issue, and
@@ -1921,7 +1911,7 @@ problem/invariant text, and `verification_hints`; they must not include fabricat
 
 **Daemon 自包含**:
 
-Controller wakeup sweep handles external `auto-loop-triage` issue intake; `triage-monitor.sh` is deleted. Triage workers emit a manual issue triage decision artifact plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
+Controller wakeup sweep handles external `crnd:triage:pending` issue intake; `triage-monitor.sh` is deleted. Triage workers emit a manual issue triage decision artifact plus `TRIAGE_DECISION_DONE:<issue>:<accept|reject>:<path>`, and controller apply helpers re-read live labels before body/label lifecycle.
 
 
 <a id="review-gate-details"></a>
@@ -2007,7 +1997,7 @@ Escalate to human ONLY when the meta-layer cannot make progress:
 - A reviewer's demand requires touching another in-flight cluster's PR (would create cross-PR dependency).
 
 Escalation action:
-- Add `needs-human-review` label on PR.
+- Add `crnd:human:maintainer-decision` label on PR.
 - Post 中文 PR comment with: round history (N rounds tried), reject evidence per round, what fix codex tried, why it's stuck.
 - `PushNotification`: "PR #N stuck at round N — human decision needed: <one-line reason>".
 - State: `pr_reviews[PR].consensus = "stuck-human-review"`.
@@ -2070,14 +2060,14 @@ Required PR comments (controller posts via `gh pr comment <PR> --body-file <file
 | Fix codex round N complete (FIX_DONE) | 中文 FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
 | Fix codex blocked (FIX_BLOCKED) | 中文: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
 | Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | 中文: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
-| Escalation triggered | Add `needs-human-review` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |
+| Escalation triggered | Add `crnd:human:maintainer-decision` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |
 | Reviewer crash | 中文: which reviewer, log path, re-dispatch attempt. Second crash → escalate per above. |
 
 Required GitHub labels (controller applies/removes):
 - `phase8-reviewing`: a reviewer round is in flight
 - `phase8-fixing`: a fix codex round is in flight
 - `phase8-consensus-pending`: consensus computation in progress
-- `needs-human-review`: escalated
+- `crnd:human:maintainer-decision`: escalated
 - `phase8-merged`: auto-merged after consensus (removed by merge action)
 
 Local-only files (logs, raw codex output, internal state) stay in `.refactor-loop/` and are NOT posted (would spam the PR). The PR comment must summarize enough that a reader can decide whether to read the local artifact, and link the exact local path.
@@ -2115,7 +2105,7 @@ If PR is pushed after consensus (rebase, requested change), head SHA changes. Ne
 
 Skip a PR in Consensus-rnd Phase review-gate if any of:
 - already merged / closed
-- `needs-human-review` label present (operator handling)
+- `crnd:human:maintainer-decision` label present (operator handling)
 - consensus recorded for current head SHA AND not stale
 
 ### Why three angles, not one
@@ -2203,17 +2193,17 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
 - ❌ r2 verdict 变化但未 unanimous,controller 以"看起来卡了"自判 stalled。
 
-reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `👤 human:需-maintainer-决策` 并写 reason banner;这只用于"共识机制本身无法收敛",非"触及 Tier/哲学/签名"。
+reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_RESOLVED:<kind>:<reason>` 后 controller 再按 retry-fix / re-design / re-cluster / drop / escalate-human 路由。**只有** reflector 显式输出 `META_RESOLVED:escalate-human:<reason>` 时,controller 才允许 label `crnd:human:maintainer-decision` 并写 reason banner;这只用于"共识机制本身无法收敛",非"触及 Tier/哲学/签名"。
 
 ### Maintainer-directive artifact precedence
 
 When reviewer evidence conflicts with maintainer prior session directive, encode the directive as `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` before considering any human label. A maintainer-directive artifact is the durable replacement for verbal authorization and has precedence over reviewer uncertainty about authorization.
 
-If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `👤 human:需-maintainer-决策`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
+If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `crnd:human:maintainer-decision`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
 Controller label application must use `apply_human_label_or_skip <pr-number> <source-marker> <reason-or-topic>` from `consensus-rnd-cli controller actions`, with the full `META_RESOLVED:escalate-human:<reason>` marker as `<source-marker>`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the helper. If the helper finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
 
-### Historical anti-pattern:`👤 human:需-maintainer-决策` 误用 (2026-05-26)
+### Historical anti-pattern:`crnd:human:maintainer-decision` 误用 (2026-05-26)
 
 PR #47/#48/#50/#52 因 architect codex 严格读 CLAUDE.md reject,reflector 选 option C 误以 label 绕路。实际 maintainer 已多次 session 内 verbal 授权。Fix:开真 Consensus-rnd Phase design-consensus(issue #54),encode maintainer-directive artifact 作 Consensus-rnd Phase design-consensus-等价。从此 label 严语义 + helper 守护。
 
@@ -2224,23 +2214,21 @@ PR #47/#48/#50/#52 因 architect codex 严格读 CLAUDE.md reject,reflector 选 
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 -->
 
-**关键 bug**:之前 `escalate:stalled` 触发后挂 `auto-loop-stuck` + `👤 human:需-maintainer-决策` label,**reflector 完成后没清掉**,导致 issue 视觉上仍卡在"等人"状态;controller sweep 时也会看到 stuck label 误以为不需处理。
+**关键 bug**:之前 `escalate:stalled` 触发后挂 `crnd:lifecycle:stuck` + `crnd:human:maintainer-decision` label,**reflector 完成后没清掉**,导致 issue 视觉上仍卡在"等人"状态;controller sweep 时也会看到 stuck label 误以为不需处理。
 
 **修复**:reflector 完成(任何 `META_RESOLVED:<kind>` 除 `escalate-human` 外)后,controller **必须立即**执行 label transition:
 
 ```bash
 gh issue edit <N> \
-  --remove-label "auto-loop-stuck" \
-  --remove-label "👤 human:需-maintainer-决策" \
-  --remove-label "🆘 human:卡死" \
-  --remove-label "🆘 human:卡死-需-rework" \
-  --add-label "🔍 phase:design-solving" \
-  --add-label "🤖 human:auto-推进"
+  --remove-label "crnd:lifecycle:stuck" \
+  --remove-label "crnd:human:maintainer-decision" \
+  --add-label "crnd:phase:design-solving" \
+  --add-label "crnd:human:auto"
 ```
 
 然后按 `META_RESOLVED:<kind>` 路由立刻做下一步(派 fresh 3 solver 轮 / 关 issue / re-cluster);**不允许**停在"reflector done but stuck label still on"暧昧态。整个系统核心是多角色多角度共识——reflector 是中介调和角色,完成后必须把控制权交回 solver 共识循环。
 
-唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `👤 human:需-maintainer-决策` label 并写明 reason/banner,这才是真正 human 介入态;它必须说明为什么 3 solver + meta-judge + reflector 的共识机制无法继续收敛。
+唯一例外:`META_RESOLVED:escalate-human` → 保留 / 加 `crnd:human:maintainer-decision` label 并写明 reason/banner,这才是真正 human 介入态;它必须说明为什么 3 solver + meta-judge + reflector 的共识机制无法继续收敛。
 
 ### Daemon → controller event channel + 自适应 wakeup(强制, 关于 daemon detect → controller 25 min gap 问题)
 
@@ -2308,7 +2296,7 @@ ScheduleWakeup(delaySeconds=$NEXT_WAKEUP_SECONDS, ...)
 
 ### Stuck label 4h 超时自动新一轮 meta-reflect(强制)
 
-每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `auto-loop-stuck` OR `👤 human:需-maintainer-决策` label 的 issue:
+每次 controller wakeup 第一动作之后(per-wakeup sweep step 1 完成后),对每个带 `crnd:lifecycle:stuck` OR `crnd:human:maintainer-decision` label 的 issue:
 
 ```bash
 last_human_at=$(gh issue view <N> --json comments --jq '[.comments[] | select(.body | contains("⟦AI:AUTO-LOOP⟧") | not) | .createdAt][-1] // .createdAt' | tr -d '"')
@@ -2365,9 +2353,9 @@ When the auto-discover Monitor fires `design-issue-event:<N>` and the new commen
 2. **Treat the new comment as fresh constraint material** — prepend its verbatim text to a NEW round's solver prompt header under "Maintainer comment (must incorporate)".
 3. **Dispatch FRESH 3 solver codex** (not "continue convergence"; truly fresh, with all prior rounds as context but no inherited stance).
 4. **No round counter penalty** — maintainer input is the loop's continuation signal, not a stop signal. The round counter increments but does NOT trip the escalation cap.
-5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `auto-loop-resume` label with their explicit framing in a comment.
+5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `crnd:triage:resume-requested` label with their explicit framing in a comment.
 
-This means: even if a previous round escalated with `auto-loop-stuck`, a new maintainer comment re-opens Consensus-rnd Phase design-consensus. The `auto-loop-stuck` label is removed automatically on reset; `phase9-converging` is re-applied.
+This means: even if a previous round escalated with `crnd:lifecycle:stuck`, a new maintainer comment re-opens Consensus-rnd Phase design-consensus. The `crnd:lifecycle:stuck` label is removed automatically on reset; the canonical design-solving phase is re-applied.
 
 ### Consensus action (3/3 unanimous + meta-judge consensus)
 
@@ -2378,7 +2366,7 @@ This means: even if a previous round escalated with `auto-loop-stuck`, a new mai
    <winning solver's framing verbatim>
    <winning solver's concrete plan verbatim>
    ```
-3. Add `auto-loop-resume` label to the issue (mirrors maintainer-decision flow).
+3. Add `crnd:triage:resume-requested` label to the issue (mirrors maintainer-decision flow).
 4. Move the design issue through GitHub labels/comments into implementing state.
 5. Dispatch implement codex per Consensus-rnd Phase implementation (worktree + 5400s no-output stall window).
 6. **Post 共识卡片**(强制)— 不再用普通 status banner,改用 distinct **consensus card** 格式:
@@ -2437,9 +2425,9 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
 | **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
-| Meta-judge → consensus | Same as above + then a follow-up controller comment: "auto-loop-resume label added; implement codex dispatched" |
+| Meta-judge → consensus | Same as above + then a follow-up controller comment: "`crnd:triage:resume-requested` label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
-| Meta-judge → escalate:stalled | Same as above + label `auto-loop-stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
+| Meta-judge → escalate:stalled | Same as above + label `crnd:lifecycle:stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
 | Legacy escalation category emitted | Post meta-judge output + summary "legacy escalation category normalized back into consensus loop"; re-dispatch judge or reflector; do not label human directly |
 
 **Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The raw reasoning, evidence, and concrete plans are the audit record; a summary loses too much fidelity. The 3+ comments per round are intentional.
@@ -2448,8 +2436,8 @@ Required labels (additions to Consensus-rnd Phase review-gate set):
 - `phase9-solving`: 3 solver codexes in flight
 - `phase9-judging`: meta-judge in flight
 - `phase9-converging`: convergence round in progress
-- (re-used) `auto-loop-resume` on consensus dispatch
-- (re-used) `auto-loop-stuck` on escalation
+- (re-used) `crnd:triage:resume-requested` on consensus dispatch
+- (re-used) `crnd:lifecycle:stuck` on escalation
 
 ### Consensus-rnd Phase design-consensus tracking
 
@@ -2466,7 +2454,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
   - `re-design` → reset Consensus-rnd Phase design-consensus round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
-  - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
+  - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not repeat a framing that prior rounds showed to be underspecified without adding new exact text/evidence; doing so counts toward stall detection.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -2503,12 +2491,12 @@ Concretely, this means:
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open `auto-loop` issue/PR that lacks an in-flight codex covering its current phase label. If any such open item carries `🎯 milestone`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
-- `🔍 phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
-- `👀 phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
-- `🔧 phase:fixing` with 0 codex → dispatch fix codex for next round
-- `🛠️ phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
-- `🚀 phase:pr-open` with 0 codex → dispatch reviewers
-- `✅ phase:consensus-reached` with 0 codex → dispatch implement codex
+- `crnd:phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
+- `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
+- `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round
+- `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
+- `crnd:phase:pr-open` with 0 codex → dispatch reviewers
+- `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
 
 Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop issue/PR already has an in-flight codex matching its phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
 
@@ -2516,7 +2504,7 @@ Audit fallback (`audit-iter-N+1`) is valid **only after** every open auto-loop i
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open `auto-loop` issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
-Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `auto-loop` / `refactor-design-needed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
+Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
 
 ### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 
@@ -2637,7 +2625,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 | CI 全绿 | "CI 全绿,合并中" |
 | CI red | "CI 红,fix codex 派出" |
 | merge 完成 | "🎉 已合并到 <branch>" |
-| escalation | "🚨 需要人介入: <reason>" + label `auto-loop-stuck` |
+| escalation | "🚨 需要人介入: <reason>" + label `crnd:lifecycle:stuck` |
 | blocked-on(被其他 issue 拖) | "blocked-on #<issue>: 待其完成自动推进" |
 
 ### Banner 模板(controller 直接 gh issue/pr comment,不走 codex)
@@ -2754,7 +2742,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 ### Maintainer 行动入口
 
 - **选定**:评论 `choose: A` / `choose: B` / `choose: C` 或给具体 narrowing constraint
-- **重派**:加 `auto-loop-resume` label,controller 用你评论作 narrowing 派 fresh round
+- **重派**:加 `crnd:triage:resume-requested` label,controller 用你评论作 narrowing 派 fresh round
 - **不做**:close issue + 加 `wontfix` label
 
 🤖 controller status banner
@@ -2798,7 +2786,7 @@ If a push fails (network, conflict, branch protection): controller MUST surface 
 3. **Consensus-rnd Phase design-consensus re-design**:重派 3 solver + meta-judge,prompt 带 "previous design caused 6 round non-converge"
 4. **Cluster re-split**:audit 阶段 re-evaluate,把当前 cluster 拆 / 合 / 撤回
 5. **Drop / wontfix**:确认任务本身价值不足,关 PR + close issue with wontfix
-6. **Human escalation**:`👤 human:需-maintainer-决策` + reason banner + PushNotification(只在 meta-layer 也无法解时)
+6. **Human escalation**:`crnd:human:maintainer-decision` + reason banner + PushNotification(只在 meta-layer 也无法解时)
 
 ### 触发 meta-layer 反思
 
@@ -2842,7 +2830,7 @@ Controller 读 marker 后路由:
 - `re-design` → 关 PR / 撤回 commits / re-Consensus-rnd Phase design-consensus with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
-- `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `👤 human:需-maintainer-决策` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
+- `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
 
 ### 反面(❌ 禁止)
 
@@ -2864,89 +2852,17 @@ CI sweep contract: every controller wakeup checks open auto-loop PR checks, imme
 <a id="label-bootstrap-loops"></a>
 ## Label bootstrap loops
 
-## Label 系统 — 强制
+This section is intentionally not a bootstrap loop. The catalog in
+`codex_refactor_loop.labels` is the single label fact source; run
+`consensus-rnd-cli labels validate-catalog` for local validation and
+`consensus-rnd-cli labels check-github --plan` for a read-only GitHub drift
+plan. The plan preserves GitHub `external_defaults`, reports unknown
+`crnd:*` labels fail-closed, and lists legacy alias migrations.
 
-**问题**:人类在 issue 列表页只看 title + label,banner 评论再清晰也得点进去才看见。Label 是封面信息,必须一眼传达"当前 phase + 是否需要人"。
-
-**规则**:每次 phase transition,**controller** 在 post banner 的同时**必同步** label。每个 issue / PR **恰好**带一组 label:
-
-### Label 组 1 — Phase(任意时刻**恰好一个**)
-
-| Label | 含义 | 触发 |
-|---|---|---|
-| `🔍 phase:design-solving` | Consensus-rnd Phase design-consensus 多 solver 跑 | 派 r1/r2 三 solver 后 |
-| `✅ phase:consensus-reached` | meta-judge 共识达成 | meta-judge `consensus:...` 后 |
-| `🛠️ phase:implementing` | implement codex 跑 | implement dispatch 后 |
-| `🚀 phase:pr-open` | PR 已开 | gh pr create 后 |
-| `👀 phase:reviewing` | Consensus-rnd Phase review-gate reviewer 跑 | reviewer dispatch 后 |
-| `🔧 phase:fixing` | fix codex 跑(reject 后修) | fix dispatch 后 |
-| `⚙️ phase:ci-running` | CI watch 中 | push 后 CI 启动 |
-| `🎉 phase:merged` | 已 merge | gh pr merge 后(也 close issue) |
-| `⏸️ phase:blocked` | blocked-on(等其他 issue) | dependency 链上游未完成 |
-
-### Label 组 2 — Human(任意时刻**恰好一个**)
-<!--
-# Refactor (iter3/skill-human-label-taxonomy):
-#   Old: 四个 Human label(含两个 🆘),no-gap/escalation 判定散落
-#   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
--->
-
-| Label | 含义 | 触发 |
-|---|---|---|
-| `🤖 human:auto-推进` | 完全自动,**不需要人介入** | 默认 |
-| `👤 human:需-maintainer-决策` | 共识机制无法继续收敛或自动修复耗尽,需要外部输入 | `META_RESOLVED:escalate-human` / rework / ci-stuck / deadlock reason |
-
-### Bootstrap(一次性 - controller 在首次跑 loop 时确保 label 存在)
-
-```bash
-# 创建所有 phase label
-for l in "🔍 phase:design-solving" "✅ phase:consensus-reached" "🛠️ phase:implementing" \
-         "🚀 phase:pr-open" "👀 phase:reviewing" "🔧 phase:fixing" "⚙️ phase:ci-running" \
-         "🎉 phase:merged" "⏸️ phase:blocked"; do
-  gh label create "$l" --color "5319e7" 2>/dev/null || true
-done
-# 创建所有 human label
-gh label create "🤖 human:auto-推进" --color "0e8a16" 2>/dev/null || true
-gh label create "👤 human:需-maintainer-决策" --color "d93f0b" 2>/dev/null || true
-```
-
-### 转移时刻代码模板
-
-每次 phase transition,controller 用同一 helper 改 label + post banner:
-
-```bash
-# helper(写在脚本里): 移除所有 phase:* label, 加新 phase:* label
-set_phase() {
-  local issue=$1 new_phase=$2
-  # 先删所有 phase:* / human:* label 再加新
-  current=$(gh issue view "$issue" --json labels --jq '.labels[].name' | grep -E '^(🔍|✅|🛠️|🚀|👀|🔧|⚙️|🎉|⏸️) phase:')
-  for old in $current; do gh issue edit "$issue" --remove-label "$old" 2>/dev/null; done
-  gh issue edit "$issue" --add-label "$new_phase"
-}
-set_human() {
-  local issue=$1 new_human=$2
-  current=$(gh issue view "$issue" --json labels --jq '.labels[].name' | grep -E '^(🤖|👤|🆘) human:')
-  for old in $current; do gh issue edit "$issue" --remove-label "$old" 2>/dev/null; done
-  gh issue edit "$issue" --add-label "$new_human"
-}
-```
-
-PR 同理(`gh pr edit` instead of `gh issue edit`)。
-
-### 硬约束
-
-- **Label 与 banner 同步发**:不允许 label 转移但不发 banner,或发 banner 但 label 没改。
-- **同一组只允许一个**:不能同时有 `🛠️ phase:implementing` 和 `🚀 phase:pr-open`(实施完成 → 立刻改 pr-open)。
-- **`👤` 出现 = 共识机制停滞或自动修复耗尽**:其他 active human label(`🤖`) = 完全自动。`🆘 human:` 只允许作为 legacy cleanup target。
-- **escalation 不等于人工授权 gate**:Consensus-rnd Phase design-consensus 只有 `escalate:stalled` → reflector;只有 `META_RESOLVED:escalate-human` 才配 `👤`。
-
-### 反面(❌ 禁止)
-
-- ❌ label 不更新就发 banner → 列表页看到的还是旧 phase
-- ❌ 同时挂多个 phase label → 人类困惑
-- ❌ 用纯文字 label(无 emoji)→ 列表页一眼看不出 phase / human 类别
-- ❌ blocked-on 不打 `⏸️ phase:blocked` → 人类以为还在主动跑
-- ❌ **PR 不加 `auto-loop` label** → consensus-rnd-cli comment-monitor 查的是 `--label auto-loop` 而非 phase:*,漏加 = monitor 完全不监控该 PR 评论 → maintainer 喊话无 react 无回复
+Controller apply, when used, must add canonical labels first, re-read live
+labels, validate exactly one canonical phase and human label for managed
+items, and only then remove aliases. Do not add bootstrap shell loops, copied
+catalog tables, or alternate label grammars here.
 
 <a id="codex-invocation-details"></a>
 ## Codex invocation details
@@ -3124,7 +3040,7 @@ filenames, markers, and audit section lookup while `WORK_UNIT_ID=$CLUSTER_ID` re
 
 ### `manual-issue` producer
 
-`manual-issue` is the Consensus-rnd Phase design-intake `auto-loop-triage` intake path for maintainer-selected GitHub
+`manual-issue` is the Consensus-rnd Phase design-intake `crnd:triage:pending` intake path for maintainer-selected GitHub
 issues. Accepted issues must be reshaped into a work-unit-backed design issue before Consensus-rnd Phase design-consensus
 solver dispatch:
 

@@ -19,6 +19,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 NOW = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.release import gate
 
 
@@ -167,8 +168,8 @@ class ReleaseGateModuleTests(unittest.TestCase):
                 self.assertIn("--paginate", cmd)
             label_commands = [cmd for cmd in runner.commands if cmd[:2] in (["gh", "issue"], ["gh", "pr"]) and cmd[2:3] == ["list"]]
             labels = [cmd[cmd.index("--label") + 1] for cmd in label_commands]
-            self.assertIn("⏸️ phase:blocked", labels)
-            self.assertIn("👤 human:需-maintainer-决策", labels)
+            self.assertIn(label_catalog.PHASE_BLOCKED, labels)
+            self.assertIn(label_catalog.HUMAN_MAINTAINER_DECISION, labels)
             heartbeat_signal = stability.signals["fresh_heartbeats"]
             self.assertEqual(heartbeat_signal["source"], "heartbeats/*.ts")
             self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 5)

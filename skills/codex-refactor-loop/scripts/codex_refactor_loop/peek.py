@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from . import labels as label_catalog
 from .context import LoopContext, LoopContextError
 from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
@@ -70,10 +71,8 @@ class PeekStatusLens:
 
     def _maintainer_comments(self) -> list[str]:
         output: list[str] = []
-        issues = self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
-        prs = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
-        issues = issues if isinstance(issues, list) else []
-        prs = prs if isinstance(prs, list) else []
+        issues = self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.MANAGED), "number")
+        prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number")
         targets = [("i", str(item.get("number"))) for item in issues if isinstance(item, dict)]
         targets.extend(("p", str(item.get("number"))) for item in prs if isinstance(item, dict))
         now = datetime.now(timezone.utc)
@@ -125,21 +124,21 @@ class PeekStatusLens:
 
     def _milestone_items(self) -> list[str]:
         lines = []
-        for kind, command in (
-            ("issue", ["issue", "list", "--label", "auto-loop", "--label", "🎯 milestone", "--state", "open", "--json", "number,title,labels"]),
-            ("PR", ["pr", "list", "--label", "auto-loop", "--label", "🎯 milestone", "--state", "open", "--json", "number,title,labels"]),
-        ):
-            for item in self.gh_json(command, []):
+        for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
+            for item in self._list_by_any_label(gh_kind, label_catalog.query_labels_for(label_catalog.MILESTONE_CURRENT), "number,title,labels"):
                 if isinstance(item, dict):
                     labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                    visible = [label for label in labels if label.startswith(("🎯", "🔍", "🛠", "⚙", "⏸", "👤", "🤖", "👀", "🔧", "🚀", "✅", "🆘"))]
+                    projection = label_catalog.normalize_label_set(labels)
+                    if label_catalog.MILESTONE_CURRENT not in projection.canonical:
+                        continue
+                    visible = self._visible_loop_labels(labels)
                     title = str(item.get("title") or "")[:55]
                     lines.append(f"  • {kind} #{item.get('number')} labels=[{', '.join(visible)}] — {title}")
         return lines
 
     def _open_prs(self) -> list[str]:
         lines = []
-        for item in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
@@ -173,7 +172,7 @@ class PeekStatusLens:
 
     def _mergeable_prs(self) -> list[str]:
         out = []
-        for num in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], []):
+        for num in self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number"):
             pr_num = str(num.get("number")) if isinstance(num, dict) else ""
             if not pr_num:
                 continue
@@ -201,33 +200,33 @@ class PeekStatusLens:
 
     def _stale_labels(self) -> list[str]:
         out = []
-        issue_prefixes = ("🔍", "🛠", "🔧", "👀", "⏸", "auto-loop-stuck", "🆘")
-        pr_prefixes = issue_prefixes + ("🚀",)
-        for kind, prefixes in (("issue", issue_prefixes), ("pr", pr_prefixes)):
-            for item in self.gh_json([kind, "list", "--label", "auto-loop", "--state", "closed", "--limit", "30", "--json", "number,labels"], []):
+        for kind in ("issue", "pr"):
+            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels", state="closed", limit="30"):
                 if not isinstance(item, dict):
                     continue
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                stale = [label for label in labels if label.startswith(prefixes)]
+                projection = label_catalog.normalize_label_set(labels)
+                stuck = (label_catalog.STUCK,) if label_catalog.STUCK in projection.canonical else ()
+                stale = sorted(projection.labels_for_group("phase") + tuple(projection.cleanup_only) + stuck)
                 if stale:
-                    suffix = "  → controller should clean up + add 🎉 phase:merged" if kind == "issue" else ""
+                    suffix = f"  → controller should clean up + add {label_catalog.PHASE_MERGED}" if kind == "issue" else ""
                     out.append(f"  ⚠️ closed {kind} #{item.get('number')} still has: {','.join(stale)}{suffix}")
         return out
 
     def _linkage_mismatch(self) -> list[str]:
         out = []
-        for item in self.gh_json(["issue", "list", "--label", "🛠️ phase:implementing", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.PHASE_IMPLEMENTING), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
-            open_prs = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--search", f"in:body Closes #{num}", "--json", "number"], [])
+            open_prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", search=f"in:body Closes #{num}")
             if open_prs:
                 continue
-            merged = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "merged", "--search", f"in:body Closes #{num}", "--json", "number"], [])
+            merged = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", state="merged", search=f"in:body Closes #{num}")
             if merged:
-                out.append(f"  ⚠️ issue #{num} [🛠️ implementing] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
+                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
             else:
-                out.append(f"  ⚠️ issue #{num} [🛠️ implementing] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
+                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
         return out
 
     def _spawn_drop(self) -> list[str]:
@@ -257,13 +256,12 @@ class PeekStatusLens:
             except OSError:
                 continue
         out = []
-        prefixes = ("🔍", "🛠", "🔧", "👀")
         for kind in ("issue", "pr"):
-            for item in self.gh_json([kind, "list", "--label", "auto-loop", "--state", "open", "--json", "number,labels"], []):
+            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels"):
                 if not isinstance(item, dict):
                     continue
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                phase = next((label for label in labels if label.startswith(prefixes)), "")
+                phase = label_catalog.normalize_label_set(labels).phase or ""
                 num = str(item.get("number"))
                 if phase and not any(f"pr{num}" in log or f"issue{num}" in log for log in active):
                     out.append(f"  ⚠️ {kind} #{num} label={phase} but 0 codex referencing it")
@@ -291,7 +289,7 @@ class PeekStatusLens:
     def _stuck_too_long(self) -> list[str]:
         out = []
         now = datetime.now(timezone.utc)
-        for item in self.gh_json(["issue", "list", "--label", "auto-loop-stuck", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.STUCK), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
@@ -308,13 +306,50 @@ class PeekStatusLens:
 
     def _open_issues(self) -> list[str]:
         out = []
-        for item in self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number,title,labels"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.MANAGED), "number,title,labels"):
             if not isinstance(item, dict):
                 continue
             labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-            visible = [label for label in labels if label.startswith(("🔍", "🛠", "⚙", "⏸", "🆘", "👤", "🤖"))]
+            visible = self._visible_loop_labels(labels)
             out.append(f"  • #{item.get('number')} labels=[{', '.join(visible)}] — {str(item.get('title') or '')[:55]}")
         return out
+
+    def _visible_loop_labels(self, labels: list[str]) -> list[str]:
+        projection = label_catalog.normalize_label_set(labels)
+        return sorted(projection.canonical | projection.cleanup_only)
+
+    def _list_by_any_label(
+        self,
+        kind: str,
+        query_labels: Sequence[str],
+        json_fields: str,
+        *,
+        state: str = "open",
+        limit: str | None = None,
+        search: str | None = None,
+    ) -> list[dict]:
+        rows: list[dict] = []
+        seen: set[int] = set()
+        for query_label in query_labels:
+            command = [kind, "list", "--label", query_label, "--state", state]
+            if search:
+                command += ["--search", search]
+            if limit:
+                command += ["--limit", limit]
+            command += ["--json", json_fields]
+            for item in self.gh_json(command, []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    number = int(item.get("number"))
+                except (TypeError, ValueError):
+                    rows.append(item)
+                    continue
+                if number in seen:
+                    continue
+                seen.add(number)
+                rows.append(item)
+        return rows
 
     def _checks(self, pr_num: str) -> tuple[int, int, int]:
         data = self.gh_json(["pr", "checks", pr_num, "--json", "bucket"], [])
