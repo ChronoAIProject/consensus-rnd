@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -51,6 +52,18 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertEqual(self.bump.bump_semver("1.2.3", "patch"), "1.2.4")
         self.assertEqual(self.bump.bump_semver("1.2.3", "minor"), "1.3.0")
         self.assertEqual(self.bump.bump_semver("1.2.3", "major"), "2.0.0")
+        self.assertEqual(self.bump.bump_semver("1.2.3-beta.1+build.5", "patch"), "1.2.4")
+
+    def test_semver_parser_accepts_prerelease_and_build_metadata(self) -> None:
+        for version in ("1.0.0", "1.0.0-beta.1", "1.0.0-rc.1+build.5"):
+            with self.subTest(version=version):
+                self.assertEqual(self.bump.parse_version(version), (1, 0, 0))
+
+    def test_semver_parser_rejects_invalid_versions(self) -> None:
+        for version in ("1.0", "1.0.0.0", "1.0.0-", "v1.0.0", ""):
+            with self.subTest(version=version):
+                with self.assertRaisesRegex(ValueError, f"invalid semver: {re.escape(version)}"):
+                    self.bump.parse_version(version)
 
     def test_desync_refuses_before_write_and_dry_run_does_not_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
