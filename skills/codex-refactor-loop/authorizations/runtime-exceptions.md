@@ -92,7 +92,7 @@ schema, or source of new authority. The executable contract remains in
 - source_round: `r3`
 - source_marker: `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`
 - skill_anchor: `#named-runtime-exception--anti-stop-restart-helperper-49`
-- allowed: cron or launchd helper maintains singleton wrappers plus actor-owned heartbeat leases for the existing daemon allowlist and runs 24h log retention.
+- allowed: cron or launchd helper maintains singleton wrappers, actor-owned heartbeat leases, and helper-private launch fingerprints at `.refactor-loop/locks/<daemon>.fingerprint.json` for the existing daemon allowlist; pid alive plus fresh heartbeat plus current fingerprint is the only skip condition, and missing, malformed, or mismatched fingerprint data fails closed to restart; runs 24h log retention.
 - forbidden: no codex spawn, commit, push, merge, label, archive, index, new daemon, issue lifecycle, PR lifecycle, tag, release, wrapper sidecar heartbeat writer, or generic lifecycle authority.
-- verification: `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
+- verification: `test_restart_daemons.py`, `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.

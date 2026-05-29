@@ -168,6 +168,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertNotEqual(old_pid, new_pid)
         self.assertEqual(2, self.start_count("comment-monitor"))
 
+    def test_restarts_when_package_tree_fingerprint_changes(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("dev_sync_daemon")
+        package_dir = self.skill / "scripts" / "codex_refactor_loop"
+        package_dir.mkdir(parents=True)
+        (package_dir / "sentinel_module.py").write_text("VALUE = 'changed'\n", encoding="utf-8")
+        self.run_helper()
+        new_pid = self.read_pid("dev_sync_daemon")
+        self.assertNotEqual(old_pid, new_pid)
+        self.assertEqual(2, self.start_count("dev_sync_daemon"))
+
     def test_restarts_when_fingerprint_missing(self) -> None:
         self.run_helper()
         self.fingerprint_path("codex-progress-reporter").unlink()
