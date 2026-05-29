@@ -111,6 +111,15 @@ class LoopContextTests(unittest.TestCase):
                 with self.assertRaisesRegex(LoopContextError, "repo-relative POSIX"):
                     ctx.artifact_execution_path(text)
 
+    def test_artifact_execution_path_rejects_symlink_escape_after_resolve(self) -> None:
+        ctx = LoopContext.load(repo_root=self.repo, env={})
+        outside_dir = self.tmp_root / "outside"
+        outside_dir.mkdir()
+        (self.repo / "link").symlink_to(outside_dir, target_is_directory=True)
+
+        with self.assertRaisesRegex(LoopContextError, "escapes REPO_ROOT"):
+            ctx.artifact_execution_path("link/out.log")
+
 
 if __name__ == "__main__":
     unittest.main()
