@@ -134,5 +134,49 @@ class RuntimeShellRemovalSourceTests(unittest.TestCase):
                     self.assertNotIn(token, text)
 
 
+class MultiNodeOwnershipSourceTests(unittest.TestCase):
+    def test_issue193_requires_github_native_author_updated_at_contract(self) -> None:
+        combined = "\n".join(
+            path.read_text(encoding="utf-8")
+            for path in (
+                REPO_ROOT / "CLAUDE.md",
+                SKILL_ROOT / "SKILL.md",
+                SCRIPT_DIR / "codex_refactor_loop" / "ownership.py",
+            )
+        )
+        for required in (
+            "author.login",
+            "updatedAt",
+            "3 hours",
+            "comments and labels are visibility only",
+            ".refactor-loop/runs/ is per-node internal state",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+
+    def test_issue193_forbids_device_lease_claim_authority_primitives(self) -> None:
+        checked = [*(SCRIPT_DIR / "codex_refactor_loop").rglob("*.py")]
+        forbidden = (
+            "AUTO_LOOP_NODE_ID",
+            "DEVICE_ID",
+            "refs/heads/auto-loop/leases",
+            "GitRefLeaseRegistry",
+            "DeviceLeaseDaemon",
+            ".refactor-loop/device-claims",
+            "WorkUnitClaim",
+            "claimed:<device>",
+        )
+        for path in checked:
+            text = path.read_text(encoding="utf-8")
+            for token in forbidden:
+                with self.subTest(path=path.relative_to(REPO_ROOT), token=token):
+                    self.assertNotIn(token, text)
+
+        docs = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8") + "\n" + (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        for token in forbidden:
+            with self.subTest(doc_forbidden_token=token):
+                self.assertIn(token, docs)
+
+
 if __name__ == "__main__":
     unittest.main()

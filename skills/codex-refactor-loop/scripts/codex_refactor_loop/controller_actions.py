@@ -16,6 +16,7 @@ from typing import Mapping, Sequence
 
 from .context import LoopContext, LoopContextError
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .ownership import GitHubWorkOwnership, WorkTarget
 
 
 PR_LABELS_REMOVE = (
@@ -176,6 +177,17 @@ class ControllerActions:
         if not pr:
             sys.stderr.write("merge_pr: missing pr number\n")
             return 1
+        # Refactor (iter/issue-193):
+        #   Old pattern: merge_pr could enter gh pr merge from any node that
+        #   reached controller lifecycle.
+        #   New principle: PR author.login owns merge side effects until
+        #   updatedAt is older than the 3 hour stale takeover cutoff.
+        decision = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.ctx.repo_root).decide(WorkTarget("pr", int(pr)))
+        if decision.reason == "foreign-fresh":
+            sys.stderr.write(f"merge_pr: skipped fresh foreign owner for PR #{pr}\n")
+            return 0
+        if decision.reason == "stale-takeover":
+            self.gh(["pr", "comment", pr, "--body", GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.ctx.repo_root).takeover_comment(decision)], check=False)
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
             match = re.search(r"Closes #([0-9]+)", body)

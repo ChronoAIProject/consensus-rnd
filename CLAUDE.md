@@ -78,6 +78,7 @@
 - **不弹 popup**:仓库内 skill 矩阵相关的决策(改 skill、改清单、改本文件、改 `.version-bump.json`)由 agent 自决,**不** `AskUserQuestion`。宪法级争议走 meta-layer self-check + 小规模 rule PR,不走 popup。
 - **Skill routing 优先**:能匹配仓库内现有 skill 的请求一律走对应 skill;skill 自包含的操作细则不复制回本文件。
 - **artifact 路径相对 `$REPO_ROOT`**:不硬编码 host 路径,不引入具体 host 事实。
+- **多节点 work ownership**:只从 GitHub 原生 issue/PR 事实派生:issue/PR `author.login` 是唯一 owner authority,GitHub `updatedAt` 超过既有 3 hours stale revival cutoff 后才允许其他节点接管并用评论说明。comments and labels are visibility only;PR body 和本地 artifact 只能作为可见状态或 per-node internal state,不得成为 ownership authority。禁止引入 `AUTO_LOOP_NODE_ID`/`DEVICE_ID`、owner marker、claim label、git-ref-CAS lease(`refs/heads/auto-loop/leases` / `GitRefLeaseRegistry`)、专用 runtime lease daemon(`DeviceLeaseDaemon`)、本地 claim 文件(`.refactor-loop/device-claims`)、WorkUnit claim schema(`WorkUnitClaim` / `claimed:<device>`)或任何新的跨节点权威协调原语;`.refactor-loop/runs/ is per-node internal state`。
 - **controller worktree 统一位置**:放在 `<repo-root>/.worktrees/<name>/`(gitignored),**不**创建 sibling `<repo>-wt-*` 目录。
 - **最小权限动作**:没有明确授权时,agent 不修改 host 配置、不发布 release、不关闭外部状态面、不执行不可逆生命周期动作。
 

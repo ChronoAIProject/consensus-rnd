@@ -30,6 +30,7 @@ from typing import Callable, Iterable, Literal, cast
 
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
+from ..ownership import GitHubWorkOwnership, WorkTarget
 
 
 ROLES = ("minimal", "structural", "delete")
@@ -375,6 +376,8 @@ class Phase9Router:
             log_path = self._log_path(issue, round_no, "judge")
             if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, "judge"):
                 continue
+            if not self._ownership_allows_issue(issue, f"{round_no}-judge"):
+                continue
             violation = self._peer_solver_reference_violation(issue, round_no)
             if violation is not None:
                 self._append_invalid_triplet_event(issue, round_no, violation)
@@ -413,6 +416,8 @@ class Phase9Router:
                     log_path = self._log_path(marker.issue, target_round, role)
                     if key in ledger or self._in_flight(log_path):
                         continue
+                    if not self._ownership_allows_issue(marker.issue, f"{target_round}-{role}"):
+                        continue
                     prompt = self._write_prompt(
                         marker.issue,
                         target_round,
@@ -430,6 +435,8 @@ class Phase9Router:
                 key = self._key(marker.issue, marker.round, "reflector")
                 log_path = self._log_path(marker.issue, marker.round, "reflector")
                 if key in ledger or self._in_flight(log_path):
+                    continue
+                if not self._ownership_allows_issue(marker.issue, f"{marker.round}-reflector"):
                     continue
                 if not self._stalled_predicate_holds(marker.issue, marker.round):
                     continue
@@ -591,6 +598,31 @@ class Phase9Router:
         }
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-triplet-evidence-invalid {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _ownership_allows_issue(self, issue: str, route: str) -> bool:
+        # Refactor (iter/issue-193):
+        #   Old pattern: Phase 9 direct dispatch trusted local logs/ledger only
+        #   and could spawn work for a fresh foreign-authored issue.
+        #   New principle: author.login owns the GitHub issue until updatedAt
+        #   crosses the 3 hour stale takeover cutoff.
+        if not self.ctx.gh_repo_slug:
+            return True
+        decision = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.repo_root).decide(WorkTarget("issue", int(issue)))
+        if decision.allowed:
+            return True
+        self._append_ledger(
+            f"{issue}-{route}-ownership-skip",
+            "ownership-skip",
+            self.logs_dir / f"phase9-issue{issue}-ownership-skip.log",
+            extra={
+                "route": route,
+                "issue": issue,
+                "ownership": decision.reason,
+                "author_login": decision.author_login,
+                "current_login": decision.current_login,
+            },
+        )
+        return False
 
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
         command = [

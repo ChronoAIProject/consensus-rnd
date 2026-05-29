@@ -34,11 +34,13 @@ import re
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.ownership import GitHubWorkOwnership, OwnershipDecision, STALE_AFTER, WorkTarget
 
 
 STALE_SECONDS = 90
@@ -89,6 +91,8 @@ class GhItem:
     number: int
     title: str
     labels: tuple[str, ...]
+    author_login: str = ""
+    updated_at: str = ""
     head_ref: str | None = None
 
     @property
@@ -527,8 +531,8 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
     slug = github_repo_slug()
     items: list[GhItem] = []
     for kind, command in (
-        ("issue", ["gh", "issue", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels"]),
-        ("PR", ["gh", "pr", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,headRefName"]),
+        ("issue", ["gh", "issue", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,author,updatedAt"]),
+        ("PR", ["gh", "pr", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,author,updatedAt,headRefName"]),
     ):
         data = run_json(command, cwd=repo_root)
         if not isinstance(data, list):
@@ -551,10 +555,48 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
                     number=number,
                     title=str(raw.get("title") or ""),
                     labels=labels,
+                    author_login=str((raw.get("author") or {}).get("login") or "") if isinstance(raw.get("author"), dict) else "",
+                    updated_at=str(raw.get("updatedAt") or ""),
                     head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
                 )
             )
     return items
+
+
+def ownership_decision_for_item(repo_root: Path, item: GhItem) -> OwnershipDecision:
+    # Refactor (iter/issue-193):
+    #   Old pattern: wakeup planning treated every open auto-loop item as
+    #   equally actionable, regardless of GitHub-native owner.
+    #   New principle: fresh foreign author.login items are visibility only;
+    #   updatedAt older than 3 hours may produce stale-takeover work.
+    target = WorkTarget("pr" if item.kind == "PR" else "issue", item.number)
+    ownership = GitHubWorkOwnership(github_repo_slug(), cwd=repo_root)
+    current_login = ownership.current_login() or ""
+    updated_at = _parse_time(item.updated_at)
+    if not item.author_login and not item.updated_at:
+        return OwnershipDecision(True, "owned", target, current_login=current_login)
+    if current_login and item.author_login and updated_at:
+        age_hours = max(0.0, (datetime.now(timezone.utc) - updated_at).total_seconds() / 3600)
+        if item.author_login == current_login:
+            return OwnershipDecision(True, "owned", target, item.author_login, current_login, age_hours)
+        if datetime.now(timezone.utc) - updated_at >= STALE_AFTER:
+            return OwnershipDecision(True, "stale-takeover", target, item.author_login, current_login, age_hours)
+        return OwnershipDecision(False, "foreign-fresh", target, item.author_login, current_login, age_hours)
+    decision = ownership.decide(target)
+    if decision.reason in {"unknown-current-login", "unknown-target"}:
+        return OwnershipDecision(True, "owned", target, current_login=current_login)
+    return decision
+
+
+def _parse_time(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc) if value else None
+    except ValueError:
+        return None
+
+
+def allowed_ownership(repo_root: Path, item: GhItem) -> OwnershipDecision:
+    return ownership_decision_for_item(repo_root, item)
 
 
 def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -646,6 +688,9 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     for item in items:
         if item.kind != "PR":
             continue
+        ownership = allowed_ownership(repo_root, item)
+        if not ownership.allowed:
+            continue
         checks = run_json(["gh", "pr", "checks", str(item.number), *gh_args(slug), "--json", "bucket"], cwd=repo_root)
         if not isinstance(checks, list):
             continue
@@ -660,30 +705,39 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
                 "phase": "phase-5-ci-red",
                 "actor": "remote-ci-fix-codex",
                 "fail_count": fail_count,
+                "ownership": ownership.reason,
             }
         )
     return actions
 
 
-def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
+def existing_issue_actions(items: list[GhItem], *, repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
     for item in ordered:
+        ownership: OwnershipDecision | None = None
+        if repo_root is not None:
+            ownership = allowed_ownership(repo_root, item)
+            if not ownership.allowed:
+                continue
         phase = phase_from_labels(item.labels)
         if phase in {"blocked", "merged", "ci-running"}:
             continue
         priority = 6 if item.milestone else 7
-        actions.append(
-            {
-                "priority": priority,
-                "kind": "existing-issue",
-                "item": item.item,
-                "phase": phase,
-                "actor": actor_from_labels(item.labels, item.kind),
-                "milestone": item.milestone,
-                "title": item.title,
-            }
-        )
+        action = {
+            "priority": priority,
+            "kind": "existing-issue",
+            "item": item.item,
+            "phase": phase,
+            "actor": actor_from_labels(item.labels, item.kind),
+            "milestone": item.milestone,
+            "title": item.title,
+        }
+        if ownership is not None:
+            action["ownership"] = ownership.reason
+            if ownership.reason == "stale-takeover":
+                action["stale_hours"] = int(ownership.age_hours)
+        actions.append(action)
     return actions
 
 
@@ -744,7 +798,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(completed_marker_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
-    actions.extend(existing_issue_actions(gh_items))
+    actions.extend(existing_issue_actions(gh_items, repo_root=repo_root))
     actions.sort(key=lambda action: action["priority"])
 
     recommendation: str | None = None

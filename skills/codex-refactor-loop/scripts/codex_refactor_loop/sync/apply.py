@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Sequence
 
 from ..context import LoopContext
+from ..ownership import GitHubWorkOwnership, WorkTarget
 from .requests import IntegrationSyncRequest, IntegrationSyncRequestError, load_request
 
 
@@ -242,6 +243,16 @@ def apply_request(
     command_runner = command_runner or run
     try:
         request = validate_common(repo, worktree, request_path, env=env, command_runner=command_runner)
+        # Refactor (iter/issue-193):
+        #   Old pattern: PR-targeted sync apply relied only on local request
+        #   state and branch SHA checks before git lifecycle side effects.
+        #   New principle: if a request names a PR, its author.login ownership
+        #   gate must pass before apply; non-PR integration sync stays SHA-only.
+        if request.pr_number is not None:
+            ctx = LoopContext.load(repo_root=repo, env=env)
+            decision = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo).decide(WorkTarget("pr", request.pr_number))
+            if decision.reason == "foreign-fresh":
+                raise IntegrationSyncRequestError("fresh foreign owner")
         clean, merge_in_progress = ensure_clean_or_merge(worktree, command_runner=command_runner)
         if not clean:
             raise IntegrationSyncRequestError("dirty non-merge worktree")

@@ -453,6 +453,18 @@ The floor is local because it prevents loop stalls.
 - **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open `auto-loop` issue/PR lacking in-flight codex coverage of its phase label; when any open `auto-loop` issue/PR carries `🎯 milestone`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
 - **Stale-issue revival(3h)**: Open `auto-loop` issue/PR with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
 
+### GitHub-native work ownership
+
+<!--
+Refactor (iter/issue-193):
+  Old pattern: multi-node coordination proposals introduced device ids, owner
+  markers, claim labels, local claim files, or git-ref-CAS lease authority.
+  New principle: GitHub issue/PR author.login + updatedAt is the only
+  ownership projection; comments and labels are visibility only.
+-->
+
+`author.login` is the only ownership authority for issue/PR work. Fresh foreign-owned issue/PR targets are skipped before spawn, reaction/comment, sync apply, or PR merge. `updatedAt` older than **3 hours** permits stale takeover, with a visible comment/status banner; comments and labels are visibility only and are never parsed as authority. `.refactor-loop/runs/ is per-node internal state`; same-login multi-device duplication is an accepted residual risk. Do not add device-id ownership, owner markers, claim labels, git-ref-CAS leases, runtime lease daemons, local claim files, WorkUnit claim schema, or a #193 runtime exception.
+
 More detail is in [concurrency floor details](#concurrency-floor-details).
 
 ## Milestone priority(强制)

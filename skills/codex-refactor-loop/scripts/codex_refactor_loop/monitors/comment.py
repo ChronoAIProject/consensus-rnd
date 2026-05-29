@@ -14,6 +14,7 @@ from typing import Iterable, Mapping, Sequence
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
+from ..ownership import GitHubWorkOwnership, WorkTarget
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -105,6 +106,15 @@ class CommentMonitor:
         if author not in self.maintainers:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
+            return
+        decision = GitHubWorkOwnership(self.repo, cwd=self.ctx.repo_root).decide(WorkTarget("issue", int(number)))
+        # Refactor (iter/issue-193):
+        #   Old pattern: maintainer comments triggered reactions/banners from
+        #   any node that saw the event first.
+        #   New principle: fresh foreign author.login targets are not marked
+        #   seen and produce no GitHub side effects.
+        if decision.reason == "foreign-fresh":
+            print(f"new-team-comment: {number} {author} {comment_id} skipped-foreign-owner", flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:

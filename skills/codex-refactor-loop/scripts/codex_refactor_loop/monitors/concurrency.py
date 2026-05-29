@@ -15,6 +15,7 @@ from typing import Sequence
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
+from ..ownership import GitHubWorkOwnership, WorkTargetResolver
 from ..state import read_json, write_json
 
 
@@ -211,7 +212,7 @@ class ConcurrencyMonitor:
                 "--state",
                 "open",
                 "--json",
-                "number,labels",
+                    "number,labels,author,updatedAt",
                 "--limit",
                 "100",
             ])
@@ -227,17 +228,20 @@ class ConcurrencyMonitor:
                 labels = [label.get("name", "") for label in entry.get("labels", [])]
                 phase = next((label for label in labels if label.startswith(("🔍", "🔧", "👀", "🛠️", "⚙️", "🚀", "✅", "🎉", "⏸️"))), "")
                 human = next((label for label in labels if label.startswith(("🤖", "👤", "🆘"))), "")
-                items.append({"number": num, "kind": kind, "phase": phase, "human": human})
+                items.append({"number": num, "kind": kind, "phase": phase, "human": human, "github_target": {"kind": kind, "number": num}})
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
-        # Refactor (iter3/skill-human-label-taxonomy):
-        #   Old: four Human labels, including two escalation labels, scattered no-gap and escalation decisions across the codebase.
-        #   New principle: exactly two active Human labels; causes move to the reason surface (#15 structural consensus).
+        # Refactor (iter/issue-193):
+        #   Old pattern: active-task expected count treated fresh foreign
+        #   author.login items as local work and could trigger duplicate spawn.
+        #   New principle: count only owned or 3h-stale GitHub-native targets.
         breakdown = []
         total = 0
         for item in items:
             if item["human"] == "👤 human:需-maintainer-决策":
+                continue
+            if not self.dispatch_ownership_allowed(item):
                 continue
             expected = PHASE_EXPECTED.get(item["phase"], 0)
             if expected > 0:
@@ -430,6 +434,18 @@ class ConcurrencyMonitor:
             start_new_session=True,
         )
 
+    def dispatch_ownership_allowed(self, payload: dict) -> bool:
+        # Refactor (iter/issue-193):
+        #   Old pattern: dispatch queue side effects were gated only by local
+        #   queue/cwd state, not GitHub-native work ownership.
+        #   New principle: issue/PR targets must pass author.login ownership
+        #   or updatedAt 3h stale takeover before spawn.
+        target = WorkTargetResolver.from_payload(payload)
+        if target is None or not self.gh_repo_slug or "github_target" not in payload:
+            return True
+        decision = GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root).decide(target)
+        return decision.reason != "foreign-fresh"
+
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
     #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
@@ -444,6 +460,11 @@ class ConcurrencyMonitor:
             if not ok:
                 self.archive_rejected(path, payload, task_id, priority, reject_reason)
                 event = f"DISPATCH_REJECTED:{task_id}:{priority}:main-worktree-cd:{reject_reason}"
+                self.write_pending_event(event)
+                log(event)
+                continue
+            if not self.dispatch_ownership_allowed(payload):
+                event = f"DISPATCH_SKIPPED_FOREIGN_OWNER:{task_id}:{priority}:fresh-foreign-owner"
                 self.write_pending_event(event)
                 log(event)
                 continue
