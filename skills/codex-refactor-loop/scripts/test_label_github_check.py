@@ -152,6 +152,14 @@ class LabelGithubCheckTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(stdout.getvalue().strip(), ",".join(labels.design_issue_label_bundle()))
 
+    def test_validate_catalog_cli_reports_success(self) -> None:
+        stdout = io.StringIO()
+        with mock.patch("sys.stdout", stdout):
+            code = labels.main(["validate-catalog"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(stdout.getvalue().strip(), "labels catalog valid")
+
 
 if __name__ == "__main__":
     unittest.main()
