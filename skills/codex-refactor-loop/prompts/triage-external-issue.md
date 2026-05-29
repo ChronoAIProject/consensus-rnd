@@ -55,8 +55,8 @@ Artifact profile: marker-only-work-unit
    - `verdict: "accept"`
    - `body_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-body.md"`
    - `comment_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md"`
-   - `add_labels: ["crnd:lifecycle:managed","crnd:phase:design-solving","crnd:human:auto"]`
-   - `remove_labels: ["crnd:triage:pending"]`
+   - `add_labels`: copy the catalog-derived accept label bundle from the controller header
+   - `remove_labels`: copy the catalog-derived triage removal label from the controller header
    - `sentinel_present: true`
    - `lifecycle_owner: "controller"`
    - `lifecycle_authority: false`
@@ -72,7 +72,7 @@ Artifact profile: marker-only-work-unit
    - `body_artifact_path: ""`
    - `comment_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md"`
    - `add_labels: []`
-   - `remove_labels: ["crnd:triage:pending"]`
+   - `remove_labels`: copy the catalog-derived triage removal label from the controller header
    - `sentinel_present: true`
    - `lifecycle_owner: "controller"`
    - `lifecycle_authority: false`

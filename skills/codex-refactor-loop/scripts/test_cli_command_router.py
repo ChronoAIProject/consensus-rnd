@@ -269,6 +269,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             self.assertEqual(0, router.run("wakeup-plan", ["--repo-root", "/tmp/repo"]))
         handler.assert_called_once_with(["--repo-root", "/tmp/repo"])
 
+    def test_labels_command_forwards_argv_to_read_only_catalog_handler(self) -> None:
+        router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
+        handler = mock.Mock(return_value=0)
+        with mock.patch.dict("codex_refactor_loop.cli.COMMANDS", {"labels": COMMANDS["labels"].__class__(handler, "labels", ("read-source", "read-gh")), **{k: v for k, v in COMMANDS.items() if k != "labels"}}):
+            self.assertEqual(0, router.run("labels", ["check-github", "--plan"]))
+        handler.assert_called_once_with(["check-github", "--plan"])
+        self.assertEqual(set(COMMANDS["labels"].authority), {"read-source", "read-gh"})
+
     def test_controller_actions_dispatch_to_python_action_handler(self) -> None:
         router = RuntimeCommandRouter(script_dir=SCRIPT_DIR)
         handler = mock.Mock(return_value=0)

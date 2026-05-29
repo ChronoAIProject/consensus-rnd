@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+# Refactor (iter4/issue-183): Old pattern: legacy emoji, Chinese, and
+# auto-loop label literals were scattered across controller code, prompts, and
+# SKILL prose. New principle: one crnd:<group>:<slug> catalog owns canonical
+# labels, legacy aliases, and dual-read migration planning.
 import argparse
 import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 
@@ -277,6 +281,10 @@ def query_labels_for(label: str) -> tuple[str, ...]:
     return (label, *aliases_for(label))
 
 
+def design_issue_label_bundle() -> tuple[str, ...]:
+    return (MANAGED, PHASE_DESIGN_SOLVING, HUMAN_AUTO)
+
+
 def migration_plan(live_labels: Iterable[dict[str, str] | str]) -> MigrationPlan:
     live_by_name: dict[str, dict[str, str]] = {}
     for item in live_labels:
@@ -366,6 +374,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     sub.add_parser("validate-catalog")
     check = sub.add_parser("check-github")
     check.add_argument("--plan", action="store_true")
+    sub.add_parser("design-issue-labels")
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command == "validate-catalog":
         assert_catalog_valid()
@@ -375,6 +384,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         plan = migration_plan(_load_gh_labels())
         print(json.dumps(plan.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
         return 1 if plan.unknown_crnd or (not args.plan and (plan.create or plan.update)) else 0
+    if args.command == "design-issue-labels":
+        print(",".join(design_issue_label_bundle()))
+        return 0
     raise AssertionError(f"unhandled labels command: {args.command}")
 
 

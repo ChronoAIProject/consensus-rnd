@@ -26,6 +26,17 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertIn("external_defaults", text)
         self.assertNotIn('for l in "🔍 phase:design-solving"', text)
         self.assertNotIn("grep -E '^(🔍|✅|🛠️|🚀|👀|🔧|⚙️|🎉|⏸️) phase:'", text)
+        self.assertNotIn("issue/PR 状态 → 期望 label", text)
+        self.assertNotIn("crnd:phase:pr-open + crnd:phase:reviewing", text)
+        self.assertNotIn('"crnd:lifecycle:managed,crnd:phase:design-solving,crnd:human:auto"', text)
+
+    def test_active_prompts_do_not_hardcode_canonical_label_handoff_arrays(self) -> None:
+        triage_prompt = (SKILL_ROOT / "prompts" / "triage-external-issue.md").read_text(encoding="utf-8")
+
+        self.assertIn("catalog-derived accept label bundle", triage_prompt)
+        self.assertIn("catalog-derived triage removal label", triage_prompt)
+        self.assertNotIn('"crnd:lifecycle:managed","crnd:phase:design-solving","crnd:human:auto"', triage_prompt)
+        self.assertNotIn('"crnd:triage:pending"', triage_prompt)
 
     def test_canonical_crnd_literals_are_registered(self) -> None:
         allowed_paths = {

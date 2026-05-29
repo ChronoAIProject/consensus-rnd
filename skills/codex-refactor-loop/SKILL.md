@@ -1290,27 +1290,12 @@ validate_prompt out.md                                    # check 0 unresolved {
 #   New principle: 恰好两个 active Human label;causes 移到 reason surface(#15 structural 共识)
 -->
 
-```
-issue/PR 状态 → 期望 label
-
-design issue:
-  open + crnd:human:auto → crnd:phase:design-solving   (solver/judge running)
-  open + crnd:human:auto → crnd:phase:implementing      (implement dispatched)
-  open + crnd:human:maintainer-decision                 (rework/deadlock reason in banner/comment)
-  closed       → crnd:phase:merged                      (via PR merge)
-  closed       → wontfix                  (per maintainer drop directive)
-
-cluster PR:
-  open + crnd:human:auto → crnd:phase:pr-open + crnd:phase:reviewing  (reviewer dispatched)
-  open + crnd:human:auto → crnd:phase:pr-open + crnd:phase:fixing     (fix codex)
-  open + crnd:human:maintainer-decision                              (reflector escalate-human with reason banner)
-  closed merged → crnd:phase:merged                                  (via merge_pr)
-  closed       → (no phase, branch deleted)
-
-rollup PR:
-  open → crnd:phase:pr-open + crnd:human:auto     (passive integration)
-  注:rollup 即使 BLOCKED 也是 🤖 auto-推进,不是 maintainer 决策点
-```
+The lifecycle state machine is implemented through `codex_refactor_loop.labels`
+and controller helpers. Prose may name individual canonical labels when
+explaining a single guard, but active label bundles and transition tables must
+come from catalog-backed helpers instead of SKILL.md examples. The invariant is
+still exactly one canonical phase label and exactly one canonical human label
+for managed open items after migration.
 
 ### Spawn pattern — Bash `run_in_background: true`(强制)
 
@@ -1503,9 +1488,11 @@ For every cluster with `requires_design: true`:
    ```bash
    gh issue create \
      --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
-     --label "crnd:lifecycle:managed,crnd:phase:design-solving,crnd:human:auto" \
+     --label "$(python3 <skill-root>/scripts/consensus-rnd-cli labels design-issue-labels)" \
      --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
    ```
+   The label expression is catalog-derived; do not inline the active label bundle
+   in SKILL.md or prompts.
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record design-pending status on GitHub: the issue body/comment links the source work unit,
    `work_unit_id`, opened timestamp, and current status. Future routing reads GitHub labels,
@@ -1892,7 +1879,8 @@ Runs **after Consensus-rnd Phase integration-sync sync** and **before** any new 
 
 #### Path A — 手动 label opt-in(已现成支持)
 
-maintainer 在外部 issue 上加 canonical loop labels:`crnd:lifecycle:managed` + `crnd:phase:design-solving` + `crnd:human:auto`
+maintainer applies the catalog-derived design-issue label bundle from
+`consensus-rnd-cli labels design-issue-labels`.
 
 Controller 下次 wakeup sweep reads `crnd:lifecycle:managed` and normalizes via `codex_refactor_loop.labels`,把它当 Consensus-rnd Phase design-consensus candidate,直接派 r1 三 solver + meta-judge。Solver prompt 自包含,会读 issue body 全文 + grep 相关代码自找 evidence。
 
@@ -1900,7 +1888,7 @@ Controller 下次 wakeup sweep reads `crnd:lifecycle:managed` and normalizes via
 
 #### Path B — Triage codex / `manual-issue` producer(推荐,更安全)
 
-maintainer 只加 1 label:`crnd:triage:pending`
+maintainer applies the catalog-defined triage-pending label.
 
 This path is the `manual-issue` producer. The triage codex accepts only concrete repository
 work units suitable for consensus, reshapes the issue into a work-unit-backed design issue, and

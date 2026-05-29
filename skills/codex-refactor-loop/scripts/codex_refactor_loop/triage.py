@@ -27,11 +27,7 @@ from .context import LoopContext
 from .github_body import validate_self_contained_github_body
 
 
-ACCEPT_LABELS = [
-    label_catalog.MANAGED,
-    label_catalog.PHASE_DESIGN_SOLVING,
-    label_catalog.HUMAN_AUTO,
-]
+ACCEPT_LABELS = list(label_catalog.design_issue_label_bundle())
 REMOVE_LABELS = [label_catalog.TRIAGE_PENDING]
 TRIAGE_READ_LABELS = label_catalog.query_labels_for(label_catalog.TRIAGE_PENDING)
 ALLOWED_VERDICTS = {"accept", "reject"}
