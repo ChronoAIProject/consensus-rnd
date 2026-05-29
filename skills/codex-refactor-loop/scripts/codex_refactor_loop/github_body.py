@@ -1,4 +1,10 @@
-"""Read-only GitHub body renderer and self-contained authority validator."""
+"""Read-only GitHub body renderer and self-contained authority validator.
+
+Runtime boundary: this module may read local artifact files and print rendered
+Markdown to stdout. It must not write files, call Git/GitHub, spawn background processes, or
+change controller state; behavior and source-regression tests verify that
+boundary.
+"""
 
 from __future__ import annotations
 
@@ -129,7 +135,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--title", required=True)
     parser.add_argument("--artifact", action="append", required=True, default=[])
     parser.add_argument("--debug-path", action="append", default=[])
-    parser.add_argument("--output", default="-")
     args = parser.parse_args(argv)
     try:
         body = render_github_body(
@@ -138,10 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             artifact_paths=args.artifact,
             debug_paths=args.debug_path,
         )
-        if args.output == "-":
-            sys.stdout.write(body)
-        else:
-            Path(args.output).write_text(body, encoding="utf-8")
+        sys.stdout.write(body)
         return 0
     except (OSError, GitHubBodyError) as exc:
         sys.stderr.write(f"{exc}\n")

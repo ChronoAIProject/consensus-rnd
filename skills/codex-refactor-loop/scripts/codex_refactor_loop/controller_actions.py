@@ -214,13 +214,7 @@ class ControllerActions:
         base = base or self.integration_branch
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
-        body_path = Path(body_file)
-        if not body_path.is_absolute():
-            body_path = self.ctx.repo_root / body_path
-        try:
-            validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=False)
-        except GitHubBodyError as exc:
-            raise RuntimeError(str(exc)) from exc
+        self._validate_pr_body_file(body_file)
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -229,6 +223,15 @@ class ControllerActions:
         pr_num = int(match.group(1))
         self.gh(["pr", "edit", str(pr_num), "--add-label", "auto-loop,🚀 phase:pr-open,👀 phase:reviewing,🤖 human:auto-推进"], check=False)
         return pr_num, match.group(0)
+
+    def _validate_pr_body_file(self, body_file: str) -> None:
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        try:
+            validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=False)
+        except GitHubBodyError as exc:
+            raise RuntimeError(str(exc)) from exc
 
     def open_release_rollup_pr_from_pending_event(
         self,
@@ -256,6 +259,7 @@ class ControllerActions:
             raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")
         if not re.fullmatch(r"[0-9A-Za-z._-]+", integration_sha):
             raise RuntimeError("open_release_rollup_pr_from_pending_event: unsafe integration sha for rollup branch")
+        self._validate_pr_body_file(body_file)
 
         remote = self.git(["ls-remote", "--exit-code", "--heads", "origin", integration_branch], check=False)
         if remote.returncode != 0 or not remote.stdout.strip():

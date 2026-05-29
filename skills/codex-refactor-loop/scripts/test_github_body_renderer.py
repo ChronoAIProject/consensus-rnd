@@ -83,6 +83,30 @@ class GitHubBodyRendererTests(unittest.TestCase):
         self.assertIn("完整共识正文", result.stdout)
         self.assertTrue(result.stdout.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
 
+    def test_cli_rejects_output_path_to_remain_read_only(self) -> None:
+        output = self.tmp / "body.md"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(CLI),
+                "render-github-body",
+                "--kind",
+                "authorization",
+                "--title",
+                "授权卡片",
+                "--artifact",
+                str(self.artifact),
+                "--output",
+                str(output),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse(output.exists())
+
 
 class GitHubBodySourceRegressionTests(unittest.TestCase):
     def test_cli_registers_renderer_as_read_artifact_only(self) -> None:
@@ -93,10 +117,11 @@ class GitHubBodySourceRegressionTests(unittest.TestCase):
 
     def test_no_new_daemon_or_lifecycle_authority_for_renderer(self) -> None:
         src = (SCRIPT_DIR / "codex_refactor_loop" / "github_body.py").read_text(encoding="utf-8")
-        for forbidden in ("subprocess", "run_gh", "gh ", "git ", "daemon", "write-state", "gh-open", "gh-label"):
+        for forbidden in ("subprocess", "run_gh", "Path(args.output).write_text", "add_argument(\"--output\"", "gh ", "git ", "daemon", "write-state", "gh-open", "gh-label"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, src)
         self.assertIn("read-only helper", src)
+        self.assertIn("must not write files", src)
 
     def test_controller_and_triage_call_same_validator(self) -> None:
         controller = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

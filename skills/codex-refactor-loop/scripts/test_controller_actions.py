@@ -123,10 +123,36 @@ class ControllerActionsTests(unittest.TestCase):
 
                 with mock.patch.object(self.actions, "git", side_effect=fake_git), mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                     with self.assertRaises(RuntimeError):
-                        self.actions.open_release_rollup_pr_from_pending_event(event_json, "body.md")
+                        self.actions.open_release_rollup_pr_from_pending_event(event_json, str(self.pr_body))
 
                 self.assertFalse(any(call[:1] == ["push"] for call in git_calls), git_calls)
                 self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+
+    def test_open_release_rollup_pr_rejects_bad_body_before_git_push_or_pr_create(self) -> None:
+        event = {
+            "integration_branch": "auto-refact-dev",
+            "review_base_branch": "dev",
+            "integration_sha": "abc123",
+        }
+        bad_body = self.tmp / "bad-rollup-body.md"
+        bad_body.write_text("## 🤖 rollup\n\n授权:.refactor-loop/runs/phase9-issue192-r1-judge.md\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        git_calls: list[list[str]] = []
+        gh_calls: list[list[str]] = []
+
+        def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
+            git_calls.append(args)
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected git call")
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "git", side_effect=fake_git), mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "local .refactor-loop artifact path"):
+                self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(bad_body))
+
+        self.assertFalse(any(call[:1] == ["push"] for call in git_calls), git_calls)
+        self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
 
     def test_open_release_rollup_pr_failed_push_does_not_create_pr(self) -> None:
         event = {
@@ -151,7 +177,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         with mock.patch.object(self.actions, "git", side_effect=fake_git), mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             with self.assertRaisesRegex(RuntimeError, "push failed"):
-                self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), "body.md")
+                self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(self.pr_body))
 
         self.assertIn(["push", "origin", "abc123:refs/heads/rollup/abc123"], git_calls)
         self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
