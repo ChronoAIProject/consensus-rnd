@@ -49,6 +49,7 @@ def copy_minimal_degradation_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
+        "skills/codex-refactor-loop/authorizations/runtime-exceptions.md",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -121,7 +122,7 @@ class PackageChecksTests(unittest.TestCase):
         for required in (
             "skill-degradation",
             "manifest-version-sync",
-            ".refactor-loop/runs/phase9-issue66-r8-judge.md",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#skill-degradation-watch-66",
             ".refactor-loop/.degradation-alert.log",
             ".refactor-loop/.controller-pending-events.log",
             "DEGRADATION_WATCH_INTERVAL_SECONDS",

@@ -207,7 +207,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
     def test_source_has_no_release_lifecycle_or_daemon_event_authority(self) -> None:
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
-        self.assertIn(".refactor-loop/runs/phase9-issue56-r2-judge.md", source)
+        self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56", source)
         self.assertIn("decision-artifact-only", source)
         for forbidden in (
             "dispatch_queue(",

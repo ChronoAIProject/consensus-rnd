@@ -15,7 +15,7 @@ from .context import LoopContext, LoopContextError
 
 
 AUTO_LOOP_SENTINEL = "⟦AI:AUTO-LOOP⟧"
-AUTHORIZATION_ARTIFACT = ".refactor-loop/runs/phase9-issue53-r7-judge.md"
+AUTHORIZATION_ARTIFACT = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53"
 OBSERVABILITY_COMMENT_WRITER = "observability-comment-writers"
 
 # Refactor (issue160/p3-banners): Old pattern: status banner rendering and
