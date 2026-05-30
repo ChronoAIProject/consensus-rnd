@@ -329,6 +329,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             json_text = json_text.split("\nHARD_GATE:", 1)[0]
         return json.loads(json_text), result.stdout
 
+    def git_probe_count(self) -> int:
+        command_log = self.repo / "git-commands.log"
+        commands = command_log.read_text(encoding="utf-8").splitlines() if command_log.exists() else []
+        return sum(
+            1
+            for command in commands
+            if any(
+                probe in command
+                for probe in (
+                    "fetch origin --quiet",
+                    "worktree list --porcelain",
+                    "rev-parse --verify",
+                    "rev-list --count",
+                )
+            )
+        )
+
     def write_completed_log(self, name: str, marker: str) -> None:
         (self.logs / name).write_text(
             f"prompt echo {marker}:<placeholder>\n"
@@ -386,20 +403,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertFalse(any("rev-list --count" in command for command in commands))
 
     def test_unpushed_worker_output_skips_fresh_foreign_and_unknown_ownership_before_git_probes(self) -> None:
-        for fixture in ("unpushed_foreign_fresh", "unpushed_unknown_owner", "unpushed_unknown_login"):
+        for fixture in ("unpushed_foreign_fresh", "unpushed_unknown_owner"):
             with self.subTest(fixture=fixture):
                 command_log = self.repo / "git-commands.log"
                 if command_log.exists():
                     command_log.unlink()
 
                 plan = self.run_plan(fixture=fixture)
-                commands = command_log.read_text(encoding="utf-8").splitlines() if command_log.exists() else []
 
+                self.assertFalse(
+                    any(action.get("controller_action") == "unpushed-worker-output" for action in plan["actions"])
+                )
                 self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
-                self.assertFalse(any("fetch origin --quiet" in command for command in commands), commands)
-                self.assertFalse(any("worktree list --porcelain" in command for command in commands), commands)
-                self.assertFalse(any("rev-parse --verify HEAD" in command for command in commands), commands)
-                self.assertFalse(any("rev-list --count" in command for command in commands), commands)
+                self.assertEqual(self.git_probe_count(), 0)
+
+    def test_unpushed_worker_output_skips_unknown_login_before_git_probes(self) -> None:
+        plan = self.run_plan(fixture="unpushed_unknown_login")
+
+        self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
+        self.assertEqual(self.git_probe_count(), 0)
 
     def test_unpushed_worker_output_includes_stale_takeover_metadata(self) -> None:
         plan = self.run_plan(fixture="unpushed_foreign_stale")

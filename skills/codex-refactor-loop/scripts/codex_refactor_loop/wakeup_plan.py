@@ -648,7 +648,7 @@ def allowed_ownership(repo_root: Path, item: GhItem) -> OwnershipDecision:
     return ownership_decision_for_item(repo_root, item)
 
 
-def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+def _run_git(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
 
 
@@ -680,7 +680,7 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
     # consensus-rnd-cli safe-push suggested_command, exposing public lifecycle
     # reachability. New principle: emit only a fixed controller_action fact with
     # no_lifecycle_authority; controller maps it to an internal primitive.
-    # Refactor (fix/pr200-unpushed-ownership-gate): Old pattern: local-ahead PRs could reach safe_push planning before GitHub-native ownership was checked.  New principle: safe-push facts use the same author.login ownership gate as ci-red and existing-issue planning before any worktree git probes.
+    # Refactor (fix/pr200-ownership-gate-before-probe): Old pattern: local-ahead PRs could reach safe_push planning before GitHub-native ownership was checked.  New principle: safe-push facts use the same author.login ownership gate as ci-red and existing-issue planning before any worktree git probes.
     prs: list[tuple[GhItem, str, OwnershipDecision]] = []
     for item in gh_items:
         if item.kind != "PR":
@@ -694,10 +694,10 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
         prs.append((item, head_ref, ownership))
     if not prs:
         return []
-    fetch = git_text(["git", "-C", str(repo_root), "fetch", "origin", "--quiet"], cwd=repo_root)
+    fetch = _run_git(["git", "-C", str(repo_root), "fetch", "origin", "--quiet"], cwd=repo_root)
     if fetch.returncode != 0:
         return []
-    listed = git_text(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"], cwd=repo_root)
+    listed = _run_git(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"], cwd=repo_root)
     if listed.returncode != 0:
         return []
     worktrees = parse_worktree_branches(listed.stdout)
@@ -706,10 +706,10 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
         worktree = worktrees.get(head_ref)
         if worktree is None:
             continue
-        local = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"], cwd=repo_root)
+        local = _run_git(["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"], cwd=repo_root)
         remote_ref = f"refs/remotes/origin/{head_ref}"
-        remote = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref], cwd=repo_root)
-        count = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"], cwd=repo_root)
+        remote = _run_git(["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref], cwd=repo_root)
+        count = _run_git(["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"], cwd=repo_root)
         if local.returncode != 0 or remote.returncode != 0 or count.returncode != 0:
             continue
         try:
