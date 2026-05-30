@@ -204,6 +204,8 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "safe-push",
             "safe-sync-main",
             "sync-request",
+            "release-publish",
+            "publish-release",
         }:
             with self.subTest(command=command):
                 self.assertNotIn(command, COMMANDS)

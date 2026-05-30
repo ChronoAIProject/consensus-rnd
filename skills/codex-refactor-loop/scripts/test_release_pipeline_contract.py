@@ -19,6 +19,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 BUMP_PATH = REPO_ROOT / ".github/scripts/bump_version.py"
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/release.yml"
 REQUIRED_CHECKS_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
+PUBLISH_PREFLIGHT_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publish_preflight.py"
 
 
 def read(path: Path) -> str:
@@ -45,6 +46,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.bump = load_bump_module()
         self.workflow = read(WORKFLOW_PATH)
         self.required_checks = read(REQUIRED_CHECKS_PATH)
+        self.publish_preflight = read(PUBLISH_PREFLIGHT_PATH)
 
     def test_nested_manifest_resolution_and_semver_bumping(self) -> None:
         data = {"plugins": [{"version": "1.2.3"}]}
@@ -189,14 +191,17 @@ class ReleasePipelineContractTests(unittest.TestCase):
                 self.assertEqual(self.snapshot_mapped_manifest_versions(repo), before)
 
     def test_workflow_contract(self) -> None:
+        executable_workflow = "\n".join(line for line in self.workflow.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("name: release", self.workflow)
-        self.assertNotIn("push:", self.workflow)
-        self.assertIn("workflow_run:", self.workflow)
-        self.assertIn("consensus-rnd-ci", self.workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", self.workflow)
-        self.assertIn("github.event.workflow_run.head_branch == 'dev'", self.workflow)
-        self.assertIn("github.event.workflow_run.head_sha || github.sha", self.workflow)
+        self.assertNotIn("push:", executable_workflow)
+        self.assertNotIn("workflow_run:", executable_workflow)
+        self.assertNotIn("contents: write", executable_workflow)
+        self.assertNotIn("gh release create", executable_workflow)
+        self.assertNotIn("git tag", executable_workflow)
+        self.assertNotIn("steps.mode.outputs.dry_run != 'true'", executable_workflow)
         self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertIn("contents: read", self.workflow)
+        self.assertIn("checks: read", self.workflow)
         self.assertNotIn("version:", self.workflow)
         self.assertNotIn("bump:", self.workflow)
         self.assertNotIn("workflow_call", self.workflow)
@@ -213,15 +218,25 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertFalse((REPO_ROOT / ".github/scripts/release_preflight.py").exists())
         for needle in (
             "required release checks",
-            "already exists; no-op",
-            "is not newer than latest tag",
-            "steps.mode.outputs.dry_run != 'true'",
+            "controller-only publication",
+            "禁 gh release create",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.workflow)
         for needle in ("contract-tests", "manifest-version-sync", "skill-degradation", "REQUIRED_RELEASE_CHECKS"):
             with self.subTest(required_check_projection=needle):
                 self.assertIn(needle, self.required_checks)
+
+    def test_release_publish_preflight_source_guards_candidate_artifact_path(self) -> None:
+        for needle in (
+            "path.is_absolute()",
+            "candidate_path_absolute",
+            '".." in candidate.parts',
+            "candidate_path_outside_repo",
+            "raw_candidate = None if candidate_path_error else read_json",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.publish_preflight)
 
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
         mapping = json.loads(read(repo / ".version-bump.json"))

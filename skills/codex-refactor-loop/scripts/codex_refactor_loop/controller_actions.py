@@ -16,6 +16,7 @@ from typing import Mapping, Sequence
 from . import labels
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .triage import apply_decision, load_triage_apply_config
 
 
@@ -39,6 +40,10 @@ class ControllerActions:
     # merge/open/safe-push/apply lifecycle commands as generic callable verbs.
     # New principle: keep these as controller-internal primitives only; callers
     # construct ControllerActions directly and public CLI routing cannot reach them.
+    #
+    # Refactor (iter217/issue-217):
+    #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+    #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         self.integration_branch = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
@@ -133,6 +138,20 @@ class ControllerActions:
         if push.stderr:
             sys.stderr.write(push.stderr)
         return push.returncode
+
+    def publish_release_candidate(
+        self,
+        candidate_path: str = ".refactor-loop/state/release-candidate.json",
+        target_ref: str = "",
+    ) -> ReleasePublishResult:
+        # Refactor (iter217/issue-217):
+        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
+        if not target:
+            raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
+        publisher = ReleasePublisher(self.ctx.repo_root)
+        return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         branch = branch or self._current_branch()

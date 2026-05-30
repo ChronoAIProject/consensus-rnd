@@ -1,118 +1,38 @@
 name: release
 
+# Refactor (iter217/issue-217):
+# Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+# New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+
 on:
-  workflow_run:
-    workflows:
-      - consensus-rnd-ci
-    types:
-      - completed
   workflow_dispatch:
-    inputs:
-      dry_run:
-        description: "Preview the release without creating a tag or GitHub Release"
-        required: false
-        type: boolean
-        default: true
 
 permissions:
-  contents: write
+  contents: read
   checks: read
 
 jobs:
-  release:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'dev') }}
+  preview:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ github.sha }}
 
       - name: Verify required release checks
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO_SLUG: ${{ github.repository }}
-          REF: ${{ github.event.workflow_run.head_sha || github.sha }}
-          WAIT_SECONDS: ${{ github.event_name == 'workflow_dispatch' && '180' || '0' }}
+          REF: ${{ github.sha }}
         run: |
           python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli release-required-checks \
             --repo "$GH_REPO_SLUG" \
             --ref "$REF" \
             --since-minutes 120 \
-            --wait-seconds "$WAIT_SECONDS" \
+            --wait-seconds 180 \
             --json
 
-      - id: manifest
-        name: Read committed manifest version
+      - name: Read committed manifest version
         run: |
-          version="$(python3 .github/scripts/bump_version.py --check --read-version)"
-          echo "version=${version}" >> "$GITHUB_OUTPUT"
-
-      - id: mode
-        name: Resolve release mode
-        run: |
-          dry_run="${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}"
-          echo "dry_run=${dry_run}" >> "$GITHUB_OUTPUT"
-
-      - id: tag
-        name: Check tag state
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.manifest.outputs.version }}
-        run: |
-          tag="v${VERSION}"
-          if gh release view "$tag" >/dev/null 2>&1 || git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-            echo "Release ${tag} already exists; no-op."
-            exit 0
-          fi
-          echo "exists=false" >> "$GITHUB_OUTPUT"
-          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
-
-      - name: Enforce semver monotonicity
-        if: steps.tag.outputs.exists != 'true'
-        env:
-          VERSION: ${{ steps.manifest.outputs.version }}
-        run: |
-          latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 | sed 's/^v//')"
-          python3 - "$latest" "$VERSION" <<'PY'
-          import sys
-          def key(value):
-              # SemVer precedence including prerelease suffixes (e.g. 1.0.0-beta.3).
-              rel, _, pre = value.partition("-")
-              relk = tuple(int(part) for part in rel.split("."))
-              if not pre:
-                  return (relk, 1, ())  # a release ranks above any prerelease of the same X.Y.Z
-              ids = []
-              for ident in pre.split("."):
-                  if ident.isdigit():
-                      ids.append((0, int(ident), ""))  # numeric identifiers rank below alphanumeric
-                  else:
-                      ids.append((1, 0, ident))
-              return (relk, 0, tuple(ids))
-          latest, current = sys.argv[1], sys.argv[2]
-          if latest and key(current) <= key(latest):
-              raise SystemExit(f"version {current} is not newer than latest tag {latest}")
-          PY
-
-      - name: Preview release notes
-        if: steps.tag.outputs.exists != 'true'
-        env:
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          previous="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1)"
-          if [ -n "$previous" ]; then
-            git log --oneline "${previous}..HEAD"
-          else
-            git log --oneline
-          fi
-          echo "Prepared release notes for ${TAG}"
-
-      - name: Create tag and GitHub Release
-        if: steps.tag.outputs.exists != 'true' && steps.mode.outputs.dry_run != 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          gh release create "$TAG" --target "$GITHUB_SHA" --generate-notes
+          python3 .github/scripts/bump_version.py --check --read-version
