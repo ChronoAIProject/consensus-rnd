@@ -19,7 +19,8 @@ NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
-from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, bump_semver, classify_bump
+from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
+from codex_refactor_loop.release.versions import next_release_version
 
 
 def write_json(path: Path, data: object) -> None:
@@ -259,7 +260,26 @@ def write_green_signals(repo: Path) -> None:
 
 
 def classify_expected_patch(version: str) -> str:
-    return bump_semver(version, "patch")
+    return next_release_version(version, "patch")
+
+
+def set_mapped_version(repo: Path, version: str) -> None:
+    # refactor helper, no behavior change
+    mapping = read_json(repo / ".version-bump.json")
+    assert isinstance(mapping, dict)
+    for item in mapping["files"]:
+        path = repo / item["path"]
+        data = read_json(path)
+        current = data
+        parts = item["field"].split(".")
+        for part in parts[:-1]:
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        last = parts[-1]
+        if isinstance(current, list):
+            current[int(last)] = version
+        else:
+            current[last] = version
+        write_json(path, data)
 
 
 class AutoReleaseGateBehaviorTests(unittest.TestCase):
@@ -892,6 +912,46 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(candidate["from_version"], decision["from_version"])
             self.assertEqual(candidate["to_version"], decision["to_version"])
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_dispatch_from_beta_base_writes_beta_next_candidate(self) -> None:
+        cases = (
+            ("fix: fixture", "", "patch"),
+            ("feat: fixture", "", "minor"),
+            ("feat!: fixture", "", "major"),
+        )
+        for subject, body, expected_bump in cases:
+            with self.subTest(expected_bump=expected_bump), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_opt_in(repo)
+                write_green_signals(repo)
+                set_mapped_version(repo, "1.0.0-beta.3")
+                write_json(
+                    repo / ".refactor-loop/state/release-commits.json",
+                    {"commits": [{"sha": "abc123", "subject": subject, "body": body}]},
+                )
+                env = {**os.environ, "REPO_ROOT": str(repo)}
+
+                result = subprocess.run(
+                    [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
+                    cwd=repo,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(result.returncode, 0, result.stderr)
+                decision = read_json(repo / ".refactor-loop/state/release-decision.json")
+                candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
+                self.assertIsInstance(decision, dict)
+                self.assertIsInstance(candidate, dict)
+                assert isinstance(decision, dict)
+                assert isinstance(candidate, dict)
+                self.assertEqual(decision["from_version"], "1.0.0-beta.3")
+                self.assertEqual(decision["to_version"], "1.0.0-beta.4")
+                self.assertEqual(decision["bump_type"], expected_bump)
+                self.assertEqual(candidate["to_version"], "1.0.0-beta.4")
+                self.assertNotIn(decision["to_version"], {"1.0.1", "1.0.0"})
 
     def test_score_only_cli_prints_stability_no_decision_write(self) -> None:
         """--score-only path prints stability summary, does not write decision.json or bump."""

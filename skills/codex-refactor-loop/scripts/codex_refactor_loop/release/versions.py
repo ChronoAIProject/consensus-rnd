@@ -83,6 +83,44 @@ def bump_semver(version: str, bump_type: str) -> str:
     raise ValueError(f"invalid bump type: {bump_type}")
 
 
+def next_release_version(version: str, bump_type: str) -> str:
+    """Compute the next release coordinate.
+
+    bump_type records commit impact; for beta.N / rc.N it never authorizes
+    stage/core promotion.
+    """
+    # Refactor (iter272/issue-272):
+    #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
+    #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
+    current = parse_semver_full(version)
+    if not current.prerelease:
+        return bump_semver(version, bump_type)
+    _validate_bump_type(bump_type)
+    if (
+        len(current.prerelease) != 2
+        or current.prerelease[0] not in {"beta", "rc"}
+        or not current.prerelease[1].isdigit()
+    ):
+        raise ValueError(f"unsupported prerelease ladder: {version}")
+    stage, index = current.prerelease
+    return f"{current.major}.{current.minor}.{current.patch}-{stage}.{int(index) + 1}"
+
+
+def validate_release_version_coordinate(from_version: str, to_version: str, bump_type: str | None) -> str | None:
+    # Refactor (iter272/issue-272):
+    #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
+    #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
+    if not isinstance(bump_type, str) or not bump_type:
+        return "release_coordinate_off_ladder"
+    try:
+        expected = next_release_version(from_version, bump_type)
+        if compare_semver(expected, to_version) == 0:
+            return None
+    except ValueError:
+        pass
+    return "release_coordinate_off_ladder"
+
+
 def compare_semver(left: str, right: str) -> int:
     left_value = parse_semver_full(left)
     right_value = parse_semver_full(right)
@@ -95,6 +133,11 @@ def compare_semver(left: str, right: str) -> int:
 
 def sort_semver(versions: list[str]) -> list[str]:
     return sorted(versions, key=cmp_to_key(compare_semver))
+
+
+def _validate_bump_type(bump_type: str) -> None:
+    if bump_type not in {"major", "minor", "patch"}:
+        raise ValueError(f"invalid bump type: {bump_type}")
 
 
 def _compare_prerelease(left: tuple[str, ...], right: tuple[str, ...]) -> int:
