@@ -18,6 +18,7 @@ from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
+from ..work_items import ManagedWorkProjection
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -193,13 +194,14 @@ class ConcurrencyMonitor:
         cmd = ["gh", kind, "list"]
         if self.gh_repo_slug:
             cmd.extend(["--repo", self.gh_repo_slug])
+        json_fields = "number,labels,body" if kind == "pr" else "number,labels"
         cmd.extend([
             "--label",
             query_label,
             "--state",
             "open",
             "--json",
-            "number,labels",
+            json_fields,
             "--limit",
             "100",
         ])
@@ -232,7 +234,17 @@ class ConcurrencyMonitor:
                 projection = label_catalog.normalize_label_set(label_names)
                 phase = projection.phase or ""
                 human = projection.human or ""
-                items.append({"number": num, "kind": kind, "phase": phase, "human": human})
+                items.append(
+                    {
+                        "number": num,
+                        "kind": kind,
+                        "phase": phase,
+                        "human": human,
+                        "labels": label_names,
+                        "body": str(entry.get("body") or ""),
+                        "state": "open",
+                    }
+                )
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
@@ -241,13 +253,17 @@ class ConcurrencyMonitor:
         #   New principle: exactly two active Human labels; causes move to the reason surface (#15 structural consensus).
         breakdown = []
         total = 0
-        for item in items:
-            if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([str(item.get("human", ""))]).canonical:
+        # Refactor (impl/issue239-linkage):
+        #   Old pattern: parent issues and child PRs were counted independently.
+        #   New principle: shared ManagedWorkProjection folds an issue represented
+        #   by an open managed PR body `Closes #N` before worker expectation math.
+        for item in ManagedWorkProjection(items).effective_worker_items():
+            if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([item.human]).canonical:
                 continue
-            phase = label_catalog.normalize_label_set([str(item.get("phase", ""))]).phase or ""
+            phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
-                breakdown.append({"id": f"#{item['number']}", "kind": item["kind"], "phase": phase, "expected": expected})
+                breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown
 

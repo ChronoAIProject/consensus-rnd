@@ -84,6 +84,14 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     printf '[]\n'
                     exit 0
                   fi
+                  if [[ "${PEEK_TEST_REPRESENTED_PARENT:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                      printf '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    printf '[]\n'
+                    exit 0
+                  fi
                   if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
                     if [[ "$args" == *"--label 🎯 milestone"* ]]; then
                       printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]}]\n'
@@ -118,15 +126,31 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                       exit 0
                     fi
                   fi
-                  if [[ -z "$pr" ]]; then
-                    if [[ "$args" == *"--jq"* ]]; then exit 0; fi
-                    printf '[]\\n'
-                    exit 0
-                  fi
                   if [[ "$args" == *"--state merged"* ]]; then
                     exit 0
                   fi
                   if [[ "$args" == *"--state closed"* ]]; then
+                    printf '[]\\n'
+                    exit 0
+                  fi
+                  if [[ "${PEEK_TEST_REPRESENTED_PARENT:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                      printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    printf '[]\n'
+                    exit 0
+                  fi
+                  if [[ "${PEEK_TEST_MISSING_LINK_PR:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                      printf '[{"number":256,"title":"missing link PR","headRefName":"impl/missing","body":"","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    printf '[]\n'
+                    exit 0
+                  fi
+                  if [[ -z "$pr" ]]; then
+                    if [[ "$args" == *"--jq"* ]]; then exit 0; fi
                     printf '[]\\n'
                     exit 0
                   fi
@@ -176,6 +200,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         milestone_fixtures: bool = False,
         unpushed: bool = False,
         pr_open_issue: bool = False,
+        represented_parent: bool = False,
+        missing_link_pr: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
@@ -193,6 +219,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_UNPUSHED"] = "1"
         if pr_open_issue:
             env["PEEK_TEST_PR_OPEN_ISSUE"] = "1"
+        if represented_parent:
+            env["PEEK_TEST_REPRESENTED_PARENT"] = "1"
+        if missing_link_pr:
+            env["PEEK_TEST_MISSING_LINK_PR"] = "1"
         return subprocess.run(
             [sys.executable, str(PEEK), "peek", *(args or [])],
             cwd=self.root,
@@ -355,14 +385,15 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertLess(milestone_index, ordinary_index)
         self.assertLess(result.stdout.index("issue #20"), result.stdout.index("#10 labels="))
 
-    def test_peek_does_not_render_linkage_mismatch_lens(self) -> None:
+    def test_peek_keeps_projection_backed_linkage_mismatch_lens(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
 
-        result = self.run_peek(pr_open_issue=True)
+        result = self.run_peek(missing_link_pr=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn("Issue/PR linkage mismatch", result.stdout)
-        self.assertNotIn("_linkage_mismatch", source)
+        self.assertIn("Issue/PR linkage mismatch", result.stdout)
+        self.assertIn("PR #256 has no `Closes #N` parent link", result.stdout)
+        self.assertIn("ManagedWorkProjection", source)
 
     def test_peek_drift_skips_zero_expected_worker_phase(self) -> None:
         result = self.run_peek(pr_open_issue=True)
@@ -370,6 +401,13 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("issue #239 label=crnd:phase:pr-open but 0 codex", result.stdout)
         self.assertNotIn("label=crnd:phase:pr-open but 0 codex", result.stdout)
+
+    def test_peek_drift_skips_represented_parent_issue(self) -> None:
+        result = self.run_peek(represented_parent=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("issue #239 label=crnd:phase:implementing but 0 codex", result.stdout)
+        self.assertIn("pr #255 label=crnd:phase:reviewing but 0 codex", result.stdout)
 
 
 if __name__ == "__main__":

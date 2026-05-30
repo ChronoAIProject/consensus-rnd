@@ -97,6 +97,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       done
                       printf ']\n'
                       ;;
+                    represented_parent)
+                      printf '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      ;;
                     non_action_statuses)
                       printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
                       ;;
@@ -141,6 +144,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       ;;
                     ci_red)
                       printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      ;;
+                    represented_parent)
+                      printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       ;;
                     milestone)
                       printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
@@ -424,6 +430,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         by_kind = {action["kind"]: action for action in red_plan["actions"]}
         self.assertEqual(by_kind["ci-red"]["item"], "PR #31")
         self.assertEqual([action for action in red_plan["actions"] if action["kind"] == "existing-issue"], [])
+
+    def test_represented_parent_issue_routes_and_expected_workers_belong_to_child_pr(self) -> None:
+        plan = self.run_plan(fixture="represented_parent")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "existing-issue"]
+        self.assertEqual([action["item"] for action in actions], ["PR #255"])
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [{"expected": 1, "id": "#255", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING}],
+        )
 
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

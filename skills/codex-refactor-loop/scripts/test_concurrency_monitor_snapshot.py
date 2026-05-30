@@ -98,6 +98,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                                 {"name": "👀 phase:reviewing"},
                                 {"name": "🤖 human:codex"},
                             ],
+                            "body": "",
                         }
                     ]
                 ),
@@ -141,6 +142,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             ("pr", label_catalog.MANAGED): [
                 {
                     "number": 73,
+                    "body": "",
                     "labels": [
                         {"name": label_catalog.MANAGED},
                         {"name": label_catalog.PHASE_REVIEWING},
@@ -151,6 +153,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             ("pr", "auto-loop"): [
                 {
                     "number": 73,
+                    "body": "",
                     "labels": [
                         {"name": label_catalog.MANAGED},
                         {"name": label_catalog.PHASE_REVIEWING},
@@ -162,6 +165,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             ("pr", "refactor-design-needed"): [
                 {
                     "number": 74,
+                    "body": "",
                     "labels": [
                         {"name": "refactor-design-needed"},
                         {"name": "🔍 phase:design-solving"},

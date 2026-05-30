@@ -2528,6 +2528,8 @@ Concretely, this means:
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
+Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
+
 - `crnd:phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
 - `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
 - `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round

@@ -19,6 +19,7 @@ from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .triage import apply_decision, load_triage_apply_config
+from .work_items import extract_closing_issue_numbers
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
@@ -210,8 +211,7 @@ class ControllerActions:
             return 1
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
-            match = re.search(r"Closes #([0-9]+)", body)
-            linked_issue = match.group(1) if match else ""
+            linked_issue = _single_linked_issue(body)
         merge = self.gh(["pr", "merge", pr, "--admin", "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
@@ -248,7 +248,7 @@ class ControllerActions:
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
-        linked_issue = self._linked_issue_from_body_file(body_file)
+        linked_issue = _single_linked_issue(self._read_body_file(body_file))
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -287,17 +287,11 @@ class ControllerActions:
         except GitHubBodyError as exc:
             raise RuntimeError(str(exc)) from exc
 
-    def _linked_issue_from_body_file(self, body_file: str) -> str:
-        # Refactor (impl/issue239-linkage):
-        #   Old pattern: PR-open parent issue state had a separate peek mismatch lens.
-        #   New principle: reuse the validated PR body `Closes #N` convention and
-        #   fold the parent issue to non-action `crnd:phase:pr-open` at PR creation.
+    def _read_body_file(self, body_file: str) -> str:
         body_path = Path(body_file)
         if not body_path.is_absolute():
             body_path = self.ctx.repo_root / body_path
-        body = body_path.read_text(encoding="utf-8")
-        match = re.search(r"Closes #([0-9]+)", body)
-        return match.group(1) if match else ""
+        return body_path.read_text(encoding="utf-8")
 
     def open_release_rollup_pr_from_pending_event(
         self,
@@ -499,3 +493,13 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _single_linked_issue(body: str) -> str:
+    # Refactor (impl/issue239-linkage):
+    #   Old pattern: controller parsed `Closes #N` with a caller-local regex
+    #   while other runtime surfaces used different interpretations.
+    #   New principle: use the shared managed-work projection parser and only
+    #   mutate a parent issue when there is exactly one durable PR-body link.
+    numbers = extract_closing_issue_numbers(body)
+    return str(numbers[0]) if len(numbers) == 1 else ""

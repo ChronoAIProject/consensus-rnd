@@ -40,6 +40,7 @@ from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.work_items import ManagedWorkProjection
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -90,6 +91,7 @@ class GhItem:
     title: str
     labels: tuple[str, ...]
     head_ref: str | None = None
+    body: str = ""
 
     @property
     def item(self) -> str:
@@ -240,15 +242,19 @@ def canonical_expected_from_active_tasks(monitor: Any | None) -> tuple[int, list
 def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, Any]]]:
     breakdown: list[dict[str, Any]] = []
     total = 0
-    for item in items:
+    # Refactor (impl/issue239-linkage):
+    #   Old pattern: wakeup hard-gate counted parent issue and child PR as
+    #   separate active work. New principle: share ManagedWorkProjection with
+    #   the daemon so represented parents are non-action expected_workers=0.
+    for item in ManagedWorkProjection(_projection_items(items)).effective_worker_items():
         labels = set(item.labels)
         if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
             continue
-        phase_label = label_catalog.normalize_label_set(item.labels).phase or ""
+        phase_label = item.phase or label_catalog.normalize_label_set(item.labels).phase or ""
         expected = label_catalog.phase_expected_workers(phase_label)
         if expected <= 0:
             continue
-        breakdown.append({"id": f"#{item.number}", "kind": item.kind.lower(), "phase": phase_label, "expected": expected})
+        breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase_label, "expected": expected})
         total += expected
     return total, breakdown
 
@@ -580,7 +586,7 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
     items: list[GhItem] = []
     for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
         rows: list[dict[str, Any]] = []
-        json_fields = "number,title,labels,headRefName" if kind == "PR" else "number,title,labels"
+        json_fields = "number,title,labels,headRefName,body" if kind == "PR" else "number,title,labels"
         for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
             command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
             data = run_json(command, cwd=repo_root)
@@ -607,6 +613,7 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
                     title=str(raw.get("title") or ""),
                     labels=labels,
                     head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
+                    body=str(raw.get("body") or "") if kind == "PR" else "",
                 )
             )
     return items
@@ -722,8 +729,11 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
 
 def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
+    represented = ManagedWorkProjection(_projection_items(items)).represented_issue_numbers()
     ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
     for item in ordered:
+        if item.kind == "issue" and item.number in represented:
+            continue
         phase = phase_from_labels(item.labels)
         status = status_from_labels(item.labels)
         if status in {"blocked", "merged", "ci-running", "pr-open"}:
@@ -770,6 +780,20 @@ def actor_from_labels(labels: tuple[str, ...], kind: str) -> str:
         if actor:
             return actor
     return "controller-triage" if kind == "issue" else "reviewer-or-controller"
+
+
+def _projection_items(items: list[GhItem]) -> list[dict[str, Any]]:
+    return [
+        {
+            "kind": item.kind,
+            "number": item.number,
+            "labels": item.labels,
+            "body": item.body,
+            "state": "open",
+            "title": item.title,
+        }
+        for item in items
+    ]
 
 
 def latest_controller_validated_audit_none(repo_root: Path) -> bool:
