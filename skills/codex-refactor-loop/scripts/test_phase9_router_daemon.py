@@ -761,37 +761,31 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         for forbidden in ("79-3-minimal", "79-3-structural", "79-3-delete"):
             self.assertNotIn(forbidden, ledger_keys)
 
-    def test_phase9_router_converge_requires_strictly_greater_target_round(self) -> None:
-        # Refactor (iter5/skill-converge-source-and-monotonic-guard):
-        # judge emitting converge:round-N where N <= source round (e.g. r2 judge
-        # emitting converge:round-2 self-reference, or a smaller round number)
-        # must be treated as noop — otherwise daemon enters spawn loops over
-        # past rounds.
+    def test_phase9_router_converge_current_round_dispatches_adjacent_next_round_without_fallback(self) -> None:
+        # Refactor (iter6/issue-244): Old pattern: same-round converge payloads
+        # were treated as backward/self references and fell back. New principle:
+        # canonical rS judge markers carry source round S and dispatch r(S+1).
         self.write_log(
             "phase9-issue79-r2-judge.log",
-            "META_JUDGE_DONE:converge:round-2:self-reference-bug",
-        )
-        self.write_log(
-            "phase9-issue79-r5-judge.log",
-            "META_JUDGE_DONE:converge:round-4:backward-reference-bug",
+            "META_JUDGE_DONE:converge:round-2:canonical-source-round",
         )
 
         self.router.tick()
 
-        for command in self.commands:
-            joined = " ".join(command)
-            self.assertNotIn("phase9-issue79-r2-minimal.log", joined)
-            self.assertNotIn("phase9-issue79-r2-structural.log", joined)
-            self.assertNotIn("phase9-issue79-r2-delete.log", joined)
-            self.assertNotIn("phase9-issue79-r4-minimal.log", joined)
-        ledger_keys = [entry["key"] for entry in self.ledger_entries()]
-        for forbidden in ("79-2-minimal", "79-2-structural", "79-2-delete",
-                          "79-4-minimal", "79-4-structural", "79-4-delete"):
-            self.assertNotIn(forbidden, ledger_keys)
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue79-r3-minimal.log", logs)
+        self.assertIn("phase9-issue79-r3-structural.log", logs)
+        self.assertIn("phase9-issue79-r3-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["79-3-delete", "79-3-minimal", "79-3-structural"],
+        )
+        self.assertEqual(self.pending_events(), "")
 
-    def test_phase9_router_converge_valid_judge_marker_still_spawns_next_round(self) -> None:
-        # Confirm the source/monotonic guards do not break the happy path:
-        # r4 judge emitting converge:round-5 must still spawn r5 solver triplet.
+    def test_phase9_router_converge_accepts_legacy_next_round_payload(self) -> None:
+        # Confirm the adjacent legacy marker remains compatible: r4 judge
+        # emitting converge:round-5 still spawns r5 solver triplet.
         self.write_log(
             "phase9-issue80-r4-judge.log",
             "META_JUDGE_DONE:converge:round-5:legitimate-next-round",
@@ -803,6 +797,34 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("phase9-issue80-r5-minimal.log", logs)
         self.assertIn("phase9-issue80-r5-structural.log", logs)
         self.assertIn("phase9-issue80-r5-delete.log", logs)
+
+    def test_phase9_router_converge_rejects_backward_payload_rounds(self) -> None:
+        self.write_log(
+            "phase9-issue79-r5-judge.log",
+            "META_JUDGE_DONE:converge:round-4:backward-reference-bug",
+        )
+
+        self.router.tick()
+
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertNotIn("phase9-issue79-r4-minimal.log", logs)
+        self.assertNotIn("phase9-issue79-r6-minimal.log", logs)
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertIn("META_JUDGE_DONE:converge:round-4:backward-reference-bug", self.pending_events())
+
+    def test_phase9_router_converge_rejects_non_adjacent_payload_rounds(self) -> None:
+        self.write_log(
+            "phase9-issue82-r4-judge.log",
+            "META_JUDGE_DONE:converge:round-6:skip-adjacent-round",
+        )
+
+        self.router.tick()
+
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertNotIn("phase9-issue82-r5-minimal.log", logs)
+        self.assertNotIn("phase9-issue82-r6-minimal.log", logs)
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertIn("META_JUDGE_DONE:converge:round-6:skip-adjacent-round", self.pending_events())
 
     def test_phase9_router_stalled_ignores_non_judge_source_logs(self) -> None:
         # Solver log emitting an escalate:stalled marker (echo/brainstorm)

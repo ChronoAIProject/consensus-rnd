@@ -72,7 +72,7 @@ Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 Otherwise:
 - If divergence is on a NAMED specific technical question and there's progress vs prior rounds → CONVERGENCE: write the `convergence_question`, controller dispatches another round.
-- → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND_PLUS_ONE}:<one-line question>`
+- → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND}:<one-line question>` (canonical payload is the judge log source round; router dispatches the adjacent next solver round)
 - If divergence is named but no progress for 3+ rounds with no maintainer input → escalate as stalled (above).
 - If divergence is fundamental / unnamed AND not stalled → still converge (the next round may surface the right framing). Only true stall escalates.
 
@@ -105,7 +105,7 @@ decision: consensus | converge | escalate
 ## If converge
 - Convergence question (specific): <one sentence>
 - What each solver should address explicitly: <bullets>
-- Round number this fires: ${CONVERGENCE_ROUND_PLUS_ONE}
+- Round number this fires: ${CONVERGENCE_ROUND_PLUS_ONE}; marker payload uses source round `${CONVERGENCE_ROUND}`
 
 ## If escalate
 - Trigger category: <stalled>
@@ -120,7 +120,7 @@ decision: consensus | converge | escalate
 
 End with EXACTLY ONE marker:
 - `META_JUDGE_DONE:consensus:<framing>:<summary>` — controller auto-dispatches implement
-- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question
+- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question; canonical N is the current judge/source round, while the router dispatches the adjacent next solver round
 - `META_JUDGE_DONE:escalate:stalled:<short>` — controller adds `crnd:lifecycle:stuck` label + PushNotification
 
 ## Marker emission allowlist(强制)

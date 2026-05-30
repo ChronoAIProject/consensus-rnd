@@ -441,19 +441,21 @@ class Phase9Router:
         #   logs echoing prompt-body marker examples plus judge-self-referential
         #   verdicts spawned cascading r3..r8 solver rounds with judge gaps.
         #   New principle: only judge-role source logs may authorize a converge
-        #   dispatch (JUDGE markers come from JUDGE logs), and `target_round`
-        #   must be strictly greater than the source round (monotonic).
+        #   dispatch (JUDGE markers come from JUDGE logs), and converge
+        #   projection must stay adjacent to the source round.
         # Refactor (iter229/issue-229):
         #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
         #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
+        # Refactor (iter6/issue-244): Old pattern: converge payload was treated as
+        # target round only, so clean rS judge logs with canonical round-S
+        # markers fell back. New principle: accept source-round and legacy
+        # adjacent payloads locally, both dispatching r(S+1).
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
                 if marker.role != self._judge_role():
                     continue
-                target_round = self._round_from_converge(marker.marker)
+                target_round = self._converge_target_round(marker.marker, marker.round)
                 if target_round is None:
-                    continue
-                if target_round <= marker.round:
                     continue
                 for role in self._solver_roles():
                     key = self._key(marker.issue, target_round, role)
@@ -524,8 +526,8 @@ class Phase9Router:
         if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
             if marker.role != self._judge_role():
                 return False
-            target_round = self._round_from_converge(marker.marker)
-            if target_round is None or target_round <= marker.round:
+            target_round = self._converge_target_round(marker.marker, marker.round)
+            if target_round is None:
                 return False
             if f"phase9-source-eligibility:{marker.issue}-{target_round}-converge_to_next_solvers" in self._fallback_seen:
                 return True
@@ -540,6 +542,16 @@ class Phase9Router:
 
     def _round_from_converge(self, marker: str) -> int | None:
         return Phase9MarkerGrammar.parse_converge_round(marker)
+
+    def _converge_target_round(self, marker_text: str, source_round: int) -> int | None:
+        # Refactor (iter6/issue-244): Old pattern: target-round math was
+        # duplicated at dispatch and fallback dedupe. New principle: one
+        # router-local adjacent helper maps canonical source-round and legacy
+        # next-round payloads to r(S+1); non-adjacent payloads fall back.
+        payload_round = Phase9MarkerGrammar.parse_converge_round(marker_text)
+        if payload_round in {source_round, source_round + 1}:
+            return source_round + 1
+        return None
 
     def _stalled_predicate_holds(self, issue: str, round_no: int) -> bool:
         if round_no < 3:

@@ -511,7 +511,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "SOLVER_DONE:<minimal|structural|delete>:*",
-            "round-N minimal/structural/delete solvers",
+            "both spawn r(S+1) minimal/structural/delete solvers",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, contract_section)
@@ -544,6 +544,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
         self.assertIn("consensus-rnd-cli", helper)
+
+    def test_phase9_converge_adjacent_round_helper_source_regression(self) -> None:
+        # Refactor (iter6/issue-244): Old pattern: router/docs treated
+        # converge payloads as target-round-only. New principle: one local
+        # adjacent helper maps source-round and legacy next-round payloads to
+        # r(S+1), and non-adjacent payloads fall back without a projection module.
+        router_path = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
+        router = router_path.read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge, router))
+
+        for token in (
+            "_converge_target_round",
+            "canonical payload is the judge log source round",
+            "source-round and legacy",
+            "non-adjacent payloads fall back",
+            "clean rS judge canonical payload is `round-S`",
+            "legacy `round-(S+1)`",
+            "non-adjacent payload mismatch falls back",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+        self.assertEqual(router.count("_converge_target_round("), 3)
+        self.assertNotIn("target_round <= marker.round", router)
+        self.assertFalse((router_path.parent / "decision.py").exists())
+        self.assertNotIn("MetaJudgeRouteProjection", combined)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
