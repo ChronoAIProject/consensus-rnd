@@ -19,6 +19,20 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_release_gate_module.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
+<a id="release-commits-producer-232"></a>
+## release-commits-producer-232
+
+- surface: `consensus-rnd-cli release-commits`
+- source_issue: `#232`
+- source_round: `r2-minimal`
+- source_marker: `SOLVER_DONE:minimal:propose:lock minimal boundary to read-git pre-gate release-commits producer; keep release-gate consumer-only`
+- skill_anchor: `#named-runtime-exception--autonomous-release-gateper-56`
+- allowed: read local git only to fetch tags, describe the latest release tag, resolve the target ref, and log the latest-tag-to-target range; atomically write `.refactor-loop/state/release-commits.json`.
+- forbidden: no GitHub API, push, merge, reset, rebase, worktree mutation, tag, release, commit, issue lifecycle, PR lifecycle, label lifecycle, generic lifecycle authority, or inline execution from `release-gate`.
+- fact_source: local git tags and refs.
+- verification: `test_release_commits.py`, `test_cli_command_router.py`, `test_release_gate_module.py`
+- no_new_runtime_authority: This mirror documents only the independent narrow producer; it does not widen `release-gate`, which remains no-git decision-artifact-only.
+
 <a id="integration-sync-daemon-53"></a>
 ## integration-sync-daemon-53
 
