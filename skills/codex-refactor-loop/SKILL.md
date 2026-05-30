@@ -628,7 +628,7 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 
 1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
 2. A meta-judge reads all three solver outputs.
-3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
+3. Concrete implementation authorization requires solver convergence plus meta-judge `consensus`: either 3/3 solver convergence, or exactly minimal+structural proposing the same bounded plan while delete abstains with no concrete objection against that plan.
 4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
 5. `escalate:stalled` routes to reflector, not directly to human.
 6. Maintainer replies reset the round when they materially change framing.
@@ -876,7 +876,7 @@ Consensus-rnd Phase design-consensus guardrails:
 
 1. Minimal, structural, and delete/defer solvers run for each design round.
 2. Meta-judge consumes all three outputs.
-3. Only 3/3 consensus plus meta-judge `consensus` authorizes implementation.
+3. Only solver consensus plus meta-judge `consensus` authorizes implementation. Solver consensus is 3/3 agreement, with one bounded exception: minimal+structural propose the same bounded plan and delete abstains with no concrete objection against that plan.
 4. `converge` means more solver work, not human escalation.
 5. `stalled` means reflector, not human escalation.
 6. Maintainer input can reframe the next round, but the controller does not synthesize a concrete plan alone.
@@ -2179,13 +2179,13 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 Runs when a GitHub design issue / Consensus-rnd Phase design-consensus artifact needs a concrete implementation decision.
 Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Consensus-rnd Phase design-consensus can frame the decision as
 work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
-solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
-unanimous + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient
+solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **solver
+consensus + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient
 authorization gate for every change, including Tier I, Tier II, `CLAUDE.md`, `SPEC.md`,
 conformance, and core abstractions. There is no post-consensus maintainer approval, physical GPG
 ratification, reinstall ratification, or philosophy escalation gate.
 
-Policy: **3/3 unanimous required** — anything less goes through convergence until consensus or true stall.
+Policy: solver consensus is required. Solver consensus means 3/3 unanimous agreement, with one bounded exception: if minimal and structural propose the same bounded plan and delete abstains with no concrete objection against that same bounded plan, the delete abstain is non-dissent. Any other mixed propose/abstain/escalate:no-plan case goes through convergence until consensus or true stall.
 
 ### Solver source contract
 
@@ -2395,7 +2395,7 @@ fi
 1. controller records the directive in the Consensus-rnd Phase design-consensus run artifact and GitHub issue thread.
 2. 立刻派一轮 fresh 3 solver(把指令 verbatim 作为 narrowing constraint)
 3. solver 们各自把指令具体化成 impl 计划(可能 minimal 给一套、structural 给另一套、delete 给第三套)
-4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
+4. meta-judge arbitrates; solver consensus is required before implement
 5. 不允许跳过 3 solver round 直接 implement(哪怕 maintainer 觉得方向很明显)
 
 理由:maintainer 直觉常常对,但 concrete 落地的细节(新 actor 边界 / schema 字段 / 命名 / 迁移路径)需要 3 个独立角度验证,避免单 codex 把 "明显方向" 误读成 "明显方案"。consensus 这步就是 catch 误读用的。
@@ -2410,11 +2410,11 @@ When the auto-discover Monitor fires `design-issue-event:<N>` and the new commen
 2. **Treat the new comment as fresh constraint material** — prepend its verbatim text to a NEW round's solver prompt header under "Maintainer comment (must incorporate)".
 3. **Dispatch FRESH 3 solver codex** (not "continue convergence"; truly fresh, with all prior rounds as context but no inherited stance).
 4. **No round counter penalty** — maintainer input is the loop's continuation signal, not a stop signal. The round counter increments but does NOT trip the escalation cap.
-5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `crnd:triage:resume-requested` label with their explicit framing in a comment.
+5. **Only solver consensus + meta-judge consensus** moves the cluster to implement. Solver consensus is 3/3 agreement, except the bounded delete-abstain non-dissent case where minimal and structural propose the same bounded plan and delete gives no concrete objection. Maintainer can override at any time by adding `crnd:triage:resume-requested` label with their explicit framing in a comment.
 
 This means: even if a previous round escalated with `crnd:lifecycle:stuck`, a new maintainer comment re-opens Consensus-rnd Phase design-consensus. The `crnd:lifecycle:stuck` label is removed automatically on reset; the canonical design-solving phase is re-applied.
 
-### Consensus action (3/3 unanimous + meta-judge consensus)
+### Consensus action (solver consensus + meta-judge consensus)
 
 1. Read the winning solver's "Concrete plan" section from the meta-judge output.
 2. Materialize `prompts/implement-<cluster-id>.md` prepending:
@@ -2478,7 +2478,7 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 
 | Consensus-rnd Phase design-consensus event | Issue comment content |
 |---|---|
-| Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
+| Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. Solver consensus plus meta-judge consensus required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
 | **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
@@ -2503,9 +2503,9 @@ solver/judge artifacts. Do not mirror it into a root local state queue.
 
 ### Anti-spiral safeguards (no hard round cap — different safeguards instead)
 
-Policy:the loop continues until 3/3 unanimous consensus, true stall reaches reflector, maintainer provides new evidence, or maintainer closes the issue.
+Policy:the loop continues until solver consensus, true stall reaches reflector, maintainer provides new evidence, or maintainer closes the issue.
 
-- **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until 3/3 unanimous OR true stall reaches reflector OR maintainer adds new constraints OR maintainer closes issue.
+- **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until solver consensus OR true stall reaches reflector OR maintainer adds new constraints OR maintainer closes issue.
 - **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → **trigger meta-layer reflector** (not human escalate;)。Reflector 同样回 4 framing question + 输出 `META_RESOLVED:<kind>` marker;路由:
   - `retry-fix` → 派 r+1 solver,加 "reflector 提示: 你们三 round 没收敛,本轮必须 propose 新 framing 不重复之前"
   - `re-design` → reset Consensus-rnd Phase design-consensus round counter,prompt 重写带 reflector 总结的新 framing 角度

@@ -564,6 +564,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "legacy `round-(S+1)`",
             "non-adjacent payload mismatch falls back",
             "Delete abstain with no concrete objection against the same bounded plan",
+            "exactly minimal+structural proposing the same bounded plan while delete abstains",
+            "Any other mixed propose/abstain/escalate:no-plan case goes through convergence",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, combined)
