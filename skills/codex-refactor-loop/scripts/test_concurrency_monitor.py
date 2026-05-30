@@ -234,7 +234,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
     def test_allows_main_readonly_dispatch_prefixes(self) -> None:
-        task_ids = ("audit-iter-5", "phase9-issue133-r4-minimal", "review-pr44-tests")
+        task_ids = (
+            "audit-iter-5",
+            "phase9-issue133-r4-minimal",
+            "solver-issue133-r4-delete",
+            "meta-judge-issue133-r4",
+            "review-pr44-tests",
+            "reviewer-pr44-quality-r2",
+        )
 
         for task_id in task_ids:
             with self.subTest(task_id=task_id):
@@ -247,6 +254,25 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
                 self.assertEqual(len(calls), 1)
                 self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
+
+    def test_rejects_main_readonly_prefix_near_misses_at_repo_root(self) -> None:
+        task_ids = (
+            "phase9-issueX-r4-minimal",
+            "phase9-issue133-r4-architect",
+            "solver-issue133-r4-judge",
+            "meta-judge-issue133-round-4",
+            "reviewish-pr44-tests",
+        )
+        for task_id in task_ids:
+            with self.subTest(task_id=task_id):
+                self.write_dispatch("p0", task_id, cd=self.repo)
+                calls: list[list[str]] = []
+
+                with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                    fired = self.monitor.dispatch_one_from_queue()
+
+                self.assertIsNone(fired)
+                self.assert_dispatch_rejected(task_id, "repo-root-cd", calls)
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree

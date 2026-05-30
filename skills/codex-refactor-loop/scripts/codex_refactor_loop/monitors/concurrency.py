@@ -27,6 +27,14 @@ HEARTBEAT_STALE_SECONDS = 90
 PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
+MAIN_READONLY_DISPATCH_PATTERNS = (
+    re.compile(r"^audit-iter-[0-9]+[A-Za-z0-9._-]*$"),
+    re.compile(r"^phase9-issue[0-9]+-r[0-9]+-(?:minimal|structural|delete|judge|reflector)$"),
+    re.compile(r"^solver-issue[0-9]+-r[0-9]+-(?:minimal|structural|delete)$"),
+    re.compile(r"^meta-judge-issue[0-9]+-r[0-9]+$"),
+    re.compile(r"^review-pr[0-9]+(?:-[A-Za-z][A-Za-z0-9_-]*)?(?:-r[0-9]+)?$"),
+    re.compile(r"^reviewer-pr[0-9]+(?:-[A-Za-z][A-Za-z0-9_-]*)?(?:-r[0-9]+)?$"),
+)
 
 PHASE_EXPECTED = {label: label_catalog.phase_expected_workers(label) for label in label_catalog.labels_for_group("phase")}
 
@@ -344,6 +352,9 @@ class ConcurrencyMonitor:
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
     #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def validate_dispatch_cwd(self, payload: dict, task_id: str) -> tuple[bool, str]:
+        # Refactor (iter81/issue-81):
+        #   Old pattern: 文件/分支/marker/label/role 命名混乱;松散 regex(parse_target ^phase9-issue([0-9]+).*)解析,缺 owner-local operational-name 契约
+        #   New principle: owner-local operational-name contract:CLAUDE.md 扩写命名不动点为 operational-name invariant + SKILL.md 增 owner map;收窄现有 owner parser/validation(progress.py parse_target 精确文法、safe_worktree 字段校验);behavior test + source-regression production-literal allowlist 防偷抄;**无**生产 OperationalNameRegistry/names.py/check_naming.py/全仓审美 lint
         cd_raw = payload.get("cd")
         if not cd_raw:
             return False, "missing-cd"
@@ -360,7 +371,7 @@ class ConcurrencyMonitor:
         except ValueError:
             return False, "outside-repo"
 
-        if task_id.startswith(MAIN_READONLY_DISPATCH_PREFIXES):
+        if any(pattern.fullmatch(task_id) for pattern in MAIN_READONLY_DISPATCH_PATTERNS):
             return True, "main-readonly-prefix"
 
         if cd_resolved == repo_root:

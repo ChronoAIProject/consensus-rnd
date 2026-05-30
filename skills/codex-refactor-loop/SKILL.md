@@ -29,6 +29,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
+| Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
 | 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
@@ -46,6 +47,24 @@ The loop has two supported entry modes:
 Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
 Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The built-in registry remains the default compatibility vocabulary; public built-in stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
+
+<a id="operational-names"></a>
+## Operational names
+
+Operational names are names parsed, routed, spawned, inspected, consumed by GitHub/git state, or passed across agents. They are protocol surfaces, not style preferences. Each surface is owner-local: its owner declares the field order, allowed charset, canonical write policy, legacy read/migration policy, behavior tests, and source-regression anchors. Do not add `codex_refactor_loop/names.py`, `check_naming.py`, or `naming_policy.py` as a production fact source; do not copy existing label, command, stage, or route catalogs into a generic registry.
+
+Owner map:
+
+| Owner | Operational names owned | Policy |
+|---|---|---|
+| `scripts/codex_refactor_loop/phase9/router.py` | `phase9-issue<N>-r<R>-<role>`, `solver-issue<N>-r<R>-<role>`, `meta-judge-issue<N>-r<R>`, and design-consensus artifact references | Canonical writer/parser for design-consensus filename identity and artifact references; legacy input is local to the router. |
+| `scripts/codex_refactor_loop/monitors/progress.py` | progress-comment target extraction for `review-pr<N>-<role>-r<R>`, `fix-pr<N>-<round>`, and `phase9-issue<N>-r<R>-<role>` | Read-only extraction owner only; malformed near-misses return empty and prompt fallback is allowed only when a prompt file exists. |
+| `scripts/codex_refactor_loop/monitors/concurrency.py` | mutable/read-only dispatch `task_id` prefix classification | Classification owner only; main-readonly prefixes must match exact owner-local forms before `$REPO_ROOT` `cd` is allowed. |
+| `scripts/codex_refactor_loop/controller_actions.py` and `scripts/codex_refactor_loop/git.py` | `refactor/iter<I>-<cluster>` branch/worktree generation | Validate iteration digits and cluster `[A-Za-z0-9._-]+` locally; this is duplicated owner-local safety until one implementation is removed or delegated. |
+| `scripts/codex_refactor_loop/controller_actions.py` and `scripts/codex_refactor_loop/sync/dev.py` | `rollup/<integration_sha>` release rollup heads | Controller-owned throwaway head only; no generic branch-name registry. |
+| `scripts/codex_refactor_loop/labels.py` | `crnd:<group>:<slug>` labels | Sole canonical label catalog; consumers import/use catalog helpers instead of copying regex truth tables. |
+| `scripts/codex_refactor_loop/cli.py::COMMANDS` | public command names and authority tokens | Public command catalog and authority fact source; controller lifecycle primitives stay outside `COMMANDS`. |
+| `scripts/codex_refactor_loop/workflow_stages.py` | workflow stage display names and slugs | Sole built-in stage catalog; HostWorkflowSpec may project `host:` data without overwriting built-ins. |
 
 `HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings. All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases. Consensus-rnd Phase design-consensus router direct-spawn ignores host `roles`, `dispatch`, and `consensus_policies` completely; its allowlist is always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`.
 
@@ -1133,7 +1152,7 @@ Dispatch cwd guard:
 - `MUTABLE_DISPATCH_PREFIXES`: `implement-`, `fix-pr`, `remote-ci-fix`, `test-add-`, `verify-`, and `hotfix-`.
 - `MAIN_READONLY_DISPATCH_PREFIXES`: `audit-`, `phase9-issue`, `solver-`, `meta-judge-`, `review-pr`, and `reviewer-pr`.
 - Queued mutable task prefixes must use `cd` under `$REPO_ROOT/.worktrees/<name>/`; `$REPO_ROOT`, relative paths, paths outside `$REPO_ROOT`, and `$REPO_ROOT/.worktrees/` itself fail closed.
-- Main-readonly prefixes are the explicit allowlist that may use `$REPO_ROOT` as `cd`.
+- Main-readonly prefixes are the explicit allowlist that may use `$REPO_ROOT` as `cd`, but each task id must still match the exact owner-local grammar for that prefix; near-miss names fail closed.
 - This is a backward-compatible tightening of the existing dispatch queue protocol: no shared workspace policy, no `workspace_policy.py`, no `WorkUnitWorkspace`, and no required `actor/work_unit_id` migration.
 
 Auto-dispatch semantics:

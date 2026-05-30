@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
+from codex_refactor_loop.git import Git
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 
 
@@ -163,6 +164,28 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("--head", create_call)
         self.assertEqual("rollup/abc123", create_call[create_call.index("--head") + 1])
         self.assertNotEqual("auto-refact-dev", create_call[create_call.index("--head") + 1])
+
+    def test_safe_worktree_rejects_unsafe_iteration_and_cluster_fields(self) -> None:
+        cases = (
+            ("x1", "issue-81"),
+            ("1/2", "issue-81"),
+            ("1", ""),
+            ("1", "issue 81"),
+            ("1", "issue/81"),
+            ("1", "issue;81"),
+            ("1", "issue$81"),
+        )
+        for iteration, cluster in cases:
+            with self.subTest(iteration=iteration, cluster=cluster):
+                with self.assertRaisesRegex(ValueError, "safe_worktree"):
+                    self.actions.safe_worktree(iteration, cluster, "dev")
+
+    def test_git_safe_worktree_rejects_unsafe_iteration_and_cluster_fields(self) -> None:
+        git = Git(self.tmp)
+        for iteration, cluster in (("x1", "issue-81"), ("1", "issue/81"), ("1", "issue 81")):
+            with self.subTest(iteration=iteration, cluster=cluster):
+                with self.assertRaisesRegex(ValueError, "safe_worktree"):
+                    git.safe_worktree(iteration, cluster, "dev")
 
     def test_open_release_rollup_pr_fails_closed_before_push_or_pr_create(self) -> None:
         cases = (

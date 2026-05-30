@@ -439,6 +439,92 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn("parse_phase9_log_identity", router)
 
+    def test_operational_name_contract_owner_map_and_registry_ban(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for needle in (
+            "operational interface",
+            "owner-local 事实源",
+            "canonical write policy",
+            "legacy read / migration policy",
+            "behavior test + source-regression",
+            "不得被第二套通用命名 registry 或全仓审美 lint 复制",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+
+        section = section_after_heading(self.skill, "Operational names")
+        for needle in (
+            "scripts/codex_refactor_loop/phase9/router.py",
+            "phase9-issue<N>-r<R>-<role>",
+            "solver-issue<N>-r<R>-<role>",
+            "meta-judge-issue<N>-r<R>",
+            "scripts/codex_refactor_loop/monitors/progress.py",
+            "progress-comment target extraction",
+            "scripts/codex_refactor_loop/monitors/concurrency.py",
+            "mutable/read-only dispatch `task_id` prefix classification",
+            "scripts/codex_refactor_loop/controller_actions.py",
+            "scripts/codex_refactor_loop/git.py",
+            "refactor/iter<I>-<cluster>",
+            "rollup/<integration_sha>",
+            "scripts/codex_refactor_loop/labels.py",
+            "crnd:<group>:<slug>",
+            "scripts/codex_refactor_loop/cli.py::COMMANDS",
+            "scripts/codex_refactor_loop/workflow_stages.py",
+            "codex_refactor_loop/names.py",
+            "check_naming.py",
+            "naming_policy.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+        package_root = SKILL_ROOT / "scripts" / "codex_refactor_loop"
+        for forbidden in ("names.py", "check_naming.py", "naming_policy.py"):
+            with self.subTest(forbidden=forbidden):
+                self.assertFalse((package_root / forbidden).exists())
+                self.assertFalse((SKILL_ROOT / "scripts" / forbidden).exists())
+
+    def test_operational_name_production_literal_owner_allowlist(self) -> None:
+        production_files = [path for path in (SKILL_ROOT / "scripts" / "codex_refactor_loop").rglob("*.py")]
+        allowed: dict[str, set[str]] = {
+            "phase9-issue": {
+                "controller_actions.py",
+                "git.py",
+                "monitors/progress.py",
+                "monitors/concurrency.py",
+                "peek.py",
+                "phase9/router.py",
+                "wakeup_plan.py",
+            },
+            "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
+            "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
+            "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py"},
+            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py"},
+            "crnd:": {"labels.py", "triage.py"},
+            "refactor/iter": {"controller_actions.py", "git.py"},
+            "rollup/": {"controller_actions.py", "sync/dev.py"},
+            "COMMANDS": {"cli.py", "restart.py"},
+            "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
+        }
+        for token, allowed_paths in allowed.items():
+            actual = {
+                str(path.relative_to(SKILL_ROOT / "scripts" / "codex_refactor_loop"))
+                for path in production_files
+                if token in path.read_text(encoding="utf-8")
+            }
+            with self.subTest(token=token):
+                self.assertLessEqual(actual, allowed_paths, actual - allowed_paths)
+
+        progress = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py").read_text(encoding="utf-8")
+        concurrency = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
+        controller_actions = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        git = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "git.py").read_text(encoding="utf-8")
+        self.assertIn("PROGRESS_PHASE9_TARGET_RE", progress)
+        self.assertIn("MAIN_READONLY_DISPATCH_PATTERNS", concurrency)
+        self.assertIn("SAFE_WORKTREE_CLUSTER_RE", controller_actions)
+        self.assertIn("SAFE_WORKTREE_CLUSTER_RE", git)
+        progress_executable = "\n".join(line for line in progress.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn(r"^phase9-issue([0-9]+).*", progress_executable)
+
     def test_host_workflow_spec_contract_locks_consensus_and_lifecycle_invariants(self) -> None:
         for needle in (
             "HOST_WORKFLOW_SPEC",

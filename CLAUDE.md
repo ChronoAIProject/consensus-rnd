@@ -38,7 +38,7 @@
 - **变更必须可验证**:行为约束必须落到机械验证手段(behavior test / source-regression test / 段落 lint);仅靠"agent 应该记得"承载的约束视为未落地。
 - **治理前置**:架构性 / 流程性规则与对应机械验证手段同时进仓库,缺一不补口径。
 - **正确架构优先**:架构在 skill 增长(更多 work-unit / 更多并发 worker / 更多 reviewer 角色)时若自然变松,说明架构本身不正确,要重设计而非加 escape hatch。
-- **命名跟随职责**:文件、目录、脚本、marker、artifact 的名字表达职责边界,不泄露偶然 runtime / 临时实现 / 当前 issue 编号。
+- **命名跟随职责**:文件、目录、脚本、prompt、marker、label、branch、artifact 的名字表达职责边界,不泄露偶然 runtime / 临时实现 / 当前 issue 编号。任何被脚本解析、路由、daemon 启动、进程探测、GitHub/git 状态面消费、或跨 agent 传递的名字都是 operational interface,必须由所属 owner-local 事实源声明字段顺序、允许字符集、canonical write policy、legacy read / migration policy,并用 behavior test + source-regression 锁住。已存在事实源(如 label catalog、command registry、workflow stage registry、route-local parser)不得被第二套通用命名 registry 或全仓审美 lint 复制。未被脚本消费的一次性历史 artifact 不因风格不统一强制重命名;已发布 public command、marker、label、branch 或 artifact basename 改名必须先有 named migration artifact。
 - **哲学文档不写版本后缀**:`V1`/`V2`/`schema` 版本字段后缀 之类的 schema/identifier 版本号属于代码内部演化坐标,**不**进哲学文档(`CLAUDE.md`/`README.md`/`SKILL.md` 哲学段)。哲学描述不变量与边界,不绑定当前版本号;一旦哲学文本要随 schema 改版而改,说明版本号泄露到了不该泄露的层。Release semver(`.version-bump.json` 映射的 package/manifest 版本)是另一回事——那是发布坐标,不是设计 identifier。
 
 ## 共识引擎哲学(本仓库唯一产品身份)
