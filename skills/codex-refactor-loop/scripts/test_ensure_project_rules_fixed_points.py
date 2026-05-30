@@ -182,7 +182,7 @@ class MultiNodeOwnershipSourceTests(unittest.TestCase):
             "ownership.py": SCRIPT_DIR / "codex_refactor_loop" / "ownership.py",
             "monitors/concurrency.py": SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py",
             "phase9/router.py": SCRIPT_DIR / "codex_refactor_loop" / "phase9" / "router.py",
-            "sync/apply.py": SCRIPT_DIR / "codex_refactor_loop" / "sync" / "apply.py",
+            "sync/executor.py": SCRIPT_DIR / "codex_refactor_loop" / "sync" / "executor.py",
         }
         for label, path in checked.items():
             text = path.read_text(encoding="utf-8")

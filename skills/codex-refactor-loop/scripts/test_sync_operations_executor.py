@@ -179,7 +179,11 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
             operation,
             repo=self.repo,
             worktree=self.worktree,
-            env={"INTEGRATION_BRANCH": "auto-refact-dev", "REVIEW_BASE_BRANCH": "dev"},
+            env={
+                "INTEGRATION_BRANCH": "auto-refact-dev",
+                "REVIEW_BASE_BRANCH": "dev",
+                "GH_REPO_SLUG": "example/repo",
+            },
             command_runner=fake,
         )
 

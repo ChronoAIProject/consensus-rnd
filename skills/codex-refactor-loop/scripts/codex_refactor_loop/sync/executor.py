@@ -269,12 +269,13 @@ class IntegrationSyncExecutor:
             #   applying daemon-authorized git side effects.
             if operation.pr_number is not None:
                 ctx = LoopContext.load(repo_root=repo, env=env)
-                ownership = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo)
-                decision = ownership.decide(WorkTarget("pr", operation.pr_number))
-                if not decision.allowed:
-                    raise IntegrationSyncOperationError(f"ownership not allowed: {decision.reason}")
-                if decision.reason == "stale-takeover" and not ownership.post_takeover_notice(decision):
-                    raise IntegrationSyncOperationError("ownership stale takeover notice failed")
+                if ctx.gh_repo_slug:
+                    ownership = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo)
+                    decision = ownership.decide(WorkTarget("pr", operation.pr_number))
+                    if not decision.allowed:
+                        raise IntegrationSyncOperationError(f"ownership not allowed: {decision.reason}")
+                    if decision.reason == "stale-takeover" and not ownership.post_takeover_notice(decision):
+                        raise IntegrationSyncOperationError("ownership stale takeover notice failed")
             clean, merge_in_progress = self._ensure_clean_or_merge(worktree, command_runner=command_runner)
             if not clean:
                 raise IntegrationSyncOperationError("dirty non-merge worktree")

@@ -604,7 +604,7 @@ class Phase9Router:
 
     def _ownership_allows_issue(self, issue: str, route: str) -> bool:
         # Refactor (iter/issue-193):
-        #   Old pattern: Phase 9 direct dispatch trusted local logs/ledger only
+        #   Old pattern: design-consensus direct dispatch trusted local logs/ledger only
         #   and could spawn work for a fresh foreign-authored issue.
         #   New principle: author.login owns the GitHub issue until updatedAt
         #   crosses the 3 hour stale takeover cutoff.
