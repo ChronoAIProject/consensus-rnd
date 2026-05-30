@@ -287,5 +287,18 @@ class MetadataOnlyIssue193SourceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, combined)
 
 
+class ReleaseSemverLadderSourceTests(unittest.TestCase):
+    def test_release_gate_uses_next_release_version_not_raw_core_bump(self) -> None:
+        gate_source = (SCRIPT_DIR / "codex_refactor_loop" / "release" / "gate.py").read_text(encoding="utf-8")
+        preflight_source = (SCRIPT_DIR / "codex_refactor_loop" / "release" / "publish_preflight.py").read_text(encoding="utf-8")
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+
+        self.assertIn("next_release_version", gate_source)
+        self.assertIn("validate_release_version_coordinate", preflight_source)
+        self.assertNotIn("bump_semver(from_version, bump_type)", gate_source)
+        self.assertIn("same-stage `N+1`", skill)
+        self.assertIn("`bump_type` is commit-impact metadata, not promotion authority", skill)
+
+
 if __name__ == "__main__":
     unittest.main()

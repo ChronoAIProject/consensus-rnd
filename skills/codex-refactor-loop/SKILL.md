@@ -1042,7 +1042,7 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 
 Tests or controller-side aggregators may write `.refactor-loop/state/auto-release-signals.json` with either booleans or `{ "passed": bool, ... }` objects for those same keys. When that file exists, it is the deterministic source for the eight gate signals.
 
-Semver bump is computed from `.refactor-loop/state/release-commits.json` entries since the latest release: `feat!:` or `BREAKING CHANGE:` yields `major`; otherwise any `feat:` yields `minor`; otherwise `fix:`, `perf:`, `refactor:`, or any other commit yields `patch`. If stability is not ready, no commits exist, or the minimum release interval has not elapsed, `bump_type` is null and `to_version == from_version`.
+Semver bump is computed from `.refactor-loop/state/release-commits.json` entries since the latest release: `feat!:` or `BREAKING CHANGE:` yields `major`; otherwise any `feat:` yields `minor`; otherwise `fix:`, `perf:`, `refactor:`, or any other commit yields `patch`. `next_release_version()` computes `to_version` from that `bump_type`; on a prerelease base such as `X.Y.Z-beta.N` or `X.Y.Z-rc.N`, the default target is same-stage `N+1`. `bump_type` is commit-impact metadata, not promotion authority: it does not authorize beta-to-rc, beta-to-GA, rc-to-GA, or core promotion while on the prerelease ladder. If stability is not ready, no commits exist, or the minimum release interval has not elapsed, `bump_type` is null and `to_version == from_version`.
 
 `.refactor-loop/state/release-decision.json` fields:
 

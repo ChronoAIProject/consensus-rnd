@@ -12,7 +12,7 @@ from typing import Any, Callable
 from ..state import read_json
 from .gate import isoformat, load_host_env, parse_time, resolve_field
 from .required_checks import REQUIRED_RELEASE_CHECKS
-from .versions import compare_semver
+from .versions import compare_semver, validate_release_version_coordinate
 
 
 REQUIRED_CANDIDATE_SCHEMA = "decision-artifact-only/v2"
@@ -196,6 +196,9 @@ class ReleasePublishPreflight:
         return next(iter(versions))
 
     def _validate_version(self, candidate: dict[str, Any], decision: dict[str, Any], version: str, reasons: list[str]) -> None:
+        # Refactor (iter272/issue-272):
+        #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
+        #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
         to_version = candidate.get("to_version")
         if not isinstance(to_version, str) or not to_version:
             reasons.append("candidate_version_missing")
@@ -208,6 +211,13 @@ class ReleasePublishPreflight:
             reasons.append("manifest_version_mismatch")
         if decision and decision.get("to_version") != to_version:
             reasons.append("decision_version_mismatch")
+        from_version = candidate.get("from_version")
+        if not isinstance(from_version, str) or not from_version:
+            reasons.append("candidate_from_version_missing")
+            return
+        coordinate_reason = validate_release_version_coordinate(from_version, to_version, candidate.get("bump_type"))
+        if coordinate_reason is not None:
+            reasons.append(coordinate_reason)
 
     def _validate_required_signals(self, candidate: dict[str, Any], decision: dict[str, Any], reasons: list[str]) -> None:
         signals = candidate.get("required_signals")
