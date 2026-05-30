@@ -28,6 +28,13 @@ from .wakeup_plan import main as wakeup_plan_main
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
 
 
+def release_commits_command(argv: Sequence[str] | None) -> int:
+    # Refactor (fix/pr236-split-release-commits-command): Old pattern: release-gate inlined the git-reading release commit producer and gained read-git authority. New principle: release commits are produced by a separate narrow CLI surface whose only powers are read-git and write-artifact, keeping release-gate decider-only.
+    from .release.commits import main as release_commits_main
+
+    return release_commits_main(argv)
+
+
 @dataclass(frozen=True)
 class CommandSpec:
     handler: Callable[[Sequence[str] | None], int]
@@ -93,6 +100,11 @@ COMMANDS: dict[str, CommandSpec] = {
         release_gate_main,
         "run the Python auto release gate",
         ("read-state", "read-gh", "write-artifact"),
+    ),
+    "release-commits": CommandSpec(
+        release_commits_command,
+        "write the git-derived release commits projection",
+        ("read-git", "write-artifact"),
     ),
     "release-required-checks": CommandSpec(
         release_required_checks_main,

@@ -1,10 +1,8 @@
 """Static degradation checks for the codex-refactor-loop skill.
 
-The skill degradation watch is intentionally a single read-only checker. It has
-no daemon lifecycle, no source mutation path, no GitHub lifecycle authority, and
-no worker dispatch API. Runtime monitoring is owned by concurrency_monitor.py,
-which may call the legacy checker script and report failures as local alerts
-only.
+The skill-degradation surface is intentionally a source-repo static checker and
+publication gate. Downstream plugin-installed hosts have no runtime watch, no
+alert log, no pending event, no peek lens, and no host.env knobs.
 """
 
 from __future__ import annotations
@@ -26,17 +24,13 @@ from ..context import LoopContext
 #   New: expose the same read-only checks from codex_refactor_loop.checks while
 #   preserving every marker, required check name, authorization path, and narrow
 #   allowlist literal for future CLI import.
+# Refactor (impl/issue235-delete-downstream-watch): Old pattern: the checker required downstream runtime watch hooks and alert surfaces. New principle: skill-degradation is source-repo CI/release validation only; downstream hosts have no runtime watch surface.
 
 CHECK_NAME = "skill-degradation"
 SKILL_RELATIVE = Path("skills/codex-refactor-loop")
 SCRIPT_RELATIVE = SKILL_RELATIVE / "scripts"
 CI_WORKFLOW = Path(".github/workflows/consensus-rnd-ci.yml")
 RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
-JUDGE_ARTIFACT = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#skill-degradation-watch-66"
-ALERT_LOG = ".refactor-loop/.degradation-alert.log"
-PENDING_EVENTS = ".refactor-loop/.controller-pending-events.log"
-INTERVAL_ENV = "DEGRADATION_WATCH_INTERVAL_SECONDS"
-AUTHORIZATION_MIRROR = SKILL_RELATIVE / "authorizations" / "runtime-exceptions.md"
 
 FORBIDDEN_RUNTIME_FILES = (
     SCRIPT_RELATIVE / "degradation_watchdog.py",
@@ -66,7 +60,6 @@ CHECKED_SURFACE_FILES = (
     SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py",
-    AUTHORIZATION_MIRROR,
     CI_WORKFLOW,
     RELEASE_WORKFLOW,
 )
@@ -88,53 +81,36 @@ DOC_FORBIDDEN_CONTEXT = (
 )
 
 REQUIRED_SKILL_MARKERS = (
-    "## Named runtime exception — skill degradation watch(per #66)",
-    JUDGE_ARTIFACT,
-    "run `consensus-rnd-cli check-degradation`",
-    "write `.refactor-loop/.degradation-alert.log`",
-    "append existing-format pending events",
-    "source mutation",
-    "git reset/rebase/merge/push",
-    "GitHub issue/PR/body/label lifecycle mutation",
-    "codex dispatch",
-    "standalone daemon creation",
-    "WorkUnit/schema/envelope changes",
+    "## Skill degradation source-repo validation",
+    "consensus-rnd-cli check-degradation --static",
+    "source-repo CI/release validation",
+    "downstream host has no runtime watch",
+    "no alert log",
+    "no pending event",
+    "no peek lens",
+    "no host.env knobs",
+    "no source mutation",
+    "no git reset/rebase/merge/push",
+    "no GitHub issue/PR/body/label lifecycle mutation",
+    "no codex dispatch",
+    "no standalone daemon creation",
+    "no WorkUnit/schema/envelope changes",
     "protocol/" + "plugin " + "registry",
-    "auto-" + "clean root garbage",
-    "auto-" + "fix API",
+    "no auto-" + "clean root garbage",
+    "no auto-" + "fix API",
 )
 
 REQUIRED_DETAILED_REFERENCE_MARKERS = (
-    "skill degradation watch(per #66)",
-    JUDGE_ARTIFACT,
-    ALERT_LOG,
-    PENDING_EVENTS,
-    INTERVAL_ENV,
+    "Skill degradation source-repo validation details",
     "consensus-rnd-cli check-degradation --static",
-    "existing-format pending event",
+    "CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`",
+    "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation`",
+    "Downstream plugin-installed hosts have no skill-degradation runtime watch",
+    "no degradation alert log",
+    "no degradation pending event",
+    "no degradation peek lens",
+    "no degradation host.env knobs",
     "no source mutation",
-)
-
-REQUIRED_HOST_ENV_MARKERS = (
-    INTERVAL_ENV,
-    "DEGRADATION_WATCH_TIMEOUT_SECONDS",
-    "DEGRADATION_ALERT_TAIL_LINES",
-    ALERT_LOG,
-)
-
-REQUIRED_MONITOR_MARKERS = (
-    INTERVAL_ENV,
-    "DEGRADATION_ALERT_LOG",
-    "run_skill_degradation_check",
-    "maybe_run_skill_degradation_watch",
-    "skill-degradation-alert",
-    "check-degradation",
-)
-
-REQUIRED_PEEK_MARKERS = (
-    ALERT_LOG,
-    "DEGRADATION_ALERT_TAIL_LINES",
-    "Skill degradation alerts",
 )
 
 REQUIRED_CI_MARKERS = (
@@ -160,6 +136,26 @@ REQUIRED_RELEASE_PROJECTION_MARKERS = (
 REQUIRED_RELEASE_GATE_MARKERS = (
     "ReleaseRequiredChecksProjection",
     "checks-api-projection",
+)
+
+FORBIDDEN_DOWNSTREAM_RUNTIME_MARKERS = (
+    ".degradation-alert.log",
+    "DEGRADATION_WATCH_INTERVAL_SECONDS",
+    "DEGRADATION_WATCH_TIMEOUT_SECONDS",
+    "DEGRADATION_ALERT_TAIL_LINES",
+    "run_skill_degradation_check",
+    "maybe_run_skill_degradation_watch",
+    "write_degradation_alert",
+    "skill-degradation-alert",
+    "Skill degradation alerts",
+    "skill-degradation-watch-66",
+)
+
+DOWNSTREAM_RUNTIME_SURFACE_FILES = (
+    SKILL_RELATIVE / "host.env.example",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
+    SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py",
+    SKILL_RELATIVE / "authorizations" / "runtime-exceptions.md",
 )
 
 
@@ -196,12 +192,10 @@ class SkillDriftChecker:
         findings.extend(self.forbidden_runtime_files_absent())
         findings.extend(self.skill_named_exception_present())
         findings.extend(self.reference_contract_present())
-        findings.extend(self.host_env_surface_present())
         findings.extend(self.ci_job_present())
         findings.extend(self.release_workflow_required_check_present())
         findings.extend(self.release_gate_required_check_present())
-        findings.extend(self.monitor_hook_present())
-        findings.extend(self.peek_status_present())
+        findings.extend(self.downstream_runtime_surface_absent())
         findings.extend(self.forbidden_surfaces_absent())
         findings.extend(self.checker_is_read_only())
         return findings
@@ -253,13 +247,6 @@ class SkillDriftChecker:
             SKILL_RELATIVE / "SKILL.md",
             REQUIRED_DETAILED_REFERENCE_MARKERS,
             "reference-contract",
-        )
-
-    def host_env_surface_present(self) -> list[Finding]:
-        return self.require_markers(
-            SKILL_RELATIVE / "host.env.example",
-            REQUIRED_HOST_ENV_MARKERS,
-            "host-env-surface",
         )
 
     def ci_job_present(self) -> list[Finding]:
@@ -343,37 +330,22 @@ class SkillDriftChecker:
             )
         return findings
 
-    def monitor_hook_present(self) -> list[Finding]:
-        findings = self.require_markers(
-            SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
-            REQUIRED_MONITOR_MARKERS,
-            "monitor-hook",
-        )
-        text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py")
-        if not text:
-            return findings
-        if "subprocess" + ".run(" not in text or "check-degradation" not in text:
-            findings.append(
-                Finding(
-                    "monitor-hook",
-                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py"),
-                    "monitor hook must invoke the single CLI checker operation",
-                )
-            )
-        for forbidden in ("Popen", "launch_dispatch", "top_up_from_dispatch_queue"):
-            hook_body = extract_function_body(text, "run_skill_degradation_check")
-            if forbidden in hook_body:
-                findings.append(
-                    Finding(
-                        "monitor-hook",
-                        str(SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py"),
-                        f"degradation hook must not use {forbidden}",
+    def downstream_runtime_surface_absent(self) -> list[Finding]:
+        findings: list[Finding] = []
+        for relative in DOWNSTREAM_RUNTIME_SURFACE_FILES:
+            text = self.read(relative)
+            if not text:
+                continue
+            for marker in FORBIDDEN_DOWNSTREAM_RUNTIME_MARKERS:
+                if marker in text:
+                    findings.append(
+                        Finding(
+                            "downstream-runtime-surface",
+                            str(relative),
+                            f"downstream runtime watch marker is forbidden: {marker}",
+                        )
                     )
-                )
         return findings
-
-    def peek_status_present(self) -> list[Finding]:
-        return self.require_markers(SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py", REQUIRED_PEEK_MARKERS, "peek-status")
 
     def forbidden_surfaces_absent(self) -> list[Finding]:
         findings: list[Finding] = []
@@ -468,23 +440,6 @@ class SkillDriftChecker:
         if "re.compile" in line:
             return True
         return False
-
-
-def extract_function_body(text: str, name: str) -> str:
-    lines = text.splitlines()
-    start = None
-    for index, line in enumerate(lines):
-        if re.match(rf"def\s+{re.escape(name)}\s*\(", line):
-            start = index
-            break
-    if start is None:
-        return ""
-    body: list[str] = []
-    for line in lines[start + 1 :]:
-        if line.startswith("def ") and body:
-            break
-        body.append(line)
-    return "\n".join(body)
 
 
 def discover_repo_root(start: Path) -> Path:

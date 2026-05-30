@@ -19,10 +19,11 @@ REPO_RULES = REPO_ROOT / "CLAUDE.md"
 
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
+    # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
+    "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
-    "skill-degradation-watch-66": "## Named runtime exception — skill degradation watch(per #66)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
 }
@@ -85,12 +86,52 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(f"{MIRROR_RELATIVE}#{anchor}", self.skill)
                 self.assertIn(f'<a id="{anchor}"></a>', self.mirror)
 
+    def test_skill_degradation_runtime_exception_mirror_is_removed(self) -> None:
+        self.assertNotIn("skill-degradation-watch-66", self.skill)
+        self.assertNotIn("skill-degradation-watch-66", self.mirror)
+        self.assertIn("## Skill degradation source-repo validation", self.skill)
+        self.assertIn("source-repo CI/release validation", self.skill)
+        self.assertIn("downstream host has no runtime watch", self.skill)
+
     def test_mirror_entries_have_required_fields(self) -> None:
         for anchor in TARGET_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
             with self.subTest(anchor=anchor):
                 for field in REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
+
+    def test_release_commits_producer_mirror_preserves_narrow_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "release-commits-producer-232")
+
+        self.assertIn("`read-git` and `write-artifact` only", entry)
+        self.assertIn("read local git only", entry)
+        self.assertIn("atomically write `.refactor-loop/state/release-commits.json`", entry)
+        self.assertIn("fact_source: local git tags and refs", entry)
+        for verification in (
+            "test_release_commits.py",
+            "test_cli_command_router.py",
+            "test_release_gate_module.py",
+        ):
+            with self.subTest(verification=verification):
+                self.assertIn(verification, entry)
+        for forbidden in (
+            "GitHub API",
+            "push",
+            "merge",
+            "reset",
+            "rebase",
+            "worktree mutation",
+            "tag",
+            "release",
+            "commit",
+            "issue lifecycle",
+            "PR lifecycle",
+            "label lifecycle",
+            "generic lifecycle authority",
+            "inline execution from `release-gate`",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
 
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
         targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66)-r\d+-judge\.md")
@@ -113,8 +154,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "label",
             "tag",
             "release",
-            "source mutation",
-            "codex dispatch",
             "new daemon",
         )
         for token in required_denials:
