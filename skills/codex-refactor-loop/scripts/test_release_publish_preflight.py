@@ -271,6 +271,8 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             ("candidate_not_ready", lambda candidate: candidate.__setitem__("ready", False)),
             ("target_ref_missing", lambda candidate: candidate.pop("target_ref")),
             ("candidate_version_missing", lambda candidate: candidate.pop("to_version")),
+            ("candidate_from_version_missing", lambda candidate: candidate.pop("from_version")),
+            ("release_coordinate_off_ladder", lambda candidate: candidate.pop("bump_type")),
             ("decision_digest_missing", lambda candidate: candidate.pop("decision_digest")),
         )
         for expected_reason, mutate_candidate in cases:
