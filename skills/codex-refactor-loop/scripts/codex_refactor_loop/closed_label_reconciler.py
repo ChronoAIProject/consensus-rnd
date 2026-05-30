@@ -48,9 +48,12 @@ class ClosedLabelReconciler:
             if self.dry_run:
                 print(_format_plan(plan, dry_run=True))
                 continue
-            self.apply_plan(plan)
-            self.verify_plan(plan)
-            print(_format_plan(plan, dry_run=False))
+            live_plan = self.apply_plan(plan)
+            if live_plan is None:
+                print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
+                continue
+            self.verify_plan(live_plan)
+            print(_format_plan(live_plan, dry_run=False))
         if changed == 0:
             print("closed-label-reconciler noop: no closed managed phase-label drift")
         return 0
@@ -70,13 +73,19 @@ class ClosedLabelReconciler:
                 plans.append(plan)
         return tuple(plans)
 
-    def apply_plan(self, plan: ClosedPhaseLabelPlan) -> None:
-        command = [plan.kind, "edit", str(plan.number)]
-        for label in plan.add_labels:
+    def apply_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
+        live_plan = self._live_plan(plan)
+        if live_plan is None:
+            return None
+        if not live_plan.needs_edit:
+            return live_plan
+        command = [live_plan.kind, "edit", str(live_plan.number)]
+        for label in live_plan.add_labels:
             command.extend(["--add-label", label])
-        for label in plan.remove_labels:
+        for label in live_plan.remove_labels:
             command.extend(["--remove-label", label])
         self._gh(command)
+        return live_plan
 
     def verify_plan(self, plan: ClosedPhaseLabelPlan) -> None:
         item = self._view_item(plan.kind, plan.number)
@@ -85,6 +94,10 @@ class ClosedLabelReconciler:
         if not ok or plan.terminal_phase not in label_catalog.normalize_label_set(live_labels).canonical:
             detail = "; ".join(errors) if errors else "terminal phase missing"
             raise RuntimeError(f"post-edit label invariant failed for {plan.kind} #{plan.number}: {detail}")
+
+    def _live_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
+        item = self._view_item(plan.kind, plan.number)
+        return plan_from_gh_item(plan.kind, item, linked_merged=self._issue_has_merged_pr(item) if plan.kind == "issue" else False)
 
     def _list_managed(self, kind: str, state: str) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []

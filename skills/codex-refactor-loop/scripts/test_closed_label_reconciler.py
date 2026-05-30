@@ -18,7 +18,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
 from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
-from codex_refactor_loop.closed_phase_labels import ClosedPhaseLabelPlan, labels_after_plan, plan_closed_phase_labels
+from codex_refactor_loop.closed_phase_labels import (
+    ClosedPhaseLabelPlan,
+    has_exactly_one_phase_and_human,
+    labels_after_plan,
+    plan_closed_phase_labels,
+)
 from codex_refactor_loop.context import LoopContext
 
 
@@ -111,6 +116,23 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
                 number=16,
                 state="CLOSED",
                 labels=[labels.PHASE_FIXING, labels.HUMAN_AUTO],
+            )
+        )
+
+    def test_has_exactly_one_phase_and_human_helper_matches_invariant(self) -> None:
+        self.assertTrue(
+            has_exactly_one_phase_and_human(
+                [labels.MANAGED, labels.PHASE_CLOSED, labels.HUMAN_AUTO]
+            )
+        )
+        self.assertFalse(
+            has_exactly_one_phase_and_human(
+                [labels.MANAGED, labels.PHASE_CLOSED, labels.PHASE_MERGED, labels.HUMAN_AUTO]
+            )
+        )
+        self.assertFalse(
+            has_exactly_one_phase_and_human(
+                [labels.MANAGED, labels.PHASE_CLOSED]
             )
         )
 
@@ -242,9 +264,20 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
             },
         }
         edit_commands: list[tuple[str, ...]] = []
+        view_counts: dict[tuple[str, ...], int] = {}
 
         def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
             command = tuple(args)
+            if command == ("issue", "view", "21", "--json", "number,state,labels"):
+                count = view_counts.get(command, 0)
+                view_counts[command] = count + 1
+                item = issue_row if count == 0 else gh_json_responses[command]
+                return CompletedProcess(["gh", *command], 0, json.dumps(item), "")
+            if command == ("pr", "view", "22", "--json", "number,state,labels,mergedAt"):
+                count = view_counts.get(command, 0)
+                view_counts[command] = count + 1
+                item = pr_row if count == 0 else gh_json_responses[command]
+                return CompletedProcess(["gh", *command], 0, json.dumps(item), "")
             if command in gh_json_responses:
                 return CompletedProcess(["gh", *command], 0, json.dumps(gh_json_responses[command]), "")
             if len(command) >= 2 and command[1] == "list":
@@ -286,6 +319,42 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         )
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
+
+    def test_apply_rechecks_live_closed_state_and_skips_stale_open_item(self) -> None:
+        plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=24,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        gh_json_responses = {
+            ("issue", "view", "24", "--json", "number,state,labels"): {
+                "number": 24,
+                "state": "OPEN",
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_REVIEWING},
+                    {"name": labels.HUMAN_AUTO},
+                ],
+            },
+            ("pr", "list", "--state", "merged", "--search", "in:body Closes #24", "--limit", "1", "--json", "number,mergedAt"): [],
+        }
+        edit_commands: list[tuple[str, ...]] = []
+
+        def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
+            command = tuple(args)
+            if command in gh_json_responses:
+                return CompletedProcess(["gh", *command], 0, json.dumps(gh_json_responses[command]), "")
+            edit_commands.append(command)
+            return CompletedProcess(["gh", *command], 0, "", "")
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch.object(reconciler, "_gh", side_effect=fake_gh):
+            self.assertIsNone(reconciler.apply_plan(plan))
+
+        self.assertEqual([], edit_commands)
 
     def test_post_edit_rejects_multiple_phase_labels(self) -> None:
         plan = plan_closed_phase_labels(
