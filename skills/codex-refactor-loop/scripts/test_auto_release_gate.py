@@ -19,7 +19,7 @@ NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
-from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
+from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, bump_semver, classify_bump
 
 
 def write_json(path: Path, data: object) -> None:
@@ -255,6 +255,10 @@ def write_green_signals(repo: Path) -> None:
     )
     state = repo / ".refactor-loop/state"
     write_json(state / "release-commits.json", {"commits": [{"sha": "abc123", "subject": "fix: fixture", "body": ""}]})
+
+
+def classify_expected_patch(version: str) -> str:
+    return bump_semver(version, "patch")
 
 
 class AutoReleaseGateBehaviorTests(unittest.TestCase):
@@ -855,6 +859,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("controller-owned release publisher owns", result.stdout)
             decision_path = repo / ".refactor-loop/state/release-decision.json"
             candidate_path = repo / ".refactor-loop/state/release-candidate.json"
             self.assertTrue(decision_path.exists())
@@ -869,13 +874,18 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             # so this assertion survives every release bump without edits.
             current_version = read_json(repo / "package.json")["version"]
             self.assertEqual(decision["from_version"], current_version)
-            self.assertEqual(decision["to_version"], "1.0.1")
+            self.assertEqual(decision["to_version"], classify_expected_patch(current_version))
             self.assertNotEqual(decision["to_version"], decision["from_version"])
             candidate = read_json(candidate_path)
             self.assertIsInstance(candidate, dict)
             assert isinstance(candidate, dict)
-            self.assertEqual(candidate["schema"], "decision-artifact-only/v1")
-            self.assertEqual(candidate["lifecycle_owner"], "controller-or-release.yml")
+            self.assertEqual(candidate["schema"], "decision-artifact-only/v2")
+            self.assertEqual(candidate["lifecycle_owner"], "controller")
+            self.assertEqual(candidate["publish_preflight"], "controller-release-publish-preflight")
+            self.assertIn("expires_at", candidate)
+            self.assertIn("target_ref", candidate)
+            self.assertIn("required_signals", candidate)
+            self.assertIn("decision_digest", candidate)
             self.assertTrue(candidate["ready"])
             self.assertEqual(candidate["bump_type"], "patch")
             self.assertEqual(candidate["from_version"], decision["from_version"])

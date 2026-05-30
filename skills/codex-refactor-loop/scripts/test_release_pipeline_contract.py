@@ -189,14 +189,17 @@ class ReleasePipelineContractTests(unittest.TestCase):
                 self.assertEqual(self.snapshot_mapped_manifest_versions(repo), before)
 
     def test_workflow_contract(self) -> None:
+        executable_workflow = "\n".join(line for line in self.workflow.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("name: release", self.workflow)
-        self.assertNotIn("push:", self.workflow)
-        self.assertIn("workflow_run:", self.workflow)
-        self.assertIn("consensus-rnd-ci", self.workflow)
-        self.assertIn("github.event.workflow_run.conclusion == 'success'", self.workflow)
-        self.assertIn("github.event.workflow_run.head_branch == 'dev'", self.workflow)
-        self.assertIn("github.event.workflow_run.head_sha || github.sha", self.workflow)
+        self.assertNotIn("push:", executable_workflow)
+        self.assertNotIn("workflow_run:", executable_workflow)
+        self.assertNotIn("contents: write", executable_workflow)
+        self.assertNotIn("gh release create", executable_workflow)
+        self.assertNotIn("git tag", executable_workflow)
+        self.assertNotIn("steps.mode.outputs.dry_run != 'true'", executable_workflow)
         self.assertIn("workflow_dispatch:", self.workflow)
+        self.assertIn("contents: read", self.workflow)
+        self.assertIn("checks: read", self.workflow)
         self.assertNotIn("version:", self.workflow)
         self.assertNotIn("bump:", self.workflow)
         self.assertNotIn("workflow_call", self.workflow)
@@ -213,9 +216,8 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertFalse((REPO_ROOT / ".github/scripts/release_preflight.py").exists())
         for needle in (
             "required release checks",
-            "already exists; no-op",
-            "is not newer than latest tag",
-            "steps.mode.outputs.dry_run != 'true'",
+            "controller-only publication",
+            "禁 gh release create",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.workflow)

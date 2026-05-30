@@ -133,11 +133,17 @@ class ReleaseGateModuleTests(unittest.TestCase):
             candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
             self.assertIsInstance(candidate, dict)
             assert isinstance(candidate, dict)
-            self.assertEqual(candidate["schema"], "decision-artifact-only/v1")
+            self.assertEqual(candidate["schema"], "decision-artifact-only/v2")
             self.assertEqual(candidate["decision_artifact"], ".refactor-loop/state/release-decision.json")
             self.assertEqual(candidate["host_opt_in"], "RELEASE_AUTO_ENABLE=true")
-            self.assertEqual(candidate["lifecycle_owner"], "controller-or-release.yml")
+            self.assertEqual(candidate["lifecycle_owner"], "controller")
+            self.assertEqual(candidate["publish_preflight"], "controller-release-publish-preflight")
+            self.assertIn("target_ref", candidate)
+            self.assertIn("expires_at", candidate)
+            self.assertIn("required_signals", candidate)
+            self.assertIn("decision_digest", candidate)
             self.assertIn("consensus-rnd-cli release-gate", candidate["next_step_hint"])
+            self.assertNotIn("release.yml", candidate["next_step_hint"])
             self.assertFalse((repo / ".refactor-loop/.controller-pending-events.log").exists())
             self.assertFalse((repo / ".refactor-loop/dispatch-queue").exists())
 
@@ -243,10 +249,11 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
     def test_source_has_no_release_lifecycle_or_daemon_event_authority(self) -> None:
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
+        executable_source = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56", source)
         self.assertIn("decision-artifact-only", source)
-        self.assertNotIn('["git"', source)
-        self.assertNotIn('"git"', source)
+        self.assertNotIn('["git"', executable_source)
+        self.assertNotIn('"git"', executable_source)
         for forbidden in (
             "dispatch_queue(",
             "pending_events(",
@@ -262,7 +269,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
             "bump_version",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, source)
+                self.assertNotIn(forbidden, executable_source)
 
     def test_required_check_names_and_daemon_heartbeat_allowlist_are_stable(self) -> None:
         self.assertEqual(gate.REQUIRED_CHECKS, ("contract-tests", "manifest-version-sync", "skill-degradation"))
