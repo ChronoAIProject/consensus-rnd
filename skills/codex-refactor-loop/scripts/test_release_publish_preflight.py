@@ -105,7 +105,9 @@ def green_required_signals() -> dict[str, object]:
 def write_ready_artifacts(
     repo: Path,
     *,
+    from_version: str = "1.9.9",
     version: str = "2.0.0",
+    bump_type: str = "patch",
     target_ref: str = "abc123",
     generated_at: datetime = NOW,
     expires_at: datetime | None = None,
@@ -113,9 +115,9 @@ def write_ready_artifacts(
 ) -> None:
     set_mapped_version(repo, version)
     decision = {
-        "from_version": "1.9.9",
+        "from_version": from_version,
         "to_version": version,
-        "bump_type": "patch",
+        "bump_type": bump_type,
         "commits": [{"sha": "abc", "subject": "fix: release"}],
         "decided_at": isoformat(generated_at),
         "stability_score": 100,
@@ -131,7 +133,7 @@ def write_ready_artifacts(
         "decision_artifact": ".refactor-loop/state/release-decision.json",
         "from_version": decision["from_version"],
         "to_version": version,
-        "bump_type": "patch",
+        "bump_type": bump_type,
         "ready": True,
         "target_ref": target_ref,
         "required_signals": decision["signals"],
@@ -189,13 +191,35 @@ class ReleasePublishPreflightTests(unittest.TestCase):
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_host_opt_in(repo)
-            write_ready_artifacts(repo, version="2.0.0", target_ref="abc123")
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10", target_ref="abc123")
 
             result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
 
             self.assertTrue(result.allowed, result.reasons)
-            self.assertEqual(result.version, "2.0.0")
+            self.assertEqual(result.version, "1.9.10")
             self.assertEqual(result.target_ref, "abc123")
+
+    def test_publish_preflight_allows_same_stage_prerelease_candidate(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.0.0-beta.4")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertTrue(result.allowed, result.reasons)
+            self.assertEqual(result.version, "1.0.0-beta.4")
+
+    def test_publish_preflight_rejects_off_ladder_prerelease_candidate(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.0.1")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("release_coordinate_off_ladder", result.reasons)
 
     def test_candidate_path_must_be_repo_relative_artifact(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -247,6 +271,8 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             ("candidate_not_ready", lambda candidate: candidate.__setitem__("ready", False)),
             ("target_ref_missing", lambda candidate: candidate.pop("target_ref")),
             ("candidate_version_missing", lambda candidate: candidate.pop("to_version")),
+            ("candidate_from_version_missing", lambda candidate: candidate.pop("from_version")),
+            ("release_coordinate_off_ladder", lambda candidate: candidate.pop("bump_type")),
             ("decision_digest_missing", lambda candidate: candidate.pop("decision_digest")),
         )
         for expected_reason, mutate_candidate in cases:
@@ -342,8 +368,8 @@ class ReleasePublishPreflightTests(unittest.TestCase):
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_host_opt_in(repo)
-            write_ready_artifacts(repo, version="2.0.0+candidate")
-            set_mapped_version(repo, "2.0.0+manifest")
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10+candidate")
+            set_mapped_version(repo, "1.9.10+manifest")
 
             result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
 

@@ -16,7 +16,7 @@ from typing import Any, Callable, Sequence
 from .. import labels as label_catalog
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
-from .versions import SEMVER_RE, bump_semver, compare_semver, parse_semver
+from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
 
 
 # Refactor (issue160-p3-auto-release-gate):
@@ -444,6 +444,9 @@ class AutoReleaseGate:
         return commits
 
     def decide_release(self, stability: StabilityResult, min_interval_hours: int) -> dict[str, Any]:
+        # Refactor (iter272/issue-272):
+        #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
+        #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
         now = self.now()
         from_version = self.current_version()
         interval = self.release_interval_status(now, min_interval_hours)
@@ -451,7 +454,7 @@ class AutoReleaseGate:
         candidate_bump = classify_bump(commits) if commits else None
         release_ready = stability.ready and interval["passed"] and bool(commits)
         bump_type = candidate_bump if release_ready else None
-        to_version = bump_semver(from_version, bump_type) if bump_type else from_version
+        to_version = next_release_version(from_version, bump_type) if bump_type else from_version
         return {
             "from_version": from_version,
             "to_version": to_version,

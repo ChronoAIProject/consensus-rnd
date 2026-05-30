@@ -198,6 +198,26 @@ class ManifestVersionSyncTests(unittest.TestCase):
         self.assertIn("MANIFEST_VERSION_SYNC_OK:", result.stdout)
         self.assertEqual(result.stderr, "")
 
+    # Refactor (iter259/issue-259):
+    #   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1)
+    #   New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py
+    def test_cli_non_source_root_still_fails_closed_for_manifest_version_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH), "check-manifest", "--repo-root", str(repo)],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("MANIFEST_VERSION_SYNC_ERROR: missing file:", result.stderr)
+        self.assertIn(".version-bump.json", result.stderr)
+        self.assertEqual(result.stdout, "")
+
     def test_cli_mismatched_manifest_fixture_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
