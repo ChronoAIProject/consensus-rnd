@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 import sys
@@ -67,6 +68,23 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("not-source-repo", result.stdout)
         self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
+
+    def test_static_checker_reports_json_for_plugin_host_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--json", "--repo-root", str(host)],
+                cwd=host,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "reason": "not-source-repo", "findings": []})
+        self.assertEqual(result.stderr, "")
 
     def test_static_checker_discovers_plugin_host_root_as_not_source_repo(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
