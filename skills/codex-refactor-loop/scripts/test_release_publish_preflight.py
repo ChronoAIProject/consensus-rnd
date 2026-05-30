@@ -186,6 +186,30 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertEqual(result.version, "2.0.0")
             self.assertEqual(result.target_ref, "abc123")
 
+    def test_candidate_path_must_be_repo_relative_artifact(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo)
+            outside = repo.parent / "release-candidate.json"
+            shutil.copy2(repo / ".refactor-loop/state/release-candidate.json", outside)
+
+            absolute = ReleasePublishPreflight(repo, now=lambda: NOW).validate(
+                candidate_path=outside,
+                target_ref="abc123",
+            )
+            parent_traversal = ReleasePublishPreflight(repo, now=lambda: NOW).validate(
+                candidate_path="../release-candidate.json",
+                target_ref="abc123",
+            )
+
+            self.assertFalse(absolute.allowed)
+            self.assertIn("candidate_path_absolute", absolute.reasons)
+            self.assertIn("missing_candidate", absolute.reasons)
+            self.assertFalse(parent_traversal.allowed)
+            self.assertIn("candidate_path_outside_repo", parent_traversal.reasons)
+            self.assertIn("missing_candidate", parent_traversal.reasons)
+
     def test_old_candidate_schema_invalid_for_publish(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"

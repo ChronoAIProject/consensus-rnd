@@ -19,6 +19,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 BUMP_PATH = REPO_ROOT / ".github/scripts/bump_version.py"
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/release.yml"
 REQUIRED_CHECKS_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
+PUBLISH_PREFLIGHT_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publish_preflight.py"
 
 
 def read(path: Path) -> str:
@@ -45,6 +46,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.bump = load_bump_module()
         self.workflow = read(WORKFLOW_PATH)
         self.required_checks = read(REQUIRED_CHECKS_PATH)
+        self.publish_preflight = read(PUBLISH_PREFLIGHT_PATH)
 
     def test_nested_manifest_resolution_and_semver_bumping(self) -> None:
         data = {"plugins": [{"version": "1.2.3"}]}
@@ -224,6 +226,17 @@ class ReleasePipelineContractTests(unittest.TestCase):
         for needle in ("contract-tests", "manifest-version-sync", "skill-degradation", "REQUIRED_RELEASE_CHECKS"):
             with self.subTest(required_check_projection=needle):
                 self.assertIn(needle, self.required_checks)
+
+    def test_release_publish_preflight_source_guards_candidate_artifact_path(self) -> None:
+        for needle in (
+            "path.is_absolute()",
+            "candidate_path_absolute",
+            '".." in candidate.parts',
+            "candidate_path_outside_repo",
+            "raw_candidate = None if candidate_path_error else read_json",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.publish_preflight)
 
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
         mapping = json.loads(read(repo / ".version-bump.json"))

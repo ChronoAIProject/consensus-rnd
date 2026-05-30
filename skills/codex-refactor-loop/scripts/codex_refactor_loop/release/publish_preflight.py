@@ -67,9 +67,11 @@ class ReleasePublishPreflight:
         # Refactor (iter217/issue-217):
         #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
         #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
-        candidate_file = self._resolve_repo_path(candidate_path)
         reasons: list[str] = []
-        raw_candidate = read_json(candidate_file, None)
+        candidate_file, candidate_path_error = self._resolve_repo_path(candidate_path)
+        if candidate_path_error:
+            reasons.append(candidate_path_error)
+        raw_candidate = None if candidate_path_error else read_json(candidate_file, None)
         candidate = raw_candidate if isinstance(raw_candidate, dict) else {}
         if not candidate:
             reasons.append("missing_candidate")
@@ -104,15 +106,18 @@ class ReleasePublishPreflight:
             candidate_digest=digest,
         )
 
-    def _resolve_repo_path(self, path: str | Path) -> Path:
+    def _resolve_repo_path(self, path: str | Path) -> tuple[Path, str | None]:
         candidate = Path(path)
         if candidate.is_absolute():
-            try:
-                candidate.resolve().relative_to(self.repo_root.resolve())
-            except ValueError:
-                return candidate
-            return candidate
-        return self.repo_root / candidate
+            return candidate, "candidate_path_absolute"
+        if ".." in candidate.parts:
+            return self.repo_root / candidate, "candidate_path_outside_repo"
+        resolved = (self.repo_root / candidate).resolve()
+        try:
+            resolved.relative_to(self.repo_root.resolve())
+        except ValueError:
+            return resolved, "candidate_path_outside_repo"
+        return resolved, None
 
     def _decision_path(self, candidate: dict[str, Any]) -> Path | None:
         raw = candidate.get("decision_artifact")

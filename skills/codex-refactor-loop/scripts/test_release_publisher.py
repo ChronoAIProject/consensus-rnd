@@ -63,12 +63,20 @@ class FakePreflight:
 class FakeRunner:
     def __init__(self) -> None:
         self.commands: list[list[str]] = []
+        self.failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {}
+        self.rev_list_stdout = "0\n"
 
     def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
-        self.commands.append(list(cmd))
-        if cmd[:3] == ["gh", "release", "create"]:
-            return subprocess.CompletedProcess(list(cmd), 0, stdout="https://github.test/release/v2.0.0\n", stderr="")
-        return subprocess.CompletedProcess(list(cmd), 0, stdout="", stderr="")
+        command = list(cmd)
+        self.commands.append(command)
+        failure = self.failures.get(tuple(command))
+        if failure is not None:
+            return failure
+        if command[:3] == ["git", "rev-list", "--count"]:
+            return subprocess.CompletedProcess(command, 0, stdout=self.rev_list_stdout, stderr="")
+        if command[:3] == ["gh", "release", "create"]:
+            return subprocess.CompletedProcess(command, 0, stdout="https://github.test/release/v2.0.0\n", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
 def allowed_result(repo: Path) -> PublishPreflightResult:
@@ -87,6 +95,28 @@ def allowed_result(repo: Path) -> PublishPreflightResult:
     )
 
 
+def expected_success_commands() -> list[list[str]]:
+    return [
+        ["python3", ".github/scripts/bump_version.py", "--version", "2.0.0"],
+        [
+            "git",
+            "add",
+            ".version-bump.json",
+            "package.json",
+            ".claude-plugin/plugin.json",
+            ".claude-plugin/marketplace.json",
+            ".codex-plugin/plugin.json",
+            ".cursor-plugin/plugin.json",
+            "gemini-extension.json",
+        ],
+        ["git", "commit", "-m", "Release v2.0.0"],
+        ["git", "fetch", "origin", "HEAD"],
+        ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
+        ["git", "push", "origin", "HEAD"],
+        ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"],
+    ]
+
+
 class ReleasePublisherTests(unittest.TestCase):
     def test_publisher_runs_preflight_before_mutation(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -99,7 +129,7 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(preflight.calls, [(".refactor-loop/state/release-candidate.json", "abc123")])
-            self.assertEqual(runner.commands[0], ["python3", ".github/scripts/bump_version.py", "--version", "2.0.0"])
+            self.assertEqual(runner.commands, expected_success_commands())
 
     def test_publisher_records_result_and_uses_exact_tag_target(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -113,7 +143,7 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertTrue(result.published)
             self.assertEqual(result.tag, "v2.0.0")
             self.assertEqual(result.target_ref, "abc123")
-            self.assertIn(["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"], runner.commands)
+            self.assertEqual(runner.commands[-1], ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"])
             payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
@@ -144,6 +174,49 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertFalse(result.published)
             self.assertEqual(result.reasons, ("host_opt_in_not_true",))
             self.assertEqual(runner.commands, [])
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_publisher_refuses_when_release_commit_is_behind_origin_head(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            runner.rev_list_stdout = "2\n"
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "safe push refused"):
+                publisher.publish(target_ref="abc123")
+
+            self.assertEqual(
+                runner.commands,
+                expected_success_commands()[:5],
+            )
+            self.assertNotIn(["git", "push", "origin", "HEAD"], runner.commands)
+            self.assertNotIn(["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"], runner.commands)
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_publisher_stops_on_command_failure_before_release_creation(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            failed_add = [
+                "git",
+                "add",
+                ".version-bump.json",
+                "package.json",
+                ".claude-plugin/plugin.json",
+                ".claude-plugin/marketplace.json",
+                ".codex-plugin/plugin.json",
+                ".cursor-plugin/plugin.json",
+                "gemini-extension.json",
+            ]
+            runner.failures[tuple(failed_add)] = subprocess.CompletedProcess(failed_add, 1, stdout="", stderr="add failed")
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "add failed"):
+                publisher.publish(target_ref="abc123")
+
+            self.assertEqual(runner.commands, expected_success_commands()[:2])
+            self.assertNotIn(["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"], runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
 
