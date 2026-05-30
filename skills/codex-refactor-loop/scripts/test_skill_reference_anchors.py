@@ -292,6 +292,41 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
+    def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # multi-device controller writes were described as local daemon facts.
+        # New principle: SKILL.md locks one cross-device active-controller
+        # lease and forbids per-work/distributed scheduler expansion.
+        for needle in (
+            "| Active controller |",
+            "## Named runtime exception - active controller lease(per #191)",
+            "GitHub/已 push git 面只承载一个 `ActiveControllerLease`",
+            "refs/heads/crnd/active-controller",
+            "active-controller.json",
+            "owner_device",
+            "lease_id",
+            "expires_at",
+            "git fetch origin <lease-ref>",
+            "git ls-remote --exit-code --heads origin <lease-ref>",
+            "git rev-parse",
+            "git show <commit>:active-controller.json",
+            "git hash-object -w --stdin",
+            "git mktree",
+            "git commit-tree",
+            "git push --force-with-lease=<old>:<lease-ref>",
+            "These commands may only read/build/publish the singleton lease blob CAS",
+            "active_controller=noop:not-owner",
+            "Worker throughput remains owner-local via `$CODEX_FLOOR`",
+            "no cross-device floor aggregation",
+            "per-work claim",
+            "host-defined lease scope",
+            "daemon ownership matrix",
+            "active-active scheduler",
+            "generic distributed lock library",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         for token in (

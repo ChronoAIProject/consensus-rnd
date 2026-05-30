@@ -19,6 +19,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
+| Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and five write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
 <!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
@@ -80,6 +81,9 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$RELEASE_ROLLUP_COOLDOWN_SECONDS` | defaulted | sync helpers | `21600` | default to `21600` seconds before duplicate release-rollup event for the same integration SHA | sync helpers | `test_sync_dev.py` |
 | `$CI_GUARDS` | optional-noop | prompt templates | empty or host guard script | empty skips with reported noop reason `guards skipped: CI_GUARDS unset` | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$CODEX_FLOOR` | defaulted | concurrency floor | `5` | missing or invalid defaults to `5`; values below hard min `2` clamp to `2` | concurrency monitor, wakeup plan | `test_concurrency_monitor.py`, `test_wakeup_plan.py` |
+| `$ACTIVE_CONTROLLER_DEVICE_ID` | optional-noop | active-controller lease | empty | empty means default single-device local-owner noop; multi-device opt-in requires a stable per-device id on every upgraded device | active_controller, restart/concurrency/router/comment/progress/dev-sync/controller actions | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
+| `$ACTIVE_CONTROLLER_TTL_SECONDS` | defaulted | active-controller lease | `1800` | missing or invalid defaults to `1800`; owner renews before expiry; expired lease may be acquired by another device | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
+| `$ACTIVE_CONTROLLER_REF` | defaulted | active-controller lease | `refs/heads/crnd/active-controller` | default singleton pushed ref; do not use host-defined per-work scopes | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
 | `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
@@ -101,6 +105,7 @@ Host config rules:
 5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
 6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
 7. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
+8. Multi-device mode is safe only after all devices run a version that honors the #191 active-controller lease. Mixed old/new versions are not safe for multi-device mode.
 
 ## Skill Root Contract
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/consensus-rnd-cli spawn-codex`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
@@ -214,6 +219,14 @@ The release lifecycle surface consumes decision-artifact-only output through the
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
 
+<a id="named-runtime-exception--active-controller-leaseper-191"></a>
+## Named runtime exception - active controller lease(per #191)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#active-controller-lease-191`. This is the single-active-controller cross-device carveout. Durable source is one JSON blob at `active-controller.json` on `refs/heads/crnd/active-controller`. Lease-only git allowlist: `git fetch origin <lease-ref>`, `git ls-remote --exit-code --heads origin <lease-ref>`, `git rev-parse`, `git show <commit>:active-controller.json`, `git hash-object -w --stdin`, `git mktree`, `git commit-tree`, and `git push --force-with-lease=<old>:<lease-ref>`. These commands may only read/build/publish the singleton lease blob CAS and expose owner/expiry. JSON fields are `owner_device`, `lease_id`, `acquired_at`, `expires_at`, `renewed_at`, `repo`, `reason`, and `source_issue`.
+
+Allowed: read/acquire/renew the singleton lease, expose owner and expiry, and gate controller write paths plus the five restart-helper-managed write daemons. Non-owner devices may run read-only peek/statusline surfaces and `restart-daemons` must write `active_controller=noop:not-owner` without starting write daemons. Worker throughput remains owner-local via `$CODEX_FLOOR`; there is no cross-device floor aggregation.
+
+Forbidden: no worker diff commit, issue/PR create/merge/close/edit, label mutation, tag/release, per-work claim, host-defined lease scope, daemon ownership matrix, active-active scheduler, generic distributed lock library, or generic lifecycle actor. Missing `ACTIVE_CONTROLLER_DEVICE_ID` is the default single-device local-owner noop, not a multi-device claim.
+
 ## Named runtime exception — integration sync daemon(per #53)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
 
@@ -259,6 +272,7 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 New principle: singleton wrapper + actor-owned heartbeat lease; stale means actor loop stopped renewing.
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)且 fingerprint current 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
+Before starting or repairing any of the five write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
@@ -1824,6 +1838,8 @@ For each `bucket: fail` check:
 
 <a id="daemon-command-bodies"></a>
 ## Daemon command bodies
+
+All five daemon command bodies below are active-controller-owner-only in multi-device mode. The owner may start/maintain `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, and `phase9_router_daemon`; a non-owner `restart-daemons` is a noop with `active_controller=noop:not-owner`. Read-only `peek` and `statusline` remain allowed on non-owner devices.
 
 Consensus-rnd Phase integration-sync is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
 

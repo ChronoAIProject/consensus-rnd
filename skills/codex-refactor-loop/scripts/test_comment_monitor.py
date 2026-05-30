@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,44 @@ class CommentMonitorTests(unittest.TestCase):
         pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("new-team-comment 42 maintainer 99", pending)
         self.assertTrue(any("reactions" in " ".join(call) for call in calls))
+
+    # Refactor (impl/issue191-single-active-controller): Old pattern: comment
+    # monitor instances on multiple devices could all mutate GitHub for one
+    # maintainer comment. New principle: non-owner remains read-only/noop.
+    def test_non_owner_team_comment_does_not_react_post_or_mark_seen(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="comment-monitor-write", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=decision):
+            with mock.patch.object(monitor, "gh", side_effect=AssertionError("gh should not be called")):
+                with mock.patch.object(monitor, "gh_api", side_effect=AssertionError("gh api should not be called")):
+                    monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
+
+        self.assertFalse(monitor.seen("99"))
+        self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
+
+    def test_owner_team_comment_keeps_existing_github_write_path(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="comment-monitor-write", lease_id="lease", expires_at="")
+        gh_calls: list[list[str]] = []
+        api_calls: list[list[str]] = []
+
+        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=decision):
+            with mock.patch.object(
+                monitor,
+                "gh",
+                side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", ""),
+            ):
+                with mock.patch.object(
+                    monitor,
+                    "gh_api",
+                    side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", ""),
+                ):
+                    monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
+
+        self.assertTrue(any("reactions" in call[0] for call in api_calls), api_calls)
+        self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
+        self.assertTrue(monitor.seen("99"))
 
     def test_updated_at_unchanged_skips_comments_graphql_query(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
