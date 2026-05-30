@@ -114,6 +114,7 @@ class CommentMonitorTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
                 ownership_cls.return_value.decide.return_value = owned
                 monitor.tick()
+                ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("issue", 42))
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["99"], "seen")
@@ -154,6 +155,7 @@ class CommentMonitorTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
                 ownership_cls.return_value.decide.return_value = decision
                 monitor.tick()
+                ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("issue", 42))
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
         self.assertNotIn("99", state)
@@ -189,6 +191,7 @@ class CommentMonitorTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
                 ownership_cls.return_value.decide.return_value = stale
                 monitor.tick()
+                ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("issue", 42))
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["101"], "seen")
