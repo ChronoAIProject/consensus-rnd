@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -27,6 +28,10 @@ from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProje
 #   skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56;
 #   it has no lifecycle authority and does not bump, commit, push, tag,
 #   publish, merge, close, or mutate issue/PR labels.
+#
+# Refactor (iter217/issue-217):
+#   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+#   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
 
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -485,20 +490,39 @@ class AutoReleaseGate:
         write_json(self.candidate_path, self.release_candidate(decision))
 
     def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:
+        # Refactor (iter217/issue-217):
+        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        now = self.now()
+        required_signals = {
+            name: {
+                "passed": bool(signal.get("passed")) if isinstance(signal, dict) else False,
+                "reason": signal.get("reason") if isinstance(signal, dict) else "invalid_signal",
+                **({"branches": signal["branches"]} if isinstance(signal, dict) and "branches" in signal else {}),
+                **({"checks": signal["checks"]} if isinstance(signal, dict) and "checks" in signal else {}),
+            }
+            for name, signal in (decision.get("signals") if isinstance(decision.get("signals"), dict) else {}).items()
+        }
         return {
-            "schema": "decision-artifact-only/v1",
-            "generated_at": isoformat(self.now()),
+            "schema": "decision-artifact-only/v2",
+            "generated_at": isoformat(now),
+            "expires_at": isoformat(now + timedelta(minutes=120)),
             "decision_artifact": str(self.decision_path.relative_to(self.repo_root)),
             "from_version": decision.get("from_version"),
             "to_version": decision.get("to_version"),
             "bump_type": decision.get("bump_type"),
             "ready": decision.get("ready"),
+            "target_ref": os.environ.get("RELEASE_TARGET_REF", ""),
+            "required_signals": required_signals,
+            "decision_digest": canonical_digest(decision),
+            "publish_preflight": "controller-release-publish-preflight",
             "host_opt_in": "RELEASE_AUTO_ENABLE=true",
-            "lifecycle_owner": "controller-or-release.yml",
+            "lifecycle_owner": "controller",
             "next_step_hint": (
-                "Controller or release.yml may consume this artifact, re-check host opt-in, "
-                "then run the existing version bump/release pipeline. consensus-rnd-cli release-gate "
-                "does not bump, commit, push, tag, publish, merge, or close."
+                "Controller may consume this artifact only through ReleasePublishPreflight, re-check "
+                "host opt-in, target ref, manifests, decision digest, and required checks, then run "
+                "controller-owned release publication. consensus-rnd-cli release-gate does not bump, "
+                "commit, push, tag, publish, merge, or close."
             ),
         }
 
@@ -563,6 +587,11 @@ def blocked_reasons(stability: StabilityResult, interval: dict[str, Any], has_co
     return reasons
 
 
+def canonical_digest(data: Any) -> str:
+    payload = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
 def print_summary(decision: dict[str, Any]) -> None:
     status = "ready" if decision.get("ready") else "blocked"
     print(
@@ -615,7 +644,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(
                 "auto-release dispatch artifact written: "
                 f"{gate.candidate_path.relative_to(repo_root)}; "
-                "controller or release.yml owns bump/commit/push"
+                "controller-owned release publisher owns bump/commit/push/tag/release after preflight"
             )
         else:
             write_json(gate.decision_path, decision)
@@ -635,6 +664,7 @@ __all__ = [
     "StabilityResult",
     "blocked_reasons",
     "bump_semver",
+    "canonical_digest",
     "classify_bump",
     "decide_release_artifact",
     "inject_host_env",

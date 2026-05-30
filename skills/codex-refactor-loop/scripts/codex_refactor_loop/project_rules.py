@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-"""Ensure the host project rules file carries consensus-rnd fixed points."""
+"""Read-only probe for consensus-rnd fixed points in host project rules."""
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import os
 import re
 import sys
-import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -45,39 +46,76 @@ KNOWN_CANONICAL_HASHES = frozenset({sha256_text(OLD_CANONICAL_BODY)})
 
 
 class FixedPointError(Exception):
-    """Raised when the managed block cannot be safely ensured."""
+    """Raised when the managed block cannot be safely inspected."""
 
 
-class ProjectRulesFixedPointEnsurer:
-    # Refactor (iter1/host-claude-md-fixed-points):
-    #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
-    #   foundational fixed points were present, so the loop did not reliably
-    #   load the base theory.
-    #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently writes
-    #   a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
-    #   (consensus:minimal), without overwriting host-owned content.
+@dataclass(frozen=True)
+class ProjectRulesFixedPointReport:
+    """refactor helper, no behavior change: immutable probe result payload."""
+
+    status: str
+    reason: str
+    target: Path
+    target_relative: Path
+    original_text: str
+    proposed_text: str | None = None
+    detail: str = ""
+    artifact: Path | None = None
+
+    @property
+    def is_current(self) -> bool:
+        return self.status == "current"
+
+    @property
+    def needs_patch(self) -> bool:
+        return self.status == "patch-required" and self.proposed_text is not None
+
+
+class ProjectRulesPatchArtifact:
+    # Refactor (iter218/issue-218):
+    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
+    def __init__(self, repo_root: Path, filename: str = "project-rules-fixed-point.patch") -> None:
+        self.repo_root = repo_root
+        self.path = repo_root / ".refactor-loop" / "runs" / filename
+
+    def write(self, report: ProjectRulesFixedPointReport) -> Path:
+        if report.proposed_text is None:
+            raise FixedPointError("patch artifact requires proposed project rules text")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        original_name = str(report.target_relative)
+        updated_name = str(report.target_relative)
+        patch = "".join(
+            difflib.unified_diff(
+                report.original_text.splitlines(keepends=True),
+                report.proposed_text.splitlines(keepends=True),
+                fromfile=f"a/{original_name}",
+                tofile=f"b/{updated_name}",
+            )
+        )
+        self.path.write_text(patch, encoding="utf-8")
+        return self.path
+
+
+class ProjectRulesFixedPointProbe:
+    # Refactor (iter218/issue-218):
+    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
     def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
         self.target = self._resolve_target(project_rules if project_rules else "CLAUDE.md")
+        self.target_relative = self.target.relative_to(self.repo_root)
 
     @classmethod
-    def from_env(cls) -> "ProjectRulesFixedPointEnsurer":
+    def from_env(cls) -> "ProjectRulesFixedPointProbe":
         return cls(os.environ.get("REPO_ROOT", ""), os.environ.get("PROJECT_RULES"))
 
-    def ensure(self) -> str:
-        # Refactor (iter1/host-claude-md-fixed-points):
-        #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
-        #   foundational fixed points were present, so the loop did not
-        #   reliably load the base theory.
-        #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently
-        #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
-        #   (consensus:minimal), without overwriting host-owned content.
+    def inspect(self) -> ProjectRulesFixedPointReport:
+        # Refactor (iter218/issue-218):
+        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
         original = self._read_target()
-        updated = self._updated_text(original)
-        if updated == original:
-            return "already-current"
-        self._atomic_write(updated)
-        return "updated"
+        return self._inspect_text(original)
 
     def _resolve_repo_root(self, repo_root: str) -> Path:
         if not repo_root:
@@ -107,39 +145,62 @@ class ProjectRulesFixedPointEnsurer:
             raise FixedPointError(f"PROJECT_RULES file is empty: {self.target}")
         return text
 
-    def _updated_text(self, text: str) -> str:
-        # Refactor (iter1/host-claude-md-fixed-points):
-        #   Old pattern: host PROJECT_RULES/CLAUDE.md did not guarantee that
-        #   foundational fixed points were present, so the loop did not
-        #   reliably load the base theory.
-        #   New principle: bootstrap ProjectRulesFixedPointEnsurer idempotently
-        #   writes a sentinel-wrapped managed fixed-point block to $PROJECT_RULES
-        #   (consensus:minimal), without overwriting host-owned content.
+    def _inspect_text(self, text: str) -> ProjectRulesFixedPointReport:
+        # Refactor (iter218/issue-218):
+        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
         starts = list(START_RE.finditer(text))
         end_count = text.count(END_MARKER)
         if len(starts) != end_count:
-            raise FixedPointError("managed marker pair is missing or unbalanced")
+            return self._blocked_report(text, "invalid-marker", "managed marker pair is missing or unbalanced")
         if len(starts) > 1:
-            raise FixedPointError("duplicate managed marker blocks are not allowed")
+            return self._blocked_report(text, "invalid-marker", "duplicate managed marker blocks are not allowed")
         if not starts:
-            return text + "\n\n" + self._managed_block()
+            return self._patch_report(text, text + "\n\n" + self._managed_block(), "missing")
 
         start = starts[0]
         end_index = text.find(END_MARKER, start.end())
         if end_index < 0:
-            raise FixedPointError("managed end marker is missing")
+            return self._blocked_report(text, "invalid-marker", "managed end marker is missing")
 
         enclosed = text[start.end() + 1:end_index]
         enclosed_hash = sha256_text(enclosed)
         marker_hash = start.group(1)
         if marker_hash != enclosed_hash:
-            raise FixedPointError("managed block hash mismatch; refusing to overwrite manual edits")
+            return self._blocked_report(text, "tampered", "managed block hash mismatch; refusing to apply repair")
         if enclosed_hash == CANONICAL_HASH:
-            return text
+            return ProjectRulesFixedPointReport(
+                status="current",
+                reason="current",
+                target=self.target,
+                target_relative=self.target_relative,
+                original_text=text,
+            )
         if enclosed_hash not in KNOWN_CANONICAL_HASHES:
-            raise FixedPointError("unknown managed block version; refusing to overwrite")
+            return self._blocked_report(text, "unknown-old", "unknown managed block version; refusing to apply repair")
 
-        return text[: start.start()] + self._managed_block() + text[end_index + len(END_MARKER):]
+        proposed = text[: start.start()] + self._managed_block() + text[end_index + len(END_MARKER):]
+        return self._patch_report(text, proposed, "known-old")
+
+    def _patch_report(self, original: str, proposed: str, reason: str) -> ProjectRulesFixedPointReport:
+        return ProjectRulesFixedPointReport(
+            status="patch-required",
+            reason=reason,
+            target=self.target,
+            target_relative=self.target_relative,
+            original_text=original,
+            proposed_text=proposed,
+        )
+
+    def _blocked_report(self, original: str, reason: str, detail: str) -> ProjectRulesFixedPointReport:
+        return ProjectRulesFixedPointReport(
+            status="blocked",
+            reason=reason,
+            target=self.target,
+            target_relative=self.target_relative,
+            original_text=original,
+            detail=detail,
+        )
 
     def _managed_block(self) -> str:
         return (
@@ -148,28 +209,27 @@ class ProjectRulesFixedPointEnsurer:
             f"{END_MARKER}"
         )
 
-    def _atomic_write(self, text: str) -> None:
-        self.target.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(prefix=f".{self.target.name}.", dir=self.target.parent)
-        tmp_path = Path(tmp_name)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                handle.write(text)
-            os.replace(tmp_path, self.target)
-        finally:
-            if tmp_path.exists():
-                tmp_path.unlink()
-
 
 def main(argv: list[str] | None = None) -> int:
     del argv
     try:
-        status = ProjectRulesFixedPointEnsurer.from_env().ensure()
+        probe = ProjectRulesFixedPointProbe.from_env()
+        report = probe.inspect()
     except FixedPointError as exc:
         sys.stderr.write(f"PROJECT_RULES_FIXED_POINT_ERROR: {exc}\n")
         return 1
-    sys.stdout.write(f"PROJECT_RULES_FIXED_POINT:{status}\n")
-    return 0
+    if report.is_current:
+        sys.stdout.write("PROJECT_RULES_FIXED_POINT:current\n")
+        return 0
+    if report.needs_patch:
+        artifact = ProjectRulesPatchArtifact(probe.repo_root).write(report)
+        relative_artifact = artifact.relative_to(probe.repo_root)
+        sys.stdout.write(
+            f"PROJECT_RULES_FIXED_POINT:patch-required artifact={relative_artifact} reason={report.reason}\n"
+        )
+        return 1
+    sys.stderr.write(f"PROJECT_RULES_FIXED_POINT_ERROR: reason={report.reason} {report.detail}\n")
+    return 1
 
 
 if __name__ == "__main__":

@@ -17,7 +17,9 @@ from . import labels
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .ownership import GitHubWorkOwnership, WorkTarget
+from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .triage import apply_decision, load_triage_apply_config
+from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
 PR_LABELS_REMOVE = (
@@ -40,13 +42,21 @@ class ControllerActions:
     # merge/open/safe-push/apply lifecycle commands as generic callable verbs.
     # New principle: keep these as controller-internal primitives only; callers
     # construct ControllerActions directly and public CLI routing cannot reach them.
+    #
+    # Refactor (iter217/issue-217):
+    #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+    #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         self.integration_branch = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
         self.review_base_branch = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = ["gh", *args]
+        # Refactor (loop/gh-arg-coercion): Old pattern: gh() assumed every arg was
+        # already a str, so an int caller (e.g. a raw PR number via merge_pr) crashed
+        # with AttributeError on full[3].startswith before any gh process ran.
+        # New principle: coerce all args to str at the gh() boundary.
+        full = ["gh", *(str(a) for a in args)]
         if self.ctx.gh_repo_slug:
             insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
             full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
@@ -130,6 +140,20 @@ class ControllerActions:
         if push.stderr:
             sys.stderr.write(push.stderr)
         return push.returncode
+
+    def publish_release_candidate(
+        self,
+        candidate_path: str = ".refactor-loop/state/release-candidate.json",
+        target_ref: str = "",
+    ) -> ReleasePublishResult:
+        # Refactor (iter217/issue-217):
+        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
+        if not target:
+            raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
+        publisher = ReleasePublisher(self.ctx.repo_root)
+        return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         branch = branch or self._current_branch()
@@ -377,6 +401,9 @@ class ControllerActions:
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+        # Refactor (iter219/issue-219):
+        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
         values = dict(os.environ)
         if env:
             values.update(env)
@@ -391,11 +418,24 @@ class ControllerActions:
             "scope_paths": values.get("SCOPE_PATHS", ""),
             "verification_hints": values.get("VERIFICATION_HINTS", ""),
         }
-        template = Path(input_path).read_text(encoding="utf-8")
+        template_path = self._resolve_template_input(input_path)
+        template = template_path.read_text(encoding="utf-8")
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
         rendered = Template(template).safe_substitute(values)
         Path(output_path).write_text(rendered, encoding="utf-8")
+
+    def _resolve_template_input(self, input_path: str) -> Path:
+        if not input_path.startswith("host:"):
+            return Path(input_path)
+        try:
+            spec = load_validated_workflow_spec(self.ctx)
+        except WorkflowSpecError as exc:
+            raise RuntimeError(str(exc)) from exc
+        rel = spec.prompt_binding_path(input_path)
+        if not rel:
+            raise RuntimeError(f"unknown host prompt binding: {input_path}")
+        return self.ctx.repo_root / rel
 
     def _worktree_for_branch(self, branch: str) -> Path | None:
         result = self.git(["worktree", "list", "--porcelain"], check=False)

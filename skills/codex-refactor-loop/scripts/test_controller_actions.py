@@ -20,6 +20,7 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
+from codex_refactor_loop.release.publisher import ReleasePublishResult
 
 
 class ControllerActionsTests(unittest.TestCase):
@@ -346,6 +347,108 @@ class ControllerActionsTests(unittest.TestCase):
         ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
         self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
         record.assert_not_called()
+
+    def test_publish_release_candidate_requires_explicit_or_env_target_ref(self) -> None:
+        with mock.patch.dict("codex_refactor_loop.controller_actions.os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "RELEASE_TARGET_REF is required"):
+                self.actions.publish_release_candidate()
+
+    def test_publish_release_candidate_uses_release_target_ref_env_when_omitted(self) -> None:
+        result = ReleasePublishResult(
+            published=True,
+            reasons=(),
+            tag="v2.0.0",
+            target_ref="env-ref",
+            version="2.0.0",
+            release_url="https://github.test/release/v2.0.0",
+            result_path=self.tmp / ".refactor-loop/state/release-publish-result.json",
+        )
+        publisher = mock.Mock()
+        publisher.publish.return_value = result
+
+        with mock.patch.dict("codex_refactor_loop.controller_actions.os.environ", {"RELEASE_TARGET_REF": "env-ref"}, clear=True):
+            with mock.patch("codex_refactor_loop.controller_actions.ReleasePublisher", return_value=publisher) as publisher_type:
+                actual = self.actions.publish_release_candidate()
+
+        self.assertIs(actual, result)
+        publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
+        publisher.publish.assert_called_once_with(
+            candidate_path=".refactor-loop/state/release-candidate.json",
+            target_ref="env-ref",
+        )
+
+    def test_publish_release_candidate_forwards_explicit_target_ref_and_candidate_path(self) -> None:
+        result = ReleasePublishResult(
+            published=True,
+            reasons=(),
+            tag="v2.0.0",
+            target_ref="explicit-ref",
+            version="2.0.0",
+            release_url="https://github.test/release/v2.0.0",
+            result_path=self.tmp / ".refactor-loop/state/release-publish-result.json",
+        )
+        publisher = mock.Mock()
+        publisher.publish.return_value = result
+
+        with mock.patch.dict("codex_refactor_loop.controller_actions.os.environ", {"RELEASE_TARGET_REF": "env-ref"}, clear=True):
+            with mock.patch("codex_refactor_loop.controller_actions.ReleasePublisher", return_value=publisher) as publisher_type:
+                actual = self.actions.publish_release_candidate(
+                    candidate_path=".refactor-loop/state/custom-candidate.json",
+                    target_ref="explicit-ref",
+                )
+
+        self.assertIs(actual, result)
+        publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
+        publisher.publish.assert_called_once_with(
+            candidate_path=".refactor-loop/state/custom-candidate.json",
+            target_ref="explicit-ref",
+        )
+
+    def write_host_workflow_spec(self, data: dict) -> ControllerActions:
+        (self.tmp / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            env={"REPO_ROOT": str(self.tmp), "GH_REPO_SLUG": "owner/repo", "HOST_WORKFLOW_SPEC": "workflow.json"},
+        )
+        return ControllerActions(ctx)
+
+    def valid_host_prompt_spec(self) -> dict:
+        (self.tmp / "prompts").mkdir(exist_ok=True)
+        (self.tmp / "prompts" / "host-render.md").write_text(
+            "Host ${HOST_NAME} handles {{work_unit_id}} from {{cluster_id}}.\n",
+            encoding="utf-8",
+        )
+        return {"prompt_bindings": {"host:render": "prompts/host-render.md"}}
+
+    def test_render_template_resolves_host_prompt_binding_from_valid_workflow_spec(self) -> None:
+        actions = self.write_host_workflow_spec(self.valid_host_prompt_spec())
+        output = self.tmp / "rendered.md"
+
+        actions.render_template(
+            "host:render",
+            str(output),
+            env={"HOST_NAME": "example-host", "WORK_UNIT_ID": "issue-219", "CLUSTER_ID": "cluster-219"},
+        )
+
+        self.assertEqual(output.read_text(encoding="utf-8"), "Host example-host handles issue-219 from cluster-219.\n")
+
+    def test_render_template_rejects_unknown_host_prompt_binding(self) -> None:
+        actions = self.write_host_workflow_spec(self.valid_host_prompt_spec())
+        output = self.tmp / "rendered.md"
+
+        with self.assertRaisesRegex(RuntimeError, "unknown host prompt binding: host:missing"):
+            actions.render_template("host:missing", str(output))
+
+        self.assertFalse(output.exists())
+
+    def test_render_template_rejects_invalid_host_workflow_spec(self) -> None:
+        actions = self.write_host_workflow_spec({"prompt_bindings": {"host:render": "../outside.md"}})
+        output = self.tmp / "rendered.md"
+
+        with self.assertRaisesRegex(RuntimeError, "prompt binding path must be repo-relative POSIX text"):
+            actions.render_template("host:render", str(output))
+
+        self.assertFalse(output.exists())
 
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):

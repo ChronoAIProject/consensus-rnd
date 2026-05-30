@@ -40,6 +40,10 @@ class LoopPaths:
 class LoopContext:
     """Resolved host repository and skill context.
 
+    Refactor (iter219/issue-219):
+      Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+      New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
+
     Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
     New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
     """
@@ -49,6 +53,7 @@ class LoopContext:
     gh_repo_slug: str | None
     paths: LoopPaths
     host_env: dict[str, str]
+    host_workflow_spec_path: str = ""
     read_only: bool = False
     repo_root_source: str = "env"
 
@@ -87,6 +92,7 @@ class LoopContext:
             gh_repo_slug=slug,
             paths=paths,
             host_env=host_env,
+            host_workflow_spec_path=str(merged.get("HOST_WORKFLOW_SPEC") or ""),
             read_only=read_only,
             repo_root_source=repo_source,
         )

@@ -145,9 +145,9 @@ REQUIRED_CI_MARKERS = (
 
 REQUIRED_RELEASE_MARKERS = (
     "release-required-checks",
-    "workflow_run:",
-    "github.event.workflow_run.head_branch == 'dev'",
-    "github.event.workflow_run.head_sha",
+    "workflow_dispatch:",
+    "contents: read",
+    "bump_version.py --check --read-version",
 )
 
 REQUIRED_RELEASE_PROJECTION_MARKERS = (
@@ -266,6 +266,9 @@ class SkillDriftChecker:
         return self.require_markers(CI_WORKFLOW, REQUIRED_CI_MARKERS, "ci-job")
 
     def release_workflow_required_check_present(self) -> list[Finding]:
+        # Refactor (iter217/issue-217):
+        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
+        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
         findings = self.require_markers(RELEASE_WORKFLOW, REQUIRED_RELEASE_MARKERS, "release-workflow")
         text = self.read(RELEASE_WORKFLOW)
         if "push:" in text:
@@ -276,6 +279,16 @@ class SkillDriftChecker:
                     "release workflow must not trigger directly on push@dev",
                 )
             )
+        executable_text = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for forbidden in ("workflow_run:", "contents: write", "gh release create", "git tag", "steps.mode.outputs.dry_run != 'true'"):
+            if forbidden in executable_text:
+                findings.append(
+                    Finding(
+                        "release-workflow",
+                        str(RELEASE_WORKFLOW),
+                        f"release workflow must not contain lifecycle mutation marker {forbidden}",
+                    )
+                )
         if "checks.listForRef" in text or "const required" in text:
             findings.append(
                 Finding(

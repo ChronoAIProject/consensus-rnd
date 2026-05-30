@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.github_body import render_github_body
-from codex_refactor_loop.triage import ACCEPT_LABELS, TriageApplyConfig, apply_decision
+from codex_refactor_loop.triage import ACCEPT_LABELS, TriageApplyConfig, apply_decision, host_issue_intake_projection
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -210,6 +210,47 @@ class PackageTriageDecisionTests(unittest.TestCase):
         with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             self.assertEqual(apply_decision(self.config, self.decision_path, issue_number=53, verdict="reject"), 2)
         self.assertIn("command-like fields forbidden: close", self.rejected_record().read_text(encoding="utf-8"))
+
+    def test_builtin_manual_issue_decision_contract_unchanged(self) -> None:
+        self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
+        data = json.loads(self.decision_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(data["schema"], "ManualIssueTriageDecision")
+        self.assertEqual(data["lifecycle_owner"], "controller")
+        self.assertFalse(data["lifecycle_authority"])
+        self.assertEqual(data["remove_labels"], [labels.TRIAGE_PENDING])
+        self.assertEqual(data["add_labels"], ACCEPT_LABELS)
+
+    def test_host_issue_intake_requires_host_namespace_and_no_lifecycle_authority(self) -> None:
+        (self.repo / "prompts").mkdir(exist_ok=True)
+        (self.repo / "prompts" / "host.md").write_text("host prompt\n", encoding="utf-8")
+        spec = {
+            "stages": [{"slug": "host:intake", "title": "Intake", "contract": "projection", "detail_anchor": "host-intake"}],
+            "work_unit_kinds": [{"name": "host:kind"}],
+            "prompt_bindings": {"host:prompt": "prompts/host.md"},
+            "issue_intake_mappings": [
+                {
+                    "name": "host:template",
+                    "work_unit_kind": "host:kind",
+                    "producer": "host:github-template",
+                    "stage": "host:intake",
+                    "prompt_binding": "host:prompt",
+                }
+            ],
+        }
+        (self.repo / "workflow.json").write_text(json.dumps(spec), encoding="utf-8")
+        ctx = LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
+
+        projection = host_issue_intake_projection(ctx, "host:template")
+
+        self.assertEqual(projection["producer"], "host:github-template")
+        self.assertEqual(projection["lifecycle_authority"], "false")
+
+        spec["issue_intake_mappings"][0]["producer"] = "manual-issue"
+        (self.repo / "workflow.json").write_text(json.dumps(spec), encoding="utf-8")
+        ctx = LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
+        with self.assertRaisesRegex(Exception, "overwrite built-in|host: namespace"):
+            host_issue_intake_projection(ctx, "host:template")
 
 
 class PackageTriageSourceRegressionTests(unittest.TestCase):

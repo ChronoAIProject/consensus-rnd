@@ -115,7 +115,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         obligations = (
             "source .refactor-loop/host.env",
             "fail closed",
-            "ProjectRulesFixedPointEnsurer",
+            "ProjectRulesFixedPointProbe",
+            "consensus-rnd-cli check-project-rules",
             "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
             "integration branch",
             "ensure labels",
@@ -140,6 +141,30 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
+
+    def test_skill_bootstrap_requires_probe_before_actor_dispatch(self) -> None:
+        # Refactor (iter218/issue-218):
+        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
+        phase0 = section_between(
+            self.skill,
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
+            r"^## Phase Routing$",
+        )
+        required_order = (
+            "ProjectRulesFixedPointProbe",
+            "consensus-rnd-cli check-project-rules",
+            ".refactor-loop/runs/project-rules-fixed-point.patch",
+            "不得派 audit / solver / reviewer / implement actor",
+            "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
+        )
+        cursor = -1
+        for token in required_order:
+            index = phase0.find(token)
+            with self.subTest(token=token):
+                self.assertNotEqual(index, -1)
+                self.assertGreater(index, cursor)
+            cursor = index
 
     def test_wake_source_contract_requires_session_monitor_with_fallback_only(self) -> None:
         wake_row = next(line for line in self.skill.splitlines() if line.startswith("| Wake source |"))
@@ -450,6 +475,28 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for token in forbidden:
             with self.subTest(token=token):
                 self.assertNotIn(token, self.skill)
+
+    def test_spawn_contract_isolates_background_spawns_from_fallible_calls(self) -> None:
+        # Old pattern: a spawn-codex background task batched with a fallible probe
+        # was silently cancelled when the probe exited non-zero (harness cancels
+        # every sibling in a parallel batch on one non-zero exit), leaving the
+        # floor unfilled with no real dispatch.
+        # New principle: each spawn-codex goes in its own tool-call message,
+        # isolated from fallible reads.
+        section = section_between(
+            self.skill,
+            r"^## Spawn Contract$",
+            r"^## ",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "same parallel tool-call batch",
+            "cancels every sibling call in a parallel batch when one of them exits non-zero",
+            "leaves the floor unfilled with no real dispatch",
+            "Dispatch each `spawn-codex` in its own tool-call message",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
     def test_issue205_audit_prompt_fails_closed_on_empty_iteration(self) -> None:
         # Refactor (iter205/issue-205):

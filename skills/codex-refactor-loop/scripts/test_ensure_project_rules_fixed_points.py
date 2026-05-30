@@ -25,54 +25,129 @@ from codex_refactor_loop.project_rules import (
     CANONICAL_HASH,
     END_MARKER,
     OLD_CANONICAL_BODY,
-    ProjectRulesFixedPointEnsurer,
+    ProjectRulesFixedPointProbe,
+    ProjectRulesPatchArtifact,
     START_RE,
     sha256_text,
 )
 
 
 class ProjectRulesFixedPointTests(unittest.TestCase):
+    # Refactor (iter218/issue-218):
+    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="project-rules-test-"))
         self.rules = self.tmp / "CLAUDE.md"
         self.rules.write_text("# Host rules\n", encoding="utf-8")
+        self.artifact = self.tmp / ".refactor-loop" / "runs" / "project-rules-fixed-point.patch"
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
-    def test_ensure_appends_managed_block_and_is_idempotent(self) -> None:
-        ensurer = ProjectRulesFixedPointEnsurer(str(self.tmp))
-        self.assertEqual("updated", ensurer.ensure())
-        text = self.rules.read_text(encoding="utf-8")
-        self.assertIn(CANONICAL_BODY, text)
-        self.assertIn(CANONICAL_HASH, text)
-        self.assertEqual("already-current", ensurer.ensure())
+    def test_probe_current_exits_zero_without_modifying_project_rules(self) -> None:
+        block = self._managed_block(CANONICAL_BODY)
+        self.rules.write_text(f"# Host rules\n\n{block}", encoding="utf-8")
+        before = self.rules.read_bytes()
+        before_mtime = self.rules.stat().st_mtime_ns
 
-    def test_refuses_manual_edit_inside_managed_block(self) -> None:
-        ensurer = ProjectRulesFixedPointEnsurer(str(self.tmp))
-        ensurer.ensure()
-        self.rules.write_text(self.rules.read_text(encoding="utf-8").replace("FI-007 删除优先", "FI-007 edited"), encoding="utf-8")
-        with self.assertRaisesRegex(Exception, "hash mismatch"):
-            ensurer.ensure()
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertTrue(report.is_current)
+        self.assertEqual("current", report.reason)
+        self.assertEqual(before, self.rules.read_bytes())
+        self.assertEqual(before_mtime, self.rules.stat().st_mtime_ns)
+        self.assertFalse(self.artifact.exists())
+
+    def test_probe_missing_block_writes_patch_artifact_and_leaves_target_unchanged(self) -> None:
+        before = self.rules.read_bytes()
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("missing", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        self.assertEqual(self.artifact, artifact)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn("--- a/CLAUDE.md", patch)
+        self.assertIn("+++ b/CLAUDE.md", patch)
+        self.assertIn("+## 共识研发不动点（由 consensus-rnd 管理）", patch)
+        self.assertIn("+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。", patch)
+        self.assertEqual(before, self.rules.read_bytes())
+
+    def test_probe_known_old_block_writes_replacement_patch_without_overwrite(self) -> None:
+        old_text = f"# Host rules\n\n{self._managed_block(OLD_CANONICAL_BODY)}"
+        self.rules.write_text(old_text, encoding="utf-8")
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertTrue(report.needs_patch)
+        self.assertEqual("known-old", report.reason)
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn("- FI-001 AI 产物默认不可信；进入主线前必须经过独立检查。", patch)
+        self.assertIn("+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。", patch)
+        self.assertEqual(old_text, self.rules.read_text(encoding="utf-8"))
+
+    def test_probe_tampered_block_fails_closed_without_apply(self) -> None:
+        self.rules.write_text(f"# Host rules\n\n{self._managed_block(CANONICAL_BODY)}", encoding="utf-8")
+        tampered = self.rules.read_text(encoding="utf-8").replace("FI-007 删除优先", "FI-007 edited")
+        self.rules.write_text(tampered, encoding="utf-8")
+
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+
+        self.assertEqual("blocked", report.status)
+        self.assertEqual("tampered", report.reason)
+        self.assertIn("hash mismatch", report.detail)
+        self.assertIsNone(report.proposed_text)
+        self.assertEqual(tampered, self.rules.read_text(encoding="utf-8"))
+        self.assertFalse(self.artifact.exists())
 
     def test_cli_operation_runs_from_single_entrypoint(self) -> None:
         env = os.environ.copy()
         env["REPO_ROOT"] = str(self.tmp)
         result = subprocess.run(
-            [sys.executable, str(CLI), "ensure-project-rules"],
+            [sys.executable, str(CLI), "check-project-rules"],
             env=env,
             capture_output=True,
             text=True,
             check=False,
         )
-        self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("PROJECT_RULES_FIXED_POINT:updated", result.stdout)
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("PROJECT_RULES_FIXED_POINT:patch-required", result.stdout)
+        self.assertIn("artifact=.refactor-loop/runs/project-rules-fixed-point.patch", result.stdout)
+        self.assertIn("reason=missing", result.stdout)
+        self.assertEqual("# Host rules\n", self.rules.read_text(encoding="utf-8"))
+        self.assertTrue(self.artifact.is_file())
+
+    def test_ensure_project_rules_command_is_removed_and_no_writer_remains(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(CLI), "ensure-project-rules"],
+            env={**os.environ.copy(), "REPO_ROOT": str(self.tmp)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn("unknown command: ensure-project-rules", result.stderr)
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "project_rules.py").read_text(encoding="utf-8")
+        runtime_source = "\n".join(line for line in source.splitlines() if "Refactor (iter218/issue-218)" not in line and "Old pattern:" not in line and "New principle:" not in line)
+        self.assertNotIn("_atomic_write", runtime_source)
+        self.assertNotIn("tempfile", source)
+        self.assertNotIn("os.replace", source)
+        self.assertNotIn("PROJECT_RULES_WRITE_ENABLE", runtime_source)
+        self.assertNotIn("ProjectRulesFixedPointEnsurer", runtime_source)
 
     def test_hash_helpers_are_stable(self) -> None:
         self.assertEqual(CANONICAL_HASH, sha256_text(CANONICAL_BODY))
         self.assertNotEqual(CANONICAL_HASH, sha256_text(OLD_CANONICAL_BODY))
         self.assertRegex(START_RE.pattern, "sha256")
         self.assertIn("consensus-rnd:foundational-invariants:end", END_MARKER)
+
+    def _managed_block(self, body: str) -> str:
+        return (
+            f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={sha256_text(body)} -->\n"
+            f"{body}"
+            f"{END_MARKER}"
+        )
 
 
 class RuntimeShellRemovalSourceTests(unittest.TestCase):

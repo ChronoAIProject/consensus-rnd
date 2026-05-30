@@ -35,6 +35,7 @@ from ..workflow_stages import format_stage
 
 
 ROLES = ("minimal", "structural", "delete")
+JUDGE_ROLE = "judge"
 LIFECYCLE_PREFIXES = (
     "META_JUDGE_DONE:consensus",
     "IMPLEMENT_DONE",
@@ -78,7 +79,7 @@ class Phase9MarkerGrammar:
         return (
             len(parts) >= 3
             and parts[0] == "SOLVER_DONE"
-            and parts[1] in ROLES
+            and bool(cls.ROUTE_TOKEN.match(parts[1]))
             and bool(cls.VERDICT_TOKEN.match(parts[2]))
         )
 
@@ -260,8 +261,8 @@ class Phase9Router:
                     continue
                 role: str | None = identity.actor
                 if marker.startswith("SOLVER_DONE:"):
-                    role = marker.split(":", 2)[1]
-                    if role not in ROLES:
+                    role = self._role_from_solver_marker(marker)
+                    if role not in self._solver_roles():
                         continue
                 markers.append(Marker(marker, log_path, identity.issue, identity.round, role))
         return markers
@@ -366,18 +367,20 @@ class Phase9Router:
     #   narrow fail-closed peer artifact token check on this route; do not add a
     #   standalone evidence file, hash, or lifecycle authority.
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
+        solver_roles = self._solver_roles()
+        judge_role = self._judge_role()
         by_issue_round: dict[tuple[str, int], dict[str, Marker]] = {}
         for marker in markers:
-            if not marker.marker.startswith("SOLVER_DONE:") or marker.role not in ROLES:
+            if not marker.marker.startswith("SOLVER_DONE:") or marker.role not in solver_roles:
                 continue
             by_issue_round.setdefault((marker.issue, marker.round), {})[marker.role] = marker
 
         for (issue, round_no), role_markers in by_issue_round.items():
-            if set(role_markers) != set(ROLES):
+            if set(role_markers) != set(solver_roles):
                 continue
-            key = self._key(issue, round_no, "judge")
-            log_path = self._log_path(issue, round_no, "judge")
-            if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, "judge"):
+            key = self._key(issue, round_no, judge_role)
+            log_path = self._log_path(issue, round_no, judge_role)
+            if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, judge_role):
                 continue
             if not self._ownership_allows_issue(issue, f"{round_no}-judge"):
                 continue
@@ -385,7 +388,7 @@ class Phase9Router:
             if violation is not None:
                 self._append_invalid_triplet_event(issue, round_no, violation)
                 continue
-            prompt = self._write_prompt(issue, round_no, "judge", self._meta_judge_prompt(issue, round_no, role_markers.values()))
+            prompt = self._write_prompt(issue, round_no, judge_role, self._meta_judge_prompt(issue, round_no, role_markers.values()))
             if self._spawn(prompt, log_path):
                 self._append_ledger(
                     key,
@@ -407,14 +410,14 @@ class Phase9Router:
         #   must be strictly greater than the source round (monotonic).
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
-                if marker.role != "judge":
+                if marker.role != self._judge_role():
                     continue
                 target_round = self._round_from_converge(marker.marker)
                 if target_round is None:
                     continue
                 if target_round <= marker.round:
                     continue
-                for role in ROLES:
+                for role in self._solver_roles():
                     key = self._key(marker.issue, target_round, role)
                     log_path = self._log_path(marker.issue, target_round, role)
                     if key in ledger or self._in_flight(log_path):
@@ -433,7 +436,7 @@ class Phase9Router:
                 continue
 
             if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
-                if marker.role != "judge":
+                if marker.role != self._judge_role():
                     continue
                 key = self._key(marker.issue, marker.round, "reflector")
                 log_path = self._log_path(marker.issue, marker.round, "reflector")
@@ -469,14 +472,14 @@ class Phase9Router:
 
     def _directly_handled(self, marker: Marker, ledger: set[str]) -> bool:
         if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
-            if marker.role != "judge":
+            if marker.role != self._judge_role():
                 return False
             target_round = self._round_from_converge(marker.marker)
             if target_round is None or target_round <= marker.round:
                 return False
-            return all(self._key(marker.issue, target_round, role) in ledger for role in ROLES)
+            return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
         if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
-            if marker.role != "judge":
+            if marker.role != self._judge_role():
                 return False
             return self._key(marker.issue, marker.round, "reflector") in ledger
         return False
@@ -490,7 +493,7 @@ class Phase9Router:
         recent: list[set[str]] = []
         for r in range(round_no - 2, round_no + 1):
             verdicts: set[str] = set()
-            for role in ROLES:
+            for role in self._solver_roles():
                 role_verdicts: set[str] = set()
                 for path in self._solver_history_log_paths(issue, r, role):
                     if not self._is_clean_exit(path):
@@ -541,9 +544,9 @@ class Phase9Router:
 
     def _equivalent_actor_log_exists(self, issue: str, round_no: int, actor: str) -> bool:
         paths = [self._log_path(issue, round_no, actor)]
-        if actor in ROLES:
+        if actor in self._solver_roles():
             paths.append(self.logs_dir / f"solver-issue{issue}-r{round_no}-{actor}.log")
-        if actor == "judge":
+        if actor == self._judge_role():
             paths.append(self.logs_dir / f"meta-judge-issue{issue}-r{round_no}.log")
         return any(path.exists() for path in paths)
 
@@ -679,7 +682,7 @@ class Phase9Router:
         marker_lines = "\n".join(
             f"- {m.role}: {self._artifact_path(m.log_path)}" for m in sorted(markers, key=lambda m: m.role or "")
         )
-        evidence_line = f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, 'judge')}"
+        evidence_line = f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, self._judge_role())}"
         return (
             f"# {format_stage('design-consensus')} meta-judge\n\nIssue: #{issue}\nRound: {round_no}\n\n"
             f"Read the three completed solver logs and emit META_JUDGE_DONE.\n\n{marker_lines}\n\n"
@@ -747,7 +750,7 @@ class Phase9Router:
     def _stalled_evidence_lines(self, issue: str, round_no: int) -> list[str]:
         lines = []
         for r in range(round_no - 2, round_no + 1):
-            for role in ROLES:
+            for role in self._solver_roles():
                 paths = " or ".join(self._artifact_path(path) for path in self._solver_history_log_paths(issue, r, role))
                 lines.append(f"- r{r} {role}: {paths}")
         return lines
@@ -784,24 +787,24 @@ class Phase9Router:
             "route": "solver_triplet_to_judge",
             "issue": issue,
             "round": round_no,
-            "target_actor": "judge",
+            "target_actor": self._judge_role(),
             "clean_exit_solver_logs": [
                 {
                     "role": marker.role or "",
                     "log_path": self._artifact_path(marker.log_path),
-                    "dialect": (self._identity_from_path(marker.log_path) or Phase9LogIdentity(issue, round_no, "judge", "phase9")).dialect,
+                    "dialect": (self._identity_from_path(marker.log_path) or Phase9LogIdentity(issue, round_no, self._judge_role(), "phase9")).dialect,
                     "marker": marker.marker,
                 }
                 for marker in sorted_markers
             ],
-            "solver_input_prompts": [self._solver_prompt_record(issue, round_no, role) for role in sorted(ROLES)],
+            "solver_input_prompts": [self._solver_prompt_record(issue, round_no, role) for role in sorted(self._solver_roles())],
             "judge_input_solver_logs": [self._artifact_path(marker.log_path) for marker in sorted_markers],
             "judge_prompt_path": self._artifact_path(judge_prompt),
             "independence_check": "pass",
         }
 
     def _peer_solver_reference_violation(self, issue: str, round_no: int) -> dict[str, str] | None:
-        for role in sorted(ROLES):
+        for role in sorted(self._solver_roles()):
             prompt_path = self._solver_prompt_path(issue, round_no, role)
             try:
                 prompt = prompt_path.read_text(encoding="utf-8")
@@ -809,7 +812,7 @@ class Phase9Router:
                 continue
             except OSError:
                 continue
-            for peer_role in sorted(set(ROLES) - {role}):
+            for peer_role in sorted(set(self._solver_roles()) - {role}):
                 for token in self._peer_solver_reference_tokens(issue, round_no, peer_role):
                     if token in prompt:
                         return {
@@ -853,6 +856,18 @@ class Phase9Router:
 
     def _now(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def _solver_roles(self) -> tuple[str, ...]:
+        # Refactor (iter219/issue-219):
+        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely and keeps the built-in allowlist.
+        return ROLES
+
+    def _judge_role(self) -> str:
+        return JUDGE_ROLE
+
+    def _role_from_solver_marker(self, marker: str) -> str:
+        return marker.split(":", 2)[1]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:

@@ -42,6 +42,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.ownership import GitHubWorkOwnership, OwnershipDecision, STALE_AFTER, WorkTarget
+from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
@@ -131,6 +132,33 @@ def read_host_env(repo_root: Path) -> dict[str, str]:
         key, value = stripped.split("=", 1)
         values[key.strip()] = value.strip().strip("\"'")
     return values
+
+
+def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]], str | None]:
+    # Refactor (iter219/issue-219):
+    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
+    try:
+        ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+        spec = load_validated_workflow_spec(ctx)
+    except WorkflowSpecError as exc:
+        return [], str(exc)
+    except Exception as exc:
+        return [], f"host workflow spec unavailable: {exc}"
+    actions = [
+        {
+            "priority": 7,
+            "kind": "host-workflow-event",
+            "item": event.name,
+            "phase": event.stage,
+            "actor": event.actor,
+            "status": event.status,
+            "route": "host-workflow-status-projection",
+            "no_lifecycle_authority": True,
+        }
+        for event in spec.events
+    ]
+    return actions, None
 
 
 def configured_floor() -> int:
@@ -823,6 +851,22 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(completed_marker_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
+    host_actions, host_spec_error = load_host_workflow_projection(repo_root)
+    if host_spec_error:
+        actions.append(
+            {
+                "priority": 2,
+                "kind": "host-workflow-spec-invalid",
+                "item": None,
+                "phase": "bootstrap",
+                "actor": "controller",
+                "route": "host-workflow-spec",
+                "reason": host_spec_error,
+                "no_lifecycle_authority": True,
+            }
+        )
+    else:
+        actions.extend(host_actions)
     actions.extend(existing_issue_actions(gh_items, repo_root=repo_root))
     actions.sort(key=lambda action: action["priority"])
 
