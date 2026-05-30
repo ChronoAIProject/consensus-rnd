@@ -366,6 +366,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "First-version scope is bounded",
             "not a DAG executor",
             "does not create public marker aliases",
+            "router direct-spawn ignores host `roles`, `dispatch`, and `consensus_policies` completely",
+            "always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -382,6 +384,44 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, workflow_spec)
+
+    def test_phase9_direct_spawn_allowlist_ignores_host_workflow_spec_sources(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        router_section = router[router.index("class Phase9Router") :]
+        heading = "### Consensus-rnd Phase design-consensus router daemon command body"
+        start = self.skill.index(heading)
+        end = self.skill.index("### Daemon vs controller", start)
+        contract_section = self.skill[start:end]
+
+        for token in (
+            "HostWorkflowSpec is not a phase9 direct-spawn authority",
+            "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
+            "must not alter this allowlist or block the built-in router routes",
+            "SOLVER_DONE:<minimal|structural|delete>:*",
+            "round-N minimal/structural/delete solvers",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, contract_section)
+
+        for required in (
+            "ROLES = (\"minimal\", \"structural\", \"delete\")",
+            "JUDGE_ROLE = \"judge\"",
+            "return ROLES",
+            "return JUDGE_ROLE",
+            "Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, router)
+
+        for forbidden in (
+            "load_validated_workflow_spec",
+            "WorkflowSpecError",
+            "workflow_spec",
+            "consensus_policies",
+            "host_workflow_spec_path",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, router_section)
 
     def test_phase9_router_filename_identity_source_regression_keeps_role_markers(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")

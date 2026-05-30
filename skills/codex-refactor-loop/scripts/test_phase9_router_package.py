@@ -73,7 +73,16 @@ class Phase9RouterPackageTests(unittest.TestCase):
                     "marker_families": ["SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED"],
                 }
             ],
+            "dispatch": {
+                "direct_spawn": {
+                    "solver_roles": ["host:a", "host:b", "host:c"],
+                    "judge_role": "host:judge",
+                }
+            },
         }
+        if invalid:
+            data["consensus_policies"][0]["peer_output_isolation"] = False
+            data["roles"][0]["command"] = "gh pr merge 224"
         (self.repo / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
         return LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
 
@@ -177,26 +186,32 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(len(reflector_commands), 1)
         self.assertIn("160-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
-    def test_router_validates_host_policy_without_extending_active_spawn_allowlist(self) -> None:
+    def test_router_ignores_host_policy_roles_and_dispatch_for_active_spawn_allowlist(self) -> None:
         ctx = self.write_host_policy()
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
         for role in ("host:a", "host:b", "host:c"):
             self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
         router.tick()
 
-        self.assertEqual(self.commands, [])
-        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue219-r1-judge.log", " ".join(self.commands[0]))
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["219-1-judge"])
         self.assertEqual(self.pending_events(), "")
 
-    def test_router_fails_closed_on_unknown_policy_or_invalid_prompt_binding(self) -> None:
+    def test_router_does_not_load_or_fail_closed_on_invalid_host_workflow_spec(self) -> None:
         ctx = self.write_host_policy(invalid=True)
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(f"phase9-issue220-r1-{role}.log", f"SOLVER_DONE:{role}:same")
 
         router.tick()
 
-        self.assertEqual(self.commands, [])
-        self.assertIn("host-workflow-spec-invalid", self.pending_events())
-        self.assertIn("peer_output_isolation", self.pending_events())
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue220-r1-judge.log", " ".join(self.commands[0]))
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["220-1-judge"])
+        self.assertEqual(self.pending_events(), "")
 
     def test_package_router_singleton_lock_conflict_fails_before_dispatch(self) -> None:
         for role in ("minimal", "structural", "delete"):

@@ -30,7 +30,6 @@ from typing import Callable, Iterable, Literal, cast
 
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
-from ..workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from ..workflow_stages import format_stage
 
 
@@ -187,12 +186,6 @@ class Phase9Router:
         self.lock_path = self.loop_dir / "phase9-router.lock"
         self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
-        try:
-            self.workflow_spec = load_validated_workflow_spec(ctx)
-            self.workflow_spec_error: str | None = None
-        except WorkflowSpecError as exc:
-            self.workflow_spec = None
-            self.workflow_spec_error = str(exc)
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
         # memory-only dedup was lost on daemon restart, re-emitting historical
         # fallback events and flooding Monitor. New principle: __init__ scans
@@ -204,9 +197,6 @@ class Phase9Router:
         self.loop_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
-        if self.workflow_spec_error is not None:
-            self._append_workflow_spec_invalid_event(self.workflow_spec_error)
-            return
         ledger = self._read_ledger()
         markers = self._collect_markers()
         self._dispatch_solver_triplets(markers, ledger)
@@ -608,24 +598,6 @@ class Phase9Router:
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-triplet-evidence-invalid {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
-    def _append_workflow_spec_invalid_event(self, reason: str) -> None:
-        # Refactor (iter219/issue-219):
-        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-        event_key = "host-workflow-spec-invalid"
-        if event_key in self._fallback_seen:
-            return
-        self._fallback_seen.add(event_key)
-        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
-        event = {
-            "key": event_key,
-            "reason": reason,
-            "dispatched_at": self._now(),
-            "no_lifecycle_authority": True,
-        }
-        with self.pending_events_path.open("a", encoding="utf-8") as pending:
-            pending.write(f"{self._now()} host-workflow-spec-invalid {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
-
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
         command = [
             str(self.spawn_codex),
@@ -840,7 +812,7 @@ class Phase9Router:
     def _solver_roles(self) -> tuple[str, ...]:
         # Refactor (iter219/issue-219):
         #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Router 只用 spec 做 fail-closed validation;active direct-spawn allowlist remains built-in.
+        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely and keeps the built-in allowlist.
         return ROLES
 
     def _judge_role(self) -> str:
