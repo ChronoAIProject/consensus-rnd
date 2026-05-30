@@ -40,6 +40,8 @@ class CommandSpec:
 # forming a generic lifecycle authority surface. New principle: COMMANDS keeps
 # only public non-lifecycle CLI primitives; controller lifecycle actions stay
 # controller-internal, with dev-sync's narrow integration-worktree carveout.
+# Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+# New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
@@ -115,7 +117,11 @@ COMMANDS: dict[str, CommandSpec] = {
     ),
     "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
     "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
-    "ensure-project-rules": CommandSpec(project_rules.main, "ensure host project rules fixed points", ("write-source",)),
+    "check-project-rules": CommandSpec(
+        project_rules.main,
+        "check host project rules fixed points and write patch artifact when needed",
+        ("read-source", "write-artifact"),
+    ),
 }
 
 
