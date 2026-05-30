@@ -101,6 +101,22 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
         self.assertFalse(plan.needs_edit)
         self.assertEqual(tuple(sorted([labels.MANAGED, labels.PHASE_CLOSED, labels.HUMAN_AUTO])), labels_after_plan([labels.MANAGED, labels.PHASE_CLOSED, labels.HUMAN_AUTO], plan))
 
+    def test_existing_merged_phase_is_preserved_as_terminal_evidence(self) -> None:
+        plan = plan_closed_phase_labels(
+            kind="issue",
+            number=18,
+            state="CLOSED",
+            labels=[labels.MANAGED, labels.PHASE_MERGED, labels.HUMAN_AUTO],
+            merged=False,
+            linked_merged=False,
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(labels.PHASE_MERGED, plan.terminal_phase)
+        self.assertFalse(plan.needs_edit)
+        self.assertEqual("existing-merged-evidence", plan.reason)
+
     def test_open_and_unmanaged_items_are_noop(self) -> None:
         self.assertIsNone(
             plan_closed_phase_labels(
