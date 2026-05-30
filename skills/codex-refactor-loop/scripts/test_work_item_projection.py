@@ -45,6 +45,37 @@ class WorkItemProjectionTests(unittest.TestCase):
         self.assertEqual(projection.represented_issue_numbers(), frozenset({239}))
         self.assertEqual([(item.kind, item.number) for item in projection.effective_worker_items()], [("pr", 255)])
 
+    def test_duplicate_open_pr_parent_link_keeps_issue_visible(self) -> None:
+        items = [
+            {
+                "kind": "issue",
+                "number": 239,
+                "labels": (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO),
+            },
+            {
+                "kind": "pr",
+                "number": 255,
+                "labels": (labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO),
+                "body": "## PR\n\nCloses #239\n",
+            },
+            {
+                "kind": "pr",
+                "number": 256,
+                "labels": (labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO),
+                "body": "## PR\n\nCloses #239\n",
+            },
+        ]
+
+        projection = ManagedWorkProjection(items)
+        mismatches = "\n".join(linkage_mismatches(items))
+
+        self.assertIn("issue #239 is closed by multiple open managed PRs (#255,#256)", mismatches)
+        self.assertNotIn(239, projection.represented_issue_numbers())
+        self.assertEqual(
+            [(item.kind, item.number) for item in projection.effective_worker_items()],
+            [("issue", 239), ("pr", 255), ("pr", 256)],
+        )
+
     def test_linkage_mismatch_reports_missing_multiple_and_merged_links(self) -> None:
         items = [
             {
