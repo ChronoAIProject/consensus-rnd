@@ -26,6 +26,7 @@ TARGET_ANCHORS = {
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
+    "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
 }
 
 REQUIRED_FIELDS = (
@@ -194,6 +195,37 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
+
+    def test_phase9_router_open_state_gate_authorizes_only_state_read(self) -> None:
+        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's new source issue state read was absent from the mechanical runtime-exception mirror. New: source-regression locks the exact state-only read and lifecycle denials in both mirror and SKILL.
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+
+        for token in (
+            "`gh issue view <N> --json state`",
+            "state-only",
+            "`read-gh`",
+            "source-OPEN gate",
+            "phase9-source-not-open",
+            "phase9-source-state-unavailable",
+            "test_phase9_router_open_state_gate.py",
+            "test_cli_command_router.py",
+            "test_skill_reference_anchors.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
+                self.assertIn(token, self.skill)
+        for forbidden in (
+            "gh issue close",
+            "gh issue edit",
+            "gh label",
+            "gh pr merge",
+            "gh release",
+            "label lifecycle",
+            "issue close",
+            "PR merge",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
 
 
 if __name__ == "__main__":

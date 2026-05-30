@@ -97,3 +97,16 @@ schema, or source of new authority. The executable contract remains in
 - forbidden: no codex spawn, commit, push, merge, label, archive, index, new daemon, issue lifecycle, PR lifecycle, tag, release, wrapper sidecar heartbeat writer, or generic lifecycle authority.
 - verification: `test_restart_daemons.py`, `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
+
+<a id="phase9-router-open-state-gate-229"></a>
+## phase9-router-open-state-gate-229
+
+- surface: `consensus-rnd-cli phase9-router`
+- source_issue: `#229`
+- source_round: `phase9-router source-OPEN gate`
+- source_marker: `phase9-router source issue state gate`
+- skill_anchor: `#consensus-rnd-phase-design-consensus-router-daemon-command-body`
+- allowed: read clean-exit logs and the private router ledger; run the state-only source-OPEN gate read `gh issue view <N> --json state` with optional `--repo <owner/repo>` from host GitHub context; append existing-format phase9-router-fallback pending events with reasons `phase9-source-not-open` or `phase9-source-state-unavailable`; write router prompts, append the private dispatch ledger, and spawn only the built-in phase9 direct routes.
+- forbidden: no gh issue close, gh issue edit, gh label, gh pr merge, gh release, GitHub lifecycle mutation, issue close, PR merge, label lifecycle, git, commit, push, tag, release, or generic lifecycle authority.
+- verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This mirror records only the #229 state-only `read-gh` source-OPEN gate and does not widen phase9-router beyond the named direct-spawn allowlist or grant lifecycle authority.

@@ -290,6 +290,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
+        self.assertIn("`gh issue view <N> --json state`", self.skill)
+        self.assertIn("state-only", self.skill)
+        self.assertIn("phase9-source-not-open", self.skill)
+        self.assertIn("phase9-source-state-unavailable", self.skill)
+        self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
