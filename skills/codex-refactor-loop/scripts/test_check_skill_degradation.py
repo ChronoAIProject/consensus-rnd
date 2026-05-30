@@ -68,6 +68,23 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.assertIn("not-source-repo", result.stdout)
         self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
 
+    def test_static_checker_discovers_plugin_host_root_as_not_source_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static"],
+                cwd=host,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not-source-repo", result.stdout)
+        self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
+
     def test_static_checker_fails_closed_for_damaged_source_repo_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
@@ -76,6 +93,24 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
 
             result = subprocess.run(
                 [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--repo-root", str(repo)],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("required-file: skills/codex-refactor-loop", result.stdout)
+        self.assertNotIn("not-source-repo", result.stdout)
+
+    def test_static_checker_discovered_source_repo_candidate_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / ".version-bump.json").write_text('{"files": []}\n', encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static"],
                 cwd=repo,
                 text=True,
                 capture_output=True,
