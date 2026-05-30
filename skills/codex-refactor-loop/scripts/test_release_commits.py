@@ -61,7 +61,7 @@ def commit(repo: Path, message: str, body: str = "") -> str:
     return git_ok(repo, "rev-parse", "HEAD")
 
 
-def init_repo() -> tempfile.TemporaryDirectory[str]:
+def init_repo(tag_release: bool = True) -> tempfile.TemporaryDirectory[str]:
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name) / "repo"
     repo.mkdir()
@@ -69,8 +69,18 @@ def init_repo() -> tempfile.TemporaryDirectory[str]:
     (repo / "file.txt").write_text("base\n", encoding="utf-8")
     git_ok(repo, "add", ".")
     git_ok(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "chore: base")
-    git_ok(repo, "tag", "v1.0.0")
+    if tag_release:
+        git_ok(repo, "tag", "v1.0.0")
     return tmp
+
+
+def write_stale_release_commits(repo: Path) -> tuple[Path, dict[str, object]]:
+    # Refactor (fix/pr236-failclosed-coverage): Old pattern: release-commits failure coverage only exercised invalid target refs. New principle: producer tests exercise each fail-closed git branch with stale state already present.
+    fixture_path = repo / commits.RELEASE_COMMITS_RELATIVE_PATH
+    fixture = {"commits": [{"sha": "fixture", "subject": "fix: keep fixture", "body": ""}]}
+    fixture_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+    return fixture_path, fixture
 
 
 def add_origin_ref(repo: Path, branch: str = "dev") -> None:
@@ -135,16 +145,83 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_without_overwriting_fixture(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
-            fixture_path = repo / ".refactor-loop/state/release-commits.json"
-            fixture = {"commits": [{"sha": "fixture", "subject": "fix: keep fixture", "body": ""}]}
-            fixture_path.parent.mkdir(parents=True, exist_ok=True)
-            fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
+            fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--target-ref", "missing-ref", "--no-fetch-tags")
 
             self.assertEqual(1, result.returncode)
             self.assertEqual(fixture, read_json(fixture_path))
             self.assertIn("target ref does not exist", result.stderr)
+
+    def test_release_commits_cli_fails_closed_without_latest_release_tag(self) -> None:
+        with init_repo(tag_release=False) as tmp:
+            repo = Path(tmp) / "repo"
+            fixture_path, fixture = write_stale_release_commits(repo)
+
+            result = run_cli(repo, "release-commits", "--target-ref", "HEAD", "--no-fetch-tags")
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(fixture, read_json(fixture_path))
+            self.assertIn("no latest release tag found", result.stderr)
+
+    def test_release_commits_cli_fails_closed_when_tag_fetch_fails(self) -> None:
+        with init_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            fixture_path, fixture = write_stale_release_commits(repo)
+
+            result = run_cli(repo, "release-commits", "--target-ref", "HEAD")
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(fixture, read_json(fixture_path))
+            self.assertIn("origin", result.stderr)
+
+    def test_release_commits_cli_fails_closed_when_git_log_fails(self) -> None:
+        with init_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            fixture_path, fixture = write_stale_release_commits(repo)
+
+            result = run_cli(repo, "release-commits", "--target-ref", "HEAD", "--since-ref", "missing-release-tag", "--no-fetch-tags")
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(fixture, read_json(fixture_path))
+            self.assertIn("missing-release-tag..HEAD", result.stderr)
+
+    def test_release_commits_cli_uses_manifest_version_tag_when_describe_finds_no_tag(self) -> None:
+        with init_repo(tag_release=False) as tmp:
+            repo = Path(tmp) / "repo"
+            (repo / "package.json").write_text(json.dumps({"version": "2.0.0"}), encoding="utf-8")
+            (repo / ".version-bump.json").write_text(
+                json.dumps({"files": [{"path": "package.json", "field": "version"}]}),
+                encoding="utf-8",
+            )
+            git_ok(repo, "add", ".")
+            git_ok(repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "chore: add version manifest")
+            unrelated_tree = git_ok(repo, "rev-parse", "HEAD^{tree}")
+            unrelated_release = git_ok(
+                repo,
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.com",
+                "commit-tree",
+                unrelated_tree,
+                "-m",
+                "release anchor",
+            )
+            git_ok(repo, "tag", "v2.0.0", unrelated_release)
+            self.assertNotEqual(0, git(repo, "describe", "--tags", "--abbrev=0").returncode)
+            feature_sha = commit(repo, "feat: fallback release")
+
+            result = run_cli(repo, "release-commits", "--target-ref", "HEAD", "--no-fetch-tags")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            data = read_json(repo / ".refactor-loop/state/release-commits.json")
+            self.assertIsInstance(data, dict)
+            assert isinstance(data, dict)
+            self.assertIn(
+                {"sha": feature_sha, "subject": "feat: fallback release", "body": ""},
+                data["commits"],
+            )
 
     def test_release_gate_cli_does_not_rewrite_release_commits_artifact(self) -> None:
         with init_repo() as tmp:
