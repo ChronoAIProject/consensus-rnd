@@ -384,17 +384,18 @@ class WorkflowInvariantValidator:
         pure = PurePosixPath(text)
         if not text or pure.is_absolute() or "\\" in text or ".." in pure.parts:
             raise WorkflowSpecError(f"{label} must be repo-relative POSIX text")
-        path = (self.repo_root / Path(*pure.parts)).resolve()
-        try:
-            path.relative_to(self.repo_root)
-        except ValueError as exc:
-            raise WorkflowSpecError(f"{label} escapes REPO_ROOT") from exc
-        if path.is_symlink():
-            target = path.resolve()
+        raw_path = self.repo_root / Path(*pure.parts)
+        if raw_path.is_symlink():
+            target = raw_path.resolve()
             try:
                 target.relative_to(self.repo_root)
             except ValueError as exc:
                 raise WorkflowSpecError(f"{label} symlink escapes REPO_ROOT") from exc
+        path = raw_path.resolve()
+        try:
+            path.relative_to(self.repo_root)
+        except ValueError as exc:
+            raise WorkflowSpecError(f"{label} escapes REPO_ROOT") from exc
         if not path.is_file():
             raise WorkflowSpecError(f"{label} does not exist: {text}")
         return pure.as_posix()
@@ -492,18 +493,19 @@ def _repo_relative_path(repo_root: Path, text: str, label: str) -> Path:
     pure = PurePosixPath(text)
     if not text or pure.is_absolute() or "\\" in text or ".." in pure.parts:
         raise WorkflowSpecError(f"{label} must be repo-relative POSIX text")
-    path = (Path(repo_root) / Path(*pure.parts)).resolve()
     repo = Path(repo_root).resolve()
-    try:
-        path.relative_to(repo)
-    except ValueError as exc:
-        raise WorkflowSpecError(f"{label} escapes REPO_ROOT") from exc
-    if path.is_symlink():
-        target = path.resolve()
+    raw_path = repo / Path(*pure.parts)
+    if raw_path.is_symlink():
+        target = raw_path.resolve()
         try:
             target.relative_to(repo)
         except ValueError as exc:
             raise WorkflowSpecError(f"{label} symlink escapes REPO_ROOT") from exc
+    path = raw_path.resolve()
+    try:
+        path.relative_to(repo)
+    except ValueError as exc:
+        raise WorkflowSpecError(f"{label} escapes REPO_ROOT") from exc
     if not path.is_file():
         raise WorkflowSpecError(f"{label} does not exist: {text}")
     return path

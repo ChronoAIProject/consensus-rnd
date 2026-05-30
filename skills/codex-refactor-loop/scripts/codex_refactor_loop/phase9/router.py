@@ -61,7 +61,7 @@ class Phase9MarkerGrammar:
     #   and converge dispatches fell back to the controller.
     #   New principle: route-specific marker grammar keeps non-ASCII bodies
     #   valid for route markers without adding a design-consensus round projection layer.
-    ROUTE_TOKEN = re.compile(r"^(?:host:[a-z][a-z0-9]*(?:-[a-z0-9]+)*|[A-Za-z0-9_./-]+)$")
+    ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     VERDICT_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     CONVERGE_RE = re.compile(r"^META_JUDGE_DONE:converge:round-(\d+)(?::.*)?$")
 
@@ -75,11 +75,7 @@ class Phase9MarkerGrammar:
 
     @classmethod
     def is_solver_done(cls, marker: str) -> bool:
-        if marker.startswith("SOLVER_DONE:host:"):
-            host_parts = marker.split(":", 4)
-            parts = ("SOLVER_DONE", f"host:{host_parts[2]}", host_parts[3] if len(host_parts) > 3 else "")
-        else:
-            parts = marker.split(":", 3)
+        parts = marker.split(":", 3)
         return (
             len(parts) >= 3
             and parts[0] == "SOLVER_DONE"
@@ -119,17 +115,17 @@ class Marker:
 class Phase9LogIdentity:
     issue: str
     round: int
-    actor: str
+    actor: Literal["minimal", "structural", "delete", "judge", "reflector"]
     dialect: Literal["phase9", "solver", "meta-judge"]
 
 
 PHASE9_LOG_RE = re.compile(
     r"^phase9-issue(?P<issue>\d+)-r(?P<round>\d+)-"
-    r"(?P<actor>minimal|structural|delete|judge|reflector|host:[a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.log$"
+    r"(?P<actor>minimal|structural|delete|judge|reflector)\.log$"
 )
 SOLVER_LOG_RE = re.compile(
     r"^solver-issue(?P<issue>\d+)-r(?P<round>\d+)-"
-    r"(?P<actor>minimal|structural|delete|host:[a-z][a-z0-9]*(?:-[a-z0-9]+)*)\.log$"
+    r"(?P<actor>minimal|structural|delete)\.log$"
 )
 META_JUDGE_LOG_RE = re.compile(r"^meta-judge-issue(?P<issue>\d+)-r(?P<round>\d+)\.log$")
 
@@ -533,9 +529,6 @@ class Phase9Router:
         return markers
 
     def _solver_verdict_text(self, marker: str) -> str:
-        if marker.startswith("SOLVER_DONE:host:"):
-            parts = marker.split(":", 4)
-            return parts[3] if len(parts) >= 4 else marker
         parts = marker.split(":", 3)
         return parts[2] if len(parts) >= 3 else marker
 
@@ -847,26 +840,13 @@ class Phase9Router:
     def _solver_roles(self) -> tuple[str, ...]:
         # Refactor (iter219/issue-219):
         #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-        if self.workflow_spec is None:
-            return ROLES
-        for policy in self.workflow_spec.consensus_policies:
-            if policy.name != "design-consensus":
-                return policy.solver_roles
+        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Router 只用 spec 做 fail-closed validation;active direct-spawn allowlist remains built-in.
         return ROLES
 
     def _judge_role(self) -> str:
-        if self.workflow_spec is None:
-            return JUDGE_ROLE
-        for policy in self.workflow_spec.consensus_policies:
-            if policy.name != "design-consensus":
-                return policy.judge_role
         return JUDGE_ROLE
 
     def _role_from_solver_marker(self, marker: str) -> str:
-        if marker.startswith("SOLVER_DONE:host:"):
-            parts = marker.split(":", 4)
-            return f"host:{parts[2]}" if len(parts) >= 3 else ""
         return marker.split(":", 2)[1]
 
 

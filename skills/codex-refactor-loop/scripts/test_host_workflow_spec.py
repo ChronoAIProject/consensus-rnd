@@ -112,6 +112,22 @@ class HostWorkflowSpecTests(unittest.TestCase):
         with self.assertRaisesRegex(WorkflowSpecError, "repo-relative"):
             load_validated_workflow_spec(self.ctx(self.write_spec(data)))
 
+        outside = Path(self.tmp.name).parent / "outside-host-prompt.md"
+        outside.write_text("outside\n", encoding="utf-8")
+        link = self.repo / "prompts" / "outside-link.md"
+        link.symlink_to(outside)
+        data = self.valid_spec()
+        data["prompt_bindings"]["host:solver"] = "prompts/outside-link.md"
+        with self.assertRaisesRegex(WorkflowSpecError, "symlink escapes REPO_ROOT"):
+            load_validated_workflow_spec(self.ctx(self.write_spec(data)))
+
+        outside_spec = Path(self.tmp.name).parent / "outside-workflow.json"
+        outside_spec.write_text(json.dumps(self.valid_spec()), encoding="utf-8")
+        spec_link = self.repo / "workflow-link.json"
+        spec_link.symlink_to(outside_spec)
+        with self.assertRaisesRegex(WorkflowSpecError, "symlink escapes REPO_ROOT"):
+            load_validated_workflow_spec(self.ctx("workflow-link.json"))
+
     def test_spec_rejects_reserved_producers_stages_markers_and_cluster_alias(self) -> None:
         cases = []
         data = self.valid_spec()

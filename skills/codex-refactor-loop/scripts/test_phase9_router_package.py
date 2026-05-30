@@ -177,16 +177,16 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(len(reflector_commands), 1)
         self.assertIn("160-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
-    def test_router_dispatches_validated_host_solver_roles_without_peer_prompt_leak(self) -> None:
+    def test_router_validates_host_policy_without_extending_active_spawn_allowlist(self) -> None:
         ctx = self.write_host_policy()
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
         for role in ("host:a", "host:b", "host:c"):
             self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
         router.tick()
 
-        self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue219-r1-host:judge.log", " ".join(self.commands[0]))
-        self.assertEqual([entry["target_actor"] for entry in self.ledger_entries()], ["host:judge"])
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
 
     def test_router_fails_closed_on_unknown_policy_or_invalid_prompt_binding(self) -> None:
         ctx = self.write_host_policy(invalid=True)
@@ -229,6 +229,8 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "meta-judge-issue100-r3-minimal.log",
             "issue100-r3-minimal.log",
             "phase9-issue100-r3-architect.log",
+            "phase9-issue100-r3-host:a.log",
+            "solver-issue100-r3-host:a.log",
             "phase9_issue100_r3_minimal.log",
         ):
             with self.subTest(name=name):
