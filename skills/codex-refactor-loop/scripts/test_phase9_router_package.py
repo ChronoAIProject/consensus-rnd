@@ -14,7 +14,12 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.phase9.router import Phase9Router, main, parse_phase9_log_identity
+from codex_refactor_loop.phase9.router import (
+    Phase9Router,
+    Phase9SourceIssueDecision,
+    main,
+    parse_phase9_log_identity,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +34,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.commands: list[list[str]] = []
         self.ctx = LoopContext.load(repo_root=self.repo)
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
+        self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -48,6 +54,9 @@ class Phase9RouterPackageTests(unittest.TestCase):
     def pending_events(self) -> str:
         path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def open_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
+        return Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")
 
     def write_host_policy(self, *, invalid: bool = False) -> LoopContext:
         (self.repo / "prompts").mkdir(exist_ok=True)
@@ -176,6 +185,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
 
         self.router.tick()
         fresh_router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
+        fresh_router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         fresh_router.tick()
 
         self.assertEqual(self.commands, [])
@@ -205,6 +215,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
     def test_router_ignores_host_policy_roles_and_dispatch_for_active_spawn_allowlist(self) -> None:
         ctx = self.write_host_policy()
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
+        router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         for role in ("host:a", "host:b", "host:c"):
             self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
         router.tick()
@@ -225,6 +236,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
     def test_router_does_not_load_or_fail_closed_on_invalid_host_workflow_spec(self) -> None:
         ctx = self.write_host_policy(invalid=True)
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
+        router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         for role in ("minimal", "structural", "delete"):
             self.write_log(f"phase9-issue220-r1-{role}.log", f"SOLVER_DONE:{role}:same")
 
@@ -335,7 +347,12 @@ class Phase9RouterPackageTests(unittest.TestCase):
             self.write_log(f"phase9-issue160-r5-{role}.log", f"SOLVER_DONE:{role}:same:summary")
         commands: list[list[str]] = []
 
-        exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
+        with mock.patch.object(
+            Phase9Router,
+            "_read_source_issue_decision",
+            return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
+        ):
+            exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(commands), 1)

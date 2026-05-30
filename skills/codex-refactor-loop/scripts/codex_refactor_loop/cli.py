@@ -94,7 +94,8 @@ COMMANDS: dict[str, CommandSpec] = {
     "phase9-router": CommandSpec(
         phase9_router_main,
         "compatibility alias for the Python design-consensus router",
-        ("read-log", "write-event", "write-artifact", "spawn"),
+        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's public CommandSpec omitted the state-only GitHub read used by the source-OPEN gate. New: include read-gh in the closed-token authority tuple while keeping lifecycle mutation tokens absent.
+        ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(
         release_gate_main,

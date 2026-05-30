@@ -143,6 +143,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertIn("compatibility alias", COMMANDS["phase9-router"].description)
         self.assertIn("design-consensus router", COMMANDS["phase9-router"].description)
 
+    def test_phase9_router_declares_state_only_read_gh_authority_without_lifecycle_tokens(self) -> None:
+        # Refactor (fix/pr245-router-authority-anchor): Old: the CLI authority source did not expose phase9-router's source-OPEN GitHub state read. New: lock the read-gh token while preserving the no-lifecycle daemon boundary.
+        self.assertEqual(
+            ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
+            COMMANDS["phase9-router"].authority,
+        )
+        self.assertFalse(set(COMMANDS["phase9-router"].authority) & LIFECYCLE_TOKENS)
+
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
             [sys.executable, str(CLI), "does-not-exist"],
