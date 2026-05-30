@@ -23,6 +23,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
 from codex_refactor_loop.monitors import concurrency
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 
 
 class PackageConcurrencyMonitorTests(unittest.TestCase):
@@ -131,14 +132,16 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
             calls.append(cmd)
             return object()
 
+        owned = OwnershipDecision(True, "owned", WorkTarget("pr", 160), "alice", "alice", 1.0)
         with mock.patch.object(concurrency.subprocess, "Popen", side_effect=fake_popen):
-            with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
-                with mock.patch.object(
-                    self.monitor,
-                    "list_auto_loop_issues",
-                    return_value=[{"number": 160, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
-                ):
-                    self.monitor.tick()
+            with mock.patch.object(self.monitor, "dispatch_ownership_decision", return_value=owned):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
+                    with mock.patch.object(
+                        self.monitor,
+                        "list_auto_loop_issues",
+                        return_value=[{"number": 160, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                    ):
+                        self.monitor.tick()
 
         self.assertEqual(len(calls), 2)
         alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")

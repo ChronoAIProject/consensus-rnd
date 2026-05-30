@@ -75,6 +75,17 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 f"SOLVER_DONE:{role}:{verdict}:summary",
             )
 
+    def enable_github_repo(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
+        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+
+    def write_stalled_ready_logs(self, issue: int, round_no: int = 3) -> None:
+        for current_round in range(round_no - 2, round_no + 1):
+            self.solver_triplet(issue=issue, round_no=current_round, verdict="same")
+        for current_round in range(round_no - 2, round_no):
+            self.write_ledger_key(f"{issue}-{current_round}-judge")
+        self.write_log(f"phase9-issue{issue}-r{round_no}-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+
     def test_phase9_router_tail_read_bounds_io_to_last_kb(self) -> None:
         # Refactor (iter5/issue122-phase9-tail-perf): direct behavior test for
         # _read_tail_lines. Build a log far larger than TAIL_READ_BYTES, write
@@ -227,6 +238,120 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         entries = self.ledger_entries()
         self.assertEqual([entry["key"] for entry in entries], ["38-4-judge-ownership-notice-failed"])
         self.assertEqual(entries[0]["ownership"], "stale-takeover")
+
+    def test_phase9_router_converge_unknown_ownership_ledgers_route_specific_skips(self) -> None:
+        self.enable_github_repo()
+        self.write_log("phase9-issue40-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+        unknown = OwnershipDecision(False, "unknown-current-login", WorkTarget("issue", 40))
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = unknown
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertEqual(
+            sorted(entry["key"] for entry in entries),
+            [
+                "40-5-delete-ownership-skip",
+                "40-5-minimal-ownership-skip",
+                "40-5-structural-ownership-skip",
+            ],
+        )
+        self.assertEqual({entry["route"] for entry in entries}, {"5-minimal", "5-structural", "5-delete"})
+        self.assertEqual({entry["ownership"] for entry in entries}, {"unknown-current-login"})
+
+    def test_phase9_router_converge_stale_ownership_posts_notice_before_solver_dispatch(self) -> None:
+        self.enable_github_repo()
+        self.write_log("phase9-issue41-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 41), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.side_effect = lambda decision: self.commands.append(["post_takeover_notice"]) or True
+            self.router.tick()
+
+        ownership_cls.return_value.post_takeover_notice.assert_any_call(stale)
+        notice_indexes = [index for index, command in enumerate(self.commands) if command == ["post_takeover_notice"]]
+        spawn_indexes = [index for index, command in enumerate(self.commands) if "spawn-codex" in command]
+        self.assertEqual(len(notice_indexes), 3)
+        self.assertEqual(len(spawn_indexes), 3)
+        self.assertTrue(all(notice < spawn for notice, spawn in zip(notice_indexes, spawn_indexes)))
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["41-5-delete", "41-5-minimal", "41-5-structural"],
+        )
+
+    def test_phase9_router_converge_stale_notice_failure_blocks_solver_dispatch(self) -> None:
+        self.enable_github_repo()
+        self.write_log("phase9-issue42-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 42), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = False
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertEqual(
+            sorted(entry["key"] for entry in entries),
+            [
+                "42-5-delete-ownership-notice-failed",
+                "42-5-minimal-ownership-notice-failed",
+                "42-5-structural-ownership-notice-failed",
+            ],
+        )
+        self.assertEqual({entry["ownership"] for entry in entries}, {"stale-takeover"})
+
+    def test_phase9_router_stalled_unknown_ownership_ledgers_reflector_skip(self) -> None:
+        self.enable_github_repo()
+        self.write_stalled_ready_logs(issue=43)
+        unknown = OwnershipDecision(False, "unknown-current-login", WorkTarget("issue", 43))
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = unknown
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertIn("43-3-reflector-ownership-skip", [entry["key"] for entry in entries])
+        skip = next(entry for entry in entries if entry["key"] == "43-3-reflector-ownership-skip")
+        self.assertEqual(skip["route"], "3-reflector")
+        self.assertEqual(skip["ownership"], "unknown-current-login")
+
+    def test_phase9_router_stalled_stale_ownership_posts_notice_before_reflector_dispatch(self) -> None:
+        self.enable_github_repo()
+        self.write_stalled_ready_logs(issue=44)
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 44), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.side_effect = lambda decision: self.commands.append(["post_takeover_notice"]) or True
+            self.router.tick()
+
+        ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
+        notice_index = self.commands.index(["post_takeover_notice"])
+        reflector_index = next(index for index, command in enumerate(self.commands) if "phase9-issue44-r3-reflector.log" in " ".join(command))
+        self.assertLess(notice_index, reflector_index)
+        self.assertIn("44-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_stalled_stale_notice_failure_blocks_reflector_dispatch(self) -> None:
+        self.enable_github_repo()
+        self.write_stalled_ready_logs(issue=45)
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 45), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = False
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertIn("45-3-reflector-ownership-notice-failed", [entry["key"] for entry in entries])
+        failure = next(entry for entry in entries if entry["key"] == "45-3-reflector-ownership-notice-failed")
+        self.assertEqual(failure["route"], "3-reflector")
+        self.assertEqual(failure["ownership"], "stale-takeover")
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)

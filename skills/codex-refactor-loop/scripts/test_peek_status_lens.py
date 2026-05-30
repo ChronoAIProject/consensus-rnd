@@ -131,7 +131,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_UNPUSHED:-}" == "1" ]]; then
-                    printf '[{"number":%s,"title":"stub PR","headRefName":"refactor/iter%s-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\\n' "$pr" "$pr"
+                    printf '[{"number":%s,"title":"stub PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"refactor/iter%s-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\\n' "$pr" "$pr"
                     exit 0
                   fi
                   printf '[{"number":%s,"title":"stub PR","labels":[]}]\\n' "$pr"
@@ -147,9 +147,15 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 if [[ "$1 $2" == "pr view" ]]; then
                   if [[ "$args" == *"--json comments"* ]]; then
                     printf '{"comments":[]}\\n'
+                  elif [[ "$args" == *"--json author,updatedAt"* ]]; then
+                    printf '{"author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z"}\\n'
                   else
                     printf 'CLEAN\\n'
                   fi
+                  exit 0
+                fi
+                if [[ "$1 $2" == "api user" ]]; then
+                  printf '{"login":"alice"}\\n'
                   exit 0
                 fi
                 printf '[]\\n'

@@ -162,7 +162,7 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertFalse(any("reactions" in " ".join(call) for call in calls))
         self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
 
-    def test_team_comment_stale_takeover_still_reacts(self) -> None:
+    def test_team_comment_stale_takeover_posts_notice_before_reacting(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         calls: list[list[str]] = []
         stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 42), "other", "maintainer", 4.0)
@@ -190,14 +190,52 @@ class CommentMonitorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
             with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
                 ownership_cls.return_value.decide.return_value = stale
+                ownership_cls.return_value.post_takeover_notice.side_effect = lambda decision: calls.append(["post_takeover_notice"]) or True
                 monitor.tick()
                 ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("issue", 42))
+                ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["101"], "seen")
         pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("new-team-comment 42 maintainer 101", pending)
         self.assertTrue(any("reactions" in " ".join(call) for call in calls))
+        notice_index = calls.index(["post_takeover_notice"])
+        reaction_index = next(index for index, call in enumerate(calls) if "reactions" in " ".join(call))
+        self.assertLess(notice_index, reaction_index)
+
+    def test_team_comment_stale_takeover_notice_failure_fails_closed(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        calls: list[list[str]] = []
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 42), "other", "maintainer", 4.0)
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            calls.append(list(command))
+            text = " ".join(command)
+            if "issue list" in text:
+                return mock.Mock(returncode=0, stdout="42\n", stderr="")
+            if "pr list" in text:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if "issues/42/comments" in text:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"id": 101, "author": "maintainer", "body": "stale check", "created_at": "2026-05-29T00:00:00Z"}) + "\n",
+                    stderr="",
+                )
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
+                ownership_cls.return_value.decide.return_value = stale
+                ownership_cls.return_value.post_takeover_notice.return_value = False
+                monitor.tick()
+                ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
+
+        state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
+        self.assertNotIn("101", state)
+        self.assertFalse(any("reactions" in " ".join(call) for call in calls))
+        self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
 
     def test_pr_team_comment_uses_pr_ownership_and_gates_side_effects(self) -> None:
         cases = (
@@ -257,6 +295,7 @@ class CommentMonitorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
             with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
                 ownership_cls.return_value.decide.return_value = decision
+                ownership_cls.return_value.post_takeover_notice.side_effect = lambda decision: calls.append(["post_takeover_notice"]) or True
                 monitor.tick()
                 ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("pr", 42))
 
@@ -266,10 +305,49 @@ class CommentMonitorTests(unittest.TestCase):
             pending = pending_path.read_text(encoding="utf-8")
             self.assertIn(f"new-team-comment 42 maintainer {comment_id}", pending)
             self.assertTrue(any("reactions" in " ".join(call) for call in calls))
+            if decision.reason == "stale-takeover":
+                ownership_cls.return_value.post_takeover_notice.assert_called_once_with(decision)
+                notice_index = calls.index(["post_takeover_notice"])
+                reaction_index = next(index for index, call in enumerate(calls) if "reactions" in " ".join(call))
+                self.assertLess(notice_index, reaction_index)
         else:
             self.assertNotIn(comment_id, state)
             self.assertFalse(any("reactions" in " ".join(call) for call in calls))
             self.assertFalse(pending_path.exists())
+
+    def test_pr_team_comment_stale_takeover_notice_failure_fails_closed(self) -> None:
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 42), "other", "maintainer", 4.0)
+        monitor = CommentMonitor(self.ctx, interval=1)
+        calls: list[list[str]] = []
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            calls.append(list(command))
+            text = " ".join(command)
+            if "issue list" in text:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if "pr list" in text:
+                return mock.Mock(returncode=0, stdout="42\n", stderr="")
+            if "issues/42/comments" in text:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"id": "202", "author": "maintainer", "body": "please check pr", "created_at": "2026-05-29T00:00:00Z"}) + "\n",
+                    stderr="",
+                )
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
+                ownership_cls.return_value.decide.return_value = stale
+                ownership_cls.return_value.post_takeover_notice.return_value = False
+                monitor.tick()
+                ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("pr", 42))
+                ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
+
+        state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
+        self.assertNotIn("202", state)
+        self.assertFalse(any("reactions" in " ".join(call) for call in calls))
+        self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
 
 
 class CommentMonitorSourceRegressionTests(unittest.TestCase):

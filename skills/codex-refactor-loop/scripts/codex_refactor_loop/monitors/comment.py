@@ -111,7 +111,8 @@ class CommentMonitor:
         # Refactor (fix/pr200-comment-ownership): Old pattern: comment targets
         # were reduced to bare numbers, so PR comments were checked as issues.
         # New principle: carry issue/pr identity into the ownership gate.
-        decision = GitHubWorkOwnership(self.repo, cwd=self.ctx.repo_root).decide(WorkTarget(kind, int(number)))
+        ownership = GitHubWorkOwnership(self.repo, cwd=self.ctx.repo_root)
+        decision = ownership.decide(WorkTarget(kind, int(number)))
         # Refactor (iter/issue-193):
         #   Old pattern: maintainer comments triggered reactions/banners from
         #   any node that saw the event first.
@@ -119,6 +120,13 @@ class CommentMonitor:
         #   seen and produce no GitHub side effects.
         if not decision.allowed:
             print(f"new-team-comment: {number} {author} {comment_id} skipped-ownership:{decision.reason}", flush=True)
+            return
+        # Refactor (fix/pr200-ownership-r15): Old pattern: stale takeover
+        # comments could react/banner/mark-seen before the visible takeover
+        # explanation.  New principle: post the ownership notice before any
+        # maintainer-comment side effect, and fail closed if it cannot post.
+        if decision.reason == "stale-takeover" and not ownership.post_takeover_notice(decision):
+            print(f"new-team-comment: {number} {author} {comment_id} skipped-ownership-notice-failed", flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:
