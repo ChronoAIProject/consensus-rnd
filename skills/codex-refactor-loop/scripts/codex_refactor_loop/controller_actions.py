@@ -186,7 +186,9 @@ class ControllerActions:
             sys.stderr.write(f"merge_pr: skipped {decision.reason} ownership for PR #{pr}\n")
             return 0
         if decision.reason == "stale-takeover":
-            self.gh(["pr", "comment", pr, "--body", ownership.takeover_comment(decision)], check=False)
+            if not ownership.post_takeover_notice(decision):
+                sys.stderr.write(f"merge_pr: skipped stale takeover for PR #{pr}; visible notice failed\n")
+                return 1
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
             match = re.search(r"Closes #([0-9]+)", body)

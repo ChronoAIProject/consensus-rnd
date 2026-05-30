@@ -318,14 +318,34 @@ class ControllerActionsTests(unittest.TestCase):
             with mock.patch.object(self.actions, "record_recent_pr_merge") as record:
                 with mock.patch("codex_refactor_loop.controller_actions.GitHubWorkOwnership") as ownership_cls:
                     ownership_cls.return_value.decide.return_value = stale
-                    ownership_cls.return_value.takeover_comment.return_value = "takeover\n⟦AI:AUTO-LOOP⟧\n"
+                    ownership_cls.return_value.post_takeover_notice.return_value = True
                     result = self.actions.merge_pr("77")
 
         self.assertEqual(result, 0)
-        comment_index = next(i for i, call in enumerate(gh_calls) if call[:2] == ["pr", "comment"])
+        ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
         merge_index = next(i for i, call in enumerate(gh_calls) if call[:2] == ["pr", "merge"])
-        self.assertLess(comment_index, merge_index)
+        self.assertGreaterEqual(merge_index, 0)
         record.assert_called_once_with("77")
+
+    def test_merge_pr_stale_takeover_notice_failure_blocks_merge(self) -> None:
+        gh_calls: list[list[str]] = []
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "record_recent_pr_merge") as record:
+                with mock.patch("codex_refactor_loop.controller_actions.GitHubWorkOwnership") as ownership_cls:
+                    ownership_cls.return_value.decide.return_value = stale
+                    ownership_cls.return_value.post_takeover_notice.return_value = False
+                    result = self.actions.merge_pr("77")
+
+        self.assertEqual(result, 1)
+        ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
+        self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
+        record.assert_not_called()
 
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):

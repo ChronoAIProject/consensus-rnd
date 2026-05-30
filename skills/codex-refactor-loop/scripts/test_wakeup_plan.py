@@ -55,6 +55,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 cmd1="$1"
                 cmd2="$2"
                 label=""
+                if [[ -n "${WAKEUP_PLAN_GH_COMMAND_LOG:-}" ]]; then
+                  printf '%s\n' "$args" >> "$WAKEUP_PLAN_GH_COMMAND_LOG"
+                fi
                 while [[ "$#" -gt 0 ]]; do
                   if [[ "$1" == "--label" ]]; then
                     label="$2"
@@ -154,6 +157,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     ci_red)
                       printf '[{"number":31,"title":"red PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
                       ;;
+                    ci_foreign_fresh)
+                      printf '[{"number":31,"title":"fresh foreign red PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      ;;
+                    ci_foreign_stale)
+                      printf '[{"number":31,"title":"stale foreign red PR","author":{"login":"bob"},"updatedAt":"2000-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      ;;
+                    ci_unknown_owner)
+                      printf '[{"number":31,"title":"unknown owner red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      ;;
+                    ci_unknown_login)
+                      printf '[{"number":31,"title":"unknown login red PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      ;;
                     milestone)
                       printf '[{"number":30,"title":"milestone PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
@@ -167,7 +182,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "pr checks" ]]; then
-                  if [[ "$fixture" == "ci_red" && "$args" == *"31"* ]]; then
+                  if [[ ( "$fixture" == "ci_red" || "$fixture" == "ci_foreign_stale" ) && "$args" == *"31"* ]]; then
                     printf '[{"bucket":"fail"}]\n'
                   else
                     printf '[]\n'
@@ -175,11 +190,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "api user" ]]; then
-                  [[ "$fixture" == "unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
+                  [[ "$fixture" == "unknown_login" || "$fixture" == "ci_unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
-                  if [[ "$fixture" == "unknown_owner" ]]; then
+                  if [[ "$fixture" == "unknown_owner" || "$fixture" == "ci_unknown_owner" ]]; then
                     printf '{"comments":[]}\n'
                   else
                     printf '{"author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z"}\n'
@@ -284,6 +299,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
                 "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
+                "WAKEUP_PLAN_GH_COMMAND_LOG": str(self.repo / "gh-commands.log"),
                 "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
             }
         )
@@ -388,6 +404,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["item"], "PR #31")
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+
+    def test_ci_red_skips_fresh_foreign_and_unknown_ownership_before_checks(self) -> None:
+        for fixture in ("ci_foreign_fresh", "ci_unknown_owner", "ci_unknown_login"):
+            with self.subTest(fixture=fixture):
+                command_log = self.repo / "gh-commands.log"
+                if command_log.exists():
+                    command_log.unlink()
+
+                plan = self.run_plan(fixture=fixture)
+                commands = command_log.read_text(encoding="utf-8").splitlines()
+
+                self.assertNotIn("ci-red", [action["kind"] for action in plan["actions"]])
+                self.assertFalse(any(command.startswith("pr checks ") for command in commands), commands)
+
+    def test_ci_red_includes_stale_takeover_metadata(self) -> None:
+        plan = self.run_plan(fixture="ci_foreign_stale")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "ci-red"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["item"], "PR #31")
+        self.assertEqual(actions[0]["ownership"], "stale-takeover")
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
