@@ -331,6 +331,36 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
+    def test_skill_project_rules_surface_has_no_apply_opt_in(self) -> None:
+        # Refactor (iter218/issue-218):
+        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
+        for needle in (
+            "host-owned read-only prompt/bootstrap evidence",
+            "patch artifact",
+            "fail closed",
+            "不得派 audit / solver / reviewer / implement actor",
+            ".refactor-loop/runs/project-rules-fixed-point.patch",
+            "consensus-rnd-cli check-project-rules",
+            "must never apply host policy edits",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        contract_text = "\n".join(
+            line
+            for line in self.skill.splitlines()
+            if "Refactor (iter218/issue-218)" not in line and "Old pattern:" not in line and "New principle:" not in line
+        )
+        for forbidden in (
+            "幂等向 $PROJECT_RULES 写入",
+            "ensure-project-rules",
+            "PROJECT_RULES_WRITE_ENABLE",
+            "--apply",
+            "ProjectRulesFixedPointEnsurer",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, contract_text)
+
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
