@@ -340,6 +340,53 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, router)
                 self.assertIn(token, self.skill)
         self.assertIn("parse_phase9_log_identity", router)
+
+    def test_host_workflow_spec_contract_locks_consensus_and_lifecycle_invariants(self) -> None:
+        for needle in (
+            "HOST_WORKFLOW_SPEC",
+            "HostWorkflowSpec",
+            "repo-relative JSON",
+            "Empty or unset keeps built-in behavior",
+            "data-only route vocabulary",
+            "events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings",
+            "reserved `host:` namespace",
+            "WorkflowInvariantValidator",
+            "rejects attempts to overwrite built-ins",
+            "public compatibility aliases",
+            "marker families",
+            "producers",
+            "cluster aliases",
+            "grants no lifecycle authority",
+            "command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import",
+            "cannot downgrade consensus",
+            "at least three independent solvers",
+            "exactly one independent judge",
+            "peer-output isolation",
+            "fixed marker families",
+            "First-version scope is bounded",
+            "not a DAG executor",
+            "does not create public marker aliases",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+        workflow_spec = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "workflow_spec.py").read_text(encoding="utf-8")
+        for token in (
+            "class HostWorkflowSpec",
+            "class WorkflowInvariantValidator",
+            "HOST_WORKFLOW_SPEC",
+            "FORBIDDEN_FIELD_NAMES",
+            "FIXED_MARKER_FAMILIES",
+            "peer_output_isolation",
+            "at least three independent solvers",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, workflow_spec)
+
+    def test_phase9_router_filename_identity_source_regression_keeps_role_markers(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, router, helper))
         self.assertIn("Refactor (issue-100/router-filename-identity)", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)

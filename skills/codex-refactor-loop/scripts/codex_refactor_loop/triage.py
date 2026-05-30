@@ -25,6 +25,7 @@ from typing import Any, Mapping
 from . import labels as label_catalog
 from .context import LoopContext
 from .github_body import validate_self_contained_github_body
+from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
 ACCEPT_LABELS = list(label_catalog.design_issue_label_bundle())
@@ -41,8 +42,15 @@ class ManualIssueTriageDecisionError(ValueError):
     """Raised when a ManualIssueTriageDecision artifact is malformed."""
 
 
+class HostIssueIntakeMappingError(ValueError):
+    """Raised when host issue-intake projection is not validated."""
+
+
 @dataclass(frozen=True)
 class ManualIssueTriageDecision:
+    # Refactor (iter219/issue-219):
+    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     issue_number: int
     verdict: str
     body_artifact_path: str
@@ -152,6 +160,27 @@ def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None =
         remove_labels=remove_labels,
         sentinel_present=True,
     )
+
+
+def host_issue_intake_projection(ctx: LoopContext, mapping_name: str) -> dict[str, str]:
+    # Refactor (iter219/issue-219):
+    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
+    try:
+        spec = load_validated_workflow_spec(ctx)
+    except WorkflowSpecError as exc:
+        raise HostIssueIntakeMappingError(str(exc)) from exc
+    for mapping in spec.issue_intake_mappings:
+        if mapping.name == mapping_name:
+            return {
+                "name": mapping.name,
+                "work_unit_kind": mapping.work_unit_kind,
+                "producer": mapping.producer,
+                "stage": mapping.stage,
+                "prompt_binding": mapping.prompt_binding,
+                "lifecycle_authority": "false",
+            }
+    raise HostIssueIntakeMappingError(f"unknown host issue intake mapping: {mapping_name}")
 
 
 def extract_json_object(text: str) -> dict[str, Any]:

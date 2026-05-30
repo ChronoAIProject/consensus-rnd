@@ -546,6 +546,53 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(by_kind["no-gap-violation"]["phase"], "work-intake")
         self.assertEqual(by_kind["no-gap-violation"]["route"], "no-gap-repair")
 
+    def test_host_stages_are_status_projection_only_after_validation(self) -> None:
+        (self.repo / "prompts").mkdir(exist_ok=True)
+        (self.repo / "prompts" / "host.md").write_text("host prompt\n", encoding="utf-8")
+        (self.repo / "workflow.json").write_text(
+            json.dumps(
+                {
+                    "stages": [
+                        {
+                            "slug": "host:qa",
+                            "title": "QA",
+                            "contract": "Host status projection only.",
+                            "detail_anchor": "host-qa",
+                        }
+                    ],
+                    "events": [{"name": "host:template-ready", "stage": "host:qa", "status": "host:queued"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nHOST_WORKFLOW_SPEC=workflow.json\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+
+        host_actions = [action for action in plan["actions"] if action["kind"] == "host-workflow-event"]
+        self.assertEqual(len(host_actions), 1)
+        self.assertEqual(host_actions[0]["phase"], "host:qa")
+        self.assertEqual(host_actions[0]["route"], "host-workflow-status-projection")
+        self.assertTrue(host_actions[0]["no_lifecycle_authority"])
+
+    def test_invalid_host_workflow_spec_is_noop_error_reason(self) -> None:
+        (self.repo / "workflow.json").write_text(json.dumps({"events": [{"name": "host:x", "stage": "missing"}]}), encoding="utf-8")
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nHOST_WORKFLOW_SPEC=workflow.json\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+
+        errors = [action for action in plan["actions"] if action["kind"] == "host-workflow-spec-invalid"]
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["phase"], "bootstrap")
+        self.assertEqual(errors[0]["route"], "host-workflow-spec")
+        self.assertTrue(errors[0]["no_lifecycle_authority"])
+
 
 if __name__ == "__main__":
     unittest.main()

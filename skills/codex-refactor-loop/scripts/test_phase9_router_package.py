@@ -49,6 +49,34 @@ class Phase9RouterPackageTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
+    def write_host_policy(self, *, invalid: bool = False) -> LoopContext:
+        (self.repo / "prompts").mkdir(exist_ok=True)
+        (self.repo / "prompts" / "host-solver.md").write_text("solver\n", encoding="utf-8")
+        (self.repo / "prompts" / "host-judge.md").write_text("judge\n", encoding="utf-8")
+        data = {
+            "prompt_bindings": {
+                "host:solver": "prompts/host-solver.md",
+                "host:judge": "prompts/host-judge.md",
+            },
+            "roles": [
+                {"name": "host:a", "prompt_binding": "host:solver"},
+                {"name": "host:b", "prompt_binding": "host:solver"},
+                {"name": "host:c", "prompt_binding": "host:solver"},
+                {"name": "host:judge", "prompt_binding": "host:judge"},
+            ],
+            "consensus_policies": [
+                {
+                    "name": "host:policy",
+                    "solver_roles": ["host:a", "host:b", "host:c"],
+                    "judge_role": "host:judge",
+                    "peer_output_isolation": not invalid,
+                    "marker_families": ["SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED"],
+                }
+            ],
+        }
+        (self.repo / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
+        return LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
+
     def test_package_router_uses_loop_context_paths_and_legacy_spawn_script(self) -> None:
         self.assertEqual(self.router.loop_dir, self.ctx.paths.refactor_loop)
         self.assertEqual(self.router.logs_dir, self.ctx.paths.logs)
@@ -148,6 +176,27 @@ class Phase9RouterPackageTests(unittest.TestCase):
         ]
         self.assertEqual(len(reflector_commands), 1)
         self.assertIn("160-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_router_dispatches_validated_host_solver_roles_without_peer_prompt_leak(self) -> None:
+        ctx = self.write_host_policy()
+        router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
+        for role in ("host:a", "host:b", "host:c"):
+            self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
+        router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue219-r1-host:judge.log", " ".join(self.commands[0]))
+        self.assertEqual([entry["target_actor"] for entry in self.ledger_entries()], ["host:judge"])
+
+    def test_router_fails_closed_on_unknown_policy_or_invalid_prompt_binding(self) -> None:
+        ctx = self.write_host_policy(invalid=True)
+        router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
+
+        router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertIn("host-workflow-spec-invalid", self.pending_events())
+        self.assertIn("peer_output_isolation", self.pending_events())
 
     def test_package_router_singleton_lock_conflict_fails_before_dispatch(self) -> None:
         for role in ("minimal", "structural", "delete"):

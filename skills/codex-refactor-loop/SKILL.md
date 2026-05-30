@@ -42,7 +42,9 @@ The loop has two supported entry modes:
 
 Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
-Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The closed registry is the only current controller workflow stage vocabulary; public stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
+Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The built-in registry remains the default compatibility vocabulary; public built-in stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
+
+`HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings. All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases.
 
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-170):
@@ -87,6 +89,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_CODE_FENCE_LANG` | prompt-empty-infer | prompt templates | empty | omit language tag; do not invent a host language default | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_PROTO_POLICY` | prompt-empty-infer | prompt templates | empty | treat schema/protocol checks as diff/project-rule driven only; do not invent protobuf or schema defaults | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_ARCHITECTURE_GREP_CHECKS` | prompt-empty-infer | prompt templates | empty | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only | prompt templates | `test_host_env_surface_matrix.py` |
+| `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates HostWorkflowSpec or fails closed before spawn/mutation | workflow_spec, router, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py` |
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
