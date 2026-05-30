@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+import importlib
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,10 @@ CHECKER_PATH = SCRIPT_PATH.with_name("consensus-rnd-cli")
 
 
 def load_checker_module():
+    scripts_dir = str(SCRIPT_PATH.parent)
+    if sys.path[0] != scripts_dir:
+        sys.path.insert(0, scripts_dir)
+    importlib.invalidate_caches()
     from codex_refactor_loop.checks import degradation
     return degradation
 
@@ -47,6 +53,105 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
 class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.checker_module = load_checker_module()
+
+    # Refactor (iter259/issue-259):
+    #   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1)
+    #   New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py
+    def test_static_checker_treats_plugin_host_root_as_not_source_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--repo-root", str(host)],
+                cwd=host,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not-source-repo", result.stdout)
+        self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
+
+    def test_static_checker_reports_json_for_plugin_host_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--json", "--repo-root", str(host)],
+                cwd=host,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout), {"ok": True, "reason": "not-source-repo", "findings": []})
+        self.assertEqual(result.stderr, "")
+
+    def test_static_checker_discovers_plugin_host_root_as_not_source_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static"],
+                cwd=host,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("not-source-repo", result.stdout)
+        self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
+
+    def test_run_static_treats_plugin_host_root_as_not_source_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            findings = self.checker_module.SkillDriftChecker(host).run_static()
+
+        self.assertEqual(findings, [])
+
+    def test_static_checker_fails_closed_for_damaged_source_repo_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / ".version-bump.json").write_text('{"files": []}\n', encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static", "--repo-root", str(repo)],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("required-file: skills/codex-refactor-loop", result.stdout)
+        self.assertNotIn("not-source-repo", result.stdout)
+
+    def test_static_checker_discovered_source_repo_candidate_still_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp) / "repo"
+            repo.mkdir()
+            (repo / ".version-bump.json").write_text('{"files": []}\n', encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(CHECKER_PATH), "check-degradation", "--static"],
+                cwd=repo,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("required-file: skills/codex-refactor-loop", result.stdout)
+        self.assertNotIn("not-source-repo", result.stdout)
 
     def test_static_checker_passes_current_repo(self) -> None:
         result = subprocess.run(
