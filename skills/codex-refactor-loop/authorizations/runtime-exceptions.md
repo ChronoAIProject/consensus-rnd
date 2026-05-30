@@ -58,19 +58,6 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_sync_dev.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
-<a id="skill-degradation-watch-66"></a>
-## skill-degradation-watch-66
-
-- surface: `skill degradation watch`
-- source_issue: `#66`
-- source_round: `r8`
-- source_marker: `META_JUDGE_DONE:consensus`
-- skill_anchor: `#named-runtime-exception--skill-degradation-watchper-66`
-- allowed: run `consensus-rnd-cli check-degradation`; write `.refactor-loop/.degradation-alert.log`; append existing-format pending events; expose read-only `consensus-rnd-cli peek` status.
-- forbidden: no source mutation, git reset, rebase, merge, push, GitHub issue lifecycle, PR lifecycle, body lifecycle, label lifecycle, codex dispatch, standalone daemon creation, WorkUnit schema changes, event envelope changes, protocol registry, plugin registry, auto-clean, or auto-fix API.
-- verification: `test_check_skill_degradation.py`, `test_package_checks.py`, `test_runtime_exception_authorization_sources.py`
-- no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
-
 <a id="statusline-51"></a>
 ## statusline-51
 

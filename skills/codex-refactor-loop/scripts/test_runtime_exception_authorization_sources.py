@@ -22,7 +22,6 @@ TARGET_ANCHORS = {
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
-    "skill-degradation-watch-66": "## Named runtime exception — skill degradation watch(per #66)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
 }
@@ -85,6 +84,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(f"{MIRROR_RELATIVE}#{anchor}", self.skill)
                 self.assertIn(f'<a id="{anchor}"></a>', self.mirror)
 
+    def test_skill_degradation_runtime_exception_mirror_is_removed(self) -> None:
+        self.assertNotIn("skill-degradation-watch-66", self.skill)
+        self.assertNotIn("skill-degradation-watch-66", self.mirror)
+        self.assertIn("## Skill degradation source-repo validation", self.skill)
+        self.assertIn("source-repo CI/release validation", self.skill)
+        self.assertIn("downstream host has no runtime watch", self.skill)
+
     def test_mirror_entries_have_required_fields(self) -> None:
         for anchor in TARGET_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
@@ -113,8 +119,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "label",
             "tag",
             "release",
-            "source mutation",
-            "codex dispatch",
             "new daemon",
         )
         for token in required_denials:

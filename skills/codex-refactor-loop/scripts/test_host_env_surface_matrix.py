@@ -149,9 +149,6 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
-            "DEGRADATION_WATCH_INTERVAL_SECONDS": ("1800", "`0` disables runtime hook"),
-            "DEGRADATION_WATCH_TIMEOUT_SECONDS": ("30", "values below `1` clamp to `1`"),
-            "DEGRADATION_ALERT_TAIL_LINES": ("10", "alert tail lines"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
         }
         for key, (default, behavior) in cases.items():
@@ -218,7 +215,6 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "RELEASE_AUTO_ENABLE": "test_auto_release_gate.py",
             "MAINTAINER_WHITELIST": "test_comment_monitor.py",
             "CODEX_FLOOR": "test_concurrency_monitor.py",
-            "DEGRADATION_WATCH_INTERVAL_SECONDS": "test_check_skill_degradation.py",
         }
         for key, test_file in anchors.items():
             with self.subTest(key=key):
@@ -236,8 +232,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("MAINTAINER_WHITELIST is unset; comment-monitor fails closed", comment_monitor)
         self.assertIn('os.environ.get("CODEX_FLOOR", "5")', concurrency_monitor)
         self.assertIn("return max(2, floor)", concurrency_monitor)
-        self.assertIn('os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "1800")', concurrency_monitor)
-        self.assertIn('os.environ.get("DEGRADATION_WATCH_TIMEOUT_SECONDS", "30")', concurrency_monitor)
+        self.assertNotIn("DEGRADATION_WATCH_INTERVAL_SECONDS", concurrency_monitor)
+        self.assertNotIn("DEGRADATION_WATCH_TIMEOUT_SECONDS", concurrency_monitor)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1", sync_dev)
 
