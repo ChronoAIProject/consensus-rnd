@@ -626,7 +626,7 @@ Consensus-rnd Phase review-gate keeps the consensus merge gate local enough for 
 
 Consensus-rnd Phase design-consensus is the sole authorization gate for concrete plans.
 
-1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
+1. Dispatch exactly three solver framings by default: minimal, structural, delete/collapse/abstain.
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
 4. `converge:round-N` always routes to another solver round; no hard round cap.
@@ -699,7 +699,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [prompts/review-fix.md](prompts/review-fix.md) — Consensus-rnd Phase review-gate fix worker.
 - [prompts/solver-minimal.md](prompts/solver-minimal.md) — Consensus-rnd Phase design-consensus minimal solver.
 - [prompts/solver-structural.md](prompts/solver-structural.md) — Consensus-rnd Phase design-consensus structural solver.
-- [prompts/solver-delete.md](prompts/solver-delete.md) — Consensus-rnd Phase design-consensus delete/defer solver.
+- [prompts/solver-delete.md](prompts/solver-delete.md) — Consensus-rnd Phase design-consensus delete/collapse/abstain solver.
 - [prompts/meta-judge.md](prompts/meta-judge.md) — Consensus-rnd Phase design-consensus meta-judge.
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
@@ -874,7 +874,7 @@ Consensus-rnd Phase review-gate guardrails:
 
 Consensus-rnd Phase design-consensus guardrails:
 
-1. Minimal, structural, and delete/defer solvers run for each design round.
+1. Minimal, structural, and delete/collapse/abstain solvers run for each design round.
 2. Meta-judge consumes all three outputs.
 3. Only 3/3 consensus plus meta-judge `consensus` authorizes implementation.
 4. `converge` means more solver work, not human escalation.
@@ -2199,7 +2199,7 @@ Audit-backed sources require verification of the audit `evidence:` file:line. Is
 |---|---|---|
 | **minimal** | smallest viable change; documented rule exception OK if scope is genuinely narrow | `prompts/solver-minimal.md` |
 | **structural** | CLAUDE-philosophy-aligned; new abstraction allowed if justified; never proposes rule exception | `prompts/solver-structural.md` |
-| **delete** | question necessity; propose delete / defer / collapse-and-redirect; abstain if feature genuinely needed | `prompts/solver-delete.md` |
+| **delete** | question necessity; propose delete / collapse-and-redirect; abstain if feature genuinely needed | `prompts/solver-delete.md` |
 
 A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
 
