@@ -227,19 +227,32 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_source_eligibility_fallback_restart_dedupe(self) -> None:
         # Refactor (fix/pr245-source-open-restart-dedupe-test): Old: source-OPEN gate tests covered in-memory fallback dedupe only. New: recreate the router after a persisted source-eligibility fallback and prove restart seeding suppresses duplicate events.
-        self.source_issue_states["37"] = "CLOSED"
-        self.solver_triplet(issue=37, round_no=4)
+        cases = (
+            ("CLOSED", "phase9-source-not-open"),
+            ("UNAVAILABLE", "phase9-source-state-unavailable"),
+        )
+        for state, reason in cases:
+            with self.subTest(reason=reason):
+                self.tmp.cleanup()
+                self.setUp()
+                self.source_issue_states["37"] = state
+                self.solver_triplet(issue=37, round_no=4)
 
-        self.router.tick()
-        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
-        fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
-        fresh_router.tick()
+                self.router.tick()
+                fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+                fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+                fresh_router.tick()
 
-        key = "phase9-source-eligibility:37-4-solver_triplet_to_judge"
-        self.assertIn(key, fresh_router._fallback_seen)
-        self.assertEqual(self.pending_events().count(key), 1)
-        self.assertEqual(self.commands, [])
-        self.assertEqual(self.ledger_entries(), [])
+                key = "phase9-source-eligibility:37-4-solver_triplet_to_judge"
+                events = self.pending_event_payloads()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["key"], key)
+                self.assertEqual(events[0]["reason"], reason)
+                self.assertIn(key, fresh_router._fallback_seen)
+                self.assertIn(key, fresh_router._load_persisted_fallback_seen())
+                self.assertEqual(self.pending_events().count(key), 1)
+                self.assertEqual(self.commands, [])
+                self.assertEqual(self.ledger_entries(), [])
 
     def test_phase9_router_issue_state_unavailable_fails_closed_without_ledger(self) -> None:
         self.source_issue_states["37"] = "UNAVAILABLE"
