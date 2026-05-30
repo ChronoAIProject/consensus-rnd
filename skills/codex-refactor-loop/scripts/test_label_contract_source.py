@@ -63,6 +63,8 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertIn(labels.MANAGED, active_contracts["pr open"])
         self.assertIn(labels.MILESTONE_CURRENT, active_contracts["existing priority"])
         self.assertIn(labels.PHASE_CONSENSUS_REACHED, active_contracts["existing priority"])
+        self.assertIn("parent issue `crnd:phase:pr-open` is non-action, expected workers 0", active_contracts["existing priority"])
+        self.assertNotIn("crnd:phase:pr-open` with 0 codex → dispatch reviewers", active_contracts["existing priority"])
         self.assertIn("catalog-managed issue/PR", active_contracts["stale revival"])
 
     def test_active_prompts_do_not_hardcode_canonical_label_handoff_arrays(self) -> None:

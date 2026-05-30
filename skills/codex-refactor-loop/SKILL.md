@@ -2532,10 +2532,10 @@ Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-is
 - `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
 - `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round
 - `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
-- `crnd:phase:pr-open` with 0 codex → dispatch reviewers
+- PR review work is represented by the child PR; parent issue `crnd:phase:pr-open` is non-action, expected workers 0
 - `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
 
-Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing work sits 0-codex is a no-gap violation, not a floor refill.
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 

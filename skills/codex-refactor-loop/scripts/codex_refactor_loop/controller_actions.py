@@ -248,6 +248,7 @@ class ControllerActions:
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
+        linked_issue = self._linked_issue_from_body_file(body_file)
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -264,6 +265,17 @@ class ControllerActions:
             ],
             check=False,
         )
+        if linked_issue:
+            args = ["issue", "edit", linked_issue]
+            for label in ISSUE_LABELS_REMOVE:
+                args.extend(["--remove-label", label])
+            args.extend(
+                [
+                    "--add-label",
+                    ",".join((labels.PHASE_PR_OPEN, labels.HUMAN_AUTO, labels.MANAGED)),
+                ]
+            )
+            self.gh(args, check=False)
         return pr_num, match.group(0)
 
     def _validate_pr_body_file(self, body_file: str) -> None:
@@ -274,6 +286,18 @@ class ControllerActions:
             validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=False)
         except GitHubBodyError as exc:
             raise RuntimeError(str(exc)) from exc
+
+    def _linked_issue_from_body_file(self, body_file: str) -> str:
+        # Refactor (impl/issue239-linkage):
+        #   Old pattern: PR-open parent issue state had a separate peek mismatch lens.
+        #   New principle: reuse the validated PR body `Closes #N` convention and
+        #   fold the parent issue to non-action `crnd:phase:pr-open` at PR creation.
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        body = body_path.read_text(encoding="utf-8")
+        match = re.search(r"Closes #([0-9]+)", body)
+        return match.group(1) if match else ""
 
     def open_release_rollup_pr_from_pending_event(
         self,

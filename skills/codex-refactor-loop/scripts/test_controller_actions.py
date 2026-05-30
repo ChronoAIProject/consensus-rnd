@@ -298,8 +298,33 @@ class ControllerActionsTests(unittest.TestCase):
         )
         self.assertNotIn("auto-loop", edit_call)
         self.assertNotIn("🚀 phase:pr-open", edit_call)
-        self.assertNotIn("👀 phase:reviewing", edit_call)
-        self.assertNotIn("🤖 human:auto-推进", edit_call)
+
+    def test_open_pr_with_label_moves_linked_parent_issue_to_pr_open(self) -> None:
+        self.pr_body.write_text(
+            "## 🤖 PR ready\n\nSelf-contained body.\n\nCloses #239\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            pr_num, _url = self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+        self.assertEqual(77, pr_num)
+        issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
+        removed = [issue_edit[index + 1] for index, value in enumerate(issue_edit) if value == "--remove-label"]
+        self.assertIn(labels.PHASE_IMPLEMENTING, removed)
+        self.assertIn(labels.HUMAN_MAINTAINER_DECISION, removed)
+        self.assertIn(labels.STUCK, removed)
+        self.assertEqual(
+            ",".join((labels.PHASE_PR_OPEN, labels.HUMAN_AUTO, labels.MANAGED)),
+            issue_edit[issue_edit.index("--add-label") + 1],
+        )
 
     def test_publish_release_candidate_requires_explicit_or_env_target_ref(self) -> None:
         with mock.patch.dict("codex_refactor_loop.controller_actions.os.environ", {}, clear=True):

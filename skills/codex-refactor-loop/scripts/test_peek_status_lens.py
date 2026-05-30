@@ -76,6 +76,14 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 args="$*"
                 pr="${PEEK_TEST_PR:-}"
                 if [[ "$1 $2" == "issue list" ]]; then
+                  if [[ "${PEEK_TEST_PR_OPEN_ISSUE:-}" == "1" ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                      printf '[{"number":239,"title":"parent issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    printf '[]\n'
+                    exit 0
+                  fi
                   if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
                     if [[ "$args" == *"--label 🎯 milestone"* ]]; then
                       printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]}]\n'
@@ -167,6 +175,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         pr: int | None = None,
         milestone_fixtures: bool = False,
         unpushed: bool = False,
+        pr_open_issue: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
@@ -182,6 +191,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
         if unpushed:
             env["PEEK_TEST_UNPUSHED"] = "1"
+        if pr_open_issue:
+            env["PEEK_TEST_PR_OPEN_ISSUE"] = "1"
         return subprocess.run(
             [sys.executable, str(PEEK), "peek", *(args or [])],
             cwd=self.root,
@@ -343,6 +354,22 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         ordinary_index = result.stdout.index("▍Open auto-loop issues:")
         self.assertLess(milestone_index, ordinary_index)
         self.assertLess(result.stdout.index("issue #20"), result.stdout.index("#10 labels="))
+
+    def test_peek_does_not_render_linkage_mismatch_lens(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+
+        result = self.run_peek(pr_open_issue=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("Issue/PR linkage mismatch", result.stdout)
+        self.assertNotIn("_linkage_mismatch", source)
+
+    def test_peek_drift_skips_zero_expected_worker_phase(self) -> None:
+        result = self.run_peek(pr_open_issue=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("issue #239 label=crnd:phase:pr-open but 0 codex", result.stdout)
+        self.assertNotIn("label=crnd:phase:pr-open but 0 codex", result.stdout)
 
 
 if __name__ == "__main__":

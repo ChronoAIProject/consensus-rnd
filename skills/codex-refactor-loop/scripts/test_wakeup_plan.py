@@ -98,7 +98,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       printf ']\n'
                       ;;
                     non_action_statuses)
-                      printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
                       ;;
                     *)
                       printf '[]\n'
@@ -415,6 +415,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="non_action_statuses")
 
         self.assertEqual([action for action in plan["actions"] if action["kind"] == "existing-issue"], [])
+        self.assertNotIn(
+            {"id": "#44", "kind": "issue", "phase": label_catalog.PHASE_PR_OPEN, "expected": 0},
+            plan["concurrency"]["expected_breakdown"],
+        )
 
         red_plan = self.run_plan(fixture="ci_red")
         by_kind = {action["kind"]: action for action in red_plan["actions"]}

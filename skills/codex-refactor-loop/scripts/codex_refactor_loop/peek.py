@@ -51,8 +51,6 @@ class PeekStatusLens:
         lines.extend(self._mergeable_prs())
         lines.extend(["", "▍Stale labels (CLOSED but still carrying in-flight phase labels):"])
         lines.extend(self._stale_labels())
-        lines.extend(["", "▍Issue/PR linkage mismatch:"])
-        lines.extend(self._linkage_mismatch())
         lines.extend(["", "▍Spawn drop (N solvers complete but judge was not dispatched):"])
         lines.extend(self._spawn_drop())
         lines.extend(["", "▍Drift (label vs codex mismatch):"])
@@ -223,22 +221,6 @@ class PeekStatusLens:
                     out.append(f"  ⚠️ closed {kind} #{item.get('number')} still has: {','.join(stale)}{suffix}")
         return out
 
-    def _linkage_mismatch(self) -> list[str]:
-        out = []
-        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.PHASE_IMPLEMENTING), "number,title"):
-            if not isinstance(item, dict):
-                continue
-            num = str(item.get("number"))
-            open_prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", search=f"in:body Closes #{num}")
-            if open_prs:
-                continue
-            merged = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", state="merged", search=f"in:body Closes #{num}")
-            if merged:
-                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
-            else:
-                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
-        return out
-
     def _spawn_drop(self) -> list[str]:
         out = []
         for minimal in self.ctx.paths.runs.glob("phase9-issue*-r*-minimal.md"):
@@ -273,6 +255,8 @@ class PeekStatusLens:
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
                 phase = label_catalog.normalize_label_set(labels).phase or ""
                 num = str(item.get("number"))
+                if phase and label_catalog.phase_expected_workers(phase) == 0:
+                    continue
                 if phase and not any(f"pr{num}" in log or f"issue{num}" in log for log in active):
                     out.append(f"  ⚠️ {kind} #{num} label={phase} but 0 codex referencing it")
         return out

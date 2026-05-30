@@ -76,6 +76,7 @@ PHASE_TO_STAGE = {
     label_catalog.PHASE_MERGED: "publish",
 }
 NON_ACTION_PHASE_LABELS = {
+    label_catalog.PHASE_PR_OPEN: "pr-open",
     label_catalog.PHASE_CI_RUNNING: "ci-running",
     label_catalog.PHASE_BLOCKED: "blocked",
     label_catalog.PHASE_MERGED: "merged",
@@ -725,7 +726,7 @@ def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
     for item in ordered:
         phase = phase_from_labels(item.labels)
         status = status_from_labels(item.labels)
-        if status in {"blocked", "merged", "ci-running"}:
+        if status in {"blocked", "merged", "ci-running", "pr-open"}:
             continue
         priority = 6 if item.milestone else 7
         actions.append(
