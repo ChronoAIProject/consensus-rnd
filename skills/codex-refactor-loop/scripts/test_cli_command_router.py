@@ -124,6 +124,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
+                "update-check",
             },
             set(COMMANDS),
         )
@@ -215,9 +216,17 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "sync-request",
             "release-publish",
             "publish-release",
+            "apply-update",
+            "check-update",
+            "install-update",
+            "update-apply",
         }:
             with self.subTest(command=command):
                 self.assertNotIn(command, COMMANDS)
+
+    def test_update_check_declares_exact_notify_only_authority(self) -> None:
+        self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
+        self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():

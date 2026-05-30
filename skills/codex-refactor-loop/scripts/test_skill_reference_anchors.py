@@ -214,6 +214,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_skill_documents_update_check_notify_only_contract(self) -> None:
+        section = section_after_heading(self.skill, "Notify-only update check(per #231)")
+        for needle in (
+            "VERSION.json",
+            "VersionSourceManifest",
+            ".version-bump.json",
+            "consensus-rnd-cli update-check",
+            "notify-only",
+            "$UPDATE_CHECK_ENABLE",
+            ".refactor-loop/state/update-check.json",
+            "host-owned",
+            "create a daemon",
+            "statusline-snapshot.json",
+            "test_statusline.py",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "copy, overwrite, reinstall",
+            "run installers",
+            "mutate `.git`",
+            "touches the network",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
             "tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \\",

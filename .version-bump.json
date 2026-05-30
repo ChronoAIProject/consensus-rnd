@@ -5,7 +5,8 @@
     { "path": ".claude-plugin/marketplace.json", "field": "plugins.0.version" },
     { "path": ".codex-plugin/plugin.json", "field": "version" },
     { "path": ".cursor-plugin/plugin.json", "field": "version" },
-    { "path": "gemini-extension.json", "field": "version" }
+    { "path": "gemini-extension.json", "field": "version" },
+    { "path": "skills/codex-refactor-loop/VERSION.json", "field": "version" }
   ],
   "audit": {
     "exclude": [

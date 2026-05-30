@@ -148,6 +148,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
     def test_defaults_and_missing_behaviors_match(self) -> None:
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
+            "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
+            "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
+            "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
@@ -163,6 +166,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 self.assertIn(behavior, self.rows[key]["Missing/empty behavior"])
 
         self.assertEqual("optional-noop", self.rows["ACTIVE_CONTROLLER_DEVICE_ID"]["Category"])
+        self.assertEqual("optional-noop", self.rows["UPDATE_CHECK_ENABLE"]["Category"])
+        self.assertEqual("defaulted", self.rows["UPDATE_CHECK_INTERVAL_SECONDS"]["Category"])
+        self.assertEqual("defaulted", self.rows["UPDATE_CHECK_TIMEOUT_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_TTL_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_REF"]["Category"])
         self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
@@ -244,6 +250,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("MAINTAINER_WHITELIST is unset; comment-monitor fails closed", comment_monitor)
         self.assertIn('os.environ.get("CODEX_FLOOR", "5")', concurrency_monitor)
         self.assertIn("return max(2, floor)", concurrency_monitor)
+        self.assertIn('env.get("UPDATE_CHECK_ENABLE")', read(SCRIPTS_DIR / "codex_refactor_loop" / "update_check.py"))
         self.assertNotIn("DEGRADATION_WATCH_INTERVAL_SECONDS", concurrency_monitor)
         self.assertNotIn("DEGRADATION_WATCH_TIMEOUT_SECONDS", concurrency_monitor)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
