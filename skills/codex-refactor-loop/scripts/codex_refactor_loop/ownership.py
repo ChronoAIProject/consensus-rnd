@@ -119,7 +119,9 @@ class GitHubWorkOwnership:
         if not isinstance(data, dict):
             return None
         author = data.get("author")
-        author_login = author.get("login") if isinstance(author, dict) else None
+        raw_author_login = author.get("login") if isinstance(author, dict) else None
+        # Refactor (fix/pr200-ownership-fail-closed): Old pattern: missing GitHub author.login fell back to current actor.  New principle: missing author.login is unknown ownership and fails closed.
+        author_login = raw_author_login.strip() if isinstance(raw_author_login, str) else ""
         updated = _parse_github_time(data.get("updatedAt"))
         if not author_login or updated is None:
             return None
@@ -127,7 +129,7 @@ class GitHubWorkOwnership:
         age_hours = max(0.0, (now - updated).total_seconds() / 3600)
         return GitHubItemOwnership(
             target=target,
-            author_login=str(author_login),
+            author_login=author_login,
             updated_at=updated,
             current_login=login,
             age_hours=age_hours,

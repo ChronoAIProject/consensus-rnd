@@ -21,7 +21,7 @@ NOW = datetime(2026, 5, 30, 0, 0, tzinfo=timezone.utc)
 
 
 class FakeGh:
-    def __init__(self, *, login: str = "alice", author: str = "alice", updated_at: str = "2026-05-29T23:00:00Z") -> None:
+    def __init__(self, *, login: str = "alice", author: object = "alice", updated_at: str = "2026-05-29T23:00:00Z") -> None:
         self.login = login
         self.author = author
         self.updated_at = updated_at
@@ -32,10 +32,13 @@ class FakeGh:
         if command[:3] == ["gh", "api", "user"]:
             return subprocess.CompletedProcess(command, 0, json.dumps({"login": self.login}), "")
         if command[:3] in (["gh", "issue", "view"], ["gh", "pr", "view"]):
+            payload = {"updatedAt": self.updated_at}
+            if self.author is not None:
+                payload["author"] = self.author if isinstance(self.author, dict) else {"login": self.author}
             return subprocess.CompletedProcess(
                 command,
                 0,
-                json.dumps({"author": {"login": self.author}, "updatedAt": self.updated_at}),
+                json.dumps(payload),
                 "",
             )
         if command[:3] in (["gh", "issue", "comment"], ["gh", "pr", "comment"]):
@@ -79,6 +82,18 @@ class GitHubWorkOwnershipTests(unittest.TestCase):
 
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.reason, "unknown-current-login")
+
+    def test_missing_or_empty_author_login_fails_closed(self) -> None:
+        for author in ({}, "", None):
+            with self.subTest(author=author):
+                fake = FakeGh(login="alice", author=author)
+
+                decision = self.ownership(fake).decide(WorkTarget("issue", 44), now=NOW)
+
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.reason, "unknown-target")
+                self.assertEqual(decision.current_login, "alice")
+                self.assertEqual(decision.author_login, "")
 
     def test_helper_uses_read_only_github_fields_only(self) -> None:
         fake = FakeGh(login="alice", author="bob")
