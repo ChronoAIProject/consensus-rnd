@@ -7,6 +7,8 @@ description: Use when the user wants an unattended Consensus R&D work-unit loop 
 > Maintainer directive merges the former REFERENCE.md back into this single SKILL.md; use intra-file anchor links.
 > Refactor (iter1/issue-141): Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
 > New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 consensus-rnd-cli restart-daemons 不无限阻塞。
+> Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+> New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 # Codex Refactor Loop — Controller Contract
 This SKILL.md is the single controller contract and detailed reference. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
 
@@ -68,7 +70,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$TEST_CMD` | required | LoopContext | host shell command string | fail closed for test-required work; callers must execute with `bash -lc "$TEST_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$INTEGRATION_BRANCH` | defaulted | sync helpers | `auto-refact-dev` | default to `auto-refact-dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
-| `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` for Consensus-rnd Phase bootstrap fixed-point and prompt evidence | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
+| `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
 | `$RELEASE_AUTO_MIN_MERGES` | defaulted | release-gate | `1` | default to `1` recent merge for stability scoring | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | defaulted | release-gate | `2` | default to `2` hours since last release decision | release-gate | `test_auto_release_gate.py` |
@@ -97,7 +99,7 @@ Host config rules:
 4. Source `$REPO_ROOT/.refactor-loop/host.env` before daemon or codex supervision commands.
 5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
 6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
-7. The ProjectRules fixed-point target is `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
+7. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
 
 ## Skill Root Contract
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/consensus-rnd-cli spawn-codex`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
@@ -337,8 +339,8 @@ Consensus-rnd Phase bootstrap is mandatory and ordered for each controller sessi
 
 1. `source .refactor-loop/host.env` from `$REPO_ROOT`; if it is absent, unreadable, or lacks required values, fail closed.
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
-3. Run `ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)` against `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
-4. If the helper exits non-zero, helper 退出非 0 → bootstrap fail closed; post the failure and stop before actors.
+3. Run `ProjectRulesFixedPointProbe(强制,先于任何 actor 派发)` through `consensus-rnd-cli check-project-rules` against `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
+4. If the probe exits non-zero, including `patch-required` with `.refactor-loop/runs/project-rules-fixed-point.patch`, bootstrap fail closed; post the failure and stop before actors, 不得派 audit / solver / reviewer / implement actor.
 5. Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` if missing; do not create or maintain root `.refactor-loop/state.json`.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
@@ -351,7 +353,7 @@ Consensus-rnd Phase bootstrap is mandatory and ordered for each controller sessi
 Consensus-rnd Phase bootstrap anti-patterns stay local because they are safety gates:
 
 - Do not continue with missing `host.env` under guessed defaults.
-- Do not skip `ProjectRulesFixedPointEnsurer` because `$PROJECT_RULES` already exists.
+- Do not skip `ProjectRulesFixedPointProbe` because `$PROJECT_RULES` already exists.
 - Do not start fewer than the five required restart-helper-managed daemons.
 - Do not initialize an alternate state model, alternate queue, wrapper envelope, root state file, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
@@ -663,7 +665,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
 - `scripts/codex_refactor_loop/controller_actions.py` — controller-internal lifecycle primitives; not a public CLI command surface.
 - [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
-- [scripts/consensus-rnd-cli ensure-project-rules](scripts/consensus-rnd-cli ensure-project-rules) — Consensus-rnd Phase bootstrap fixed-point helper.
+- [scripts/consensus-rnd-cli check-project-rules](scripts/consensus-rnd-cli check-project-rules) — read-only Consensus-rnd Phase bootstrap fixed-point probe; writes patch artifact only.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
 - [scripts/consensus-rnd-cli restart-daemons](scripts/consensus-rnd-cli restart-daemons) — cron/launchd anti-stop helper for existing daemon wrappers.
 - [scripts/consensus-rnd-cli log-retention](scripts/consensus-rnd-cli log-retention) — daemonless 24h direct-rm helper for `.refactor-loop/logs/*.log`.
@@ -931,7 +933,7 @@ Worker-owned operations:
 
 Maintainer-owned operations:
 
-1. Change the host policy or project rules outside the managed fixed-point block.
+1. Change the host policy or project rules, including applying any fixed-point patch artifact.
 2. Approve a real human-needed decision after `META_RESOLVED:escalate-human`.
 3. Stop the loop.
 4. Expand scope beyond the current work unit or repo.
@@ -1383,15 +1385,16 @@ You are the **Controller**. You never edit production code yourself. You orchest
 0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
    - ❌ 严禁用 `git rev-parse` / `gh repo view` 猜值后带空 BUILD_CMD/TEST_CMD 硬跑。
-0b. **ProjectRulesFixedPointEnsurer(强制,先于任何 actor 派发)**:在 `host.env` 注入后立即运行:
+0b. **ProjectRulesFixedPointProbe(强制,先于任何 actor 派发)**:在 `host.env` 注入后立即运行:
    ```bash
-   python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli ensure-project-rules
+   python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-project-rules
    ```
-   - 该 helper 只维护解析后的 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 内一个 `consensus-rnd:foundational-invariants` sentinel managed 区块;区块外 host 内容保持不变。
-   - helper 退出非 0 → bootstrap fail closed:不得初始化 state、不得建 labels、不得起 daemon、不得派 audit / solver / reviewer / implement actor。
-   - # Refactor (iter1/host-claude-md-fixed-points):
-     #   Old pattern: host 的 PROJECT_RULES/CLAUDE.md 不保证基础不动点(泛化理论)在场,跑 loop 时基础理论未被可靠加载
-     #   New principle: Consensus-rnd Phase bootstrap ProjectRulesFixedPointEnsurer 幂等向 $PROJECT_RULES 写入带 sentinel 的 managed 不动点区块(consensus:minimal,不覆盖 host 已有内容)
+   - 该 probe 只读解析后的 `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 内 `consensus-rnd:foundational-invariants` sentinel block;`$PROJECT_RULES` 是 host-owned read-only evidence,不是 skill 可写 surface。
+   - 非 current 时只写 `.refactor-loop/runs/project-rules-fixed-point.patch`,并以非 0 退出;controller 把该 patch artifact 交给 maintainer / host policy 流程处理。
+   - probe 退出非 0 → bootstrap fail closed:不得初始化 state、不得建 labels、不得起 daemon、不得派 audit / solver / reviewer / implement actor。
+   - # Refactor (iter218/issue-218):
+     #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+     #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
 3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。

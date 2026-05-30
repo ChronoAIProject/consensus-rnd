@@ -98,15 +98,18 @@ LIFECYCLE_TOKENS = {
 
 
 class RuntimeCommandRouterTests(unittest.TestCase):
+    # Refactor (iter218/issue-218):
+    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
     def test_each_public_operation_is_registered(self) -> None:
         self.assertEqual(
             {
                 "check-degradation",
                 "check-manifest",
+                "check-project-rules",
                 "labels",
                 "concurrency",
                 "dev-sync",
-                "ensure-project-rules",
                 "log-retention",
                 "spawn-codex",
                 "peek",
@@ -194,6 +197,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "apply-human-label",
             "apply-sync",
             "apply-triage",
+            "ensure-project-rules",
             "merge-pr",
             "open-pr",
             "open-release-rollup-pr",
@@ -210,6 +214,15 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 lifecycle_tokens = set(spec.authority) & LIFECYCLE_TOKENS
                 allowed = DAEMON_LIFECYCLE_CARVEOUTS.get(name, set())
                 self.assertFalse(lifecycle_tokens - allowed)
+
+    def test_check_project_rules_cli_declares_read_source_write_artifact_only(self) -> None:
+        self.assertIn("check-project-rules", COMMANDS)
+        self.assertNotIn("ensure-project-rules", COMMANDS)
+        self.assertEqual(("read-source", "write-artifact"), COMMANDS["check-project-rules"].authority)
+        for name, spec in COMMANDS.items():
+            if "project-rules" in name:
+                with self.subTest(command=name):
+                    self.assertNotIn("write-source", spec.authority)
 
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")

@@ -115,7 +115,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         obligations = (
             "source .refactor-loop/host.env",
             "fail closed",
-            "ProjectRulesFixedPointEnsurer",
+            "ProjectRulesFixedPointProbe",
+            "consensus-rnd-cli check-project-rules",
             "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
             "integration branch",
             "ensure labels",
@@ -140,6 +141,30 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(daemon=daemon):
                 self.assertIn(daemon, phase0)
+
+    def test_skill_bootstrap_requires_probe_before_actor_dispatch(self) -> None:
+        # Refactor (iter218/issue-218):
+        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
+        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
+        phase0 = section_between(
+            self.skill,
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
+            r"^## Phase Routing$",
+        )
+        required_order = (
+            "ProjectRulesFixedPointProbe",
+            "consensus-rnd-cli check-project-rules",
+            ".refactor-loop/runs/project-rules-fixed-point.patch",
+            "不得派 audit / solver / reviewer / implement actor",
+            "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
+        )
+        cursor = -1
+        for token in required_order:
+            index = phase0.find(token)
+            with self.subTest(token=token):
+                self.assertNotEqual(index, -1)
+                self.assertGreater(index, cursor)
+            cursor = index
 
     def test_wake_source_contract_requires_session_monitor_with_fallback_only(self) -> None:
         wake_row = next(line for line in self.skill.splitlines() if line.startswith("| Wake source |"))
