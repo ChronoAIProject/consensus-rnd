@@ -22,6 +22,7 @@ from .restart import main as restart_main
 from .retention import main as retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
+from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
 
 
@@ -111,6 +112,11 @@ COMMANDS: dict[str, CommandSpec] = {
         release_required_checks_main,
         "check exact release required check-runs",
         ("read-gh",),
+    ),
+    "update-check": CommandSpec(
+        update_check_main,
+        "run the notify-only version update check probe",
+        ("read-source", "read-gh", "write-state"),
     ),
     "render-github-body": CommandSpec(
         github_body.main,

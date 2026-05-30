@@ -28,6 +28,7 @@ EXPECTED_VERSION_RECORDS = {
     (".codex-plugin/plugin.json", "version"),
     (".cursor-plugin/plugin.json", "version"),
     ("gemini-extension.json", "version"),
+    ("skills/codex-refactor-loop/VERSION.json", "version"),
 }
 
 
@@ -45,6 +46,7 @@ class ManifestVersionSyncTests(unittest.TestCase):
             {"path": ".codex-plugin/plugin.json", "field": "version"},
             {"path": ".cursor-plugin/plugin.json", "field": "version"},
             {"path": "gemini-extension.json", "field": "version"},
+            {"path": "skills/codex-refactor-loop/VERSION.json", "field": "version"},
         ]
         self.write_json(root, ".version-bump.json", {"files": files})
         self.write_json(root, "package.json", {"version": "1.2.3"})
@@ -54,6 +56,17 @@ class ManifestVersionSyncTests(unittest.TestCase):
         self.write_json(root, ".cursor-plugin/plugin.json", {"version": "1.2.3"})
         gemini_manifest = {"version": gemini_version} if include_gemini_field else {"name": "consensus-rnd"}
         self.write_json(root, "gemini-extension.json", gemini_manifest)
+        self.write_json(
+            root,
+            "skills/codex-refactor-loop/VERSION.json",
+            {
+                "schema": "codex-refactor-loop-version",
+                "version": "1.2.3",
+                "repository": "ChronoAIProject/consensus-rnd",
+                "release_source": "github-release-then-tag",
+                "install_hint": "host-owned",
+            },
+        )
 
     def write_single_record_fixture(
         self,

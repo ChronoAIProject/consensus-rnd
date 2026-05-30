@@ -43,6 +43,7 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         ".codex-plugin/plugin.json",
         ".cursor-plugin/plugin.json",
         "gemini-extension.json",
+        "skills/codex-refactor-loop/VERSION.json",
     ]
     for relative in paths:
         source = REPO_ROOT / relative

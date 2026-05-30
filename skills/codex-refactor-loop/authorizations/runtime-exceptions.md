@@ -47,6 +47,19 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_release_commits.py`, `test_cli_command_router.py`, `test_release_gate_module.py`
 - no_new_runtime_authority: This mirror documents only the independent narrow producer; it does not widen `release-gate`, which remains no-git decision-artifact-only.
 
+<a id="update-check-231"></a>
+## update-check-231
+
+- surface: `consensus-rnd-cli update-check`
+- source_issue: `#231`
+- source_round: `r4 structural`
+- source_marker: `META_JUDGE_DONE:consensus:B-structural-profile:notify-only-update-check-with-version-manifest-snapshot-projection-shared-semver`
+- skill_anchor: `#notify-only-update-checkper-231`
+- allowed: read checked-in `skills/codex-refactor-loop/VERSION.json`; read GitHub latest release and tags for the repository named in that manifest; atomically write `.refactor-loop/state/update-check.json`; let `restart-daemons` call the probe after the fixed five-daemon start/skip pass; let `concurrency` project fresh positive update fields into `statusline-snapshot.json`.
+- forbidden: no copy/overwrite/reinstall, host config edit, git lifecycle, GitHub lifecycle, installer, new daemon, commit, push, merge, rebase, reset, tag, release, issue lifecycle, PR lifecycle, label lifecycle, or apply/update command surface.
+- verification: `test_update_check.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_concurrency_monitor_snapshot.py`, `test_statusline.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This is notify-only state projection; downstream installation or update application is host-owned and outside the skill runtime.
+
 <a id="integration-sync-daemon-53"></a>
 ## integration-sync-daemon-53
 

@@ -24,6 +24,7 @@ TARGET_ANCHORS = {
     # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
     "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
+    "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
@@ -163,6 +164,32 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "label lifecycle",
             "generic lifecycle authority",
             "inline execution from `release-gate`",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
+    def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "update-check-231")
+
+        for token in (
+            "notify-only",
+            "VERSION.json",
+            ".refactor-loop/state/update-check.json",
+            "restart-daemons",
+            "statusline-snapshot.json",
+            "test_update_check.py",
+            "test_statusline.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
+                self.assertIn(token, self.skill)
+        for forbidden in (
+            "copy/overwrite/reinstall",
+            "host config edit",
+            "GitHub lifecycle",
+            "installer",
+            "new daemon",
+            "apply/update command surface",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
