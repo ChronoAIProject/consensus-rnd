@@ -247,6 +247,8 @@ Allowed: read/acquire/renew the singleton lease, expose owner and expiry, and ga
 
 Forbidden: no worker diff commit, issue/PR create/merge/close/edit, label mutation, tag/release, per-work claim, host-defined lease scope, daemon ownership matrix, active-active scheduler, generic distributed lock library, or generic lifecycle actor. Missing `ACTIVE_CONTROLLER_DEVICE_ID` is the default single-device local-owner noop, not a multi-device claim.
 
+#193 metadata-only invariant: issue/PR `author.login` and `updatedAt` may only be planning/routing/stale read-only metadata. They must not become side-effect authorization, per-work owner authority, claim/lease scope, stale takeover permit, or any replacement for the #191 `ActiveControllerLease` / `require_active_controller(...)` gate on issue/PR target writes.
+
 ## Named runtime exception — closed-label-reconciler(per #238)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#closed-label-reconciler-238`. This is the only closed managed item phase-label reconciliation carveout. Consensus marker: `META_JUDGE_DONE:consensus:closed-label-reconciler:option B named restart-managed closed-label-reconciler with crnd:phase:closed and gh-label-closed-reconcile authority`.
 
@@ -2576,6 +2578,8 @@ Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-man
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
 Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
+
+Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibility, but it does not authorize GitHub comments, label edits, PR merges, issue closes, takeover, or any other issue/PR target write. Those writes remain gated solely by #191 `ActiveControllerLease` ownership through `require_active_controller(...)`.
 
 ### Concurrency floor = `$CODEX_FLOOR` 本仓库 codex(host 可配,默认 5,硬下限 2)(强制)
 

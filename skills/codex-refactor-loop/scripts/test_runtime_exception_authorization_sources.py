@@ -332,6 +332,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, self.skill)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
+        # Refactor (iter193/issue-193):
+        #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
+        #   per-work ownership as a second authority for issue/PR writes.
+        #   New principle: author.login+updatedAt are metadata only; issue/PR
+        #   write permits come only from #191 ActiveControllerLease.
         entry = mirror_entry(self.mirror, "active-controller-lease-191")
 
         for required in (
@@ -356,6 +361,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "comment/progress writes",
             "dev-sync",
             "controller lifecycle helpers",
+            "metadata_only_193",
+            "issue/PR `author.login` and `updatedAt` are planning/routing/stale metadata only",
+            "must not authorize side effects",
+            "per-work owner authority",
+            "claim/lease scope",
+            "stale takeover permit",
+            "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)

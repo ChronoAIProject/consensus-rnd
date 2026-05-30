@@ -233,5 +233,60 @@ class RuntimeShellRemovalSourceTests(unittest.TestCase):
         )
 
 
+class MetadataOnlyIssue193SourceTests(unittest.TestCase):
+    # Refactor (iter193/issue-193):
+    #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
+    #   per-work ownership as a second authority for issue/PR writes.
+    #   New principle: author.login+updatedAt are metadata only; issue/PR
+    #   write permits come only from #191 ActiveControllerLease.
+    def test_project_rules_lock_issue_193_metadata_only_invariant(self) -> None:
+        rules = (REPO_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "#193 中 issue/PR author.login 与 updatedAt 仅可作为 planning/routing/stale metadata",
+            rules,
+        )
+        self.assertIn(
+            "不得作为 side-effect authorization、per-work owner authority、claim/lease scope 或 takeover permit",
+            rules,
+        )
+        self.assertIn("issue/PR target 写副作用的跨设备 permit 只来自 #191 ActiveControllerLease", rules)
+        self.assertLess(rules.index("#191 是唯一跨设备 active-controller lease carveout"), rules.index("#193 中 issue/PR"))
+
+    def test_pr200_per_work_authority_surface_is_absent(self) -> None:
+        checked_roots = [
+            REPO_ROOT / "CLAUDE.md",
+            SKILL_ROOT / "SKILL.md",
+            SKILL_ROOT / "authorizations",
+            SCRIPT_DIR / "codex_refactor_loop",
+        ]
+        combined_parts: list[str] = []
+        for root in checked_roots:
+            if root.is_file():
+                paths = [root]
+            else:
+                paths = [
+                    path
+                    for path in root.rglob("*")
+                    if path.is_file() and path.suffix in {".md", ".py"}
+                ]
+            for path in paths:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+                combined_parts.append(text)
+        combined = "\n".join(combined_parts)
+        for forbidden in (
+            "GitHubWorkOwnership",
+            "OwnershipDecision",
+            "WorkTargetResolver",
+            "require_ownership_permit",
+            "post_takeover_notice",
+            "allowed_ownership",
+            "refs/heads/auto-loop/leases",
+            "WorkUnitClaim",
+            ".refactor-loop/device-claims",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
+
+
 if __name__ == "__main__":
     unittest.main()

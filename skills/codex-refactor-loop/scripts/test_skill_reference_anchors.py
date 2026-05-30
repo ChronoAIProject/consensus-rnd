@@ -325,10 +325,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # multi-device controller writes were described as local daemon facts.
-        # New principle: SKILL.md locks one cross-device active-controller
-        # lease and forbids per-work/distributed scheduler expansion.
+        # Refactor (iter193/issue-193):
+        #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
+        #   per-work ownership as a second authority for issue/PR writes.
+        #   New principle: author.login+updatedAt are metadata only; issue/PR
+        #   write permits come only from #191 ActiveControllerLease.
         for needle in (
             "| Active controller |",
             "## Named runtime exception - active controller lease(per #191)",
@@ -355,6 +356,30 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "daemon ownership matrix",
             "active-active scheduler",
             "generic distributed lock library",
+            "#193 metadata-only invariant",
+            "issue/PR `author.login` and `updatedAt` may only be planning/routing/stale read-only metadata",
+            "must not become side-effect authorization",
+            "per-work owner authority",
+            "claim/lease scope",
+            "stale takeover permit",
+            "`require_active_controller(...)` gate on issue/PR target writes",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+    def test_stale_revival_documents_updated_at_as_metadata_only(self) -> None:
+        # Refactor (iter193/issue-193):
+        #   Old pattern: stale updatedAt could be read as takeover permission.
+        #   New principle: stale routing is visibility metadata, while all
+        #   issue/PR write side effects stay behind #191 ActiveControllerLease.
+        for needle in (
+            "Stale `updatedAt` is routing metadata only",
+            "it does not authorize GitHub comments",
+            "label edits",
+            "PR merges",
+            "issue closes",
+            "takeover",
+            "Those writes remain gated solely by #191 `ActiveControllerLease` ownership through `require_active_controller(...)`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
