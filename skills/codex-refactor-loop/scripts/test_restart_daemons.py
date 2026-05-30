@@ -244,6 +244,30 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(1, self.start_count("dev_sync_daemon"))
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern:
+    # restart-daemons started controller write daemons on every device. New
+    # principle: non-owner restart-daemons writes active_controller=noop and
+    # starts no write daemon.
+    def test_non_owner_restart_daemons_writes_noop_and_starts_no_daemons(self) -> None:
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="restart-daemons", lease_id="lease", expires_at="")
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            helper = RestartDaemons(self.ctx, self.config)
+            helper.run()
+
+        self.assertEqual([], helper._wrappers)
+        status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", status["active_controller"])
+        for name in DAEMON_NAMES:
+            self.assertEqual(0, self.start_count(name))
+
+    def test_owner_restart_daemons_starts_static_allowlist(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            self.run_helper()
+
+        for name in DAEMON_NAMES:
+            self.assertEqual(1, self.start_count(name))
+
     def test_restart_helper_source_mentions_launch_fingerprint_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
         for needle in (

@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .executor import IntegrationSyncExecutor
@@ -312,6 +313,7 @@ class IntegrationSyncDaemon:
     def __init__(
         self,
         *,
+        context: LoopContext | None = None,
         worktree: Path,
         main_repo: Path,
         integration: str,
@@ -330,6 +332,7 @@ class IntegrationSyncDaemon:
         now_provider: Callable[[], datetime] | None = None,
         executor: IntegrationSyncExecutor | None = None,
     ) -> None:
+        self.context = context
         self.worktree = worktree
         self.main_repo = main_repo
         self.integration = integration
@@ -368,6 +371,7 @@ class IntegrationSyncDaemon:
     @classmethod
     def from_config(cls, config: DevSyncConfig, *, command_runner=run, logger=log) -> "IntegrationSyncDaemon":
         return cls(
+            context=config.context,
             worktree=config.worktree,
             main_repo=config.main_repo,
             integration=config.integration,
@@ -718,6 +722,17 @@ class IntegrationSyncDaemon:
         return True
 
     def tick(self) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # multiple dev-sync daemons could touch the integration worktree and
+        # execute the #53 git allowlist concurrently. New principle: the #53
+        # allowlist remains narrow, and only the active-controller owner may
+        # enter it.
+        if self.context is not None:
+            decision = require_active_controller(self.context, "dev-sync")
+            write_active_controller_status(self.context, decision)
+            if not decision.allowed:
+                self.log(f"active_controller=noop:not-owner action=dev-sync owner={decision.owner_device}")
+                return
         cwd = self.worktree
         if not remote_branch_exists(
             main_repo=self.main_repo,

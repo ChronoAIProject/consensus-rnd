@@ -104,6 +104,32 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern: any
+    # device-local concurrency monitor could dispatch and archive queue entries.
+    # New principle: non-owner monitors preserve queue files and write no
+    # DISPATCH_FIRED side effect.
+    def test_non_owner_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
+        dispatch = self.write_dispatch("p1", "fix-pr44-round-3")
+        calls: list[list[str]] = []
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="concurrency-dispatch", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        events = self.refactor_loop / ".controller-pending-events.log"
+        self.assertFalse(events.exists())
+
+    def test_floor_remains_local_code_floor_without_cross_device_aggregation(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.get("CODEX_FLOOR"', source)
+        self.assertNotIn("REMOTE_CODEX_FLOOR", source)
+        self.assertNotIn("cross_device_floor", source)
+
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md

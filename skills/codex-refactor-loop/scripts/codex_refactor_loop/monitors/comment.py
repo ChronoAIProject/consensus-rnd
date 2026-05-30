@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
@@ -106,6 +107,15 @@ class CommentMonitor:
         if author not in self.maintainers:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
+            return
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # comment monitors on multiple devices could react and post banners for
+        # the same maintainer comment. New principle: GitHub comment mutations
+        # are active-controller-owner-only; non-owners stay read-only.
+        decision = require_active_controller(self.ctx, "comment-monitor-write")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            print(f"active_controller=noop:not-owner comment-monitor {number} {comment_id} owner={decision.owner_device}", flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:

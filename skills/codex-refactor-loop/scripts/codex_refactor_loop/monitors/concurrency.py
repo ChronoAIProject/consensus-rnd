@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
@@ -441,6 +442,15 @@ class ConcurrencyMonitor:
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
     #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def dispatch_one_from_queue(self) -> tuple[str, str, str] | None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # concurrency monitors on multiple devices could consume/archive the
+        # same local queue and spawn duplicate workers. New principle: dispatch
+        # and queue archive require the single active-controller owner.
+        decision = require_active_controller(self.ctx, "concurrency-dispatch")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            log(f"active_controller=noop:not-owner action=concurrency-dispatch owner={decision.owner_device}")
+            return None
         for priority, path in self.dispatch_queue_files():
             payload = json.loads(path.read_text(encoding="utf-8"))
             task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
@@ -484,6 +494,9 @@ class ConcurrencyMonitor:
         state = self.load_state()
         zero_streak = int(state.get("zero_streak", 0))
         self.maybe_run_skill_degradation_watch(state)
+        decision = require_active_controller(self.ctx, "concurrency-tick")
+        write_active_controller_status(self.ctx, decision)
+        owner_allowed = decision.allowed
 
         items = self.list_auto_loop_issues()
         expected, breakdown = self.compute_expected(items)
@@ -509,7 +522,7 @@ class ConcurrencyMonitor:
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
-            if not self.dispatch_queue_empty():
+            if owner_allowed and not self.dispatch_queue_empty():
                 actual = self.top_up_from_dispatch_queue(actual, max(expected, self.configured_floor()))
             self.write_statusline_snapshot(
                 actual=actual,
@@ -527,10 +540,19 @@ class ConcurrencyMonitor:
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
-                self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
-                log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                if owner_allowed:
+                    self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                    log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                else:
+                    log(
+                        "active_controller=noop:not-owner "
+                        f"action=concurrency-tick dispatch_required={deficit} owner={decision.owner_device}"
+                    )
             else:
-                actual = self.top_up_from_dispatch_queue(actual, target)
+                if owner_allowed:
+                    actual = self.top_up_from_dispatch_queue(actual, target)
+                else:
+                    log(f"active_controller=noop:not-owner action=concurrency-top-up owner={decision.owner_device}")
 
         self.write_statusline_snapshot(
             actual=actual,

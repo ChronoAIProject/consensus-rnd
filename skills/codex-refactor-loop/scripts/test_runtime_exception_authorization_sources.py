@@ -20,6 +20,7 @@ REPO_RULES = REPO_ROOT / "CLAUDE.md"
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
     # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
+    "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
@@ -128,7 +129,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
-        targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66)-r\d+-judge\.md")
+        targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")
         checked_paths = (
             SKILL_MD,
             SKILL_ROOT / "scripts" / "codex_refactor_loop" / "release" / "gate.py",
@@ -190,6 +191,47 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
+
+    def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "active-controller-lease-191")
+
+        for required in (
+            "single active controller lease",
+            "refs/heads/crnd/active-controller",
+            "active-controller.json",
+            "owner_device",
+            "lease_id",
+            "expires_at",
+            "git fetch origin <lease-ref>",
+            "git commit-tree",
+            "git push --force-with-lease=<old>:<lease-ref>",
+            "restart-daemons",
+            "concurrency dispatch",
+            "phase9 router",
+            "comment/progress writes",
+            "dev-sync",
+            "controller lifecycle helpers",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+
+        for forbidden in (
+            "worker diff commit",
+            "issue create/edit/close",
+            "PR create/edit/merge/close",
+            "label mutation",
+            "tag",
+            "release",
+            "per-work claim",
+            "host-defined lease scope",
+            "cross-device floor aggregation",
+            "daemon ownership matrix",
+            "active-active scheduler",
+            "generic distributed lock library",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
 
 
 if __name__ == "__main__":

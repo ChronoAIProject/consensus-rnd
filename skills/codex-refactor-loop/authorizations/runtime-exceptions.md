@@ -19,6 +19,20 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_release_gate_module.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
+<a id="active-controller-lease-191"></a>
+## active-controller-lease-191
+
+- surface: `single active controller lease`
+- source_issue: `#191`
+- source_round: `r2`
+- source_marker: `META_JUDGE_DONE:consensus:single-active-controller`
+- skill_anchor: `#named-runtime-exception--active-controller-leaseper-191`
+- durable_source: singleton JSON blob `active-controller.json` on `refs/heads/crnd/active-controller`; fields `owner_device`, `lease_id`, `acquired_at`, `expires_at`, `renewed_at`, `repo`, `reason`, `source_issue`.
+- allowed: read/acquire/renew only the global active-controller lease via `git fetch origin <lease-ref>`, `git rev-parse`, `git commit-tree`, and `git push --force-with-lease=<old>:<lease-ref>`; expose owner/expiry; gate restart-daemons, concurrency dispatch, phase9 router, comment/progress writes, dev-sync, and controller lifecycle helpers.
+- forbidden: no worker diff commit, issue create/edit/close, PR create/edit/merge/close, label mutation, tag, release, per-work claim, host-defined lease scope, cross-device floor aggregation, daemon ownership matrix, active-active scheduler, generic distributed lock library, or generic lifecycle actor.
+- verification: `test_active_controller_lease.py`, `test_restart_daemons.py`, `test_concurrency_monitor.py`, `test_phase9_router_package.py`, `test_comment_progress_active_controller.py`, `test_sync_dev.py`, `test_controller_actions.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`, `test_host_env_surface_matrix.py`
+- no_new_runtime_authority: This is a singleton coordination gate only; it does not grant lifecycle authority and does not create per-work leases.
+
 <a id="release-commits-producer-232"></a>
 ## release-commits-producer-232
 

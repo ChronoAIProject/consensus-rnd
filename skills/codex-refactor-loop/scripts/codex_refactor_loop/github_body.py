@@ -25,6 +25,11 @@ AUTHORITY_PATH_RE = re.compile(
     re.I,
 )
 DEBUG_SUMMARY = "<summary>本机调试线索</summary>"
+INLINE_ARTIFACT_DETAILS_RE = re.compile(
+    r"<details>\s*<summary>内联 artifact [0-9]+: [^<]+</summary>\s*"
+    r"```markdown\n(?P<artifact>.*?)\n```\s*</details>",
+    re.S,
+)
 ALLOWED_KINDS = {"pr", "design-issue", "consensus", "authorization", "escalation", "triage"}
 
 
@@ -41,6 +46,10 @@ def render_github_body(
     max_bytes: int = MAX_BODY_BYTES,
 ) -> str:
     """Render a self-contained Chinese GitHub body from local artifacts.
+
+    Refactor (iter191/issue-191):
+    Old pattern: multi-device / multi-loop runtime lacks a single-active-controller guard; GitHub-facing authority/consensus bodies risk referencing local .refactor-loop paths instead of inlining artifacts
+    New principle: single active controller lease (no per-work claims, no cross-device floor); strengthen the self-contained github_body.py validator so authority/consensus/plan bodies inline raw artifacts and .refactor-loop/runs/*.md appears only as debug detail
 
     Refactor (issue192/self-contained-github-body):
     Old pattern: GitHub bodies could cite `.refactor-loop/runs/*.md` as the
@@ -112,7 +121,12 @@ def validate_self_contained_github_body(
     authority_required: bool = False,
     max_bytes: int = MAX_BODY_BYTES,
 ) -> None:
-    """Fail closed when a GitHub body uses local run paths as sole authority."""
+    """Fail closed when a GitHub body uses local run paths as sole authority.
+
+    Refactor (iter191/issue-191):
+    Old pattern: multi-device / multi-loop runtime lacks a single-active-controller guard; GitHub-facing authority/consensus bodies risk referencing local .refactor-loop paths instead of inlining artifacts
+    New principle: single active controller lease (no per-work claims, no cross-device floor); strengthen the self-contained github_body.py validator so authority/consensus/plan bodies inline raw artifacts and .refactor-loop/runs/*.md appears only as debug detail
+    """
 
     if not isinstance(text, str) or not text.strip():
         raise GitHubBodyError("empty GitHub body")
@@ -125,8 +139,8 @@ def validate_self_contained_github_body(
         raise GitHubBodyError("local .refactor-loop artifact path cannot be the only authority source")
     if LOCAL_RUN_ARTIFACT_RE.search(public_text) is not None:
         raise GitHubBodyError("local .refactor-loop artifact path is only allowed under 本机调试线索 details")
-    if authority_required and not _has_inline_artifact_details(text):
-        raise GitHubBodyError("authority body must inline artifact text in details")
+    if authority_required and not _has_raw_inline_artifact_details(text):
+        raise GitHubBodyError("authority body must inline raw artifact text in inline artifact details")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -175,13 +189,13 @@ def _kind_label(kind: str) -> str:
     }[kind]
 
 
-def _has_inline_artifact_details(text: str) -> bool:
-    return "<details>" in text and "```markdown" in text and "</details>" in text
+def _has_raw_inline_artifact_details(text: str) -> bool:
+    return any(match.group("artifact").strip() for match in INLINE_ARTIFACT_DETAILS_RE.finditer(text))
 
 
 def _mask_allowed_run_path_sections(text: str) -> str:
     masked = re.sub(r"<details>\s*" + re.escape(DEBUG_SUMMARY) + r".*?</details>", "", text, flags=re.S)
-    masked = re.sub(r"<details>.*?```markdown.*?</details>", "", masked, flags=re.S)
+    masked = INLINE_ARTIFACT_DETAILS_RE.sub("", masked)
     return masked
 
 
