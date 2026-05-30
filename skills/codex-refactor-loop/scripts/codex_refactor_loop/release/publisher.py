@@ -81,13 +81,19 @@ class ReleasePublisher:
         self._ensure_success(add, "git add")
         commit = self._run(["git", "commit", "-m", f"Release {tag}"])
         self._ensure_success(commit, "git commit")
+        # Refactor (fix/publisher-tag-target): Old pattern: publisher committed
+        # synchronized release manifests, pushed HEAD, then created the release tag
+        # on the preflight candidate ref whose manifests could still be old.
+        # New principle: the release tag target is the freshly committed manifest
+        # bump SHA, so tag version and mapped manifest versions are coupled.
+        release_target_ref = self._current_head_sha()
         self._safe_push()
-        release = self._run(["gh", "release", "create", tag, "--target", result.target_ref, "--generate-notes"])
+        release = self._run(["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"])
         self._ensure_success(release, "gh release create")
         release_url = release.stdout.strip().splitlines()[-1] if release.stdout.strip() else ""
         payload = {
             "tag": tag,
-            "target_ref": result.target_ref,
+            "target_ref": release_target_ref,
             "version": version,
             "published_at": isoformat(self.now()),
             "release_url": release_url,
@@ -98,7 +104,7 @@ class ReleasePublisher:
             published=True,
             reasons=(),
             tag=tag,
-            target_ref=result.target_ref,
+            target_ref=release_target_ref,
             version=version,
             release_url=release_url,
             result_path=self.result_path,
@@ -118,10 +124,20 @@ class ReleasePublisher:
     def _run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return self.runner(cmd, self.repo_root)
 
+    def _current_head_sha(self) -> str:
+        result = self._run(["git", "rev-parse", "HEAD"])
+        self._ensure_success(result, "git rev-parse HEAD")
+        sha = result.stdout.strip()
+        if not sha:
+            raise RuntimeError("git rev-parse HEAD returned an empty release target")
+        return sha
+
     def _safe_push(self) -> None:
         # Refactor (iter217/issue-217):
-        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        #   Old pattern: release.yml kept tag/release mutation authority and
+        #   could not reliably read local runtime facts.
+        #   New principle: controller-only publication owns release mutation;
+        #   release.yml is a read-only preview.
         fetch = self._run(["git", "fetch", "origin", "HEAD"])
         self._ensure_success(fetch, "git fetch")
         behind = self._run(["git", "rev-list", "--count", "HEAD..origin/HEAD"])

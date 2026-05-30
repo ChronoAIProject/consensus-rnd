@@ -65,6 +65,7 @@ class FakeRunner:
         self.commands: list[list[str]] = []
         self.failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {}
         self.rev_list_stdout = "0\n"
+        self.head_sha = "bumpcommit456"
 
     def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         command = list(cmd)
@@ -74,6 +75,8 @@ class FakeRunner:
             return failure
         if command[:3] == ["git", "rev-list", "--count"]:
             return subprocess.CompletedProcess(command, 0, stdout=self.rev_list_stdout, stderr="")
+        if command == ["git", "rev-parse", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_sha}\n", stderr="")
         if command[:3] == ["gh", "release", "create"]:
             return subprocess.CompletedProcess(command, 0, stdout="https://github.test/release/v2.0.0\n", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
@@ -110,11 +113,18 @@ def expected_success_commands() -> list[list[str]]:
             "gemini-extension.json",
         ],
         ["git", "commit", "-m", "Release v2.0.0"],
+        ["git", "rev-parse", "HEAD"],
         ["git", "fetch", "origin", "HEAD"],
         ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
         ["git", "push", "origin", "HEAD"],
-        ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"],
+        ["gh", "release", "create", "v2.0.0", "--target", "bumpcommit456", "--generate-notes"],
     ]
+
+
+def expected_violating_pre_bump_tag_command() -> list[str]:
+    return [
+        ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"],
+    ][0]
 
 
 class ReleasePublisherTests(unittest.TestCase):
@@ -131,7 +141,7 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertEqual(preflight.calls, [(".refactor-loop/state/release-candidate.json", "abc123")])
             self.assertEqual(runner.commands, expected_success_commands())
 
-    def test_publisher_records_result_and_uses_exact_tag_target(self) -> None:
+    def test_publisher_records_result_and_uses_bump_commit_tag_target(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             preflight = FakePreflight(allowed_result(repo))
@@ -142,13 +152,20 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertTrue(result.published)
             self.assertEqual(result.tag, "v2.0.0")
-            self.assertEqual(result.target_ref, "abc123")
-            self.assertEqual(runner.commands[-1], ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"])
+            self.assertEqual(result.target_ref, "bumpcommit456")
+            self.assertIn(["git", "commit", "-m", "Release v2.0.0"], runner.commands)
+            self.assertIn(["git", "rev-parse", "HEAD"], runner.commands)
+            self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
+            self.assertEqual(
+                runner.commands[-1],
+                ["gh", "release", "create", "v2.0.0", "--target", "bumpcommit456", "--generate-notes"],
+            )
+            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
             payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["tag"], "v2.0.0")
-            self.assertEqual(payload["target_ref"], "abc123")
+            self.assertEqual(payload["target_ref"], "bumpcommit456")
             self.assertEqual(payload["candidate_digest"], "digest123")
             self.assertEqual(payload["release_url"], "https://github.test/release/v2.0.0")
 
@@ -188,10 +205,10 @@ class ReleasePublisherTests(unittest.TestCase):
 
             self.assertEqual(
                 runner.commands,
-                expected_success_commands()[:5],
+                expected_success_commands()[:6],
             )
             self.assertNotIn(["git", "push", "origin", "HEAD"], runner.commands)
-            self.assertNotIn(["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"], runner.commands)
+            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_publisher_stops_on_command_failure_before_release_creation(self) -> None:
@@ -216,7 +233,7 @@ class ReleasePublisherTests(unittest.TestCase):
                 publisher.publish(target_ref="abc123")
 
             self.assertEqual(runner.commands, expected_success_commands()[:2])
-            self.assertNotIn(["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"], runner.commands)
+            self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
 
