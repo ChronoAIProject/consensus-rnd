@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from subprocess import CompletedProcess
 from unittest import mock
 
 
@@ -139,6 +140,105 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         gh.assert_not_called()
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
+
+    def test_owner_run_lists_closed_managed_items_edits_and_reverifies(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        issue_row = {
+            "number": 21,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_REVIEWING},
+                {"name": labels.STUCK},
+                {"name": labels.HUMAN_AUTO},
+            ],
+            "title": "closed issue",
+        }
+        pr_row = {
+            "number": 22,
+            "state": "CLOSED",
+            "mergedAt": None,
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_FIXING},
+                {"name": "🆘 human:卡死"},
+                {"name": labels.HUMAN_AUTO},
+            ],
+            "title": "closed pr",
+        }
+        gh_json_responses = {
+            ("issue", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
+            ("issue", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
+            ("pr", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [pr_row],
+            ("pr", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [pr_row],
+            ("pr", "list", "--label", labels.MANAGED, "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--label", "auto-loop", "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--state", "merged", "--search", "in:body Closes #21", "--limit", "1", "--json", "number,mergedAt"): [{"number": 30, "mergedAt": "2026-05-31T00:00:00Z"}],
+            ("issue", "view", "21", "--json", "number,state,labels"): {
+                "number": 21,
+                "state": "CLOSED",
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_MERGED},
+                    {"name": labels.HUMAN_AUTO},
+                ],
+            },
+            ("pr", "view", "22", "--json", "number,state,labels,mergedAt"): {
+                "number": 22,
+                "state": "CLOSED",
+                "mergedAt": None,
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_CLOSED},
+                    {"name": labels.HUMAN_AUTO},
+                ],
+            },
+        }
+        edit_commands: list[tuple[str, ...]] = []
+
+        def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
+            command = tuple(args)
+            if command in gh_json_responses:
+                return CompletedProcess(["gh", *command], 0, json.dumps(gh_json_responses[command]), "")
+            if len(command) >= 2 and command[1] == "list":
+                return CompletedProcess(["gh", *command], 0, "[]", "")
+            edit_commands.append(command)
+            return CompletedProcess(["gh", *command], 0, "", "")
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "_gh", side_effect=fake_gh):
+                self.assertEqual(0, reconciler.run_once())
+
+        self.assertEqual(
+            [
+                (
+                    "issue",
+                    "edit",
+                    "21",
+                    "--add-label",
+                    labels.PHASE_MERGED,
+                    "--remove-label",
+                    labels.STUCK,
+                    "--remove-label",
+                    labels.PHASE_REVIEWING,
+                ),
+                (
+                    "pr",
+                    "edit",
+                    "22",
+                    "--add-label",
+                    labels.PHASE_CLOSED,
+                    "--remove-label",
+                    labels.PHASE_FIXING,
+                    "--remove-label",
+                    "🆘 human:卡死",
+                ),
+            ],
+            edit_commands,
+        )
+        status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("owner", status["active_controller"])
 
     def test_post_edit_rejects_multiple_phase_labels(self) -> None:
         plan = plan_closed_phase_labels(

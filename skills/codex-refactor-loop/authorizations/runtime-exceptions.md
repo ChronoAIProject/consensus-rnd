@@ -61,6 +61,19 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror documents only the #238 closed managed item terminal phase-label reconciliation carveout and does not grant generic GitHub label/edit or lifecycle authority.
 
+<a id="update-check-231"></a>
+## update-check-231
+
+- surface: `consensus-rnd-cli update-check`
+- source_issue: `#231`
+- source_round: `r4 structural`
+- source_marker: `META_JUDGE_DONE:consensus:B-structural-profile:notify-only-update-check-with-version-manifest-snapshot-projection-shared-semver`
+- skill_anchor: `#notify-only-update-checkper-231`
+- allowed: read checked-in `skills/codex-refactor-loop/VERSION.json`; read GitHub latest release and tags for the repository named in that manifest; atomically write `.refactor-loop/state/update-check.json`; let `restart-daemons` call the probe after the fixed daemon start/skip pass; let `concurrency` project fresh positive update fields into `statusline-snapshot.json`.
+- forbidden: no copy/overwrite/reinstall, host config edit, git lifecycle, GitHub lifecycle, installer, new daemon, commit, push, merge, rebase, reset, tag, release, issue lifecycle, PR lifecycle, label lifecycle, or apply/update command surface.
+- verification: `test_update_check.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_concurrency_monitor_snapshot.py`, `test_statusline.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This is notify-only state projection; downstream installation or update application is host-owned and outside the skill runtime.
+
 <a id="integration-sync-daemon-53"></a>
 ## integration-sync-daemon-53
 

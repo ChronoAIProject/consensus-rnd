@@ -25,6 +25,7 @@ TARGET_ANCHORS = {
     "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
+    "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
@@ -209,6 +210,32 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("#238 是唯一 closed managed item phase-label reconciliation carveout", self.repo_rules)
         self.assertIn("checked-in `closed-label-reconciler`", self.repo_rules)
         self.assertIn("exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`", self.repo_rules)
+
+    def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "update-check-231")
+
+        for token in (
+            "notify-only",
+            "VERSION.json",
+            ".refactor-loop/state/update-check.json",
+            "restart-daemons",
+            "statusline-snapshot.json",
+            "test_update_check.py",
+            "test_statusline.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
+                self.assertIn(token, self.skill)
+        for forbidden in (
+            "copy/overwrite/reinstall",
+            "host config edit",
+            "GitHub lifecycle",
+            "installer",
+            "new daemon",
+            "apply/update command surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
 
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
         targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")

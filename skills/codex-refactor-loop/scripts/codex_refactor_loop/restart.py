@@ -18,6 +18,7 @@ from typing import Any, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .retention import retain_logs
+from .update_check import maybe_run_update_check
 
 
 # Refactor (issue238/closed-label-reconciler): Old: Python kept a five-daemon
@@ -162,6 +163,7 @@ class RestartDaemons:
                 self.start_daemon(name, command)
         finally:
             self._release_restart_lock()
+        self._run_update_check()
         return 0
 
     def start_daemon(self, name: str, command_template: Sequence[str]) -> None:
@@ -229,6 +231,22 @@ class RestartDaemons:
             return
         suffix = " missing=true" if missing else ""
         self._log(f"log_retention: ttl_hours=24 deleted={deleted} kept={kept} target={target}{suffix}")
+
+    def _run_update_check(self) -> None:
+        # Refactor (issue231-update-check):
+        #   Old pattern: restart-daemons maintained only daemon wrappers and had
+        #   no startup projection for installed skill version drift.
+        #   New principle: after the fixed daemon start/skip pass, run the opt-in
+        #   notify-only probe and log warnings without blocking daemon restart.
+        try:
+            result = maybe_run_update_check(self.ctx, startup=True)
+        except Exception as exc:
+            self._log(f"update_check warning: {exc!r}")
+            return
+        status = result.get("status") if isinstance(result, dict) else "unknown"
+        reason = result.get("reason") if isinstance(result, dict) else None
+        suffix = f" reason={reason}" if reason else ""
+        self._log(f"update_check: status={status}{suffix}")
 
     def _acquire_restart_lock(self) -> None:
         attempts = 0

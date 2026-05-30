@@ -52,7 +52,10 @@ def render_snapshot(data: Mapping[str, Any]) -> str:
     freeze_seg = f" [STUCK {freeze}m]" if freeze > 5 else ""
     p0_seg = f" P0×{p0}" if p0 > 2 else ""
     d_seg = f" d:{d_healthy}/{d_total}" if d_total > 0 else ""
-    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{p0_seg}{freeze_seg}\033[0m"
+    update_seg = ""
+    if data.get("update_available") is True and data.get("update_latest_version"):
+        update_seg = f" up:v{data['update_latest_version']}"
+    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{update_seg}{p0_seg}{freeze_seg}\033[0m"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

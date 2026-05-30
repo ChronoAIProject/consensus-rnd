@@ -27,6 +27,7 @@ EXPECTED_VERSION_RECORDS = {
     (".codex-plugin/plugin.json", "version"),
     (".cursor-plugin/plugin.json", "version"),
     ("gemini-extension.json", "version"),
+    ("skills/codex-refactor-loop/VERSION.json", "version"),
 }
 
 

@@ -119,6 +119,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
             ".codex-plugin/plugin.json",
             ".cursor-plugin/plugin.json",
             "gemini-extension.json",
+            "skills/codex-refactor-loop/VERSION.json",
             ".github/scripts/bump_version.py",
         ]
         with tempfile.TemporaryDirectory() as tmp:
