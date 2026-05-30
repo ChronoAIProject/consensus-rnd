@@ -144,6 +144,16 @@ def write_ready_artifacts(
 
 
 class ReleasePublishPreflightTests(unittest.TestCase):
+    # Refactor (iter1/issue-225):
+    #   Old pattern: release publish preflight 的 fail-closed 负向分支缺测试(#217 误合遗留)
+    #   New principle: 为 ReleasePublishPreflight 每个 fail-closed reason 补负向行为测试
+
+    def assert_preflight_denies_with_reason(self, repo: Path, expected_reason: str) -> None:
+        # refactor helper, no behavior change
+        result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+        self.assertFalse(result.allowed)
+        self.assertIn(expected_reason, result.reasons)
+
     def test_missing_candidate_or_decision_fails_closed(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -229,6 +239,76 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertIn("old_candidate_schema", result.reasons)
             self.assertTrue(any(reason.startswith("missing_candidate_fields:") for reason in result.reasons))
 
+    def test_candidate_metadata_fail_closed_reasons_are_explicit(self) -> None:
+        cases = (
+            ("publish_preflight_mismatch", lambda candidate: candidate.__setitem__("publish_preflight", "release.yml")),
+            ("lifecycle_owner_not_controller", lambda candidate: candidate.__setitem__("lifecycle_owner", "workflow")),
+            ("candidate_not_ready", lambda candidate: candidate.__setitem__("ready", False)),
+            ("target_ref_missing", lambda candidate: candidate.pop("target_ref")),
+            ("candidate_version_missing", lambda candidate: candidate.pop("to_version")),
+            ("decision_digest_missing", lambda candidate: candidate.pop("decision_digest")),
+        )
+        for expected_reason, mutate_candidate in cases:
+            with self.subTest(expected_reason=expected_reason), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_host_opt_in(repo)
+                write_ready_artifacts(repo)
+                candidate_path = repo / ".refactor-loop/state/release-candidate.json"
+                candidate = read_json(candidate_path)
+                assert isinstance(candidate, dict)
+                mutate_candidate(candidate)
+                write_json(candidate_path, candidate)
+
+                self.assert_preflight_denies_with_reason(repo, expected_reason)
+
+    def test_decision_identity_fail_closed_reasons_are_explicit(self) -> None:
+        cases = (
+            ("decision_not_ready", lambda decision, candidate: decision.__setitem__("ready", False)),
+            (
+                "candidate_decision_version_mismatch",
+                lambda decision, candidate: candidate.__setitem__("to_version", "2.0.1"),
+            ),
+            (
+                "candidate_decision_from_version_mismatch",
+                lambda decision, candidate: candidate.__setitem__("from_version", "1.9.8"),
+            ),
+            ("decision_digest_mismatch", lambda decision, candidate: decision.__setitem__("stability_score", 99)),
+        )
+        for expected_reason, mutate_artifacts in cases:
+            with self.subTest(expected_reason=expected_reason), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_host_opt_in(repo)
+                write_ready_artifacts(repo)
+                candidate_path = repo / ".refactor-loop/state/release-candidate.json"
+                decision_path = repo / ".refactor-loop/state/release-decision.json"
+                candidate = read_json(candidate_path)
+                decision = read_json(decision_path)
+                assert isinstance(candidate, dict)
+                assert isinstance(decision, dict)
+                mutate_artifacts(decision, candidate)
+                write_json(candidate_path, candidate)
+                write_json(decision_path, decision)
+
+                self.assert_preflight_denies_with_reason(repo, expected_reason)
+
+    def test_candidate_timestamp_parse_failures_fail_closed(self) -> None:
+        cases = (
+            ("candidate_generated_at_invalid", "generated_at"),
+            ("candidate_expires_at_invalid", "expires_at"),
+        )
+        for expected_reason, field in cases:
+            with self.subTest(expected_reason=expected_reason), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_host_opt_in(repo)
+                write_ready_artifacts(repo)
+                candidate_path = repo / ".refactor-loop/state/release-candidate.json"
+                candidate = read_json(candidate_path)
+                assert isinstance(candidate, dict)
+                candidate[field] = "not-a-timestamp"
+                write_json(candidate_path, candidate)
+
+                self.assert_preflight_denies_with_reason(repo, expected_reason)
+
     def test_stale_candidate_fails_closed(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -256,6 +336,29 @@ class ReleasePublishPreflightTests(unittest.TestCase):
 
             self.assertFalse(result.allowed)
             self.assertIn("manifest_version_mismatch", result.reasons)
+
+    def test_unsynchronized_mapped_manifests_fail_closed(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, version="2.0.0")
+            mapping = read_json(repo / ".version-bump.json")
+            assert isinstance(mapping, dict)
+            item = mapping["files"][0]
+            path = repo / item["path"]
+            data = read_json(path)
+            current = data
+            parts = item["field"].split(".")
+            for part in parts[:-1]:
+                current = current[int(part)] if isinstance(current, list) else current[part]
+            last = parts[-1]
+            if isinstance(current, list):
+                current[int(last)] = "1.9.9"
+            else:
+                current[last] = "1.9.9"
+            write_json(path, data)
+
+            self.assert_preflight_denies_with_reason(repo, "manifest_versions_not_synchronized")
 
     def test_target_ref_mismatch_fails_closed(self) -> None:
         with copy_repo_fixture() as tmp:
