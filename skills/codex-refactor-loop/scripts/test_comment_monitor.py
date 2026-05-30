@@ -72,7 +72,10 @@ class CommentMonitorTests(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=responses[(kind, label)], stderr="")
 
         with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
-            self.assertEqual(monitor.targets(), ["1", "2", "3", "8", "11"])
+            self.assertEqual(
+                monitor.targets(),
+                [("pr", "1"), ("issue", "2"), ("pr", "3"), ("issue", "8"), ("pr", "8"), ("issue", "11")],
+            )
 
         expected_calls = {
             (kind, label)
@@ -192,6 +195,78 @@ class CommentMonitorTests(unittest.TestCase):
         pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("new-team-comment 42 maintainer 101", pending)
         self.assertTrue(any("reactions" in " ".join(call) for call in calls))
+
+    def test_pr_team_comment_uses_pr_ownership_and_gates_side_effects(self) -> None:
+        cases = (
+            (
+                OwnershipDecision(True, "owned", WorkTarget("pr", 42), "maintainer", "maintainer", 1.0),
+                True,
+                "201",
+            ),
+            (
+                OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 42), "other", "maintainer", 4.0),
+                True,
+                "202",
+            ),
+            (
+                OwnershipDecision(False, "foreign-fresh", WorkTarget("pr", 42), "other", "maintainer", 1.0),
+                False,
+                "203",
+            ),
+            (
+                OwnershipDecision(False, "unknown-current-login", WorkTarget("pr", 42)),
+                False,
+                "204",
+            ),
+        )
+        for decision, should_process, comment_id in cases:
+            with self.subTest(reason=decision.reason):
+                self._assert_pr_comment_ownership_gate(decision, should_process, comment_id)
+
+    def _assert_pr_comment_ownership_gate(self, decision: OwnershipDecision, should_process: bool, comment_id: str) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        calls: list[list[str]] = []
+        pending_path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
+        pending_path.unlink(missing_ok=True)
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            calls.append(list(command))
+            text = " ".join(command)
+            if "issue list" in text:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if "pr list" in text:
+                return mock.Mock(returncode=0, stdout="42\n", stderr="")
+            if "issues/42/comments" in text:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"id": comment_id, "author": "maintainer", "body": "please check pr", "created_at": "2026-05-29T00:00:00Z"}) + "\n",
+                    stderr="",
+                )
+            if "reactions" in text:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if "issue comment" in text:
+                return mock.Mock(returncode=1, stdout="", stderr="not an issue")
+            if "pr comment" in text:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/42#issuecomment-205\n", stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubWorkOwnership") as ownership_cls:
+                ownership_cls.return_value.decide.return_value = decision
+                monitor.tick()
+                ownership_cls.return_value.decide.assert_called_once_with(WorkTarget("pr", 42))
+
+        state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
+        if should_process:
+            self.assertEqual(state[comment_id], "seen")
+            pending = pending_path.read_text(encoding="utf-8")
+            self.assertIn(f"new-team-comment 42 maintainer {comment_id}", pending)
+            self.assertTrue(any("reactions" in " ".join(call) for call in calls))
+        else:
+            self.assertNotIn(comment_id, state)
+            self.assertFalse(any("reactions" in " ".join(call) for call in calls))
+            self.assertFalse(pending_path.exists())
 
 
 class CommentMonitorSourceRegressionTests(unittest.TestCase):

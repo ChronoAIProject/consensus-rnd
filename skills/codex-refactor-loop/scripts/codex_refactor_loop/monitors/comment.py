@@ -66,12 +66,12 @@ class CommentMonitor:
             self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
-        for number in self.targets():
+        for kind, number in self.targets():
             for comment in self.comments(number):
-                self.handle_comment(number, comment)
+                self.handle_comment(kind, number, comment)
 
-    def targets(self) -> list[str]:
-        numbers: set[str] = set()
+    def targets(self) -> list[tuple[str, str]]:
+        targets: set[tuple[str, str]] = set()
         for kind in ("issue", "pr"):
             for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
                 result = self.gh(
@@ -79,8 +79,8 @@ class CommentMonitor:
                     check=False,
                 )
                 if result.returncode == 0:
-                    numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
-        return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
+                    targets.update((kind, line.strip()) for line in result.stdout.splitlines() if line.strip())
+        return sorted(targets, key=lambda item: (int(item[1]) if item[1].isdigit() else item[1], item[0]))
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:
         result = self.gh_api([f"repos/{self.repo}/issues/{number}/comments", "--jq", ".[] | {id, author: .user.login, body, created_at}"], check=False)
@@ -94,7 +94,7 @@ class CommentMonitor:
                 continue
         return rows
 
-    def handle_comment(self, number: str, comment: Mapping[str, object]) -> None:
+    def handle_comment(self, kind: str, number: str, comment: Mapping[str, object]) -> None:
         comment_id = str(comment.get("id") or "")
         if not comment_id or self.seen(comment_id):
             return
@@ -108,7 +108,10 @@ class CommentMonitor:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
             return
-        decision = GitHubWorkOwnership(self.repo, cwd=self.ctx.repo_root).decide(WorkTarget("issue", int(number)))
+        # Refactor (fix/pr200-comment-ownership): Old pattern: comment targets
+        # were reduced to bare numbers, so PR comments were checked as issues.
+        # New principle: carry issue/pr identity into the ownership gate.
+        decision = GitHubWorkOwnership(self.repo, cwd=self.ctx.repo_root).decide(WorkTarget(kind, int(number)))
         # Refactor (iter/issue-193):
         #   Old pattern: maintainer comments triggered reactions/banners from
         #   any node that saw the event first.
