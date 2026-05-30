@@ -18,7 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
 from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
-from codex_refactor_loop.closed_phase_labels import labels_after_plan, plan_closed_phase_labels
+from codex_refactor_loop.closed_phase_labels import ClosedPhaseLabelPlan, labels_after_plan, plan_closed_phase_labels
 from codex_refactor_loop.context import LoopContext
 
 
@@ -140,6 +140,53 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         gh.assert_not_called()
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
+
+    def test_owner_without_repo_slug_noops_before_gh_calls(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            f'export REPO_ROOT="{self.repo}"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=SCRIPT_DIR.parent, env={})
+        self.assertIsNone(ctx.gh_repo_slug)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        reconciler = ClosedLabelReconciler(ctx)
+
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "_gh") as gh:
+                self.assertEqual(0, reconciler.run_once())
+
+        gh.assert_not_called()
+        status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("owner", status["active_controller"])
+
+    def test_dry_run_prints_plan_without_apply_verify_or_gh_mutation(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=23,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        reconciler = ClosedLabelReconciler(self.ctx, dry_run=True)
+
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "collect_plans", return_value=(plan,)):
+                with mock.patch.object(reconciler, "apply_plan") as apply_plan:
+                    with mock.patch.object(reconciler, "verify_plan") as verify_plan:
+                        with mock.patch.object(reconciler, "_gh") as gh:
+                            with mock.patch("builtins.print") as print_mock:
+                                self.assertEqual(0, reconciler.run_once())
+
+        apply_plan.assert_not_called()
+        verify_plan.assert_not_called()
+        gh.assert_not_called()
+        print_mock.assert_any_call(
+            "closed-label-reconciler dry-run: issue #23 "
+            f"terminal={labels.PHASE_CLOSED} add={labels.PHASE_CLOSED} "
+            f"remove={labels.PHASE_REVIEWING} reason=closed-no-merged-evidence"
+        )
 
     def test_owner_run_lists_closed_managed_items_edits_and_reverifies(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
