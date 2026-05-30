@@ -24,13 +24,15 @@ Artifact profile: marker-only-work-unit
 
 1. **作用域**：仅修改下列文件；扩展前必须打印 `SCOPE_EXTEND: <file> <reason>`：
 ${SCOPE_PATHS}
-2. **代码注释**：被重构的每个类/关键方法必须按 `${HOST_COMMENT_RULE}` 新增/更新一段 Refactor self-documentation；为空时匹配目标文件已有注释风格，文件类型不支持注释时在实施摘要说明 not applicable。内容必须包含：
+2. **Refactor comment policy**：读取 `${HOST_REFACTOR_COMMENT_POLICY}`。empty/`self-doc-comment` 归一化为 `self-doc-comment`；`none` 是 no source refactor-history comments 模式；其它值 invalid, fail-closed：停止实施并在摘要说明 invalid `HOST_REFACTOR_COMMENT_POLICY`; do not guess.
+   - empty/`self-doc-comment`：被重构的每个类/关键方法必须按 `${HOST_COMMENT_RULE}` 新增/更新一段 Refactor self-documentation；`${HOST_COMMENT_RULE}` 为空时匹配目标文件已有注释风格，文件类型不支持注释时在实施摘要说明 not applicable。内容必须包含：
    ```
    Refactor (iter${ITERATION}/${CLUSTER_ID}):
      Old pattern: ${OLD_PATTERN}
      New principle: ${NEW_PRINCIPLE}
    ```
    3-5 行内；不是 changelog，是代码自我说明。
+   - `none`：MUST NOT add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments. Put the rationale in the implementation summary and include exactly: `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`.
 3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型须注释 "refactor helper, no behavior change"。
 4. **测试**：按 `verification_hints` 跑测试，必须通过；测试不足必须补；任何 `sleep/delay` 轮询测试必须改为确定性断言。
 5. **架构守卫**：跑 host 配置的 `$CI_GUARDS`，必须通过。其它 cluster 特定守卫见 verification hints。

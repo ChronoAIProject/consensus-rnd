@@ -17,7 +17,7 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 
 ## Your checklist (architect angle only — other reviewers cover other angles)
 
-- [ ] **Old/New pattern comment**: each refactored type/method follows `${HOST_COMMENT_RULE}` for refactor self-documentation. If empty, require the same Old/New intent in the surrounding file's comment style; if the file type cannot carry comments, accept a documented not-applicable reason.
+- [ ] **Old/New pattern comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. empty/`self-doc-comment` normalizes to `self-doc-comment`: each refactored type/method follows `${HOST_COMMENT_RULE}` for refactor self-documentation, or surrounding file comment style when `${HOST_COMMENT_RULE}` is empty; if the file type cannot carry comments, accept a documented not-applicable reason. `none`: absence is compliant, and new Old/New/iteration refactor-history source comments must be rejected under the `$PROJECT_RULES` no-comment clause. Any other value is invalid and fail-closed; do not guess.
 - [ ] **CLAUDE clause compliance**: each net-changed concept maps to a clause; no new violation introduced. Use `$PROJECT_RULES`, `$SOURCE_GLOBS`, actual diff evidence, `$CI_GUARDS`, and `${HOST_ARCHITECTURE_GREP_CHECKS}` for host-specific grep checks. If `${HOST_ARCHITECTURE_GREP_CHECKS}` is empty, do not invent language/framework-specific anti-patterns.
 - [ ] **Scope honesty**: diff stays within the cluster's declared `scope_paths` (or has a documented SCOPE_EXTEND in implement summary). Diff drift → comment.
 - [ ] **Single business entity per actor**: no new `*WriteActor` / `*ReadActor` / `*Store` splits of one entity.

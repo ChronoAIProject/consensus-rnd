@@ -44,7 +44,7 @@ Categorize each demand into one of:
 
 For each fix:
 - Open the file fully (not just the hunk) to make a context-aware change.
-- Preserve refactor self-doc comment style: when fixing a refactored type/method, the `// Refactor (iterN/cluster-XXX):` block must remain (or be added if missing).
+- Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}` is empty/`self-doc-comment`. When `${HOST_REFACTOR_COMMENT_POLICY}=none`, do not add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments; if a reviewer demands those comments, classify it as a host-policy conflict/false-positive and record that evidence in the fix report. Any other policy value is invalid and fail-closed; do not guess.
 - New test files: follow existing host test naming conventions, single behavior per test, no `sleep/delay`, no `[Skip]`, no mock-only assertions.
 - New non-test code stays minimal and reuses existing patterns.
 
