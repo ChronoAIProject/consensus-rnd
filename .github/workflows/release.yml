@@ -78,10 +78,21 @@ jobs:
           latest="$(git tag -l 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 1 | sed 's/^v//')"
           python3 - "$latest" "$VERSION" <<'PY'
           import sys
-          def parts(value):
-              return tuple(int(part) for part in value.split("."))
+          def key(value):
+              # SemVer precedence including prerelease suffixes (e.g. 1.0.0-beta.3).
+              rel, _, pre = value.partition("-")
+              relk = tuple(int(part) for part in rel.split("."))
+              if not pre:
+                  return (relk, 1, ())  # a release ranks above any prerelease of the same X.Y.Z
+              ids = []
+              for ident in pre.split("."):
+                  if ident.isdigit():
+                      ids.append((0, int(ident), ""))  # numeric identifiers rank below alphanumeric
+                  else:
+                      ids.append((1, 0, ident))
+              return (relk, 0, tuple(ids))
           latest, current = sys.argv[1], sys.argv[2]
-          if latest and parts(current) <= parts(latest):
+          if latest and key(current) <= key(latest):
               raise SystemExit(f"version {current} is not newer than latest tag {latest}")
           PY
 
