@@ -355,6 +355,30 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "daemon ownership matrix",
             "active-active scheduler",
             "generic distributed lock library",
+            "#193 metadata-only invariant",
+            "issue/PR `author.login` and `updatedAt` may only be planning/routing/stale read-only metadata",
+            "must not become side-effect authorization",
+            "per-work owner authority",
+            "claim/lease scope",
+            "stale takeover permit",
+            "`require_active_controller(...)` gate on issue/PR target writes",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+    def test_stale_revival_documents_updated_at_as_metadata_only(self) -> None:
+        # Refactor (iter193/issue-193):
+        #   Old pattern: stale updatedAt could be read as takeover permission.
+        #   New principle: stale routing is visibility metadata, while all
+        #   issue/PR write side effects stay behind #191 ActiveControllerLease.
+        for needle in (
+            "Stale `updatedAt` is routing metadata only",
+            "it does not authorize GitHub comments",
+            "label edits",
+            "PR merges",
+            "issue closes",
+            "takeover",
+            "Those writes remain gated solely by #191 `ActiveControllerLease` ownership through `require_active_controller(...)`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
