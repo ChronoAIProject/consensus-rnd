@@ -63,6 +63,11 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertIn(labels.MANAGED, active_contracts["pr open"])
         self.assertIn(labels.MILESTONE_CURRENT, active_contracts["existing priority"])
         self.assertIn(labels.PHASE_CONSENSUS_REACHED, active_contracts["existing priority"])
+        self.assertIn("codex_refactor_loop.work_items.ManagedWorkProjection", active_contracts["existing priority"])
+        self.assertIn("Closes #N", active_contracts["existing priority"])
+        self.assertIn("worker expectation and review/fix routing belong to the child PR", active_contracts["existing priority"])
+        self.assertIn("parent issue `crnd:phase:pr-open` is non-action, expected workers 0", active_contracts["existing priority"])
+        self.assertNotIn("crnd:phase:pr-open` with 0 codex → dispatch reviewers", active_contracts["existing priority"])
         self.assertIn("catalog-managed issue/PR", active_contracts["stale revival"])
 
     def test_active_prompts_do_not_hardcode_canonical_label_handoff_arrays(self) -> None:
@@ -76,6 +81,7 @@ class LabelContractSourceTests(unittest.TestCase):
     def test_canonical_crnd_literals_are_registered(self) -> None:
         allowed_paths = {
             SCRIPT_DIR / "codex_refactor_loop" / "labels.py",
+            SCRIPT_DIR / "codex_refactor_loop" / "closed_phase_labels.py",
             Path(__file__).resolve(),
         }
         registered = set(labels.canonical_labels())
@@ -87,6 +93,14 @@ class LabelContractSourceTests(unittest.TestCase):
             for literal in pattern.findall(text):
                 with self.subTest(path=path.relative_to(SKILL_ROOT), literal=literal):
                     self.assertIn(literal, registered)
+
+    def test_closed_phase_is_catalog_owned_ascii_phase_exclusive(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "labels.py").read_text(encoding="utf-8")
+
+        self.assertIn('PHASE_CLOSED = canonical_name("phase", "closed")', source)
+        self.assertIn('"closed"', source)
+        self.assertIn("Closed terminal protocol state", source)
+        self.assertEqual(labels.PHASE_CLOSED, "crnd:phase:closed")
 
     def test_runtime_code_has_no_legacy_routing_literals_outside_catalog(self) -> None:
         allow = {

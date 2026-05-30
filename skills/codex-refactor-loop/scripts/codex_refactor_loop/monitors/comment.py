@@ -12,12 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
+ITEM_UPDATED_STATE_KEY = "_item_updated"
 CONTROLLER_PREFIXES = (
     "## 🤖",
     "## 📊",
@@ -52,7 +54,7 @@ class CommentMonitor:
             raise RuntimeError("FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed")
         self.maintainers = {item for item in whitelist.replace(",", " ").split() if item}
         self.state_file = state_file or Path(os.environ.get("STATE_FILE", ctx.paths.refactor_loop / "comment-monitor-state.json"))
-        self.interval = int(interval or os.environ.get("INTERVAL", "30"))
+        self.interval = int(interval or os.environ.get("COMMENT_MONITOR_INTERVAL") or os.environ.get("INTERVAL", "30"))
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
@@ -65,9 +67,58 @@ class CommentMonitor:
             self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
-        for number in self.targets():
-            for comment in self.comments(number):
+        self._poll_once()
+
+    def _poll_once(self) -> None:
+        # Refactor (fix/comment-monitor-only-new): Old pattern: every tick fetched
+        # recent comments for every managed item. New principle: use the search
+        # node updatedAt as the per-item freshness gate before spending a comments
+        # query.
+        for number, updated_at in self._search_active().items():
+            if not self._should_fetch_comments(number, updated_at):
+                continue
+            ok, comments = self._comments_with_status(number)
+            for comment in comments:
                 self.handle_comment(number, comment)
+            if ok:
+                self.mark_item_updated(number, updated_at)
+
+    def _search_active(self) -> dict[str, str]:
+        active: dict[str, str] = {}
+        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+            search_query = f'repo:{self.repo} is:open label:"{query_label}" {_lookback_search_fragment()}'.strip()
+            data = self._graphql_json(
+                """
+                query($searchQuery: String!) {
+                  search(query: $searchQuery, type: ISSUE, first: 100) {
+                    nodes {
+                      ... on Issue {
+                        number
+                        updatedAt
+                      }
+                      ... on PullRequest {
+                        number
+                        updatedAt
+                      }
+                    }
+                  }
+                }
+                """,
+                {"searchQuery": search_query},
+            )
+            nodes = (((data.get("data") or {}).get("search") or {}).get("nodes") or []) if isinstance(data, dict) else []
+            if not isinstance(nodes, list):
+                continue
+            for node in nodes:
+                if not isinstance(node, dict):
+                    continue
+                number = str(node.get("number") or "")
+                updated_at = str(node.get("updatedAt") or "")
+                if not number or not updated_at:
+                    continue
+                if number not in active or updated_at > active[number]:
+                    active[number] = updated_at
+        return dict(sorted(active.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
 
     def targets(self) -> list[str]:
         numbers: set[str] = set()
@@ -82,16 +133,65 @@ class CommentMonitor:
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:
-        result = self.gh_api([f"repos/{self.repo}/issues/{number}/comments", "--jq", ".[] | {id, author: .user.login, body, created_at}"], check=False)
+        return self._comments_with_status(number)[1]
+
+    def _comments_with_status(self, number: str) -> tuple[bool, list[dict[str, object]]]:
+        result = self._gh_graphql(
+            """
+            query($owner: String!, $name: String!, $number: Int!) {
+              repository(owner: $owner, name: $name) {
+                issueOrPullRequest(number: $number) {
+                  ... on Issue {
+                    comments(last: 20) {
+                      nodes {
+                        databaseId
+                        author { login }
+                        body
+                        createdAt
+                      }
+                    }
+                  }
+                  ... on PullRequest {
+                    comments(last: 20) {
+                      nodes {
+                        databaseId
+                        author { login }
+                        body
+                        createdAt
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            """,
+            {"number": int(number)},
+        )
         if result.returncode != 0 or not result.stdout.strip():
-            return []
-        rows = []
-        for line in result.stdout.splitlines():
-            try:
-                rows.append(json.loads(line))
-            except json.JSONDecodeError:
+            return False, []
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return False, []
+        if not isinstance(data, dict):
+            return False, []
+        item = (((data.get("data") or {}).get("repository") or {}).get("issueOrPullRequest") or {}) if isinstance(data, dict) else {}
+        nodes = (((item.get("comments") or {}).get("nodes") or []) if isinstance(item, dict) else [])
+        if not isinstance(nodes, list):
+            return False, []
+        comments = []
+        for node in nodes:
+            if not isinstance(node, dict):
                 continue
-        return rows
+            comments.append(
+                {
+                    "id": node.get("databaseId"),
+                    "author": ((node.get("author") or {}).get("login") if isinstance(node.get("author"), dict) else ""),
+                    "body": node.get("body") or "",
+                    "created_at": node.get("createdAt") or "",
+                }
+            )
+        return True, comments
 
     def handle_comment(self, number: str, comment: Mapping[str, object]) -> None:
         comment_id = str(comment.get("id") or "")
@@ -106,6 +206,15 @@ class CommentMonitor:
         if author not in self.maintainers:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
+            return
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # comment monitors on multiple devices could react and post banners for
+        # the same maintainer comment. New principle: GitHub comment mutations
+        # are active-controller-owner-only; non-owners stay read-only.
+        decision = require_active_controller(self.ctx, "comment-monitor-write")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            print(f"active_controller=noop:not-owner comment-monitor {number} {comment_id} owner={decision.owner_device}", flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:
@@ -153,6 +262,29 @@ class CommentMonitor:
     def mark_seen(self, comment_id: str) -> None:
         state = self._state()
         state[comment_id] = "seen"
+        self._write_state(state)
+
+    def _should_fetch_comments(self, number: str, updated_at: str) -> bool:
+        last_updated_at = self._last_updated_at()
+        previous = last_updated_at.get(number)
+        return not previous or updated_at > previous
+
+    def mark_item_updated(self, number: str, updated_at: str) -> None:
+        state = self._state()
+        item_updated = state.get(ITEM_UPDATED_STATE_KEY)
+        if not isinstance(item_updated, dict):
+            item_updated = {}
+        item_updated[str(number)] = updated_at
+        state[ITEM_UPDATED_STATE_KEY] = item_updated
+        self._write_state(state)
+
+    def _last_updated_at(self) -> dict[str, str]:
+        raw = self._state().get(ITEM_UPDATED_STATE_KEY)
+        if not isinstance(raw, dict):
+            return {}
+        return {str(key): str(value) for key, value in raw.items() if isinstance(value, str)}
+
+    def _write_state(self, state: dict[str, object]) -> None:
         tmp = self.state_file.with_name(f".{self.state_file.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, self.state_file)
@@ -169,6 +301,23 @@ class CommentMonitor:
 
     def gh_api(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return _run(["gh", "api", *args], self.ctx.repo_root, check=check)
+
+    def _graphql_json(self, query: str, variables: Mapping[str, object]) -> dict[str, object]:
+        result = self._gh_graphql(query, variables)
+        if result.returncode != 0 or not result.stdout.strip():
+            return {}
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _gh_graphql(self, query: str, variables: Mapping[str, object]) -> subprocess.CompletedProcess[str]:
+        owner, name = self.repo.split("/", 1)
+        args: list[str] = ["graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}"]
+        for key, value in variables.items():
+            args.extend(["-F", f"{key}={value}"])
+        return self.gh_api(args, check=False)
 
 
 def is_controller_post(first_line: str, body: str) -> bool:
@@ -208,6 +357,15 @@ def _first_url(text: str) -> str:
         if part.startswith("https://"):
             return part
     return ""
+
+
+def _lookback_search_fragment() -> str:
+    raw = os.environ.get("COMMENT_MONITOR_LOOKBACK", "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("updated:"):
+        return raw
+    return f"updated:>={raw}"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -104,6 +104,32 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern: any
+    # device-local concurrency monitor could dispatch and archive queue entries.
+    # New principle: non-owner monitors preserve queue files and write no
+    # DISPATCH_FIRED side effect.
+    def test_non_owner_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
+        dispatch = self.write_dispatch("p1", "fix-pr44-round-3")
+        calls: list[list[str]] = []
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="concurrency-dispatch", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        events = self.refactor_loop / ".controller-pending-events.log"
+        self.assertFalse(events.exists())
+
+    def test_floor_remains_local_code_floor_without_cross_device_aggregation(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.get("CODEX_FLOOR"', source)
+        self.assertNotIn("REMOTE_CODEX_FLOOR", source)
+        self.assertNotIn("cross_device_floor", source)
+
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
@@ -316,6 +342,50 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-a:p0:fix-pr57-round-1-a needed", events)
         self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
 
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: tick()
+    # only proved the owner/default-local queue top-up path. New: non-owner
+    # ticks keep read-only alert/status behavior but cannot dispatch or archive.
+    def test_tick_non_owner_p0_no_gap_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        dispatch_a = self.write_dispatch("p0", "fix-pr57-round-1-a")
+        dispatch_b = self.write_dispatch("p0", "fix-pr57-round-1-b")
+        calls: list[list[str]] = []
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                    with mock.patch.object(
+                        self.monitor,
+                        "list_auto_loop_issues",
+                        return_value=[{"number": 57, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                    ):
+                        self.monitor.tick()
+
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch_a.exists())
+        self.assertTrue(dispatch_b.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation", alert)
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 0)
+        self.assertEqual(snapshot["expected"], 1)
+        self.assertEqual(snapshot["p0_streak"], 1)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("concurrency-alert P0 no-gap-violation", events)
+        self.assertNotIn("DISPATCH_FIRED", events)
+
     def test_tick_below_floor_with_non_empty_queue_dispatches(self) -> None:
         for i in range(3):
             self.write_dispatch("p1", f"floor-task-{i}")
@@ -332,6 +402,72 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 1)
+
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: below-floor
+    # tick coverage only asserted owner dispatch. New: non-owner below-floor
+    # queue repair is read-only and leaves the dispatch queue untouched.
+    def test_tick_non_owner_below_floor_with_non_empty_queue_does_not_top_up(self) -> None:
+        for i in range(3):
+            self.write_dispatch("p1", f"floor-task-{i}")
+        calls: list[list[str]] = []
+        os.environ["CODEX_FLOOR"] = "4"
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=2):
+                    with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+                        with mock.patch.object(self.monitor, "top_up_from_dispatch_queue", wraps=self.monitor.top_up_from_dispatch_queue) as top_up:
+                            self.monitor.tick()
+
+        top_up.assert_not_called()
+        self.assertEqual(calls, [])
+        remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
+        self.assertEqual(len(remaining), 3)
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 2)
+        self.assertEqual(snapshot["expected"], 0)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
+
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: empty-queue
+    # deficit tests only covered owner hard-gate emission. New: non-owners
+    # preserve status snapshots without enqueueing controller write requests.
+    def test_tick_non_owner_below_floor_with_empty_queue_does_not_write_hard_gate(self) -> None:
+        os.environ["CODEX_FLOOR"] = "4"
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=2):
+                with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+                    self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 2)
+        self.assertEqual(snapshot["expected"], 0)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
 
     def test_tick_dispatches_toward_expected_count_not_just_floor(self) -> None:
         """When expected > floor, tick fires deficit toward expected (not just floor)."""

@@ -214,6 +214,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_skill_documents_update_check_notify_only_contract(self) -> None:
+        section = section_after_heading(self.skill, "Notify-only update check(per #231)")
+        for needle in (
+            "VERSION.json",
+            "VersionSourceManifest",
+            ".version-bump.json",
+            "consensus-rnd-cli update-check",
+            "notify-only",
+            "$UPDATE_CHECK_ENABLE",
+            ".refactor-loop/state/update-check.json",
+            "host-owned",
+            "create a daemon",
+            "statusline-snapshot.json",
+            "test_statusline.py",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "copy, overwrite, reinstall",
+            "run installers",
+            "mutate `.git`",
+            "touches the network",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
             "tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \\",
@@ -290,7 +317,47 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
+        self.assertIn("`gh issue view <N> --json state`", self.skill)
+        self.assertIn("state-only", self.skill)
+        self.assertIn("phase9-source-not-open", self.skill)
+        self.assertIn("phase9-source-state-unavailable", self.skill)
+        self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+
+    def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # multi-device controller writes were described as local daemon facts.
+        # New principle: SKILL.md locks one cross-device active-controller
+        # lease and forbids per-work/distributed scheduler expansion.
+        for needle in (
+            "| Active controller |",
+            "## Named runtime exception - active controller lease(per #191)",
+            "GitHub/已 push git 面只承载一个 `ActiveControllerLease`",
+            "refs/heads/crnd/active-controller",
+            "active-controller.json",
+            "owner_device",
+            "lease_id",
+            "expires_at",
+            "git fetch origin <lease-ref>",
+            "git ls-remote --exit-code --heads origin <lease-ref>",
+            "git rev-parse",
+            "git show <commit>:active-controller.json",
+            "git hash-object -w --stdin",
+            "git mktree",
+            "git commit-tree",
+            "git push --force-with-lease=<old>:<lease-ref>",
+            "These commands may only read/build/publish the singleton lease blob CAS",
+            "active_controller=noop:not-owner",
+            "Worker throughput remains owner-local via `$CODEX_FLOOR`",
+            "no cross-device floor aggregation",
+            "per-work claim",
+            "host-defined lease scope",
+            "daemon ownership matrix",
+            "active-active scheduler",
+            "generic distributed lock library",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
 
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
@@ -444,7 +511,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "SOLVER_DONE:<minimal|structural|delete>:*",
-            "round-N minimal/structural/delete solvers",
+            "both spawn r(S+1) minimal/structural/delete solvers",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, contract_section)
@@ -477,6 +544,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
         self.assertIn("consensus-rnd-cli", helper)
+
+    def test_phase9_converge_adjacent_round_helper_source_regression(self) -> None:
+        # Refactor (iter6/issue-244): Old pattern: router/docs treated
+        # converge payloads as target-round-only. New principle: one local
+        # adjacent helper maps source-round and legacy next-round payloads to
+        # r(S+1), and non-adjacent payloads fall back without a projection module.
+        router_path = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
+        router = router_path.read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge, router))
+
+        for token in (
+            "_converge_target_round",
+            "canonical payload is the judge log source round",
+            "source-round and legacy",
+            "non-adjacent payloads fall back",
+            "clean rS judge canonical payload is `round-S`",
+            "legacy `round-(S+1)`",
+            "non-adjacent payload mismatch falls back",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+        self.assertEqual(router.count("_converge_target_round("), 3)
+        self.assertNotIn("target_round <= marker.round", router)
+        self.assertFalse((router_path.parent / "decision.py").exists())
+        self.assertNotIn("MetaJudgeRouteProjection", combined)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):

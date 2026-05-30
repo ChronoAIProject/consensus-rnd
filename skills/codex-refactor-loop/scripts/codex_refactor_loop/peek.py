@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from . import labels as label_catalog
+from .closed_phase_labels import plan_from_gh_item
 from .context import LoopContext, LoopContextError
+from .work_items import ManagedWorkProjection
 from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
@@ -209,35 +211,29 @@ class PeekStatusLens:
         return out
 
     def _stale_labels(self) -> list[str]:
+        # Refactor (issue238/closed-label-reconciler):
+        #   Old pattern: peek printed remediation text that told the controller
+        #   to clean labels. New principle: peek remains a read-only display of
+        #   the closed-label-reconciler projection and emits no edit guidance.
         out = []
         for kind in ("issue", "pr"):
-            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels", state="closed", limit="30"):
+            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,state,labels", state="closed", limit="30"):
                 if not isinstance(item, dict):
                     continue
-                labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                projection = label_catalog.normalize_label_set(labels)
-                stuck = (label_catalog.STUCK,) if label_catalog.STUCK in projection.canonical else ()
-                stale = sorted(projection.labels_for_group("phase") + tuple(projection.cleanup_only) + stuck)
-                if stale:
-                    suffix = f"  → controller should clean up + add {label_catalog.PHASE_MERGED}" if kind == "issue" else ""
-                    out.append(f"  ⚠️ closed {kind} #{item.get('number')} still has: {','.join(stale)}{suffix}")
+                plan = plan_from_gh_item(kind, item)
+                if plan and plan.needs_edit:
+                    out.append(
+                        f"  ⚠️ closed {kind} #{plan.number} terminal={plan.terminal_phase} "
+                        f"add={','.join(plan.add_labels) or '-'} remove={','.join(plan.remove_labels) or '-'}"
+                    )
         return out
 
     def _linkage_mismatch(self) -> list[str]:
-        out = []
-        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.PHASE_IMPLEMENTING), "number,title"):
-            if not isinstance(item, dict):
-                continue
-            num = str(item.get("number"))
-            open_prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", search=f"in:body Closes #{num}")
-            if open_prs:
-                continue
-            merged = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", state="merged", search=f"in:body Closes #{num}")
-            if merged:
-                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
-            else:
-                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
-        return out
+        # Refactor (impl/issue239-linkage):
+        #   Old pattern: peek searched implementing issues locally and guessed
+        #   PR linkage. New principle: render the shared read-only projection so
+        #   missing or ambiguous `Closes #N` links remain visible.
+        return list(self._managed_work_projection().linkage_mismatches())
 
     def _spawn_drop(self) -> list[str]:
         out = []
@@ -266,6 +262,7 @@ class PeekStatusLens:
             except OSError:
                 continue
         out = []
+        represented = self._managed_work_projection().represented_issue_numbers()
         for kind in ("issue", "pr"):
             for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels"):
                 if not isinstance(item, dict):
@@ -273,9 +270,28 @@ class PeekStatusLens:
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
                 phase = label_catalog.normalize_label_set(labels).phase or ""
                 num = str(item.get("number"))
+                if kind == "issue" and _safe_int(num) in represented:
+                    continue
+                if phase and label_catalog.phase_expected_workers(phase) == 0:
+                    continue
                 if phase and not any(f"pr{num}" in log or f"issue{num}" in log for log in active):
                     out.append(f"  ⚠️ {kind} #{num} label={phase} but 0 codex referencing it")
         return out
+
+    def _managed_work_projection(self) -> ManagedWorkProjection:
+        items = []
+        for item in load_github_items(self.ctx.repo_root):
+            items.append(
+                {
+                    "kind": item.kind,
+                    "number": item.number,
+                    "labels": item.labels,
+                    "body": item.body,
+                    "state": "open",
+                    "title": item.title,
+                }
+            )
+        return ManagedWorkProjection(items)
 
     def _stale_worktrees(self) -> list[str]:
         out = []
@@ -449,6 +465,13 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:

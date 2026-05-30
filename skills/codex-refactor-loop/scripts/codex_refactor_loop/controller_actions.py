@@ -13,11 +13,13 @@ from pathlib import Path
 from string import Template
 from typing import Mapping, Sequence
 
+from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .triage import apply_decision, load_triage_apply_config
+from .work_items import extract_closing_issue_numbers
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
@@ -71,6 +73,8 @@ class ControllerActions:
         return result
 
     def apply_human_label_or_skip(self, pr_number: str, source_marker: str = "", reason: str = "") -> int:
+        if not self._require_owner_or_return("controller-label", code=3):
+            return 3
         if not pr_number:
             sys.stderr.write("apply_human_label_or_skip: missing pr_number\n")
             return 2
@@ -109,6 +113,8 @@ class ControllerActions:
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def safe_push(self, remote: str = "origin", branch: str = "") -> int:
+        if not self._require_owner_or_return("safe-push", code=3):
+            return 3
         branch = branch or self._current_branch()
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
@@ -145,6 +151,7 @@ class ControllerActions:
         candidate_path: str = ".refactor-loop/state/release-candidate.json",
         target_ref: str = "",
     ) -> ReleasePublishResult:
+        self._require_owner_or_raise("publish-release")
         # Refactor (iter217/issue-217):
         #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
         #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
@@ -155,6 +162,8 @@ class ControllerActions:
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
+        if not self._require_owner_or_return("safe-sync-main", code=3):
+            return 3
         branch = branch or self._current_branch()
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
@@ -195,13 +204,14 @@ class ControllerActions:
         return wt_path, branch
 
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
+        if not self._require_owner_or_return("merge-pr", code=3):
+            return 3
         if not pr:
             sys.stderr.write("merge_pr: missing pr number\n")
             return 1
         if not linked_issue:
             body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
-            match = re.search(r"Closes #([0-9]+)", body)
-            linked_issue = match.group(1) if match else ""
+            linked_issue = _single_linked_issue(body)
         merge = self.gh(["pr", "merge", pr, "--admin", "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
@@ -233,10 +243,12 @@ class ControllerActions:
         return 0
 
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
+        self._require_owner_or_raise("open-pr")
         base = base or self.integration_branch
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
+        linked_issue = _single_linked_issue(self._read_body_file(body_file))
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -253,6 +265,17 @@ class ControllerActions:
             ],
             check=False,
         )
+        if linked_issue:
+            args = ["issue", "edit", linked_issue]
+            for label in ISSUE_LABELS_REMOVE:
+                args.extend(["--remove-label", label])
+            args.extend(
+                [
+                    "--add-label",
+                    ",".join((labels.PHASE_PR_OPEN, labels.HUMAN_AUTO, labels.MANAGED)),
+                ]
+            )
+            self.gh(args, check=False)
         return pr_num, match.group(0)
 
     def _validate_pr_body_file(self, body_file: str) -> None:
@@ -264,12 +287,19 @@ class ControllerActions:
         except GitHubBodyError as exc:
             raise RuntimeError(str(exc)) from exc
 
+    def _read_body_file(self, body_file: str) -> str:
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        return body_path.read_text(encoding="utf-8")
+
     def open_release_rollup_pr_from_pending_event(
         self,
         event_json: str,
         body_file: str,
         title: str = "Release rollup",
     ) -> tuple[int, str]:
+        self._require_owner_or_raise("open-release-rollup-pr")
         # Refactor (issue174-rollup-throwaway-head):
         # Old pattern: the rollup PR used the shared integration branch as
         # its head, so GitHub merge/delete-branch flows could delete the
@@ -373,6 +403,8 @@ class ControllerActions:
         Path(tmp).replace(path)
 
     def apply_triage_decision_marker(self, marker: str) -> int:
+        if not self._require_owner_or_return("apply-triage", code=3):
+            return 3
         # Refactor (iter201/issue-201): Old pattern: controller marker handling
         # subprocessed consensus-rnd-cli apply-triage, preserving public lifecycle
         # reachability. New principle: direct internal call keeps validation and
@@ -432,6 +464,24 @@ class ControllerActions:
                 return current
         return None
 
+    def _require_owner_or_return(self, action: str, *, code: int) -> bool:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # controller lifecycle helpers could mutate GitHub/git from any device.
+        # New principle: every lifecycle mutation fails closed unless this
+        # process owns the singleton active-controller lease.
+        decision = require_active_controller(self.ctx, action)
+        write_active_controller_status(self.ctx, decision)
+        if decision.allowed:
+            return True
+        sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
+        return False
+
+    def _require_owner_or_raise(self, action: str) -> None:
+        decision = require_active_controller(self.ctx, action)
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
+
 
 def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
@@ -443,3 +493,13 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _single_linked_issue(body: str) -> str:
+    # Refactor (impl/issue239-linkage):
+    #   Old pattern: controller parsed `Closes #N` with a caller-local regex
+    #   while other runtime surfaces used different interpretations.
+    #   New principle: use the shared managed-work projection parser and only
+    #   mutate a parent issue when there is exactly one durable PR-body link.
+    numbers = extract_closing_issue_numbers(body)
+    return str(numbers[0]) if len(numbers) == 1 else ""

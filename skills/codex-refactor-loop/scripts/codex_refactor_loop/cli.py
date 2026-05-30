@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import banners, github_body, project_rules, spawn, statusline
+from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
 from .labels import main as labels_main
@@ -22,6 +23,7 @@ from .restart import main as restart_main
 from .retention import main as retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
+from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
 
 
@@ -64,6 +66,11 @@ COMMANDS: dict[str, CommandSpec] = {
         "run the Python comment monitor daemon",
         ("read-gh", "gh-reaction", "gh-comment", "write-state", "write-event"),
     ),
+    "closed-label-reconciler": CommandSpec(
+        closed_label_reconciler_main,
+        "run the closed managed item phase-label reconciler",
+        ("read-gh", "gh-label-closed-reconcile", "write-state"),
+    ),
     "concurrency": CommandSpec(
         concurrency_main,
         "run the Python concurrency monitor or read-only counter",
@@ -94,7 +101,8 @@ COMMANDS: dict[str, CommandSpec] = {
     "phase9-router": CommandSpec(
         phase9_router_main,
         "compatibility alias for the Python design-consensus router",
-        ("read-log", "write-event", "write-artifact", "spawn"),
+        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's public CommandSpec omitted the state-only GitHub read used by the source-OPEN gate. New: include read-gh in the closed-token authority tuple while keeping lifecycle mutation tokens absent.
+        ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(
         release_gate_main,
@@ -110,6 +118,11 @@ COMMANDS: dict[str, CommandSpec] = {
         release_required_checks_main,
         "check exact release required check-runs",
         ("read-gh",),
+    ),
+    "update-check": CommandSpec(
+        update_check_main,
+        "run the notify-only version update check probe",
+        ("read-source", "read-gh", "write-state"),
     ),
     "render-github-body": CommandSpec(
         github_body.main,

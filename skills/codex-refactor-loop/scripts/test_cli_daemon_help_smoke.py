@@ -25,6 +25,7 @@ OPERATIONS = [
     "concurrency",
     "phase9-router",
     "comment-monitor",
+    "closed-label-reconciler",
     "progress-reporter",
     "release-gate",
     "statusline",

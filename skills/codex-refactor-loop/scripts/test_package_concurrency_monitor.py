@@ -81,10 +81,10 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
 
     def test_compute_expected_preserves_phase_and_human_label_semantics(self) -> None:
         items = [
-            {"number": 160, "kind": "issue", "phase": "🛠️ phase:implementing", "human": "🤖 human:auto-推进"},
-            {"number": 161, "kind": "pr", "phase": "👀 phase:reviewing", "human": "🤖 human:codex"},
-            {"number": 162, "kind": "issue", "phase": "🔧 phase:fixing", "human": "👤 human:需-maintainer-决策"},
-            {"number": 163, "kind": "pr", "phase": "⚙️ phase:ci-running", "human": "🤖 human:auto-推进"},
+            {"number": 160, "kind": "issue", "phase": "🛠️ phase:implementing", "human": "🤖 human:auto-推进", "labels": ["auto-loop", "🛠️ phase:implementing", "🤖 human:auto-推进"]},
+            {"number": 161, "kind": "pr", "phase": "👀 phase:reviewing", "human": "🤖 human:codex", "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"]},
+            {"number": 162, "kind": "issue", "phase": "🔧 phase:fixing", "human": "👤 human:需-maintainer-决策", "labels": ["auto-loop", "🔧 phase:fixing", "👤 human:需-maintainer-决策"]},
+            {"number": 163, "kind": "pr", "phase": "⚙️ phase:ci-running", "human": "🤖 human:auto-推进", "labels": ["auto-loop", "⚙️ phase:ci-running", "🤖 human:auto-推进"]},
         ]
 
         expected, breakdown = self.monitor.compute_expected(items)
@@ -96,6 +96,33 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 {"id": "#160", "kind": "issue", "phase": labels.PHASE_IMPLEMENTING, "expected": 1},
                 {"id": "#161", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1},
             ],
+        )
+
+    def test_compute_expected_folds_parent_issue_represented_by_child_pr_body(self) -> None:
+        items = [
+            {
+                "number": 239,
+                "kind": "issue",
+                "phase": labels.PHASE_IMPLEMENTING,
+                "human": labels.HUMAN_AUTO,
+                "labels": [labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO],
+            },
+            {
+                "number": 255,
+                "kind": "pr",
+                "phase": labels.PHASE_REVIEWING,
+                "human": labels.HUMAN_AUTO,
+                "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO],
+                "body": "## PR\n\nCloses #239\n",
+            },
+        ]
+
+        expected, breakdown = self.monitor.compute_expected(items)
+
+        self.assertEqual(expected, 1)
+        self.assertEqual(
+            breakdown,
+            [{"id": "#255", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1}],
         )
 
     def test_cli_count_and_list_use_canonical_spawn_filter(self) -> None:

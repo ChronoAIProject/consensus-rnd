@@ -9,14 +9,17 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
+from ..update_check import parse_time
+from ..work_items import ManagedWorkProjection
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -153,10 +156,44 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        update_projection = self.read_update_projection(now=now)
+        if update_projection:
+            payload.update(update_projection)
         self.statusline_snapshot.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, self.statusline_snapshot)
+
+    def read_update_projection(self, *, now: datetime) -> dict[str, object]:
+        raw = read_json(self.ctx.paths.state / "update-check.json", {})
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("status") in {"disabled", "unknown"}:
+            return {}
+        checked_at = parse_time(raw.get("checked_at"))
+        if checked_at is None:
+            return {}
+        interval = raw.get("interval_seconds")
+        ttl = int(interval) if isinstance(interval, int) and interval > 0 else 21600
+        if now - checked_at > timedelta(seconds=ttl * 2):
+            return {}
+        if raw.get("update_available") is not True:
+            return {}
+        latest = raw.get("latest_version")
+        source = raw.get("update_source")
+        release_url = raw.get("release_url")
+        if not isinstance(latest, str) or not latest:
+            return {}
+        projection: dict[str, object] = {
+            "update_available": True,
+            "update_latest_version": latest,
+            "update_checked_at": raw["checked_at"],
+        }
+        if isinstance(source, str) and source:
+            projection["update_source"] = source
+        if isinstance(release_url, str) and release_url:
+            projection["update_release_url"] = release_url
+        return projection
 
     def list_in_flight_codex_lines(self) -> list[str]:
         lines: list[str] = []
@@ -192,13 +229,14 @@ class ConcurrencyMonitor:
         cmd = ["gh", kind, "list"]
         if self.gh_repo_slug:
             cmd.extend(["--repo", self.gh_repo_slug])
+        json_fields = "number,labels,body" if kind == "pr" else "number,labels"
         cmd.extend([
             "--label",
             query_label,
             "--state",
             "open",
             "--json",
-            "number,labels",
+            json_fields,
             "--limit",
             "100",
         ])
@@ -231,7 +269,17 @@ class ConcurrencyMonitor:
                 projection = label_catalog.normalize_label_set(label_names)
                 phase = projection.phase or ""
                 human = projection.human or ""
-                items.append({"number": num, "kind": kind, "phase": phase, "human": human})
+                items.append(
+                    {
+                        "number": num,
+                        "kind": kind,
+                        "phase": phase,
+                        "human": human,
+                        "labels": label_names,
+                        "body": str(entry.get("body") or ""),
+                        "state": "open",
+                    }
+                )
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
@@ -240,13 +288,17 @@ class ConcurrencyMonitor:
         #   New principle: exactly two active Human labels; causes move to the reason surface (#15 structural consensus).
         breakdown = []
         total = 0
-        for item in items:
-            if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([str(item.get("human", ""))]).canonical:
+        # Refactor (impl/issue239-linkage):
+        #   Old pattern: parent issues and child PRs were counted independently.
+        #   New principle: shared ManagedWorkProjection folds an issue represented
+        #   by an open managed PR body `Closes #N` before worker expectation math.
+        for item in ManagedWorkProjection(items).effective_worker_items():
+            if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([item.human]).canonical:
                 continue
-            phase = label_catalog.normalize_label_set([str(item.get("phase", ""))]).phase or ""
+            phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
-                breakdown.append({"id": f"#{item['number']}", "kind": item["kind"], "phase": phase, "expected": expected})
+                breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown
 
@@ -362,6 +414,15 @@ class ConcurrencyMonitor:
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
     #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def dispatch_one_from_queue(self) -> tuple[str, str, str] | None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # concurrency monitors on multiple devices could consume/archive the
+        # same local queue and spawn duplicate workers. New principle: dispatch
+        # and queue archive require the single active-controller owner.
+        decision = require_active_controller(self.ctx, "concurrency-dispatch")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            log(f"active_controller=noop:not-owner action=concurrency-dispatch owner={decision.owner_device}")
+            return None
         for priority, path in self.dispatch_queue_files():
             payload = json.loads(path.read_text(encoding="utf-8"))
             task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
@@ -405,6 +466,9 @@ class ConcurrencyMonitor:
         state = self.load_state()
         zero_streak = int(state.get("zero_streak", 0))
         # Refactor (impl/issue235-delete-downstream-watch): Old pattern: concurrency tick ran source-repo skill-degradation checks against downstream host roots. New principle: downstream hosts have no skill-degradation runtime watch; source-repo static validation stays in CI/release gates.
+        decision = require_active_controller(self.ctx, "concurrency-tick")
+        write_active_controller_status(self.ctx, decision)
+        owner_allowed = decision.allowed
 
         items = self.list_auto_loop_issues()
         expected, breakdown = self.compute_expected(items)
@@ -430,7 +494,7 @@ class ConcurrencyMonitor:
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
-            if not self.dispatch_queue_empty():
+            if owner_allowed and not self.dispatch_queue_empty():
                 actual = self.top_up_from_dispatch_queue(actual, max(expected, self.configured_floor()))
             self.write_statusline_snapshot(
                 actual=actual,
@@ -448,10 +512,19 @@ class ConcurrencyMonitor:
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
-                self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
-                log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                if owner_allowed:
+                    self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                    log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                else:
+                    log(
+                        "active_controller=noop:not-owner "
+                        f"action=concurrency-tick dispatch_required={deficit} owner={decision.owner_device}"
+                    )
             else:
-                actual = self.top_up_from_dispatch_queue(actual, target)
+                if owner_allowed:
+                    actual = self.top_up_from_dispatch_queue(actual, target)
+                else:
+                    log(f"active_controller=noop:not-owner action=concurrency-top-up owner={decision.owner_device}")
 
         self.write_statusline_snapshot(
             actual=actual,

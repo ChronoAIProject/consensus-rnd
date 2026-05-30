@@ -19,6 +19,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 |---|---|---|---|---|
 | Host config | Host facts come only from `host.env`; skill text remains host-agnostic. | `source .refactor-loop/host.env` before running actors; fail closed if required vars are absent. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
+| Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and six write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
 <!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
@@ -74,12 +75,20 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
+| `$UPDATE_CHECK_ENABLE` | optional-noop | update-check probe | `false` | false or empty exits 0 with noop reason and writes disabled update-check state | update-check, restart-daemons | `test_update_check.py`, `test_restart_daemons.py` |
+| `$UPDATE_CHECK_INTERVAL_SECONDS` | defaulted | update-check probe | `21600` | default to `21600` seconds; fresh local update-check state is reused for manual probes | update-check, concurrency snapshot projection | `test_update_check.py`, `test_concurrency_monitor_snapshot.py` |
+| `$UPDATE_CHECK_TIMEOUT_SECONDS` | defaulted | update-check probe | `5` | default to `5` seconds for GitHub release/tag reads; failures write unknown state and never block restart | update-check | `test_update_check.py` |
 | `$RELEASE_AUTO_MIN_MERGES` | defaulted | release-gate | `1` | default to `1` recent merge for stability scoring | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | defaulted | release-gate | `2` | default to `2` hours since last release decision | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_ROLLUP_MIN_COMMITS` | defaulted | sync helpers | `1` | default to `1` integration-ahead commit before release-rollup pending event | sync helpers | `test_sync_dev.py` |
 | `$RELEASE_ROLLUP_COOLDOWN_SECONDS` | defaulted | sync helpers | `21600` | default to `21600` seconds before duplicate release-rollup event for the same integration SHA | sync helpers | `test_sync_dev.py` |
 | `$CI_GUARDS` | optional-noop | prompt templates | empty or host guard script | empty skips with reported noop reason `guards skipped: CI_GUARDS unset` | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$CODEX_FLOOR` | defaulted | concurrency floor | `5` | missing or invalid defaults to `5`; values below hard min `2` clamp to `2` | concurrency monitor, wakeup plan | `test_concurrency_monitor.py`, `test_wakeup_plan.py` |
+| `$ACTIVE_CONTROLLER_DEVICE_ID` | optional-noop | active-controller lease | empty | empty means default single-device local-owner noop; multi-device opt-in requires a stable per-device id on every upgraded device | active_controller, restart/concurrency/router/comment/progress/dev-sync/controller actions | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
+| `$ACTIVE_CONTROLLER_TTL_SECONDS` | defaulted | active-controller lease | `1800` | missing or invalid defaults to `1800`; owner renews before expiry; expired lease may be acquired by another device | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
+| `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
+| `$COMMENT_MONITOR_LOOKBACK` | optional-noop | comment-monitor | empty or `YYYY-MM-DD` / `updated:>=YYYY-MM-DD` search fragment | empty adds no lookback filter; non-empty is limited to a GitHub `updated:` search qualifier and must not change labels, ownership, or write behavior | comment-monitor | `test_comment_monitor.py`, `test_host_env_surface_matrix.py` |
+| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `self-doc-comment` | missing/empty normalizes to `self-doc-comment`; `none` disables refactor-history source comments; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -92,6 +101,9 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics: whether Old/New refactor comments are allowed, required, or rejected. `${HOST_COMMENT_RULE}` only supplies comment syntax in `self-doc-comment` mode; it does not override the policy.
+
 Host config rules:
 1. `host.env` is the only runtime fact injection point.
 2. `GH_REPO` must not be exported as a bare repo name; use `GH_REPO_SLUG`.
@@ -100,6 +112,8 @@ Host config rules:
 5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
 6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
 7. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
+8. Multi-device mode is safe only after all devices run a version that honors the #191 active-controller lease. Mixed old/new versions are not safe for multi-device mode.
+9. The active-controller lease ref is a code-owned singleton constant, not a host scope. Host env must not define alternate active-controller refs.
 
 ## Skill Root Contract
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/consensus-rnd-cli spawn-codex`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
@@ -205,6 +219,15 @@ Stability requires all signals green and fail-closed handling on missing or red 
 <!-- Refactor (iter217/issue-217): Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界. New principle: controller-only publication via ReleasePublishPreflight+ReleasePublisher; release.yml is read-only preview(contents:read) and forbidden to create tags/releases. -->
 The release lifecycle surface consumes decision-artifact-only output through the controller only: a scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, target ref, candidate expiry, decision digest, mapped manifest version, and required signals through `ReleasePublishPreflight`, then `ReleasePublisher` may run the existing version bump command, commit/push mapped manifests, create `v<to_version>` at the candidate target ref, and write `.refactor-loop/state/release-publish-result.json`. `consensus-rnd-cli release-gate` remains decider only; `release.yml` is read-only manual preview/verification with `contents: read` and no tag or GitHub Release authority. Forbidden: per-release maintainer emoji ratification, approval-ticket gating, release-candidate JSON authorization, workflow tag/release creation, or public `consensus-rnd-cli` release-publish commands.
 
+## Notify-only update check(per #231)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231`. `skills/codex-refactor-loop/VERSION.json` is the checked-in `VersionSourceManifest`: data-only fields are `schema`, `version`, `repository`, `release_source`, and `install_hint`; only `version` is listed in `.version-bump.json`.
+
+`consensus-rnd-cli update-check` is notify-only. It reads local `VERSION.json`, reads the GitHub latest release and then tags for `ChronoAIProject/consensus-rnd`, and atomically writes `.refactor-loop/state/update-check.json`. `$UPDATE_CHECK_ENABLE` missing, empty, or not true exits 0 and writes disabled state with a reason. GitHub/network/manifest errors write unknown state and do not block `restart-daemons`.
+
+Downstream apply remains host-owned: the probe must not copy, overwrite, reinstall, edit host config, run installers, mutate `.git`, commit, push, tag, release, open/close/edit issues or PRs, mutate labels, or create a daemon. `restart-daemons` may call `maybe_run_update_check(startup=True)` only after the fixed daemon start/skip pass, and failures are warnings. `concurrency` may project fresh, positive update state into `statusline-snapshot.json`; `statusline` remains snapshot-only and never reads `update-check.json` directly or touches the network. When `update_available=true`, statusline displays `up:v<latest>`.
+
+Verification is locked by `test_update_check.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_concurrency_monitor_snapshot.py`, `test_statusline.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
+
 <!-- Refactor (iter1/issue-166): Old pattern: CLI command authority was represented by coarse read_only metadata and prose-only runtime exception text, so the matrix could under-report command surfaces. New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source, including named narrow carveouts such as dev-sync's integration-worktree git surface, and SKILL prose cannot grant missing runtime authority. -->
 <!-- Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed merge-pr/open-pr/safe-push/apply-sync/apply-triage lifecycle commands and wakeup_plan/peek rendered copyable suggested_command, forming generic lifecycle authority. New principle: delete public lifecycle CLI surface; COMMANDS covers public non-lifecycle commands only, controller lifecycle primitives stay internal, wakeup-plan emits fixed controller_action facts with no_lifecycle_authority:true, and dev-sync keeps only the #53 carveout. -->
 ## CLI runtime authority fact source(per #166)
@@ -212,6 +235,26 @@ The release lifecycle surface consumes decision-artifact-only output through the
 
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
+
+## Named runtime exception - update-check(per #231)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231`. Narrow allowlist: read checked-in `skills/codex-refactor-loop/VERSION.json`, read GitHub release/tag metadata, write `.refactor-loop/state/update-check.json`, and let `concurrency` project fresh positive update fields into `statusline-snapshot.json`. Forbidden: no copy/overwrite/reinstall, host config edit, git or GitHub lifecycle mutation, installer, new daemon, commit, push, merge, tag, release, issue/PR lifecycle, label lifecycle, or apply/update command surface.
+
+<a id="named-runtime-exception--active-controller-leaseper-191"></a>
+## Named runtime exception - active controller lease(per #191)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#active-controller-lease-191`. This is the single-active-controller cross-device carveout. Durable source is one JSON blob at `active-controller.json` on `refs/heads/crnd/active-controller`. Lease-only git allowlist: `git fetch origin <lease-ref>`, `git ls-remote --exit-code --heads origin <lease-ref>`, `git rev-parse`, `git show <commit>:active-controller.json`, `git hash-object -w --stdin`, `git mktree`, `git commit-tree`, and `git push --force-with-lease=<old>:<lease-ref>`. These commands may only read/build/publish the singleton lease blob CAS and expose owner/expiry. JSON fields are `owner_device`, `lease_id`, `acquired_at`, `expires_at`, `renewed_at`, `repo`, `reason`, and `source_issue`.
+
+Allowed: read/acquire/renew the singleton lease, expose owner and expiry, and gate controller write paths plus the six restart-helper-managed write daemons. Non-owner devices may run read-only peek/statusline surfaces and `restart-daemons` must write `active_controller=noop:not-owner` without starting write daemons. Worker throughput remains owner-local via `$CODEX_FLOOR`; there is no cross-device floor aggregation.
+
+Forbidden: no worker diff commit, issue/PR create/merge/close/edit, label mutation, tag/release, per-work claim, host-defined lease scope, daemon ownership matrix, active-active scheduler, generic distributed lock library, or generic lifecycle actor. Missing `ACTIVE_CONTROLLER_DEVICE_ID` is the default single-device local-owner noop, not a multi-device claim.
+
+## Named runtime exception — closed-label-reconciler(per #238)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#closed-label-reconciler-238`. This is the only closed managed item phase-label reconciliation carveout. Consensus marker: `META_JUDGE_DONE:consensus:closed-label-reconciler:option B named restart-managed closed-label-reconciler with crnd:phase:closed and gh-label-closed-reconcile authority`.
+
+Allowed: active-controller owner only; checked-in `closed-label-reconciler` command (`consensus-rnd-cli closed-label-reconciler`) may read CLOSED `crnd:lifecycle:managed` issue/PR labels and apply terminal phase-label reconciliation: remove phase labels, cleanup-only aliases, and `crnd:lifecycle:stuck`, then add exactly one terminal phase label, either `crnd:phase:merged` when merged evidence is present or `crnd:phase:closed` when evidence is insufficient. `crnd:phase:closed` is a protocol terminal state, not a product verdict.
+
+Forbidden: no open item mutation, issue create/close/reopen/body/title edit, PR create/merge/close/body/title edit, human label mutation, triage label mutation, milestone label mutation, lifecycle label mutation beyond removing `crnd:lifecycle:stuck`, tag/release, generic `gh-label`, generic `gh-edit`, generic lifecycle actor, or controller close-path inline reconcile. `peek` may display the read-only projection but must not render remediation text or copyable edit commands.
+
+Fact source and verification: projection logic lives in `closed_phase_labels.py`, the daemon in `closed_label_reconciler.py`, and the only public command authority is `cli.py::COMMANDS["closed-label-reconciler"].authority == ("read-gh", "gh-label-closed-reconcile", "write-state")`; it does not grant generic `gh-label` or `gh-edit`. Behavior/source-regression coverage: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, and `test_runtime_exception_authorization_sources.py`.
 
 ## Named runtime exception — integration sync daemon(per #53)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
@@ -227,10 +270,10 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 `skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; `consensus-rnd-cli release-gate` requires it beside `contract-tests` and `manifest-version-sync`. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
 
 ## Claude Code statusline(per #51 consensus)
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示、optional update notice)。
 
 **Producer**:`consensus-rnd-cli concurrency` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。Snapshot 包含 `daemons` map(扫 `.refactor-loop/heartbeats/*.ts` 动态发现,每条记 `age_seconds` + `stale`,stale 阈值 90s)+ 汇总 `daemons_healthy` / `daemons_total`。
-**Consumer**:`consensus-rnd-cli statusline` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`。
+**Consumer**:`consensus-rnd-cli statusline` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`;当 snapshot 中 `update_available=true` 时追加 `up:v<latest>`。Statusline 不直读 `update-check.json`,不触网。
 
 **Install one-liner**(host project,**手动一行,无 installer script**):
 
@@ -257,7 +300,8 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 <!-- Refactor (iter1/issue-143): Old pattern: consensus-rnd-cli restart-daemons wrapper sidecar wrote heartbeat while daemon loop hangs.
 New principle: singleton wrapper + actor-owned heartbeat lease; stale means actor loop stopped renewing.
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)且 fingerprint current 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增 daemon。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)且 fingerprint current 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
+Before starting or repairing any of the six write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
@@ -267,7 +311,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat + matching fingerprint skip / stale/missing/malformed heartbeat repair / dead pid repair / missing/malformed/mismatched fingerprint restart / CLI entrypoint and package tree fingerprint restart / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
@@ -349,7 +393,7 @@ Consensus-rnd Phase bootstrap is mandatory and ordered for each controller sessi
 5. Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` if missing; do not create or maintain root `.refactor-loop/state.json`.
 6. Ensure the integration branch exists locally and remotely; create it from `$REVIEW_BASE_BRANCH` only when missing.
 7. ensure labels for the exact phase/human taxonomy; bootstrap command loops live in [label bootstrap loops](#label-bootstrap-loops).
-8. ensure all 5 restart-helper-managed daemons are alive as singletons: `consensus-rnd-cli concurrency`, `consensus-rnd-cli progress-reporter`, `consensus-rnd-cli comment-monitor`, `consensus-rnd-cli dev-sync`, and `consensus-rnd-cli phase9-router`. The persistent daemon-event Monitor bridge is armed separately in step 9.
+8. ensure all 6 restart-helper-managed daemons are alive as singletons: `consensus-rnd-cli concurrency`, `consensus-rnd-cli progress-reporter`, `consensus-rnd-cli comment-monitor`, `consensus-rnd-cli dev-sync`, `consensus-rnd-cli phase9-router`, and `consensus-rnd-cli closed-label-reconciler`. The persistent daemon-event Monitor bridge is armed separately in step 9.
 9. arm persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`.
 10. dispatch producer: audit by default, or manual issue intake only when explicit GitHub labels select it.
 11. Post a GitHub status card for Consensus-rnd Phase bootstrap completion or blocked state.
@@ -359,7 +403,7 @@ Consensus-rnd Phase bootstrap anti-patterns stay local because they are safety g
 
 - Do not continue with missing `host.env` under guessed defaults.
 - Do not skip `ProjectRulesFixedPointProbe` because `$PROJECT_RULES` already exists.
-- Do not start fewer than the five required restart-helper-managed daemons.
+- Do not start fewer than the six required restart-helper-managed daemons.
 - Do not initialize an alternate state model, alternate queue, wrapper envelope, root state file, or renamed work-unit schema.
 - Do not post local-only bootstrap status; GitHub must show the state.
 
@@ -372,7 +416,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
 | `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; both dispatch r(S+1) solvers, while any non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
@@ -544,7 +588,9 @@ exactly one canonical `crnd:human:*` label after migration. GitHub
 phase/human/lifecycle/triage/milestone routing semantics. Migration is
 controller-owned: add canonical labels first, re-read live labels, validate
 exactly-one phase/human, then remove aliases. Workers and daemons must not
-mutate labels.
+mutate labels except the #238 `closed-label-reconciler`, which may mutate only
+CLOSED `crnd:lifecycle:managed` item phase/cleanup/stuck labels into exactly
+one terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
 
 ## `crnd:human:maintainer-decision` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 
@@ -595,7 +641,7 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
-4. `converge:round-N` always routes to another solver round; no hard round cap.
+4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
 5. `escalate:stalled` routes to reflector, not directly to human.
 6. Maintainer replies reset the round when they materially change framing.
 7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
@@ -633,7 +679,8 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 1. No new features; only clean the authorized violation or implement the consensus plan.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
-3. Code self-documents refactors with the host-required refactor comment format when touching source.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+3. Code self-documents refactors according to `$HOST_REFACTOR_COMMENT_POLICY`: `self-doc-comment` requires host-style refactor-history comments; `none` forbids those source comments and requires the rationale in external artifacts.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
@@ -1014,7 +1061,7 @@ nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scrip
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
 Integration sync uses integration sync operation artifacts; the daemon writes `.refactor-loop/runs/integration-sync-operation-<kind>-<ts>.json` and records `.refactor-loop/runs/integration-sync-executions/<operation-stem>.(applied|rejected).json` after live-state validation.
-**5 个长跑 daemon 全部要起**(监控面 = 这 5 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync operation executor)、`consensus-rnd-cli phase9-router`(30s narrow Consensus-rnd Phase design-consensus deterministic routing)。
+**6 个长跑 daemon 全部要起**(监控面 = 这 6 个):`consensus-rnd-cli concurrency`(60s codex 并发)、`consensus-rnd-cli progress-reporter`(600s 进度回贴)、`consensus-rnd-cli comment-monitor`(30s maintainer 评论 eyes-react)、`consensus-rnd-cli dev-sync`(600s integration sync operation executor)、`consensus-rnd-cli phase9-router`(30s narrow Consensus-rnd Phase design-consensus deterministic routing)、`consensus-rnd-cli closed-label-reconciler`(1800s closed managed item terminal phase-label reconciliation)。
 
 `consensus-rnd-cli restart-daemons` also runs daemonless log retention before daemon freshness checks. `consensus-rnd-cli log-retention` has no lifecycle authority: it reads `$REPO_ROOT/.refactor-loop/host.env`, targets only `$REPO_ROOT/.refactor-loop/logs/*.log`, and directly removes regular log files older than 24h. It must not create archive/index state, scan or delete `.refactor-loop/runs/` or prompts, call GitHub, run git, spawn codex, or become a daemon. Verification lives in `test_log_retention.py`.
 <!-- Refactor (iter215/cluster-215-controller-process-selftest):
@@ -1215,7 +1262,7 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 |---|---|
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
-| META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
+| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver; legacy r(S+1) payload remains compatible |
 | META_JUDGE_DONE:escalate:stalled | reflector(per Consensus-rnd Phase design-consensus 路由表) |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Consensus-rnd Phase review-gate reviewer × 3 |
@@ -1239,7 +1286,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
-| `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
+| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
 | `escalate:stalled` | 派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
 | `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
@@ -1384,7 +1431,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 
 ### 首次唤醒强制序列(MANDATORY — 按序跑完才能 end turn)
 
-> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 5 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
+> 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 6 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
 
 0. **host.env 自检(缺失即停,绝不臆造)**:`source .refactor-loop/host.env` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 `.refactor-loop/host.env` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
@@ -1401,13 +1448,13 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
-3. **起并挂载全部 5 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 5 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只建本地目录 + 派默认 producer,不起 5 daemon(baseline 默认失败模式)
+- ❌ 只建本地目录 + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -1824,6 +1871,8 @@ For each `bucket: fail` check:
 <a id="daemon-command-bodies"></a>
 ## Daemon command bodies
 
+All six daemon command bodies below are active-controller-owner-only in multi-device mode. The owner may start/maintain `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, and `closed_label_reconciler`; a non-owner `restart-daemons` is a noop with `active_controller=noop:not-owner`. Read-only `peek` and `statusline` remain allowed on non-owner devices.
+
 Consensus-rnd Phase integration-sync is owned by the singleton daemon, not by controller wakeup shell commands. The goal is to keep `integration_branch` continuously up-to-date with `review_base_branch` so cluster PRs base on fresh code and the eventual rollup PR has minimal merge conflicts.
 
 ### Consensus-rnd Phase integration-sync 现在由独立 daemon 自主完成
@@ -1849,15 +1898,18 @@ Daemon 工作流由 `integration sync daemon` 命名状态机表达:
 Ambiguous rollup metadata, failed operation construction, or adoption conflicts append `.refactor-loop/.controller-pending-events.log` and do not guess. Controller reads pending events and posts the visible GitHub card when action is needed.
 
 ### Consensus-rnd Phase design-consensus router daemon command body
-`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs 和私有 ledger。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+<!-- Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's daemon contract said no GitHub while the source-OPEN gate read GitHub issue state. New: document the narrow state-only read-gh authority in the durable runtime-exception mirror and keep lifecycle authority forbidden. -->
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229`.
+`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/spawn/ledger side-effect 前的 source-OPEN gate state-only GitHub read:`gh issue view <N> --json state`(optional `--repo <owner/repo>` from host GitHub context)。该 `read-gh` 只读取 issue `state`;非 OPEN 或 state 不可证明时 fail closed,不 spawn、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
-- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; both spawn r(S+1) minimal/structural/delete solvers; non-adjacent payload mismatch falls back.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 HostWorkflowSpec is not a phase9 direct-spawn authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
-Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 5-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
-Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; fallback events use prefix `phase9-router-fallback`. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
+Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 6-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
+Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; fallback events use prefix `phase9-router-fallback`. The state-only source-OPEN gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
 dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
@@ -2198,7 +2250,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 | Decision | Category | Controller 动作 |
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action";implement 可改 Tier I/II/CLAUDE.md/SPEC/核心抽象) |
-| `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt); `consensus-rnd-cli phase9-router` may direct-dispatch this route |
+| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver(把 convergence question prepend prompt); non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
 | `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人; `consensus-rnd-cli phase9-router` may direct-dispatch only when the stalled predicate holds |
 | `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge` / `escalate:stalled`;**禁止**直接 label 人 |
 
@@ -2508,14 +2560,16 @@ Concretely, this means:
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
+Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
+
 - `crnd:phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
 - `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
 - `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round
 - `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
-- `crnd:phase:pr-open` with 0 codex → dispatch reviewers
+- PR review work is represented by the child PR; parent issue `crnd:phase:pr-open` is non-action, expected workers 0
 - `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
 
-Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing work sits 0-codex is a no-gap violation, not a floor refill.
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 
@@ -2864,7 +2918,7 @@ CI sweep contract: every controller wakeup checks open catalog-managed PR checks
 
 ## Codex 进展实时上报 — 强制
 
-`consensus-rnd-cli progress-reporter` is one of the five required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment only when the codex exits cleanly, and uses only log-tail `^EXIT=0` for successful completion detection. Nonzero `EXIT=<n>` is a failed terminal state that remains visible instead of being silently cleaned up.
+`consensus-rnd-cli progress-reporter` is one of the six required daemons. It edits one progress comment per in-flight codex, includes elapsed time plus log tail, skips old finished logs, deletes the progress comment only when the codex exits cleanly, and uses only log-tail `^EXIT=0` for successful completion detection. Nonzero `EXIT=<n>` is a failed terminal state that remains visible instead of being silently cleaned up.
 
 <a id="label-bootstrap-loops"></a>
 ## Label bootstrap loops
@@ -2922,7 +2976,8 @@ Bash(
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
-3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+3. **Code self-documents the refactor according to policy** — `$HOST_REFACTOR_COMMENT_POLICY` empty/`self-doc-comment` requires a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; `none` forbids refactor-history source comments and moves the rationale to external artifacts.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
