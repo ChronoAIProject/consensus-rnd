@@ -332,16 +332,31 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
                 self.assertIn(f"ownership not allowed: {decision.reason}", self.rejected_record().read_text(encoding="utf-8"))
                 self.assertNotIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
-    def test_pr_targeted_apply_stale_takeover_allows_apply(self) -> None:
+    def test_pr_targeted_apply_stale_takeover_posts_notice_before_git_push(self) -> None:
         self.write_request({"pr_number": 77})
         fake = FakeGit()
         stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
 
         with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
             ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = True
             self.assertEqual(0, self.apply(fake))
 
+        ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
         self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
+
+    def test_pr_targeted_apply_stale_takeover_notice_failure_rejects_before_git_push(self) -> None:
+        self.write_request({"pr_number": 77})
+        fake = FakeGit()
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = False
+            self.assertEqual(2, self.apply(fake))
+
+        self.assertIn("ownership stale takeover notice failed", self.rejected_record().read_text(encoding="utf-8"))
+        self.assertNotIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):

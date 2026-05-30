@@ -608,6 +608,22 @@ class Phase9Router:
         if not self.ctx.gh_repo_slug:
             return True
         decision = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.repo_root).decide(WorkTarget("issue", int(issue)))
+        if decision.allowed and decision.reason == "stale-takeover":
+            ownership = GitHubWorkOwnership(self.ctx.gh_repo_slug, cwd=self.repo_root)
+            if not ownership.post_takeover_notice(decision):
+                self._append_ledger(
+                    f"{issue}-{route}-ownership-notice-failed",
+                    "ownership-notice-failed",
+                    self.logs_dir / f"phase9-issue{issue}-ownership-notice-failed.log",
+                    extra={
+                        "route": route,
+                        "issue": issue,
+                        "ownership": decision.reason,
+                        "author_login": decision.author_login,
+                        "current_login": decision.current_login,
+                    },
+                )
+                return False
         if decision.allowed:
             return True
         self._append_ledger(

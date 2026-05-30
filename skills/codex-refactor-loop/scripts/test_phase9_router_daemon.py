@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -26,10 +27,17 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.env = mock.patch.dict(
+            os.environ,
+            {"GH_REPO_SLUG": "", "GH_OWNER": "", "GH_REPO_NAME": "", "GH_REPO": ""},
+            clear=False,
+        )
+        self.env.start()
         self.commands: list[list[str]] = []
         self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
 
     def tearDown(self) -> None:
+        self.env.stop()
         self.tmp.cleanup()
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
@@ -188,7 +196,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual([entry["key"] for entry in entries], ["37-4-judge-ownership-skip"])
         self.assertEqual(entries[0]["ownership"], "unknown-current-login")
 
-    def test_phase9_router_stale_ownership_allows_direct_dispatch(self) -> None:
+    def test_phase9_router_stale_ownership_posts_notice_before_direct_dispatch(self) -> None:
         (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
         self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
         self.solver_triplet(issue=38, round_no=4)
@@ -196,10 +204,28 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
             ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = True
             self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
+        ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
         self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
+
+    def test_phase9_router_stale_ownership_notice_failure_ledgers_skip_before_dispatch(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
+        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.solver_triplet(issue=38, round_no=4)
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("issue", 38), "other", "alice", 4.0)
+
+        with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
+            ownership_cls.return_value.decide.return_value = stale
+            ownership_cls.return_value.post_takeover_notice.return_value = False
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        entries = self.ledger_entries()
+        self.assertEqual([entry["key"] for entry in entries], ["38-4-judge-ownership-notice-failed"])
+        self.assertEqual(entries[0]["ownership"], "stale-takeover")
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)

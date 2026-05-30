@@ -39,23 +39,6 @@ class GhCli:
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"invalid gh JSON for {' '.join(args)}") from exc
 
-    # Refactor (iter/issue-193):
-    #   Old pattern: callers could invent ownership from labels/comments or
-    #   local state when deciding whether to run side effects.
-    #   New principle: expose only read helpers for GitHub author.login and
-    #   updatedAt; mutation remains in existing controller-owned methods.
-    def current_login(self) -> str | None:
-        data = self.run_json(["api", "user"])
-        return str(data.get("login")) if isinstance(data, dict) and data.get("login") else None
-
-    def issue_ownership_fields(self, number: int | str) -> dict[str, Any]:
-        data = self.run_json(["issue", "view", str(number), "--json", "author,updatedAt"])
-        return data if isinstance(data, dict) else {}
-
-    def pr_ownership_fields(self, number: int | str) -> dict[str, Any]:
-        data = self.run_json(["pr", "view", str(number), "--json", "author,updatedAt"])
-        return data if isinstance(data, dict) else {}
-
     def issue_comment(self, number: int | str, body: str) -> str:
         return self.run_text(["issue", "comment", str(number), "--body", body])
 

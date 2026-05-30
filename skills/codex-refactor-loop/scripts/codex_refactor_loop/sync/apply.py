@@ -250,9 +250,12 @@ def apply_request(
         #   gate must pass before apply; non-PR integration sync stays SHA-only.
         if request.pr_number is not None:
             ctx = LoopContext.load(repo_root=repo, env=env)
-            decision = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo).decide(WorkTarget("pr", request.pr_number))
+            ownership = GitHubWorkOwnership(ctx.gh_repo_slug, cwd=repo)
+            decision = ownership.decide(WorkTarget("pr", request.pr_number))
             if not decision.allowed:
                 raise IntegrationSyncRequestError(f"ownership not allowed: {decision.reason}")
+            if decision.reason == "stale-takeover" and not ownership.post_takeover_notice(decision):
+                raise IntegrationSyncRequestError("ownership stale takeover notice failed")
         clean, merge_in_progress = ensure_clean_or_merge(worktree, command_runner=command_runner)
         if not clean:
             raise IntegrationSyncRequestError("dirty non-merge worktree")

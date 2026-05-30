@@ -15,7 +15,7 @@ from typing import Sequence
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
-from ..ownership import GitHubWorkOwnership, WorkTargetResolver
+from ..ownership import GitHubWorkOwnership, OwnershipDecision, WorkTargetResolver
 from ..state import read_json, write_json
 
 
@@ -434,17 +434,20 @@ class ConcurrencyMonitor:
             start_new_session=True,
         )
 
-    def dispatch_ownership_allowed(self, payload: dict) -> bool:
+    def dispatch_ownership_decision(self, payload: dict) -> OwnershipDecision | None:
         # Refactor (iter/issue-193):
         #   Old pattern: dispatch queue side effects were gated only by local
         #   queue/cwd state, not GitHub-native work ownership.
         #   New principle: issue/PR targets must pass author.login ownership
-        #   or updatedAt 3h stale takeover before spawn.
+        #   or updatedAt 3h stale takeover with a visible notice before spawn.
         target = WorkTargetResolver.from_payload(payload)
         if target is None or not self.gh_repo_slug or "github_target" not in payload:
-            return True
-        decision = GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root).decide(target)
-        return decision.allowed
+            return None
+        return GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root).decide(target)
+
+    def dispatch_ownership_allowed(self, payload: dict) -> bool:
+        decision = self.dispatch_ownership_decision(payload)
+        return True if decision is None else decision.allowed
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
@@ -463,11 +466,19 @@ class ConcurrencyMonitor:
                 self.write_pending_event(event)
                 log(event)
                 continue
-            if not self.dispatch_ownership_allowed(payload):
+            decision = self.dispatch_ownership_decision(payload)
+            if decision is not None and not decision.allowed:
                 event = f"DISPATCH_SKIPPED_FOREIGN_OWNER:{task_id}:{priority}:ownership-not-allowed"
                 self.write_pending_event(event)
                 log(event)
                 continue
+            if decision is not None and decision.reason == "stale-takeover":
+                ownership = GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root)
+                if not ownership.post_takeover_notice(decision):
+                    event = f"DISPATCH_SKIPPED_STALE_TAKEOVER_NOTICE_FAILED:{task_id}:{priority}"
+                    self.write_pending_event(event)
+                    log(event)
+                    continue
             self.launch_dispatch(payload)
             self.archive_dispatched(path, payload, task_id)
             self.write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")

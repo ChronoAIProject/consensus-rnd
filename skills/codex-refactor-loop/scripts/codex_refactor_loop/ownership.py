@@ -156,6 +156,27 @@ class GitHubWorkOwnership:
             f"{AI_SENTINEL}\n"
         )
 
+    def post_takeover_notice(self, decision: OwnershipDecision) -> bool:
+        # Refactor (iter/issue-193):
+        #   Old pattern: stale takeover could be decided without the visible
+        #   GitHub explanation required before controller side effects.
+        #   New principle: stale takeover side effects require a posted
+        #   comment; the comment remains visibility only, not authority.
+        if decision.reason != "stale-takeover":
+            return True
+        result = self.command_runner(
+            [
+                "gh",
+                "pr" if decision.target.kind == "pr" else "issue",
+                "comment",
+                str(decision.target.number),
+                "--body",
+                self.takeover_comment(decision),
+                *self._repo_args(),
+            ]
+        )
+        return result.returncode == 0
+
 
 class WorkTargetResolver:
     # Refactor (iter/issue-193):

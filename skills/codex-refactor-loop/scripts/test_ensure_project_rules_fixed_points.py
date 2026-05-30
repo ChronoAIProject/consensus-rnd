@@ -177,6 +177,19 @@ class MultiNodeOwnershipSourceTests(unittest.TestCase):
             with self.subTest(doc_forbidden_token=token):
                 self.assertIn(token, docs)
 
+    def test_issue193_stale_takeover_side_effect_paths_require_visible_notice(self) -> None:
+        checked = {
+            "ownership.py": SCRIPT_DIR / "codex_refactor_loop" / "ownership.py",
+            "monitors/concurrency.py": SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py",
+            "phase9/router.py": SCRIPT_DIR / "codex_refactor_loop" / "phase9" / "router.py",
+            "sync/apply.py": SCRIPT_DIR / "codex_refactor_loop" / "sync" / "apply.py",
+        }
+        for label, path in checked.items():
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(path=label):
+                self.assertIn("post_takeover_notice", text)
+                self.assertIn("stale-takeover", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -38,6 +38,8 @@ class FakeGh:
                 json.dumps({"author": {"login": self.author}, "updatedAt": self.updated_at}),
                 "",
             )
+        if command[:3] in (["gh", "issue", "comment"], ["gh", "pr", "comment"]):
+            return subprocess.CompletedProcess(command, 0, "comment-url\n", "")
         return subprocess.CompletedProcess(command, 1, "", "unexpected command")
 
 
@@ -102,6 +104,48 @@ class GitHubWorkOwnershipTests(unittest.TestCase):
         self.assertIn("updatedAt", body)
         self.assertIn("visibility only", body)
         self.assertTrue(body.rstrip().endswith("⟦AI:AUTO-LOOP⟧"))
+
+    def test_post_takeover_notice_comments_on_target_only_for_stale_takeover(self) -> None:
+        fake = FakeGh(login="alice", author="bob", updated_at="2026-05-29T20:00:00Z")
+        ownership = self.ownership(fake)
+        decision = ownership.decide(WorkTarget("pr", 44), now=NOW)
+
+        self.assertTrue(ownership.post_takeover_notice(decision))
+
+        rendered = "\n".join(" ".join(command) for command in fake.commands)
+        self.assertIn("gh pr comment 44 --body", rendered)
+        self.assertIn("--repo owner/repo", rendered)
+        self.assertIn("Stale takeover notice", rendered)
+
+    def test_post_takeover_notice_fails_closed_when_gh_comment_fails(self) -> None:
+        def failing_comment(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command[:3] == ["gh", "api", "user"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"login": "alice"}), "")
+            if command[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"author": {"login": "bob"}, "updatedAt": "2026-05-29T20:00:00Z"}),
+                    "",
+                )
+            if command[:3] == ["gh", "issue", "comment"]:
+                return subprocess.CompletedProcess(command, 1, "", "comment failed")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        ownership = GitHubWorkOwnership("owner/repo", cwd=Path(tempfile.gettempdir()), command_runner=failing_comment)
+        decision = ownership.decide(WorkTarget("issue", 44), now=NOW)
+
+        self.assertFalse(ownership.post_takeover_notice(decision))
+
+    def test_post_takeover_notice_noops_for_owned_decision(self) -> None:
+        fake = FakeGh(login="alice", author="alice")
+        ownership = self.ownership(fake)
+        decision = ownership.decide(WorkTarget("issue", 44), now=NOW)
+        command_count = len(fake.commands)
+
+        self.assertTrue(ownership.post_takeover_notice(decision))
+
+        self.assertEqual(len(fake.commands), command_count)
 
     def test_target_resolver_accepts_existing_payload_surfaces(self) -> None:
         self.assertEqual(WorkTargetResolver.from_payload({"github_target": {"kind": "issue", "number": 193}}), WorkTarget("issue", 193))
