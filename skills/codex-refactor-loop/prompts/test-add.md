@@ -1,5 +1,7 @@
 # 任务：补测试覆盖重构引入的未覆盖代码 — ${CLUSTER_ID}
 
+Artifact profile: marker-only-work-unit
+
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 worktree: `${WORKTREE_PATH}`，分支 `${BRANCH}`。
@@ -46,12 +48,12 @@ ${UNCOVERED_LINES}
 4. 实施测试。
 5. 跑：
    ```
-   $TEST_CMD
+   bash -lc "$TEST_CMD"
    ```
    必须全部通过。
 6. 本地 codecov 验证（如果工具可用）：
    ```
-   $TEST_CMD
+   bash -lc "$TEST_CMD"
      --settings <coverlet.runsettings if exists> 2>&1 | tail -5
    ```
 7. 若 `$CI_GUARDS` 非空,跑 `bash "$REPO_ROOT/$CI_GUARDS"` —— 必须通过（禁 `sleep/delay` 等）；为空则记录 guards skipped。
@@ -66,7 +68,7 @@ ${UNCOVERED_LINES}
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `TEST_BLOCKED:<reason>`
@@ -86,7 +88,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## codex 工具边界(强制)
 
-<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 
 本 prompt 是 marker/artifact-only,**默认不需要任何 gh 操作**。
 
@@ -100,8 +102,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

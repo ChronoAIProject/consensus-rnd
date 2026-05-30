@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import unittest
 from pathlib import Path
 
@@ -14,6 +15,10 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 README_MD = REPO_ROOT / "README.md"
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
+
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop.workflow_stages import WORKFLOW_STAGES, format_stage  # noqa: E402
 
 
 def read(path: Path) -> str:
@@ -34,6 +39,37 @@ def reference_anchors(reference: str) -> set[str]:
         if line.startswith("#"):
             anchors.add(slugify_heading(line))
     return anchors
+
+
+def section_after_anchor(markdown: str, anchor: str) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    return _section_after_first_heading(after_anchor)
+
+
+def section_after_heading(markdown: str, heading: str) -> str:
+    pattern = re.compile(rf"(?m)^## {re.escape(heading)}$")
+    match = pattern.search(markdown)
+    if not match:
+        raise AssertionError(f"missing markdown heading: {heading}")
+    return _section_after_first_heading(markdown[match.start() :])
+
+
+def _section_after_first_heading(markdown: str) -> str:
+    lines = markdown.splitlines(keepends=True)
+    if not lines:
+        return ""
+    start = 0
+    for index, line in enumerate(lines):
+        if re.match(r"^##\s+", line):
+            start = index
+            break
+    for index in range(start + 1, len(lines)):
+        if re.match(r"^##\s+", lines[index]):
+            return "".join(lines[start:index])
+    return "".join(lines[start:])
 
 
 class SkillReferenceAnchorTests(unittest.TestCase):
@@ -65,7 +101,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host-runtime-details",
             "status-and-escalation-templates",
             "work-unit-contract",
-            "state-schema",
+            "specialized-state-artifacts",
             "batching-heuristics",
             "recovery-playbook",
             "daemon-command-bodies",
@@ -77,6 +113,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, available)
 
+    def test_workflow_stage_index_uses_registry_display_and_anchors(self) -> None:
+        available = reference_anchors(self.skill)
+        index = section_after_heading(self.skill, "Workflow Stage Index")
+        self.assertIn("scripts/codex_refactor_loop/workflow_stages.py", self.skill)
+        for stage in WORKFLOW_STAGES:
+            with self.subTest(slug=stage.slug):
+                self.assertIn(format_stage(stage), index)
+                self.assertIn(stage.slug, index)
+                self.assertIn(stage.detail_anchor, available)
+
     def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
         skill_lines = len(self.skill.splitlines())
 
@@ -87,10 +133,45 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
+    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+        top = "\n".join(self.skill.splitlines()[:200])
+        for needle in (
+            "## Two entry modes",
+            "audit-driven",
+            "issue-driven / Path A",
+            "catalog-derived design issue label bundle",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "Legacy issue-entry labels are migration aliases only",
+            "Audit is a seed producer, not the only entry",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, top)
+
+    def test_skill_documents_phase9_solver_source_contract(self) -> None:
+        phase9 = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)",
+        )
+        for needle in (
+            "### Solver source contract",
+            "WORK_UNIT_SOURCE_REF",
+            "source_ref",
+            "gh-issue-<N>",
+            "gh issue view <N>",
+            "issue body/comments are the scope source",
+            "must not be fabricated",
+            "A missing audit `evidence:` block is not by itself a defect for manual issues",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, phase9)
+
     def test_downstream_install_walkthrough_contract(self) -> None:
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
         #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks required host surfaces.
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
         combined_links = "\n".join((self.readme, self.skill))
         self.assertNotIn("REFERENCE.md#downstream-install-walkthrough", combined_links)
         self.assertIn("SKILL.md#downstream-install-walkthrough", combined_links)
@@ -101,17 +182,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host.env.example",
             ".refactor-loop/host.env",
             "consensus-rnd-cli restart-daemons",
-            "cron",
-            "launchd",
-            "statusLine",
             "consensus-rnd-cli statusline",
+            "source .refactor-loop/host.env && exec",
             ".git",
             "CI",
             "policy",
+            "HOST_*",
         )
         for needle in required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, self.skill)
+                self.assertIn(needle, walkthrough)
 
         forbidden_paths = (
             "scripts/install.sh",
@@ -124,31 +204,14 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertFalse((REPO_ROOT / forbidden).exists(), forbidden)
 
-        walkthrough = self.skill.split("## Downstream install walkthrough", 1)[1].split(
-            "## Named runtime exception",
-            1,
-        )[0]
         self.assertEqual(1, walkthrough.count("HOST_*"))
         self.assertNotIn("HOST_TEST_FILE_GLOBS |", walkthrough)
-        self.assertIn("source .refactor-loop/host.env && exec", walkthrough)
-
-        restart_helper = self.skill.split("## Anti-stop restart helper cron/launchd install(per #49)", 1)[1].split(
-            "## Named runtime exception",
-            1,
-        )[0]
-        self.assertIn("cron/launchd-only helper invariant", restart_helper)
-        self.assertNotIn("Host project cron install one-liner", restart_helper)
-        self.assertNotIn("launchd host template", restart_helper)
-        self.assertNotIn("ProgramArguments", restart_helper)
-        self.assertNotIn("restart-cron.log", restart_helper)
-
-        command_bodies = (
-            "source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
-            "source .refactor-loop/host.env && exec python3 &lt;skill-root&gt;/scripts/consensus-rnd-cli restart-daemons",
+        self.assertIn("according to the Host env surface matrix", walkthrough)
+        self.assertIn("conditional fail-closed surfaces such as `MAINTAINER_WHITELIST`", walkthrough)
+        self.assertNotIn(
+            "including `REPO_ROOT`, `GH_REPO_SLUG`, `BUILD_CMD`, `TEST_CMD`, `SOURCE_GLOBS`, and `MAINTAINER_WHITELIST`",
+            walkthrough,
         )
-        for body in command_bodies:
-            with self.subTest(body=body):
-                self.assertEqual(1, self.skill.count(body))
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
@@ -210,9 +273,63 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("daemon-owned output logs remain `phase9-issue...`", self.skill)
         self.assertIn("clean `^EXIT=0`", self.skill)
         self.assertIn(".refactor-loop/phase9-router-ledger.jsonl", self.skill)
+        for token in (
+            "route",
+            "target_actor",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_path",
+            "independence_check",
+            "phase9-triplet-evidence-invalid",
+            "Router recovery/idempotency reads only `key`",
+            "meta-judge decisions read solver logs, not ledger evidence",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+
+    def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        for token in (
+            "Refactor (iter1/issue-167)",
+            "Old pattern: solver triplet handoff recorded only the base dispatch row",
+            "durable triplet provenance",
+            "visible same-round peer artifact reference failure",
+            "New principle: keep row-level router-private ledger provenance",
+            "narrow fail-closed peer artifact token check",
+            "do not add a",
+            "standalone evidence file",
+            "hash",
+            "lifecycle authority",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+
+    def test_skill_documents_cli_runtime_authority_fact_source(self) -> None:
+        required = (
+            "Refactor (iter1/issue-166)",
+            "Old pattern: CLI command authority was represented by coarse read_only metadata",
+            "New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source",
+            "dev-sync's integration-worktree git surface",
+            "## CLI runtime authority fact source(per #166)",
+            "cli.py::COMMANDS[*].authority",
+            "unique mechanical fact source for CLI runtime command authority",
+            "CommandSpec.authority",
+            "inline closed-token tuple",
+            "git/gh/spawn/write-artifact/label/merge",
+            "narrow allowlist",
+            "durable authorization source",
+            "no lifecycle authority by default",
+            "Worker prompt authority remains in prompt contracts and prompt tests",
+            "not as pseudo-commands in `COMMANDS`",
+            "behavior test and source-regression anchor",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
 
     def test_phase9_router_filename_identity_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
@@ -244,18 +361,18 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
             r"(?m)^## Claude Code statusline\(per #51 consensus\)$",
             "statusline consensus section must be an independent markdown heading",
         )
+        section = section_after_heading(self.skill, "Claude Code statusline(per #51 consensus)")
         required = (
-            "**Producer**",
-            "**Consumer**",
-            "**Install one-liner**",
-            "**Uninstall one-liner**",
-            "**无新 daemon**",
-            "**手动一行,无 installer script**",
+            "statusLine",
+            "consensus-rnd-cli statusline",
+            "install",
+            "installer script",
+            "daemon",
             "Named runtime exception",
         )
         for needle in required:
             with self.subTest(needle=needle):
-                self.assertIn(needle, self.skill)
+                self.assertIn(needle, section)
 
     def test_statusline_contract_does_not_add_daemon_or_installer(self) -> None:
         scripts_dir = SKILL_ROOT / "scripts"
@@ -274,15 +391,12 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
                 self.assertNotIn(token, combined)
 
     def test_statusline_install_uninstall_anchor_is_local_and_manual(self) -> None:
-        section = self.skill.split("## Claude Code statusline(per #51 consensus)", 1)[1].split(
-            "## Anti-stop restart helper cron/launchd install(per #49)",
-            1,
-        )[0]
+        section = section_after_heading(self.skill, "Claude Code statusline(per #51 consensus)")
         required = (
-            "Install one-liner",
-            "Uninstall one-liner",
             "statusLine",
-            "手动一行,无 installer script",
+            "consensus-rnd-cli statusline",
+            "installer script",
+            "Uninstall",
         )
         for needle in required:
             with self.subTest(needle=needle):

@@ -1,5 +1,7 @@
 # Role: Code quality reviewer (readability + simplicity angle)
 
+Artifact profile: phase8-reviewer
+
 <!--
 Refactor (iter1/issue-126):
   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
@@ -55,7 +57,7 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: code is readable, focused, no over/under-engineering smell, refactor self-docs are present and clear.
 - **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; host 项目的复杂度分析器 borderline.
@@ -67,7 +69,7 @@ End with marker: `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `REVIEW_DONE:${PR_NUMBER}:quality:<verdict>`
@@ -98,8 +100,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

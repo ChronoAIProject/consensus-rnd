@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
 
-CONTRACT_MARKER = "MarkerEmissionContractV1: single-valid-invalid-role-marker-source"
+CONTRACT_MARKER = "MarkerEmissionContract: single-valid-invalid-role-marker-source"
 SECTION_HEADING = "## Marker emission allowlist(强制)"
 REQUIRED_PROHIBITION = (
     "Only the markers listed above are valid role-routing markers for this prompt. "
@@ -34,6 +34,8 @@ ROLE_MARKER_TOKENS = (
     "TEST_BLOCKED",
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
+    "REBASE_RESOLVE_DONE",
+    "REBASE_RESOLVE_BLOCKED",
 )
 
 PROMPT_ALLOWLISTS = {
@@ -52,7 +54,6 @@ PROMPT_ALLOWLISTS = {
         "REMOTE_CI_FIX_DONE:${CHECK_NAME}:<status>",
     ),
     "review-fix.md": (
-        "SCOPE_EXTEND:<file>:<reason>",
         "FIX_DONE:${PR_NUMBER}:round-${FIX_ROUND}:applied-<N>:rejected-<M>:blocked-<K>",
         "FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:<conflict|human-decision|build-broken|other>:<short>",
     ),
@@ -106,6 +107,61 @@ PROMPT_ALLOWLISTS = {
         "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:accept:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
         "TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:reject:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json",
     ),
+    "rebase-resolve.md": (
+        "REBASE_RESOLVE_DONE:${PR_NUMBER}:<status>",
+        "REBASE_RESOLVE_BLOCKED:${PR_NUMBER}:<conflict|human-decision|build-broken|other>:<short>",
+    ),
+}
+
+KNOWN_ARTIFACT_PROFILES = {
+    "phase9-solver",
+    "phase9-delete-solver",
+    "phase9-meta-judge",
+    "phase8-reviewer",
+    "review-fix",
+    "marker-only-work-unit",
+    "github-ai-post-body",
+}
+
+PROMPT_ARTIFACT_PROFILES = {
+    "audit.md": "marker-only-work-unit",
+    "implement.md": "marker-only-work-unit",
+    "verify.md": "marker-only-work-unit",
+    "remote-ci-fix.md": "marker-only-work-unit",
+    "review-fix.md": "review-fix",
+    "reviewer-architect.md": "phase8-reviewer",
+    "reviewer-tests.md": "phase8-reviewer",
+    "reviewer-quality.md": "phase8-reviewer",
+    "solver-minimal.md": "phase9-solver",
+    "solver-structural.md": "phase9-solver",
+    "solver-delete.md": "phase9-delete-solver",
+    "meta-judge.md": "phase9-meta-judge",
+    "meta-reflector-stalled.md": "marker-only-work-unit",
+    "test-add.md": "marker-only-work-unit",
+    "triage-external-issue.md": "marker-only-work-unit",
+    "rebase-resolve.md": "marker-only-work-unit",
+}
+
+PROFILE_TERMINAL_MARKER_TOKENS = {
+    "marker-only-work-unit": {
+        "AUDIT_DONE",
+        "AUDIT_INCOMPLETE",
+        "SCOPE_EXTEND",
+        "IMPLEMENT_DONE",
+        "VERIFY_DONE",
+        "REMOTE_CI_FIX_DONE",
+        "META_RESOLVED",
+        "TEST_BLOCKED",
+        "TEST_ADD_DONE",
+        "TRIAGE_DECISION_DONE",
+        "REBASE_RESOLVE_DONE",
+        "REBASE_RESOLVE_BLOCKED",
+    },
+    "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
+    "phase8-reviewer": {"REVIEW_DONE"},
+    "phase9-solver": {"SOLVER_DONE"},
+    "phase9-delete-solver": {"SOLVER_DONE"},
+    "phase9-meta-judge": {"META_JUDGE_DONE"},
 }
 
 
@@ -124,7 +180,14 @@ def marker_token(marker: str) -> str:
     return marker.split(":", 1)[0]
 
 
+def artifact_profile_anchors(body: str) -> list[str]:
+    return re.findall(r"(?m)^Artifact profile: ([a-z0-9-]+)$", body)
+
+
 class MarkerEmissionContractTests(unittest.TestCase):
+    # Refactor (iter205/issue-205):
+    #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+    #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
     def test_each_prompt_declares_exact_allowlist_section(self) -> None:
         for filename, allowed_markers in PROMPT_ALLOWLISTS.items():
             with self.subTest(prompt=filename):
@@ -165,6 +228,64 @@ class MarkerEmissionContractTests(unittest.TestCase):
         }
 
         self.assertEqual(role_prompt_files, set(PROMPT_ALLOWLISTS))
+        self.assertEqual(role_prompt_files, set(PROMPT_ARTIFACT_PROFILES))
+
+    def test_active_prompts_do_not_require_parallel_language_sections(self) -> None:
+        forbidden_patterns = (
+            r"##\s+Concrete plan \(English\)",
+            r"##\s+Concrete plan \(中文\)",
+            r"##\s+English\b",
+            r"##\s+中文\b",
+            r"(?<!do not add a )mandatory parallel English",
+            r"required peer to 中文",
+            r"_en\s*\+\s*_zh",
+        )
+        offenders: list[str] = []
+        for path in sorted(PROMPTS_DIR.glob("*.md")):
+            text = path.read_text(encoding="utf-8")
+            for pattern in forbidden_patterns:
+                if re.search(pattern, text):
+                    offenders.append(f"{path.name}: {pattern}")
+
+        self.assertEqual(offenders, [])
+
+    def test_each_marker_prompt_declares_exactly_one_known_artifact_profile(self) -> None:
+        self.assertEqual(set(PROMPT_ARTIFACT_PROFILES), set(PROMPT_ALLOWLISTS))
+        for filename, expected_profile in PROMPT_ARTIFACT_PROFILES.items():
+            with self.subTest(prompt=filename):
+                body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
+                anchors = artifact_profile_anchors(body)
+
+                self.assertEqual(anchors, [expected_profile])
+                self.assertIn(expected_profile, KNOWN_ARTIFACT_PROFILES)
+
+    def test_prompt_artifact_profile_terminal_marker_policy_matches_allowlist(self) -> None:
+        for filename, allowed_markers in PROMPT_ALLOWLISTS.items():
+            with self.subTest(prompt=filename):
+                profile = PROMPT_ARTIFACT_PROFILES[filename]
+                profile_tokens = PROFILE_TERMINAL_MARKER_TOKENS[profile]
+                allowed_tokens = {marker_token(marker) for marker in allowed_markers}
+
+                self.assertLessEqual(
+                    allowed_tokens,
+                    profile_tokens,
+                    f"{filename} allowlist tokens must fit profile {profile}",
+                )
+
+    def test_github_post_rules_declares_post_body_artifact_profile(self) -> None:
+        body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+        self.assertEqual(artifact_profile_anchors(body), ["github-ai-post-body"])
+
+    def test_skill_documents_prompt_inventory_sync_for_new_role_prompts(self) -> None:
+        skill = (PROMPTS_DIR.parents[0] / "SKILL.md").read_text(encoding="utf-8")
+        section_start = skill.find("## Dogfood anti-rules(per #205)")
+        section_end = skill.find("## Wakeup Skeleton", section_start)
+        section = skill[section_start:section_end]
+
+        self.assertIn("Any new role prompt", section)
+        self.assertIn("test_marker_emission_contract.py", section)
+        self.assertIn("PROMPT_ALLOWLISTS", section)
+        self.assertIn("PROMPT_ARTIFACT_PROFILES", section)
 
 
 if __name__ == "__main__":

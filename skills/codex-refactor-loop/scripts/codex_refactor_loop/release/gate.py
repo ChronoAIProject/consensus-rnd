@@ -13,6 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+from .. import labels as label_catalog
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
 
@@ -23,9 +24,9 @@ from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProje
 #   New principle: keep every gate signal and artifact byte-for-byte compatible,
 #   but expose package functions/classes from codex_refactor_loop.release.gate.
 #   This module remains decision-artifact-only per
-#   .refactor-loop/runs/phase9-issue56-r2-judge.md; it has no lifecycle
-#   authority and does not bump, commit, push, tag, publish, merge, close, or
-#   mutate issue/PR labels.
+#   skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56;
+#   it has no lifecycle authority and does not bump, commit, push, tag,
+#   publish, merge, close, or mutate issue/PR labels.
 
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -237,8 +238,8 @@ class AutoReleaseGate:
         since_2h = self.now() - timedelta(hours=2)
         since_30m = self.now() - timedelta(minutes=30)
         signals["required_checks_recent_green"] = self.required_checks_recent_green(since_2h)
-        signals["no_open_blocked_pr"] = self.no_label_on_open_prs("⏸️ phase:blocked")
-        signals["no_human_decision_label"] = self.no_label_on_open_items("👤 human:需-maintainer-决策")
+        signals["no_open_blocked_pr"] = self.no_label_on_open_prs(label_catalog.PHASE_BLOCKED)
+        signals["no_human_decision_label"] = self.no_label_on_open_items(label_catalog.HUMAN_MAINTAINER_DECISION)
         signals["no_phase8_reject_churn"] = self.no_phase8_reject_churn()
         signals["p0_alert_streak_ok"] = self.p0_alert_streak_ok(since_30m)
         signals["recent_pr_merges_min"] = self.recent_pr_merges_min(since_2h, min_recent_merges)
@@ -323,12 +324,20 @@ class AutoReleaseGate:
         return {"passed": passed, "reason": reason, "branches": evidence, "source": "checks-api-projection"}
 
     def no_label_on_open_prs(self, label: str) -> dict[str, Any]:
-        return self.no_label("pr", label)
+        return self.no_any_label("pr", label_catalog.query_labels_for(label))
 
     def no_label_on_open_items(self, label: str) -> dict[str, Any]:
-        issue = self.no_label("issue", label)
-        pr = self.no_label("pr", label)
+        query_labels = label_catalog.query_labels_for(label)
+        issue = self.no_any_label("issue", query_labels)
+        pr = self.no_any_label("pr", query_labels)
         return {"passed": issue["passed"] and pr["passed"], "issue": issue, "pr": pr, "source": "gh"}
+
+    def no_any_label(self, kind: str, query_labels: Sequence[str]) -> dict[str, Any]:
+        checks = [self.no_label(kind, label) for label in query_labels]
+        failed = [check for check in checks if not check["passed"]]
+        passed = not failed
+        reason = None if passed else failed[0]["reason"]
+        return {"passed": passed, "reason": reason, "checks": checks, "labels": list(query_labels), "source": "gh"}
 
     def no_label(self, kind: str, label: str) -> dict[str, Any]:
         result = self.runner(

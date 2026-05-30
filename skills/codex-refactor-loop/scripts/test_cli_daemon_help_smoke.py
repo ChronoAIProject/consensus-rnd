@@ -31,6 +31,7 @@ OPERATIONS = [
     "restart-daemons",
     "spawn-codex",
     "wakeup-plan",
+    "peek",
 ]
 
 
@@ -45,8 +46,9 @@ class CliDaemonHelpSmokeTests(unittest.TestCase):
                 timeout=30,
             )
             blob = result.stdout + result.stderr
-            if "NameError" in blob or "ImportError" in blob or "ModuleNotFoundError" in blob:
-                offenders.append(f"{op}: {blob.strip().splitlines()[-1] if blob.strip() else 'import error'}")
+            if result.returncode != 0 or "usage:" not in blob or "NameError" in blob or "ImportError" in blob or "ModuleNotFoundError" in blob:
+                reason = blob.strip().splitlines()[-1] if blob.strip() else f"returncode={result.returncode}"
+                offenders.append(f"{op}: {reason}")
         self.assertEqual(offenders, [], f"command main() import errors: {offenders}")
 
 

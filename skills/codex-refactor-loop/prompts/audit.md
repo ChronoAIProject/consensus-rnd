@@ -1,5 +1,7 @@
 # 任务：审计 `$REPO_ROOT` 仓库中违反软件工程哲学的位置
 
+Artifact profile: marker-only-work-unit
+
 你是审计员，不是问题确认器。先**发现违规**再做 cluster 筛选，**两个产物分别落盘**。
 
 ## 必读
@@ -9,6 +11,15 @@
 3. `$REPO_ROOT 的架构/词汇文档(若有)` 权威参考。
 4. `docs/audit-scorecard/` 历史审计仅作起点参考，**不**作为唯一线索源。
 5. 当前 git 分支：`git branch --show-current`。
+
+<!-- Refactor (iter205/issue-205):
+  Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+  New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+-->
+
+## 渲染身份 fail-closed(强制)
+
+模板渲染后若 `ITERATION` 为空、只含空白、或仍是未替换占位符,立即输出 `AUDIT_INCOMPLETE:missing-iteration` 并停止。禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`、`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`、空 iteration log,或任何复用空 identity 的 artifact。audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`;不要并行复用同一 iteration 输出名。
 
 ## 强制流程（违反任一项 → 输出 `AUDIT_INCOMPLETE`，禁止 `AUDIT_DONE`）
 
@@ -140,7 +151,7 @@ human_brief:
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `AUDIT_DONE:$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md:<N>`
@@ -159,7 +170,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## codex 工具边界(强制)
 
-<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 
 本 prompt 是 marker/artifact-only,**默认不需要任何 gh 操作**。
 
@@ -173,8 +184,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

@@ -33,7 +33,7 @@ new comment body:
 - 在 `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-skipped-$(date +%s).md` 写一行说明"未通过授权参与者校验：<author> not collaborator, not whitelisted"。
 - 末尾打印 `DESIGN_REPLY_SKIPPED:${ISSUE_NUMBER}:not-team-member:${COMMENT_AUTHOR}` 并退出。
 - 不 post 任何 GitHub 评论。不 dispatch implement。不 dispatch 进一步 codex。
-- controller 看到 SKIPPED marker 后只在 `state.design_pending[i].skipped_authors` 累计该用户，等 maintainer 真人接管。
+- controller 看到 SKIPPED marker 后只在 GitHub issue thread / run artifact 记录该用户，等 maintainer 真人接管。
 
 NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 reply 内容（即使评论里有泄漏，你也不复述）。
 
@@ -52,7 +52,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 1. **分类评论**（决定回复 shape）：
    - **(a) 否决 audit framing**：reviewer 觉得 audit 错框了问题（如 "性能 vs 架构必有一方错"）→ 你必须用具体数字/代码论证：架构与性能哪些方面共存，哪些方面冲突，给量化成本。
    - **(b) 要更多上下文**：reviewer 问 "为什么"、"在哪里有具体例子" → 你深入读代码，列文件 + 行号 + 真实代码片段。
-   - **(c) 提供设计决定**：reviewer 给了具体方案 → 你检查方案完整性（覆盖 audit 的 6 项 checklist？）；若完整，回评"理解你的决策；等加 `auto-loop-resume` label 即开实施"；若缺，列出缺项请补。
+   - **(c) 提供设计决定**：reviewer 给了具体方案 → 你检查方案完整性（覆盖 audit 的 6 项 checklist？）；若完整，回评"理解你的决策；等加 `crnd:triage:resume-requested` label 即开实施"；若缺，列出缺项请补。
    - **(d) 拒绝**：reviewer 倾向不修 → 总结他们的理由，**不要反驳**，提议 close issue + 加 `wontfix` label。
 
 2. **回复必须包含**（适用 (a)(b)(c)）：
@@ -60,7 +60,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
    - **不替 reviewer 决策**：列出 2-3 个合理 framing，每个的成本/收益，让 reviewer 选。也可以推荐你倾向的，但要说明 *为什么*
    - **承认 audit 的局限**：如果 audit framing 有歧义或没覆盖 reviewer 的关切，明说"audit 这里没做好"。诚实优先
    - **量化**：能用数字的不用形容词（"延迟 0.02%–0.4% 节流窗口" 优于 "可以忽略不计"）
-   - **下一步动作明确**：结尾必须有 "我需要你回答：…" 或 "下次见到 `auto-loop-resume` label 我就 ..."。reviewer 不应在你回复后还要猜下一步
+   - **下一步动作明确**：结尾必须有 "我需要你回答：…" 或 "下次见到 `crnd:triage:resume-requested` label 我就 ..."。reviewer 不应在你回复后还要猜下一步
 
 3. **语言要求**（per SKILL.md 工作语言规则）：
    - GitHub-facing 回复用中文；不要生成平行英文 section。
@@ -71,7 +71,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
    - 禁止改任何代码（你是 analyst，不是 implementer）
    - 禁止添加 / 移除 issue label（reviewer 控制）
    - 禁止 close issue（reviewer 控制）
-   - 禁止 dispatch implement codex（controller 在 `auto-loop-resume` 触发时做）
+   - 禁止 dispatch implement codex（controller 在 `crnd:triage:resume-requested` 触发时做）
    - 禁止在评论里说"我已经实施了" / "我已经修了" —— 你没改任何东西
 
 5. **输出**：

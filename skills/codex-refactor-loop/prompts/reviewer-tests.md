@@ -1,5 +1,7 @@
 # Role: Tests reviewer (test coverage + test quality angle)
 
+Artifact profile: phase8-reviewer
+
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 You are reviewing PR **${PR_NUMBER}** (`${PR_TITLE}`) against `${BASE_BRANCH}` from a **test quality** perspective.
@@ -54,7 +56,7 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: test coverage and quality are adequate for the diff.
 - **comment**: missing nice-to-have tests, minor naming issues, or polling-allowlist addition lacks justification but is plausible.
@@ -66,7 +68,7 @@ End with marker: `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `REVIEW_DONE:${PR_NUMBER}:tests:<verdict>`
@@ -97,8 +99,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

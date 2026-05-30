@@ -35,6 +35,7 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
+        "skills/codex-refactor-loop/authorizations/runtime-exceptions.md",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -106,6 +107,32 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 
         self.assertTrue(any(f.check == "forbidden-surface" and "DegradationCheck" in f.message for f in findings))
+
+    def test_checker_detects_skill_degradation_check_surface(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = repo / "skills/codex-refactor-loop/SKILL.md"
+            skill.write_text(
+                skill.read_text(encoding="utf-8") + "\nRuntime creates SkillDegradationCheck objects.\n",
+                encoding="utf-8",
+            )
+
+            findings = self.checker_module.SkillDriftChecker(repo).run_static()
+
+        self.assertTrue(any(f.check == "forbidden-surface" and "SkillDegradation" in f.message for f in findings))
+
+    def test_checker_detects_work_unit_replacement_surface(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = repo / "skills/codex-refactor-loop/SKILL.md"
+            skill.write_text(
+                skill.read_text(encoding="utf-8") + "\nRuntime creates WorkUnitReplacement objects.\n",
+                encoding="utf-8",
+            )
+
+            findings = self.checker_module.SkillDriftChecker(repo).run_static()
+
+        self.assertTrue(any(f.check == "forbidden-surface" and "WorkUnit" in f.message for f in findings))
 
 
 if __name__ == "__main__":

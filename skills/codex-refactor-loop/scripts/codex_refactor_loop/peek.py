@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -11,7 +12,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from . import labels as label_catalog
 from .context import LoopContext, LoopContextError
+from .workflow_stages import format_stage
+from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
 
 REVIEW_MARKER_TAIL_LINES = 30
@@ -31,7 +35,7 @@ class PeekStatusLens:
         active = self._list_loop_codex()
         if active:
             lines.extend(f"  • {item}" for item in sorted(active))
-        lines.extend(["", "▍Phase 9 router / pending events:", "  ledger tail:"])
+        lines.extend(["", f"▍{format_stage('design-consensus')} router / pending events:", "  ledger tail:"])
         lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl", 10, "    "))
         lines.append("  pending events tail:")
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
@@ -42,6 +46,8 @@ class PeekStatusLens:
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])
         lines.extend(self._open_prs())
+        lines.extend(["", "▍Unpushed worker output:"])
+        lines.extend(self._unpushed_worker_output())
         lines.extend(["", "▍Monitor zero_streak (last 10 ticks):"])
         lines.extend(self._zero_streak())
         lines.extend(["", "▍Mergeable PRs (controller should merge immediately):"])
@@ -65,10 +71,8 @@ class PeekStatusLens:
 
     def _maintainer_comments(self) -> list[str]:
         output: list[str] = []
-        issues = self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
-        prs = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], [])
-        issues = issues if isinstance(issues, list) else []
-        prs = prs if isinstance(prs, list) else []
+        issues = self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.MANAGED), "number")
+        prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number")
         targets = [("i", str(item.get("number"))) for item in issues if isinstance(item, dict)]
         targets.extend(("p", str(item.get("number"))) for item in prs if isinstance(item, dict))
         now = datetime.now(timezone.utc)
@@ -120,21 +124,21 @@ class PeekStatusLens:
 
     def _milestone_items(self) -> list[str]:
         lines = []
-        for kind, command in (
-            ("issue", ["issue", "list", "--label", "auto-loop", "--label", "🎯 milestone", "--state", "open", "--json", "number,title,labels"]),
-            ("PR", ["pr", "list", "--label", "auto-loop", "--label", "🎯 milestone", "--state", "open", "--json", "number,title,labels"]),
-        ):
-            for item in self.gh_json(command, []):
+        for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
+            for item in self._list_by_any_label(gh_kind, label_catalog.query_labels_for(label_catalog.MILESTONE_CURRENT), "number,title,labels"):
                 if isinstance(item, dict):
                     labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                    visible = [label for label in labels if label.startswith(("🎯", "🔍", "🛠", "⚙", "⏸", "👤", "🤖", "👀", "🔧", "🚀", "✅", "🆘"))]
+                    projection = label_catalog.normalize_label_set(labels)
+                    if label_catalog.MILESTONE_CURRENT not in projection.canonical:
+                        continue
+                    visible = self._visible_loop_labels(labels)
                     title = str(item.get("title") or "")[:55]
                     lines.append(f"  • {kind} #{item.get('number')} labels=[{', '.join(visible)}] — {title}")
         return lines
 
     def _open_prs(self) -> list[str]:
         lines = []
-        for item in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
@@ -142,6 +146,21 @@ class PeekStatusLens:
             state = self.gh_text(["pr", "view", num, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"]).strip()
             lines.append(f"  • PR #{num} [{state}] CI: fail={fail} pending={pending} pass={passed} — {str(item.get('title') or '')[:60]}")
         return lines
+
+    def _unpushed_worker_output(self) -> list[str]:
+        # Refactor (iter201/issue-201): Old pattern: peek displayed a copyable
+        # consensus-rnd-cli safe-push command, making a status lens look like a
+        # lifecycle dispatcher. New principle: show fixed facts only; controller
+        # lifecycle execution remains internal and non-public.
+        out = []
+        for action in unpushed_worker_output_actions(self.ctx.repo_root, load_github_items(self.ctx.repo_root)):
+            out.append(
+                "  ⚠️ "
+                f"{action['line']} head={action['head_ref']} ahead={action['ahead_count']} "
+                f"worktree={action['worktree']} controller_action={action['controller_action']} "
+                f"no_lifecycle_authority={str(action['no_lifecycle_authority']).lower()}"
+            )
+        return out
 
     def _zero_streak(self) -> list[str]:
         lines = _tail(self.ctx.paths.logs / "concurrency-monitor.log", 10)
@@ -157,8 +176,11 @@ class PeekStatusLens:
         return out
 
     def _mergeable_prs(self) -> list[str]:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
         out = []
-        for num in self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--json", "number"], []):
+        for num in self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number"):
             pr_num = str(num.get("number")) if isinstance(num, dict) else ""
             if not pr_num:
                 continue
@@ -170,7 +192,12 @@ class PeekStatusLens:
                 continue
             approve = comment = reject = 0
             for role in ("architect", "tests", "quality"):
-                verdict = extract_review_verdict_tail(self.ctx.paths.logs / f"review-pr{pr_num}-{role}-r{max_round}.log", pr_num, role)
+                verdict = extract_review_verdict(
+                    self.ctx.paths.runs / f"review-pr{pr_num}-{role}-r{max_round}.md",
+                    self.ctx.paths.logs / f"review-pr{pr_num}-{role}-r{max_round}.log",
+                    pr_num,
+                    role,
+                )
                 if verdict == "approve":
                     approve += 1
                 elif verdict == "comment":
@@ -186,33 +213,33 @@ class PeekStatusLens:
 
     def _stale_labels(self) -> list[str]:
         out = []
-        issue_prefixes = ("🔍", "🛠", "🔧", "👀", "⏸", "auto-loop-stuck", "🆘")
-        pr_prefixes = issue_prefixes + ("🚀",)
-        for kind, prefixes in (("issue", issue_prefixes), ("pr", pr_prefixes)):
-            for item in self.gh_json([kind, "list", "--label", "auto-loop", "--state", "closed", "--limit", "30", "--json", "number,labels"], []):
+        for kind in ("issue", "pr"):
+            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels", state="closed", limit="30"):
                 if not isinstance(item, dict):
                     continue
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                stale = [label for label in labels if label.startswith(prefixes)]
+                projection = label_catalog.normalize_label_set(labels)
+                stuck = (label_catalog.STUCK,) if label_catalog.STUCK in projection.canonical else ()
+                stale = sorted(projection.labels_for_group("phase") + tuple(projection.cleanup_only) + stuck)
                 if stale:
-                    suffix = "  → controller should clean up + add 🎉 phase:merged" if kind == "issue" else ""
+                    suffix = f"  → controller should clean up + add {label_catalog.PHASE_MERGED}" if kind == "issue" else ""
                     out.append(f"  ⚠️ closed {kind} #{item.get('number')} still has: {','.join(stale)}{suffix}")
         return out
 
     def _linkage_mismatch(self) -> list[str]:
         out = []
-        for item in self.gh_json(["issue", "list", "--label", "🛠️ phase:implementing", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.PHASE_IMPLEMENTING), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
-            open_prs = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "open", "--search", f"in:body Closes #{num}", "--json", "number"], [])
+            open_prs = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", search=f"in:body Closes #{num}")
             if open_prs:
                 continue
-            merged = self.gh_json(["pr", "list", "--label", "auto-loop", "--state", "merged", "--search", f"in:body Closes #{num}", "--json", "number"], [])
+            merged = self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number", state="merged", search=f"in:body Closes #{num}")
             if merged:
-                out.append(f"  ⚠️ issue #{num} [🛠️ implementing] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
+                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] PR #{merged[0].get('number')} is merged but issue is still open — controller should gh issue close")
             else:
-                out.append(f"  ⚠️ issue #{num} [🛠️ implementing] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
+                out.append(f"  ⚠️ issue #{num} [{label_catalog.PHASE_IMPLEMENTING}] has no matching in-flight or merged PR (implement codex failed/not dispatched?)")
         return out
 
     def _spawn_drop(self) -> list[str]:
@@ -242,13 +269,12 @@ class PeekStatusLens:
             except OSError:
                 continue
         out = []
-        prefixes = ("🔍", "🛠", "🔧", "👀")
         for kind in ("issue", "pr"):
-            for item in self.gh_json([kind, "list", "--label", "auto-loop", "--state", "open", "--json", "number,labels"], []):
+            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,labels"):
                 if not isinstance(item, dict):
                     continue
                 labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-                phase = next((label for label in labels if label.startswith(prefixes)), "")
+                phase = label_catalog.normalize_label_set(labels).phase or ""
                 num = str(item.get("number"))
                 if phase and not any(f"pr{num}" in log or f"issue{num}" in log for log in active):
                     out.append(f"  ⚠️ {kind} #{num} label={phase} but 0 codex referencing it")
@@ -276,7 +302,7 @@ class PeekStatusLens:
     def _stuck_too_long(self) -> list[str]:
         out = []
         now = datetime.now(timezone.utc)
-        for item in self.gh_json(["issue", "list", "--label", "auto-loop-stuck", "--state", "open", "--json", "number,title"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.STUCK), "number,title"):
             if not isinstance(item, dict):
                 continue
             num = str(item.get("number"))
@@ -293,13 +319,50 @@ class PeekStatusLens:
 
     def _open_issues(self) -> list[str]:
         out = []
-        for item in self.gh_json(["issue", "list", "--label", "auto-loop", "--state", "open", "--json", "number,title,labels"], []):
+        for item in self._list_by_any_label("issue", label_catalog.query_labels_for(label_catalog.MANAGED), "number,title,labels"):
             if not isinstance(item, dict):
                 continue
             labels = [str(label.get("name", "")) for label in item.get("labels", []) if isinstance(label, dict)]
-            visible = [label for label in labels if label.startswith(("🔍", "🛠", "⚙", "⏸", "🆘", "👤", "🤖"))]
+            visible = self._visible_loop_labels(labels)
             out.append(f"  • #{item.get('number')} labels=[{', '.join(visible)}] — {str(item.get('title') or '')[:55]}")
         return out
+
+    def _visible_loop_labels(self, labels: list[str]) -> list[str]:
+        projection = label_catalog.normalize_label_set(labels)
+        return sorted(projection.canonical | projection.cleanup_only)
+
+    def _list_by_any_label(
+        self,
+        kind: str,
+        query_labels: Sequence[str],
+        json_fields: str,
+        *,
+        state: str = "open",
+        limit: str | None = None,
+        search: str | None = None,
+    ) -> list[dict]:
+        rows: list[dict] = []
+        seen: set[int] = set()
+        for query_label in query_labels:
+            command = [kind, "list", "--label", query_label, "--state", state]
+            if search:
+                command += ["--search", search]
+            if limit:
+                command += ["--limit", limit]
+            command += ["--json", json_fields]
+            for item in self.gh_json(command, []):
+                if not isinstance(item, dict):
+                    continue
+                try:
+                    number = int(item.get("number"))
+                except (TypeError, ValueError):
+                    rows.append(item)
+                    continue
+                if number in seen:
+                    continue
+                seen.add(number)
+                rows.append(item)
+        return rows
 
     def _checks(self, pr_num: str) -> tuple[int, int, int]:
         data = self.gh_json(["pr", "checks", pr_num, "--json", "bucket"], [])
@@ -341,6 +404,33 @@ def extract_review_verdict_tail(log_path: Path, pr_num: str, role: str) -> str:
     return verdict
 
 
+def extract_review_verdict(artifact_path: Path, log_path: Path, pr_num: str, role: str) -> str:
+    # Refactor (iter205/issue-205):
+    #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+    #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+    verdict = _review_artifact_frontmatter_verdict(artifact_path)
+    if verdict:
+        return verdict
+    return extract_review_verdict_tail(log_path, pr_num, role)
+
+
+def _review_artifact_frontmatter_verdict(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if not text.startswith("---\n"):
+        return ""
+    end = text.find("\n---", 4)
+    if end == -1:
+        return ""
+    for line in text[4:end].splitlines():
+        match = re.match(r"\s*verdict\s*:\s*(approve|comment|reject)\s*$", line)
+        if match:
+            return match.group(1)
+    return ""
+
+
 def _tail(path: Path, count: int) -> list[str]:
     try:
         return path.read_text(encoding="utf-8", errors="replace").splitlines()[-count:]
@@ -365,7 +455,17 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    del argv
+    # Refactor (iter1/issue-116):
+    #   Old pattern: `peek --help` ignored argv, loaded LoopContext, fetched
+    #   git, and ran the live status sweep, so bounded help could hang.
+    #   New principle: argparse owns the human status-lens help surface before
+    #   any repository, git, or GitHub access. `peek` remains text-only; the
+    #   machine-readable next-action surface is `wakeup-plan`.
+    parser = argparse.ArgumentParser(
+        prog="consensus-rnd-cli peek",
+        description="render the human-readable codex-refactor-loop status lens",
+    )
+    parser.parse_args(argv)
     try:
         ctx = LoopContext.load(read_only=True, allow_git_root_fallback=True, cwd=os.getcwd())
     except LoopContextError as exc:

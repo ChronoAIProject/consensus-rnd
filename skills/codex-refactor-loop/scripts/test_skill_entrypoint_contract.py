@@ -11,6 +11,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
@@ -57,8 +58,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for pattern in (
             r"^## Controller Contract Index$",
             r"^## Host .+$",
-            r"^## Phase Index$",
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Workflow Stage Index$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Loop control$",
             r"^## Label .+$",
             r"^## Hard rules .+$",
@@ -73,8 +74,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "⟦AI:AUTO-LOOP⟧",
             "#status-and-escalation-templates",
             "Controller = pure orchestration",
-            "#phase-0-details",
-            "Phase 0",
+            "#bootstrap-details",
+            "Consensus-rnd Phase bootstrap",
             "phase routing",
             "3/3",
             "CODEX_FLOOR",
@@ -92,11 +93,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
             "## Milestone priority",
-            "🎯 milestone",
+            "crnd:milestone:current",
             "orthogonal third axis",
+            "Legacy milestone labels are migration aliases only",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
-            "milestone members = GitHub `🎯 milestone` label",
+            "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
         )
         for needle in required:
@@ -106,7 +108,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -114,7 +116,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "source .refactor-loop/host.env",
             "fail closed",
             "ProjectRulesFixedPointEnsurer",
-            "initialize state",
+            "Create `.refactor-loop/{logs,runs,clusters,prompts,worktrees,state}`",
             "integration branch",
             "ensure labels",
             "restart-helper-managed daemons",
@@ -160,7 +162,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         self.assertTrue(skeleton)
         self.assertIn("consensus-rnd-cli wakeup-plan", skeleton)
@@ -190,7 +192,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         checklist = section_between(
             self.skill,
@@ -204,10 +206,18 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
             "**Allowed**",
+            "**Allowed git topology observation(issue #190 only)**",
             "**Forbidden / no lifecycle authority**",
             "no restart",
             "no spawn",
-            "no git",
+            "git fetch origin --quiet",
+            "worktree list --porcelain",
+            "rev-list --count refs/remotes/origin/<head>..HEAD",
+            "UNPUSHED_WORKER_OUTPUT:<pr>:<n>",
+            "no git lifecycle or mutation commands",
+            "no checkout/switch",
+            "no branch create/delete/update",
+            "no worktree add/remove/prune",
             "no GitHub lifecycle mutation",
             "`RECOMMEND:audit`",
             "`AUDIT_DONE:none:0` no longer exempts",
@@ -225,8 +235,16 @@ class SkillEntrypointContractTests(unittest.TestCase):
         script = read(PACKAGE_WAKEUP_PLAN)
         for needle in (
             "Allowed: read `.refactor-loop` files",
-            "Forbidden: no restart/spawn, no git",
+            "issue-190",
+            "git fetch origin --quiet",
+            "git worktree list --porcelain",
+            "git rev-parse --verify HEAD",
+            "git rev-parse --verify refs/remotes/origin/<head>",
+            "git rev-list --count refs/remotes/origin/<head>..HEAD",
+            "Forbidden: no restart/spawn, no git lifecycle or mutation",
+            "no commit, push, checkout/switch",
             "no GitHub lifecycle mutation",
+            ".refactor-loop/runs/phase9-issue190-r3-judge.md",
             "no_lifecycle_authority",
             "count_in_flight_codex",
             "HARD_GATE:dispatch_required",
@@ -235,11 +253,13 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, script)
+        self.assertNotIn("WorkerOutputProjection", script)
+        self.assertNotIn("codex_refactor_loop.projections", script)
 
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -257,14 +277,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "recovery-playbook",
             "label-bootstrap-loops",
             "historical-bilingual-notes",
+            "specialized-state-artifacts",
         )
         self.assertIn("## Detailed reference", self.skill)
         for anchor in detailed_anchors:
             with self.subTest(anchor=anchor):
                 self.assertIn(f"(#{anchor})", self.skill)
                 self.assertIn(anchor, self.skill)
-        self.assertNotIn('"schema_version": 1', self.skill)
-        self.assertNotIn('"work_unit_schema_version": 1', self.skill)
+        schema_field = "schema" + "_version"
+        work_unit_schema_field = "work_unit_" + schema_field
+        self.assertNotIn(f'"{schema_field}": 1', self.skill)
+        self.assertNotIn(f'"{work_unit_schema_field}": 1', self.skill)
         for emoji_heading in ("📊", "🆘"):
             with self.subTest(emoji_heading=emoji_heading):
                 self.assertRegex(self.skill, rf"(?m)^## {emoji_heading} ")
@@ -276,12 +299,14 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "prompts/verify.md": read(SKILL_ROOT / "prompts" / "verify.md"),
             "prompts/meta-judge.md": read(SKILL_ROOT / "prompts" / "meta-judge.md"),
         }
+        schema_field = "schema" + "_version"
+        work_unit_schema_field = "work_unit_" + schema_field
         forbidden_fragments = (
             "state-v2",
             "v1 audit-backed work unit",
             "v1 audit cluster alias",
-            '"schema_version": 1',
-            '"work_unit_schema_version": 1',
+            f'"{schema_field}": 1',
+            f'"{work_unit_schema_field}": 1',
         )
         for path, text in docs.items():
             with self.subTest(path=path):
@@ -301,11 +326,151 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
         self.assertIn("consensus-rnd-cli phase9-router", self.skill)
-        self.assertIn("narrow Phase 9 allowlist", self.skill)
+        self.assertIn("narrow Consensus-rnd Phase design-consensus allowlist", self.skill)
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
+
+    def test_runtime_surface_boundary_keeps_peek_human_and_wakeup_plan_machine(self) -> None:
+        self.assertIn("`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader", self.skill)
+        self.assertIn("`consensus-rnd-cli peek` is a status lens, not routing authority", self.skill)
+        self.assertIn("structured output", self.skill)
+        self.assertNotIn("peek --json", self.skill)
+        self.assertNotIn("`--json`", read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py"))
+
+    def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
+        forbidden = (
+            "Write initial state.json",
+            "authoritative queue containers",
+            "state.json.trunk_head",
+            "clusters_planned",
+            "clusters_active",
+            "clusters_done",
+            "clusters_failed",
+            "design_pending",
+            "remote_ci",
+            "State schema",
+            "state schema",
+            "state-schema",
+        )
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.skill)
+
+        required = (
+            "Root `.refactor-loop/state.json` is not a contract surface",
+            "do not create or maintain root `.refactor-loop/state.json`",
+            ".refactor-loop/state/statusline-snapshot.json",
+            ".refactor-loop/state/phase8-review-state.json",
+            ".refactor-loop/state/recent-pr-merges.json",
+            ".refactor-loop/codex-progress-state.json",
+            ".refactor-loop/comment-monitor-state.json",
+            ".refactor-loop/.concurrency-monitor-state.json",
+            "specialized-state-artifacts",
+        )
+        for token in required:
+            with self.subTest(token=token):
+                self.assertIn(token, self.skill)
+
+    def test_host_commands_are_shell_strings_executed_via_bash_lc(self) -> None:
+        docs = {
+            "SKILL.md": self.skill,
+            "host.env.example": read(HOST_ENV_EXAMPLE),
+            "prompts/implement.md": read(SKILL_ROOT / "prompts" / "implement.md"),
+            "prompts/review-fix.md": read(SKILL_ROOT / "prompts" / "review-fix.md"),
+            "prompts/test-add.md": read(SKILL_ROOT / "prompts" / "test-add.md"),
+            "sync/dev.py": read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "sync" / "dev.py"),
+        }
+        for path, text in docs.items():
+            with self.subTest(path=path):
+                if path in {"SKILL.md", "host.env.example", "prompts/implement.md"}:
+                    self.assertIn("shell command string", text)
+                if "BUILD_CMD" in text:
+                    self.assertIn('bash -lc "$BUILD_CMD"', text)
+                if "TEST_CMD" in text:
+                    self.assertIn('bash -lc "$TEST_CMD"', text)
+
+        bare_host_command_lines: list[str] = []
+        bare_host_command_re = re.compile(r"^\s*\$(BUILD_CMD|TEST_CMD)\s*$")
+        for path, text in docs.items():
+            for lineno, line in enumerate(text.splitlines(), start=1):
+                if bare_host_command_re.match(line):
+                    bare_host_command_lines.append(f"{path}:{lineno}:{line.strip()}")
+
+        self.assertEqual(
+            bare_host_command_lines,
+            [],
+            "Host command strings must be executed via bash -lc, not as bare lines",
+        )
+
+    def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
+        host_config = section_between(
+            self.skill,
+            r"^## Host .+$",
+            r"^## Skill Root Contract$",
+        )
+        self.assertIn("### Host env surface matrix", host_config)
+        self.assertIn("`host.env.example` is a copyable template view", host_config)
+        self.assertIn("the only manually maintained host.env contract", host_config)
+        self.assertIn(
+            "| Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |",
+            host_config,
+        )
+        self.assertIn("host.env` is the only runtime fact injection point", host_config)
+        self.assertNotIn("| Variable | Meaning | Default / example |", host_config)
+        self.assertNotIn("| Variable | Prompt meaning | Empty behavior |", host_config)
+
+    def test_issue205_dogfood_anti_rules_are_local_contract(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+        section = section_between(
+            self.skill,
+            r"^## Dogfood anti-rules\(per #205\)$",
+            r"^## Wakeup Skeleton$",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "only one active `audit-iter-N`",
+            "fails closed when `ITERATION` is empty",
+            "do not write `audit-iter-.md`",
+            "must be registered in `test_marker_emission_contract.py` prompt inventory",
+            "PROMPT_ALLOWLISTS",
+            "PROMPT_ARTIFACT_PROFILES",
+            "review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`",
+            "fall back to clean log-tail `REVIEW_DONE` markers",
+            "consensus-rnd-cli restart-daemons",
+            "must not hand-kill daemon processes",
+            "probe process lists as liveness authority",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        forbidden = ("WorkerCompletionEvidence", "AuditRunLease", "restart-daemons --force")
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.skill)
+
+    def test_issue205_audit_prompt_fails_closed_on_empty_iteration(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+        audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
+        section = section_between(
+            audit_prompt,
+            r"^## 渲染身份 fail-closed\(强制\)$",
+            r"^## 强制流程",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "`ITERATION` 为空",
+            "立即输出 `AUDIT_INCOMPLETE:missing-iteration`",
+            "禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`",
+            "`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`",
+            "audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
 
 if __name__ == "__main__":

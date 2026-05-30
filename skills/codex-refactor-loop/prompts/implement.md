@@ -1,5 +1,7 @@
 # 任务：实施 ${WORK_UNIT_ID}
 
+Artifact profile: marker-only-work-unit
+
 <!-- Refactor (iter3/skill-host-language-policy): Old: prompt hardcoded host-language defaults  New: 6 HOST_* variables are optional and empty by default, injected by host.env (#20 structural consensus) -->
 
 你以无人值守模式在 worktree `${WORKTREE_PATH}` 中工作，对应分支 `${BRANCH}`。
@@ -34,14 +36,14 @@ ${SCOPE_PATHS}
 5. **架构守卫**：跑 host 配置的 `$CI_GUARDS`，必须通过。其它 cluster 特定守卫见 verification hints。
 6. **不依赖外部仓库**：禁止建议在 $EXTERNAL_REPOS/$EXTERNAL_REPOS 改动。
 7. **Schema/protocol**：如 `${HOST_PROTO_POLICY}` 非空或 diff / `$PROJECT_RULES` 显示改了 schema/protocol 文件，按 host policy 本地重生成/验证并确认编译通过。
-8. **构建命令**：使用 host 配置的 `$BUILD_CMD` / `$TEST_CMD`。
+8. **构建命令**：使用 host 配置的 `$BUILD_CMD` / `$TEST_CMD`。它们是 shell command string,必须在已 source `host.env` 的 shell 中用 `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` 或等价 shell invocation 执行。
 
 ## 流程
 
 1. 按 `${DESIGN_DECISION_PATH}` 选择 design-issue consensus artifact 或 audit 段，读所有 `scope_paths` 文件。
 2. 打印 `PLAN:` 前缀的具体改动计划（一行一项）。
 3. 实施。
-4. 编译：`$BUILD_CMD`，失败时修复，最多 5 次迭代。
+4. 编译：`bash -lc "$BUILD_CMD"`，失败时修复，最多 5 次迭代。
 5. 跑指定测试。失败则修复（禁止 disable/skip），最多 5 次。
 6. 跑架构守卫，失败则修复。
 7. `git add -A && git status` 确认改动。
@@ -55,7 +57,7 @@ ${SCOPE_PATHS}
 
 ## Marker emission allowlist(强制)
 
-<!-- MarkerEmissionContractV1: single-valid-invalid-role-marker-source -->
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
 
 ALLOWED markers:
 - `SCOPE_EXTEND:<file>:<reason>`
@@ -79,7 +81,7 @@ ${VERIFICATION_HINTS}
 
 ## codex 工具边界(强制)
 
-<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Phase 9 共识) -->
+<!-- Refactor (iter5/prompt-gh-ban-marker-only): Old pattern: marker-only prompt(audit/implement/verify/remote-ci-fix/test-add)缺 gh 禁止段,codex 可自由调 gh issue create/pr merge/issue close/label edit。 New principle: 复用 reviewer/solver "可调/不可调" 模式,统一禁 lifecycle 类 gh 操作;controller 拥有 PR create/merge/close + issue create/close + label。(2026-05-26 maintainer-directive 等价 Consensus-rnd Phase design-consensus 共识) -->
 
 本 prompt 是 marker/artifact-only,**默认不需要任何 gh 操作**。
 
@@ -93,8 +95,8 @@ ${VERIFICATION_HINTS}
 
 ## AI 内容标识符(强制)
 
-所有 AI 生成的对外内容(GitHub issue/PR comment、PR body、commit message、`runs/*.md` artifact、push notification)**必须末尾独立一行**加 sentinel:
+所有 AI 生成的 GitHub issue/PR comment、PR body、commit message、push notification **must end with the sentinel as the final standalone line**. Internal marker-bearing `runs/*.md` artifacts must put the sentinel on the penultimate line, immediately before the final routing marker:
 
     ⟦AI:AUTO-LOOP⟧
 
-不可修改字符 / 不放代码注释 / 不放路径分支名。无 sentinel = 产生失败,controller 拒绝 post。
+Do not modify the sentinel characters; do not place them in code comments, paths, or branch names. No sentinel = generation failure; controller rejects the artifact or post.

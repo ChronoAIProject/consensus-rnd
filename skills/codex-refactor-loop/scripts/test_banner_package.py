@@ -160,7 +160,7 @@ class BannerPackageTests(unittest.TestCase):
         source = PACKAGE_BANNERS.read_text(encoding="utf-8")
         for required in (
             "observability-comment-writers",
-            ".refactor-loop/runs/phase9-issue53-r7-judge.md",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53",
             "ROLE_NEXT_STEPS",
             "BANNER_POSTED",
             "FAIL banner post",

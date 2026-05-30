@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Behavior tests for the narrow Phase 9 router daemon."""
+"""Behavior tests for the narrow Consensus-rnd Phase design-consensus router daemon."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -35,6 +36,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / "logs" / name
         tail = ["EXIT=0"] if exit_zero else ["EXIT=1"]
         path.write_text("\n".join([*lines, *tail, ""]), encoding="utf-8")
+        return path
+
+    def write_solver_prompt(self, issue: int, round_no: int, role: str, body: str = "solver input\n") -> Path:
+        path = self.repo / ".refactor-loop" / "prompts" / "phase9" / f"phase9-issue{issue}-r{round_no}-{role}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
         return path
 
     def ledger_entries(self) -> list[dict]:
@@ -166,6 +173,204 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
 
+    def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
+        self.solver_triplet(issue=167, round_no=6)
+        for role in ("minimal", "structural", "delete"):
+            self.write_solver_prompt(167, 6, role)
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        entries = self.ledger_entries()
+        self.assertEqual(len(entries), 1)
+        entry = entries[0]
+        for key in (
+            "key",
+            "marker",
+            "log_path",
+            "dispatched_at",
+            "route",
+            "issue",
+            "round",
+            "target_actor",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_path",
+            "independence_check",
+        ):
+            with self.subTest(key=key):
+                self.assertIn(key, entry)
+        self.assertEqual(entry["key"], "167-6-judge")
+        self.assertEqual(entry["marker"], "SOLVER_DONE:triplet")
+        self.assertEqual(entry["log_path"], ".refactor-loop/logs/phase9-issue167-r6-judge.log")
+        self.assertEqual(entry["route"], "solver_triplet_to_judge")
+        self.assertEqual(entry["issue"], "167")
+        self.assertEqual(entry["round"], 6)
+        self.assertEqual(entry["target_actor"], "judge")
+        self.assertEqual(entry["independence_check"], "pass")
+        self.assertEqual(entry["judge_prompt_path"], ".refactor-loop/prompts/phase9/phase9-issue167-r6-judge.md")
+        self.assertEqual(
+            entry["judge_input_solver_logs"],
+            [
+                ".refactor-loop/logs/phase9-issue167-r6-delete.log",
+                ".refactor-loop/logs/phase9-issue167-r6-minimal.log",
+                ".refactor-loop/logs/phase9-issue167-r6-structural.log",
+            ],
+        )
+        self.assertEqual([record["role"] for record in entry["clean_exit_solver_logs"]], ["delete", "minimal", "structural"])
+        self.assertEqual([record["dialect"] for record in entry["clean_exit_solver_logs"]], ["phase9", "phase9", "phase9"])
+        self.assertEqual([record["status"] for record in entry["solver_input_prompts"]], ["present", "present", "present"])
+        self.assertNotIn("independence_checks", entry)
+
+    def test_phase9_router_triplet_ledger_records_missing_solver_prompts_without_blocking(self) -> None:
+        self.solver_triplet(issue=168, round_no=2)
+        self.write_solver_prompt(168, 2, "minimal")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        entry = self.ledger_entries()[0]
+        self.assertEqual(
+            entry["solver_input_prompts"],
+            [
+                {
+                    "role": "delete",
+                    "prompt_path": ".refactor-loop/prompts/phase9/phase9-issue168-r2-delete.md",
+                    "status": "missing",
+                },
+                {
+                    "role": "minimal",
+                    "prompt_path": ".refactor-loop/prompts/phase9/phase9-issue168-r2-minimal.md",
+                    "status": "present",
+                },
+                {
+                    "role": "structural",
+                    "prompt_path": ".refactor-loop/prompts/phase9/phase9-issue168-r2-structural.md",
+                    "status": "missing",
+                },
+            ],
+        )
+
+    def test_phase9_router_read_ledger_ignores_provenance_fields_for_recovery(self) -> None:
+        path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"key": "167-6-judge", "clean_exit_solver_logs": "malformed"}),
+                    json.dumps({"key": "167-7-judge", "independence_check": {"unexpected": "shape"}}),
+                    json.dumps({"route": "solver_triplet_to_judge"}),
+                    "{not-json",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(self.router._read_ledger(), {"167-6-judge", "167-7-judge"})
+        self.solver_triplet(issue=167, round_no=6)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 4)
+
+    def test_phase9_router_judge_prompt_references_dispatch_ledger_evidence(self) -> None:
+        self.solver_triplet(issue=169, round_no=8)
+
+        self.router.tick()
+
+        prompt_path = self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue169-r8-judge.md"
+        prompt = prompt_path.read_text(encoding="utf-8")
+        for token in (
+            ".refactor-loop/logs/phase9-issue169-r8-delete.log",
+            ".refactor-loop/logs/phase9-issue169-r8-minimal.log",
+            ".refactor-loop/logs/phase9-issue169-r8-structural.log",
+            "Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key=169-8-judge",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, prompt)
+        self.assertIn("Consensus-rnd Phase design-consensus meta-judge", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
+        self.assertNotIn("phase9-evidence", prompt)
+        self.assertNotIn("Dispatch ledger:", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_durable_artifacts_store_relative_paths_but_spawn_argv_absolute(self) -> None:
+        self.solver_triplet(issue=202, round_no=1)
+
+        self.router.tick()
+
+        ledger = self.ledger_entries()[0]
+        self.assertEqual(".refactor-loop/logs/phase9-issue202-r1-judge.log", ledger["log_path"])
+        self.assertNotIn(str(self.repo), json.dumps(ledger, ensure_ascii=False))
+        command = self.commands[0]
+        self.assertIn(str((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue202-r1-judge.md").resolve()), command)
+        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue202-r1-judge.log").resolve()), command)
+
+        self.write_log("phase9-issue202-r2-judge.log", "META_RESOLVED:re-design:scope")
+        self.router.tick()
+
+        events = self.pending_events()
+        self.assertIn('"log_path": ".refactor-loop/logs/phase9-issue202-r2-judge.log"', events)
+        self.assertNotIn(str(self.repo), events)
+
+    def test_phase9_router_fallback_restart_dedupe_reads_legacy_absolute_and_writes_relative(self) -> None:
+        legacy_log = self.repo / ".refactor-loop" / "logs" / "phase9-issue203-r1-judge.log"
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text(
+            "2026-05-29T00:00:00Z phase9-router-fallback "
+            + json.dumps({"log_path": str(legacy_log), "marker": "META_RESOLVED:old"}, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
+        self.write_log("phase9-issue203-r1-judge.log", "META_RESOLVED:old")
+
+        fresh_router = Phase9Router(self.repo, command_runner=self.commands.append)
+        fresh_router.tick()
+
+        self.assertEqual(self.pending_events().count("META_RESOLVED:old"), 1)
+
+    def test_phase9_router_peer_solver_prompt_reference_fails_closed(self) -> None:
+        self.solver_triplet(issue=170, round_no=3)
+        self.write_solver_prompt(
+            170,
+            3,
+            "minimal",
+            "I already read .refactor-loop/logs/phase9-issue170-r3-delete.log\n",
+        )
+
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue170-r3-judge.md").exists())
+        events = self.pending_events()
+        self.assertEqual(events.count("phase9-triplet-evidence-invalid"), 3)
+        event = json.loads(events.split("phase9-triplet-evidence-invalid ", 1)[1].splitlines()[0])
+        self.assertEqual(event["reason"], "phase9-triplet-evidence-invalid")
+        self.assertEqual(event["issue"], "170")
+        self.assertEqual(event["round"], 3)
+        self.assertEqual(event["role"], "minimal")
+        self.assertEqual(event["peer_role"], "delete")
+        self.assertEqual(event["prompt_path"], ".refactor-loop/prompts/phase9/phase9-issue170-r3-minimal.md")
+        self.assertEqual(event["matched_token"], ".refactor-loop/logs/phase9-issue170-r3-delete.log")
+
+    def test_phase9_router_triplet_evidence_requires_exact_clean_exit_triplet(self) -> None:
+        self.write_log("phase9-issue171-r1-minimal.log", "SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue171-r1-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.router.tick()
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+        self.write_log("phase9-issue172-r1-minimal.log", "SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue172-r1-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue172-r1-delete.log", "SOLVER_DONE:delete:ok:x", exit_zero=False)
+        self.router.tick()
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_solver_triplet_accepts_non_ascii_summary(self) -> None:
         # Refactor (iter1/issue-149):
         #   Old pattern: phase9_router marker parser 不能可靠识别含中文收敛问题/route 后缀的 judge marker → 漏派 triplet judge 与 converge round,controller 被迫 fallback 全部 dispatch(本会话持续 no-gap churn 根因)。
@@ -276,6 +481,35 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
+
+    def test_solver_prompt_for_issue_driven_converge_has_source_header(self) -> None:
+        self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        self.router.tick()
+
+        prompt = (
+            self.repo
+            / ".refactor-loop"
+            / "prompts"
+            / "phase9"
+            / "phase9-issue114-r2-structural.md"
+        ).read_text(encoding="utf-8")
+        required = (
+            "WORK_UNIT_ID=issue-114",
+            "CLUSTER_ID=issue-114 (compatibility alias only; not an audit cluster_id)",
+            "WORK_UNIT_KIND=manual-work-unit",
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-114",
+            "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-structural.md",
+            "gh issue view 114",
+            "issue body/comments are the scope spec when no local audit artifact is provided",
+            "do not fabricate audit artifacts",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
+        self.assertNotIn("cluster spec", prompt)
 
     def test_phase9_router_converge_accepts_non_ascii_reason(self) -> None:
         self.write_log(
@@ -525,18 +759,21 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         for round_no in (1, 2, 3):
             for role in ("minimal", "structural", "delete"):
-                expected = str(self.repo / ".refactor-loop" / "logs" / f"phase9-issue85-r{round_no}-{role}.log")
+                expected = f".refactor-loop/logs/phase9-issue85-r{round_no}-{role}.log"
                 with self.subTest(expected=expected):
                     self.assertIn(expected, prompt)
+        self.assertNotIn(str(self.repo), prompt)
 
         self.assertNotEqual(
             prompt.strip(),
             (
-                "# Phase 9 stalled reflector\n\nIssue: #85\nRound: 3\n"
+                "# Consensus-rnd Phase design-consensus stalled reflector\n\nIssue: #85\nRound: 3\n"
                 f"Stalled marker: {stalled_marker}\n\n"
                 "Reflect on the convergence failure and emit META_RESOLVED."
             ),
         )
+        self.assertIn("Consensus-rnd Phase design-consensus stalled reflector", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
 
     def test_stalled_reflector_prompt_fails_closed_on_template_oserror(self) -> None:
         for round_no in (1, 2, 3):
@@ -564,11 +801,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "META_RESOLVED:escalate-human:missing-stalled-reflector-template",
             "template unavailable",
             stalled_marker,
-            str(self.repo / ".refactor-loop" / "logs" / "phase9-issue86-r3-minimal.log"),
+            ".refactor-loop/logs/phase9-issue86-r3-minimal.log",
             "⟦AI:AUTO-LOOP⟧",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
+        self.assertNotIn(str(self.repo), prompt)
 
     def test_phase9_router_stalled_rejects_changed_recent_verdict_text(self) -> None:
         for round_no, verdict in ((1, "same"), (2, "changed"), (3, "same")):
@@ -653,7 +891,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         """#37 consensus exception allows only private ledger plus fallback event."""
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
         for forbidden in (
-            "WorkUnitV2",
+            "WorkUnitReplacement",
             "ControllerOrchestrator",
             "ControllerEvent",
             "ControllerCommand",
@@ -680,6 +918,19 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("class Phase9RoundProjection", src)
         self.assertNotIn("Phase9RoundProjection(", src)
         self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
+
+    def test_phase9_router_source_regression_uses_loop_context_artifact_path_boundary(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        self.assertIn("self.ctx.durable_artifact_path(path)", src)
+        self.assertIn("self.ctx.artifact_execution_path(text)", src)
+        for forbidden in (
+            '"log_path": self._artifact_path(log_path) if extra else str(log_path)',
+            '"log_path": str(marker.log_path)',
+            "f\"- {m.role}: {m.log_path}\"",
+            "str(path) for path in self._solver_history_log_paths",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, src)
 
     def test_main_once_dispatches_via_temp_repo_root(self) -> None:
         self.solver_triplet(issue=37, round_no=4)

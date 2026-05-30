@@ -24,7 +24,7 @@ from ..context import LoopContext
 #   Old: scripts/check_skill_degradation.py owned the static issue #66 drift
 #   gate as a top-level script.
 #   New: expose the same read-only checks from codex_refactor_loop.checks while
-#   preserving every marker, required check name, artifact path, and narrow
+#   preserving every marker, required check name, authorization path, and narrow
 #   allowlist literal for future CLI import.
 
 CHECK_NAME = "skill-degradation"
@@ -32,10 +32,11 @@ SKILL_RELATIVE = Path("skills/codex-refactor-loop")
 SCRIPT_RELATIVE = SKILL_RELATIVE / "scripts"
 CI_WORKFLOW = Path(".github/workflows/consensus-rnd-ci.yml")
 RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
-JUDGE_ARTIFACT = ".refactor-loop/runs/phase9-issue66-r8-judge.md"
+JUDGE_ARTIFACT = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#skill-degradation-watch-66"
 ALERT_LOG = ".refactor-loop/.degradation-alert.log"
 PENDING_EVENTS = ".refactor-loop/.controller-pending-events.log"
 INTERVAL_ENV = "DEGRADATION_WATCH_INTERVAL_SECONDS"
+AUTHORIZATION_MIRROR = SKILL_RELATIVE / "authorizations" / "runtime-exceptions.md"
 
 FORBIDDEN_RUNTIME_FILES = (
     SCRIPT_RELATIVE / "degradation_watchdog.py",
@@ -46,8 +47,8 @@ FORBIDDEN_RUNTIME_FILES = (
 
 FORBIDDEN_SURFACE_PATTERNS = (
     re.compile(r"\b" + "Degradation" + r"Check\b"),
-    re.compile(r"\b" + "SkillDegradation" + r"CheckV1\b"),
-    re.compile(r"\b" + "WorkUnit" + r"V2\b"),
+    re.compile(r"\b" + "SkillDegradation" + r"Check\b"),
+    re.compile(r"\b" + "WorkUnit" + r"Replacement\b"),
     re.compile(r"\b" + "Controller" + r"Event\b"),
     re.compile(r"\b" + "Controller" + r"Command\b"),
     re.compile(r"\b" + "Controller" + r"Orchestrator\b"),
@@ -65,6 +66,7 @@ CHECKED_SURFACE_FILES = (
     SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "monitors" / "concurrency.py",
     SCRIPT_RELATIVE / "codex_refactor_loop" / "peek.py",
+    AUTHORIZATION_MIRROR,
     CI_WORKFLOW,
     RELEASE_WORKFLOW,
 )

@@ -15,6 +15,7 @@ from typing import Sequence
 
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
+from .. import labels as label_catalog
 from ..state import read_json, write_json
 
 
@@ -25,17 +26,7 @@ PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
 MAIN_READONLY_DISPATCH_PREFIXES = ("audit-", "phase9-issue", "solver-", "meta-judge-", "review-pr", "reviewer-pr")
 
-PHASE_EXPECTED = {
-    "🔍 phase:design-solving": 1,
-    "🔧 phase:fixing": 1,
-    "👀 phase:reviewing": 1,
-    "🛠️ phase:implementing": 1,
-    "⚙️ phase:ci-running": 0,
-    "🚀 phase:pr-open": 0,
-    "✅ phase:consensus-reached": 0,
-    "🎉 phase:merged": 0,
-    "⏸️ phase:blocked": 0,
-}
+PHASE_EXPECTED = {label: label_catalog.phase_expected_workers(label) for label in label_catalog.labels_for_group("phase")}
 
 _DEFAULT_MONITOR: ConcurrencyMonitor | None = None
 
@@ -199,34 +190,49 @@ class ConcurrencyMonitor:
     def count_in_flight_codex(self) -> int:
         return len(self.list_in_flight_codex_lines())
 
+    def _gh_list_by_label(self, kind: str, query_label: str) -> list[dict]:
+        cmd = ["gh", kind, "list"]
+        if self.gh_repo_slug:
+            cmd.extend(["--repo", self.gh_repo_slug])
+        cmd.extend([
+            "--label",
+            query_label,
+            "--state",
+            "open",
+            "--json",
+            "number,labels",
+            "--limit",
+            "100",
+        ])
+        result = self.run(cmd)
+        if result.returncode != 0:
+            return []
+        try:
+            rows = json.loads(result.stdout)
+        except Exception:
+            return []
+        return rows if isinstance(rows, list) else []
+
     def list_auto_loop_issues(self) -> list[dict]:
         items: list[dict] = []
-        for kind, gh_cmd in (("issue", "issue"), ("pr", "pr")):
-            cmd = ["gh", gh_cmd, "list"]
-            if self.gh_repo_slug:
-                cmd.extend(["--repo", self.gh_repo_slug])
-            cmd.extend([
-                "--label",
-                "auto-loop",
-                "--state",
-                "open",
-                "--json",
-                "number,labels",
-                "--limit",
-                "100",
-            ])
-            result = self.run(cmd)
-            if result.returncode != 0:
-                continue
-            try:
-                rows = json.loads(result.stdout)
-            except Exception:
-                continue
+        seen: set[tuple[str, int]] = set()
+        for kind in ("issue", "pr"):
+            rows: list[dict] = []
+            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+                rows.extend(self._gh_list_by_label(kind, query_label))
             for entry in rows:
-                num = entry.get("number")
-                labels = [label.get("name", "") for label in entry.get("labels", [])]
-                phase = next((label for label in labels if label.startswith(("🔍", "🔧", "👀", "🛠️", "⚙️", "🚀", "✅", "🎉", "⏸️"))), "")
-                human = next((label for label in labels if label.startswith(("🤖", "👤", "🆘"))), "")
+                try:
+                    num = int(entry.get("number"))
+                except (TypeError, ValueError):
+                    continue
+                key = (kind, num)
+                if key in seen:
+                    continue
+                seen.add(key)
+                label_names = [label.get("name", "") for label in entry.get("labels", [])]
+                projection = label_catalog.normalize_label_set(label_names)
+                phase = projection.phase or ""
+                human = projection.human or ""
                 items.append({"number": num, "kind": kind, "phase": phase, "human": human})
         return items
 
@@ -237,11 +243,12 @@ class ConcurrencyMonitor:
         breakdown = []
         total = 0
         for item in items:
-            if item["human"] == "👤 human:需-maintainer-决策":
+            if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([str(item.get("human", ""))]).canonical:
                 continue
-            expected = PHASE_EXPECTED.get(item["phase"], 0)
+            phase = label_catalog.normalize_label_set([str(item.get("phase", ""))]).phase or ""
+            expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
-                breakdown.append({"id": f"#{item['number']}", "kind": item["kind"], "phase": item["phase"], "expected": expected})
+                breakdown.append({"id": f"#{item['number']}", "kind": item["kind"], "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown
 
@@ -260,7 +267,7 @@ class ConcurrencyMonitor:
             handle.write(f"{ts} concurrency-alert {msg}\n")
 
     def degradation_watch_interval_seconds(self) -> int:
-        raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "0")
+        raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "1800")
         try:
             interval = int(raw)
         except ValueError:

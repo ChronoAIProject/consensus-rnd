@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Behavior tests for the packaged Phase 9 router module."""
+"""Behavior tests for the packaged Consensus-rnd Phase design-consensus router module."""
 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -85,6 +86,37 @@ class Phase9RouterPackageTests(unittest.TestCase):
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["149-3-delete", "149-3-minimal", "149-3-structural"],
         )
+        prompt = (self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue149-r3-minimal.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Consensus-rnd Phase design-consensus minimal solver", prompt)
+        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
+
+    def test_converge_solver_prompt_declares_issue_source_ref(self) -> None:
+        self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        self.router.tick()
+
+        prompt = (
+            self.repo
+            / ".refactor-loop"
+            / "prompts"
+            / "phase9"
+            / "phase9-issue114-r2-minimal.md"
+        ).read_text(encoding="utf-8")
+        required = (
+            "WORK_UNIT_ID=issue-114",
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-114",
+            "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-minimal.md",
+            "gh issue view 114",
+            "issue body/comments are the scope spec when no local audit artifact is provided",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
+        self.assertNotIn("cluster spec", prompt)
 
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")
@@ -160,6 +192,20 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "META_JUDGE_DONE:converge",
             "META_JUDGE_DONE:escalate:stalled",
             "phase9-router-ledger.jsonl",
+            ".refactor-loop/phase9-router-ledger.jsonl",
+            "route",
+            "target_actor",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_path",
+            "independence_check",
+            "phase9-triplet-evidence-invalid",
+            "Refactor (iter1/issue-167)",
+            "Old pattern: solver triplet handoff recorded only the base dispatch row",
+            "New principle: keep row-level router-private ledger provenance",
+            "narrow fail-closed peer artifact token check",
+            "Dispatch ledger evidence:",
             ".controller-pending-events.log",
             "phase9-router-fallback",
             "phase9-router.lock",
@@ -170,7 +216,16 @@ class Phase9RouterPackageTests(unittest.TestCase):
                 self.assertIn(required, src)
 
         for forbidden in (
-            "WorkUnitV2",
+            "WorkUnitReplacement",
+            "phase9-evidence",
+            "Phase9RoundEvidence",
+            "evidence.py",
+            "phase9_triplet_evidence",
+            "prompt_sha256",
+            "sha256",
+            "peer_reference_status",
+            "phase9-triplet-peer-reference",
+            "independence_checks",
             "ControllerOrchestrator",
             "ControllerEvent",
             "ControllerCommand",

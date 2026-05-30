@@ -18,6 +18,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
 
 
@@ -482,8 +483,8 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
     def test_fail_closed_when_blocked_or_human_label_present(self) -> None:
         cases = (
-            ("⏸️ phase:blocked", "no_open_blocked_pr"),
-            ("👤 human:需-maintainer-决策", "no_human_decision_label"),
+            (label_catalog.PHASE_BLOCKED, "no_open_blocked_pr"),
+            (label_catalog.HUMAN_MAINTAINER_DECISION, "no_human_decision_label"),
         )
         for label, signal_name in cases:
             with self.subTest(label=label):
@@ -863,7 +864,11 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             assert isinstance(decision, dict)
             self.assertTrue(decision["ready"])
             self.assertEqual(decision["bump_type"], "patch")
-            self.assertEqual(decision["from_version"], "1.0.0-beta.1")
+            # Version-agnostic: from_version must equal the current package.json
+            # version (decision dispatch is artifact-only and does not bump it),
+            # so this assertion survives every release bump without edits.
+            current_version = read_json(repo / "package.json")["version"]
+            self.assertEqual(decision["from_version"], current_version)
             self.assertEqual(decision["to_version"], "1.0.1")
             self.assertNotEqual(decision["to_version"], decision["from_version"])
             candidate = read_json(candidate_path)

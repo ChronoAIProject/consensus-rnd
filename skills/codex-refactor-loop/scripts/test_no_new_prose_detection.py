@@ -14,8 +14,8 @@ BASE_REF = "origin/auto-refact-dev"
 
 # Refactor (iter326/issue-106):
 #   Old pattern: source-regression tests literally matched Chinese/English prose, so switching languages broke them wholesale
-#   New principle: no DetectionInvariantV1; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
-#   explicit anchors, source-regression guard against future localized prose detectors (Phase 9 r1 consensus:structural)
+#   New principle: no detection-invariant schema suffix; use stable protocol tokens (markers/labels/anchors/sentinels/script names),
+#   explicit anchors, source-regression guard against future localized prose detectors (Consensus-rnd Phase design-consensus r1 consensus:structural)
 FORBIDDEN_NEW_TEST_TOKENS = (
     "事实源唯一",
     "GitHub 是系统状态唯一显示面",
@@ -30,6 +30,15 @@ FORBIDDEN_NEW_TEST_TOKENS = (
     "禁止** 裸 `nohup python3 <daemon> &`",
     "Source files are English-only; external user-facing artifacts are 中文 by default",
     "No mandatory parallel English section",
+    "iter5/prompt-gh-ban-marker-only",
+    "lifecycle / label ",
+    "cron/launchd-only helper invariant",
+    "**Producer**",
+    "**Consumer**",
+    "**Install one-liner**",
+    "**Uninstall one-liner**",
+    "**无新 daemon**",
+    "**手动一行,无 installer script**",
 )
 
 
