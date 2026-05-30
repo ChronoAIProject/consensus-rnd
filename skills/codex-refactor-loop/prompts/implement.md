@@ -24,6 +24,7 @@ Artifact profile: marker-only-work-unit
 
 1. **作用域**：仅修改下列文件；扩展前必须打印 `SCOPE_EXTEND: <file> <reason>`：
 ${SCOPE_PATHS}
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
 2. **Refactor comment policy**：读取 `${HOST_REFACTOR_COMMENT_POLICY}`。empty/`self-doc-comment` 归一化为 `self-doc-comment`；`none` 是 no source refactor-history comments 模式；其它值 invalid, fail-closed：停止实施并在摘要说明 invalid `HOST_REFACTOR_COMMENT_POLICY`; do not guess.
    - empty/`self-doc-comment`：被重构的每个类/关键方法必须按 `${HOST_COMMENT_RULE}` 新增/更新一段 Refactor self-documentation；`${HOST_COMMENT_RULE}` 为空时匹配目标文件已有注释风格，文件类型不支持注释时在实施摘要说明 not applicable。内容必须包含：
    ```

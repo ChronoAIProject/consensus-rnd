@@ -20,6 +20,7 @@ Artifact profile: marker-only-work-unit
 
 ### 1. 改动与设计原则一致
 
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
 - 检查 `${HOST_REFACTOR_COMMENT_POLICY}`。empty/`self-doc-comment` 归一化为 `self-doc-comment`；`none` 禁用 refactor-history source comments；其它值 invalid, fail-closed → 标 rework; do not guess.
 - empty/`self-doc-comment`：检查每个被重构的关键类/方法是否按 `${HOST_COMMENT_RULE}` 或目标文件现有注释风格带有 Refactor self-documentation，包含 Old pattern + New principle。缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。
 - `none`：missing Refactor self-documentation is not a defect and must not trigger rework. 新增 `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments → 标记缺陷；外部 artifact/实施摘要必须说明 rationale，包括 `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)` 或等价理由。

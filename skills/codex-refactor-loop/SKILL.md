@@ -98,6 +98,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
 `$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics: whether Old/New refactor comments are allowed, required, or rejected. `${HOST_COMMENT_RULE}` only supplies comment syntax in `self-doc-comment` mode; it does not override the policy.
 
 Host config rules:
@@ -651,6 +652,7 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 1. No new features; only clean the authorized violation or implement the consensus plan.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
 3. Code self-documents refactors according to `$HOST_REFACTOR_COMMENT_POLICY`: `self-doc-comment` requires host-style refactor-history comments; `none` forbids those source comments and requires the rationale in external artifacts.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
@@ -2945,6 +2947,7 @@ Bash(
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
 3. **Code self-documents the refactor according to policy** — `$HOST_REFACTOR_COMMENT_POLICY` empty/`self-doc-comment` requires a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; `none` forbids refactor-history source comments and moves the rationale to external artifacts.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
