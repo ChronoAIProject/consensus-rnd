@@ -27,6 +27,7 @@ EXPECTED_VERSION_RECORDS = {
     (".codex-plugin/plugin.json", "version"),
     (".cursor-plugin/plugin.json", "version"),
     ("gemini-extension.json", "version"),
+    ("skills/codex-refactor-loop/VERSION.json", "version"),
 }
 
 
@@ -46,10 +47,10 @@ def copy_minimal_degradation_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/host.env.example",
         "skills/codex-refactor-loop/scripts/consensus-rnd-cli",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
-        "skills/codex-refactor-loop/authorizations/runtime-exceptions.md",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -93,7 +94,7 @@ class PackageChecksTests(unittest.TestCase):
             skill = repo / "skills/codex-refactor-loop/SKILL.md"
             skill.write_text(
                 skill.read_text(encoding="utf-8").replace(
-                    "## Named runtime exception — skill degradation watch(per #66)",
+                    "## Skill degradation source-repo validation",
                     "## Removed heading",
                 )
                 + "\nRuntime creates DegradationCheck objects.\n",
@@ -111,8 +112,6 @@ class PackageChecksTests(unittest.TestCase):
             [
                 *degradation.REQUIRED_SKILL_MARKERS,
                 *degradation.REQUIRED_DETAILED_REFERENCE_MARKERS,
-                *degradation.REQUIRED_HOST_ENV_MARKERS,
-                *degradation.REQUIRED_MONITOR_MARKERS,
                 *degradation.REQUIRED_CI_MARKERS,
                 *degradation.REQUIRED_RELEASE_MARKERS,
                 *degradation.REQUIRED_RELEASE_PROJECTION_MARKERS,
@@ -122,25 +121,29 @@ class PackageChecksTests(unittest.TestCase):
         for required in (
             "skill-degradation",
             "manifest-version-sync",
-            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#skill-degradation-watch-66",
-            ".refactor-loop/.degradation-alert.log",
-            ".refactor-loop/.controller-pending-events.log",
-            "DEGRADATION_WATCH_INTERVAL_SECONDS",
             "consensus-rnd-cli check-degradation --static",
-            "source mutation",
-            "git reset/rebase/merge/push",
-            "GitHub issue/PR/body/label lifecycle mutation",
-            "codex dispatch",
-            "standalone daemon creation",
-            "WorkUnit/schema/envelope changes",
-            "auto-" + "clean root garbage",
-            "auto-" + "fix API",
+            "source-repo CI/release validation",
+            "downstream host has no runtime watch",
+            "no alert log",
+            "no pending event",
+            "no peek lens",
+            "no host.env knobs",
+            "no source mutation",
+            "no git reset/rebase/merge/push",
+            "no GitHub issue/PR/body/label lifecycle mutation",
+            "no codex dispatch",
+            "no standalone daemon creation",
+            "no WorkUnit/schema/envelope changes",
+            "no auto-" + "clean root garbage",
+            "no auto-" + "fix API",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, evaluated_markers)
 
         self.assertIn("Old: scripts/check_skill_degradation.py", source)
         self.assertIn("New: expose the same read-only checks", source)
+        self.assertIn("Old pattern: the checker required downstream runtime watch hooks", source)
+        self.assertIn("New principle: skill-degradation is source-repo CI/release validation only", source)
 
         for forbidden in (
             "subprocess.run(",
@@ -154,6 +157,10 @@ class PackageChecksTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
+
+        for removed_runtime_marker in degradation.FORBIDDEN_DOWNSTREAM_RUNTIME_MARKERS:
+            with self.subTest(removed_runtime_marker=removed_runtime_marker):
+                self.assertNotIn(removed_runtime_marker, evaluated_markers)
 
     def test_manifest_records_match_version_bump_and_accept_loop_context(self) -> None:
         ctx = LoopContext.load(repo_root=REPO_ROOT, read_only=True)

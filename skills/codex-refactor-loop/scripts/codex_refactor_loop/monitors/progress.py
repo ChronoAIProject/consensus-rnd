@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 
@@ -122,6 +123,15 @@ class ProgressReporter:
         return body
 
     def post_or_update(self, base: str, log: Path) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # progress reporters on multiple devices could create/edit/delete the
+        # same GitHub progress comment. New principle: GitHub comment writes
+        # require the single active-controller owner.
+        decision = require_active_controller(self.ctx, "progress-reporter-write")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            self.log_msg(f"active_controller=noop:not-owner progress-reporter {base} owner={decision.owner_device}")
+            return
         state = self._state()
         item = state.get(base, {}) if isinstance(state.get(base), dict) else {}
         target = str(item.get("target") or "")

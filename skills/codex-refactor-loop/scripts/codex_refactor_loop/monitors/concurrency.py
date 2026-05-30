@@ -9,19 +9,20 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
 from .. import labels as label_catalog
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from ..ownership import GitHubWorkOwnership, OwnershipDecision, WorkTargetResolver
 from ..state import read_json, write_json
+from ..update_check import parse_time
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
-DEGRADATION_ALERT_LOG = ".refactor-loop/.degradation-alert.log"
 HEARTBEAT_STALE_SECONDS = 90
 PRIORITIES = ("p0", "p1", "p2")
 MUTABLE_DISPATCH_PREFIXES = ("implement-", "fix-pr", "remote-ci-fix", "test-add-", "verify-", "hotfix-")
@@ -52,7 +53,6 @@ class ConcurrencyMonitor:
         self.gh_repo_slug = ctx.gh_repo_slug
         self.interval = int(interval or os.environ.get("INTERVAL", "60"))
         self.alert_log = ctx.paths.refactor_loop / ".concurrency-alert.log"
-        self.degradation_alert_log = ctx.repo_root / DEGRADATION_ALERT_LOG
         self.pending_events = ctx.paths.pending_events
         self.statusline_snapshot = ctx.paths.statusline_snapshot
         self.heartbeats_dir = ctx.paths.heartbeats
@@ -156,10 +156,44 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        update_projection = self.read_update_projection(now=now)
+        if update_projection:
+            payload.update(update_projection)
         self.statusline_snapshot.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, self.statusline_snapshot)
+
+    def read_update_projection(self, *, now: datetime) -> dict[str, object]:
+        raw = read_json(self.ctx.paths.state / "update-check.json", {})
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("status") in {"disabled", "unknown"}:
+            return {}
+        checked_at = parse_time(raw.get("checked_at"))
+        if checked_at is None:
+            return {}
+        interval = raw.get("interval_seconds")
+        ttl = int(interval) if isinstance(interval, int) and interval > 0 else 21600
+        if now - checked_at > timedelta(seconds=ttl * 2):
+            return {}
+        if raw.get("update_available") is not True:
+            return {}
+        latest = raw.get("latest_version")
+        source = raw.get("update_source")
+        release_url = raw.get("release_url")
+        if not isinstance(latest, str) or not latest:
+            return {}
+        projection: dict[str, object] = {
+            "update_available": True,
+            "update_latest_version": latest,
+            "update_checked_at": raw["checked_at"],
+        }
+        if isinstance(source, str) and source:
+            projection["update_source"] = source
+        if isinstance(release_url, str) and release_url:
+            projection["update_release_url"] = release_url
+        return projection
 
     def list_in_flight_codex_lines(self) -> list[str]:
         lines: list[str] = []
@@ -269,83 +303,6 @@ class ConcurrencyMonitor:
             handle.write(line + "\n")
         with self.pending_events.open("a", encoding="utf-8") as handle:
             handle.write(f"{ts} concurrency-alert {msg}\n")
-
-    def degradation_watch_interval_seconds(self) -> int:
-        raw = os.environ.get("DEGRADATION_WATCH_INTERVAL_SECONDS", "1800")
-        try:
-            interval = int(raw)
-        except ValueError:
-            interval = 1800
-        return max(0, interval)
-
-    def degradation_watch_timeout_seconds(self) -> int:
-        raw = os.environ.get("DEGRADATION_WATCH_TIMEOUT_SECONDS", "30")
-        try:
-            timeout = int(raw)
-        except ValueError:
-            timeout = 30
-        return max(1, timeout)
-
-    # Refactor (iter5/cluster-issue66-skill-degradation):
-    #   Old: no standalone watchdog, no DegradationCheck protocol, no plugin registry, and no GitHub auto-open path.
-    #   New: runtime monitoring stays a concurrency monitor throttled hook that calls the single-file static checker and emits local alerts only; it is not an independent watchdog.
-    def run_skill_degradation_check(self) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            [
-                sys.executable,
-                str(self.cli),
-                "check-degradation",
-                "--static",
-                "--repo-root",
-                str(self.repo_root),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=self.degradation_watch_timeout_seconds(),
-            check=False,
-        )
-
-    def write_degradation_alert(self, result: subprocess.CompletedProcess[str] | None, error: str | None = None) -> None:
-        self.degradation_alert_log.parent.mkdir(parents=True, exist_ok=True)
-        ts = utc_ts()
-        if result is None:
-            detail = {"error": error or "unknown"}
-            summary = "skill-degradation-alert checker-error"
-        else:
-            stdout = (result.stdout or "").strip()
-            stderr = (result.stderr or "").strip()
-            detail = {
-                "returncode": result.returncode,
-                "stdout_tail": stdout[-4000:],
-                "stderr_tail": stderr[-4000:],
-            }
-            summary = f"skill-degradation-alert returncode={result.returncode}"
-        with self.degradation_alert_log.open("a", encoding="utf-8") as handle:
-            handle.write(f"[{ts}] {summary} | detail={json.dumps(detail, ensure_ascii=False)}\n")
-        self.write_pending_event(f"{summary} log=.refactor-loop/.degradation-alert.log")
-
-    def maybe_run_skill_degradation_watch(self, state: dict) -> None:
-        interval = self.degradation_watch_interval_seconds()
-        if interval <= 0:
-            return
-        now = int(time.time())
-        last = int(state.get("last_degradation_watch_at", 0) or 0)
-        if last and now - last < interval:
-            return
-        state["last_degradation_watch_at"] = now
-        try:
-            result = self.run_skill_degradation_check()
-        except subprocess.TimeoutExpired as exc:
-            self.write_degradation_alert(None, error=f"timeout after {exc.timeout}s")
-            log(f"skill-degradation-alert timeout after {exc.timeout}s; see {self.degradation_alert_log}")
-            return
-        except Exception as exc:
-            self.write_degradation_alert(None, error=repr(exc))
-            log(f"skill-degradation-alert exception={exc!r}; see {self.degradation_alert_log}")
-            return
-        if result.returncode != 0:
-            self.write_degradation_alert(result)
-            log(f"skill-degradation-alert returncode={result.returncode}; see {self.degradation_alert_log}")
 
     def dispatch_queue_files(self) -> list[tuple[str, Path]]:
         files: list[tuple[str, Path]] = []
@@ -461,6 +418,15 @@ class ConcurrencyMonitor:
     #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
     #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def dispatch_one_from_queue(self) -> tuple[str, str, str] | None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # concurrency monitors on multiple devices could consume/archive the
+        # same local queue and spawn duplicate workers. New principle: dispatch
+        # and queue archive require the single active-controller owner.
+        decision = require_active_controller(self.ctx, "concurrency-dispatch")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            log(f"active_controller=noop:not-owner action=concurrency-dispatch owner={decision.owner_device}")
+            return None
         for priority, path in self.dispatch_queue_files():
             payload = json.loads(path.read_text(encoding="utf-8"))
             task_id = str(payload.get("task_id") or path.name.removesuffix(".dispatch.json"))
@@ -516,7 +482,10 @@ class ConcurrencyMonitor:
     def tick(self) -> None:
         state = self.load_state()
         zero_streak = int(state.get("zero_streak", 0))
-        self.maybe_run_skill_degradation_watch(state)
+        # Refactor (impl/issue235-delete-downstream-watch): Old pattern: concurrency tick ran source-repo skill-degradation checks against downstream host roots. New principle: downstream hosts have no skill-degradation runtime watch; source-repo static validation stays in CI/release gates.
+        decision = require_active_controller(self.ctx, "concurrency-tick")
+        write_active_controller_status(self.ctx, decision)
+        owner_allowed = decision.allowed
 
         items = self.list_auto_loop_issues()
         expected, breakdown = self.compute_expected(items)
@@ -542,7 +511,7 @@ class ConcurrencyMonitor:
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
-            if not self.dispatch_queue_empty():
+            if owner_allowed and not self.dispatch_queue_empty():
                 actual = self.top_up_from_dispatch_queue(actual, max(expected, self.configured_floor()))
             self.write_statusline_snapshot(
                 actual=actual,
@@ -560,10 +529,19 @@ class ConcurrencyMonitor:
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
-                self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
-                log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                if owner_allowed:
+                    self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                    log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                else:
+                    log(
+                        "active_controller=noop:not-owner "
+                        f"action=concurrency-tick dispatch_required={deficit} owner={decision.owner_device}"
+                    )
             else:
-                actual = self.top_up_from_dispatch_queue(actual, target)
+                if owner_allowed:
+                    actual = self.top_up_from_dispatch_queue(actual, target)
+                else:
+                    log(f"active_controller=noop:not-owner action=concurrency-top-up owner={decision.owner_device}")
 
         self.write_statusline_snapshot(
             actual=actual,
@@ -653,26 +631,6 @@ def write_alert(msg: str, detail: dict) -> None:
 
 def write_pending_event(event: str) -> None:
     _default_monitor().write_pending_event(event)
-
-
-def degradation_watch_interval_seconds() -> int:
-    return _default_monitor().degradation_watch_interval_seconds()
-
-
-def degradation_watch_timeout_seconds() -> int:
-    return _default_monitor().degradation_watch_timeout_seconds()
-
-
-def run_skill_degradation_check() -> subprocess.CompletedProcess[str]:
-    return _default_monitor().run_skill_degradation_check()
-
-
-def write_degradation_alert(result: subprocess.CompletedProcess[str] | None, error: str | None = None) -> None:
-    _default_monitor().write_degradation_alert(result, error=error)
-
-
-def maybe_run_skill_degradation_watch(state: dict) -> None:
-    _default_monitor().maybe_run_skill_degradation_watch(state)
 
 
 def dispatch_queue_files() -> list[tuple[str, Path]]:

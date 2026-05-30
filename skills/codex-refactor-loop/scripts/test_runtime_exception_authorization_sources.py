@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import unittest
@@ -16,15 +17,20 @@ SKILL_MD = SKILL_ROOT / "SKILL.md"
 MIRROR_RELATIVE = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"
 MIRROR = REPO_ROOT / MIRROR_RELATIVE
 REPO_RULES = REPO_ROOT / "CLAUDE.md"
+ACTIVE_CONTROLLER = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "active_controller.py"
 
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
+    # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
+    "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
+    "release-commits-producer-232": "release-commits` is the independent narrow producer",
+    "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
-    "skill-degradation-watch-66": "## Named runtime exception — skill degradation watch(per #66)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
+    "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
 }
 
 REQUIRED_FIELDS = (
@@ -52,6 +58,36 @@ def mirror_entry(mirror: str, anchor: str) -> str:
     if match is None:
         return rest
     return rest[: len(marker) + match.start()]
+
+
+def active_controller_git_subcommands() -> set[str]:
+    tree = ast.parse(read(ACTIVE_CONTROLLER))
+    commands: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "_git":
+            continue
+        if not node.args or not isinstance(node.args[0], ast.List):
+            continue
+        values = []
+        for elt in node.args[0].elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                values.append(elt.value)
+        index = 0
+        while index + 1 < len(values) and values[index] == "-c":
+            index += 2
+        if index < len(values):
+            commands.add(values[index])
+    return commands
+
+
+def documented_git_subcommands(text: str) -> set[str]:
+    commands: set[str] = set()
+    for command in re.findall(r"`git ([^`]+)`", text):
+        subcommand = command.split()[0]
+        commands.add(subcommand)
+    return commands
 
 
 class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
@@ -85,6 +121,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(f"{MIRROR_RELATIVE}#{anchor}", self.skill)
                 self.assertIn(f'<a id="{anchor}"></a>', self.mirror)
 
+    def test_skill_degradation_runtime_exception_mirror_is_removed(self) -> None:
+        self.assertNotIn("skill-degradation-watch-66", self.skill)
+        self.assertNotIn("skill-degradation-watch-66", self.mirror)
+        self.assertIn("## Skill degradation source-repo validation", self.skill)
+        self.assertIn("source-repo CI/release validation", self.skill)
+        self.assertIn("downstream host has no runtime watch", self.skill)
+
     def test_mirror_entries_have_required_fields(self) -> None:
         for anchor in TARGET_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
@@ -92,8 +135,67 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 for field in REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
 
+    def test_release_commits_producer_mirror_preserves_narrow_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "release-commits-producer-232")
+
+        self.assertIn("`read-git` and `write-artifact` only", entry)
+        self.assertIn("read local git only", entry)
+        self.assertIn("atomically write `.refactor-loop/state/release-commits.json`", entry)
+        self.assertIn("fact_source: local git tags and refs", entry)
+        for verification in (
+            "test_release_commits.py",
+            "test_cli_command_router.py",
+            "test_release_gate_module.py",
+        ):
+            with self.subTest(verification=verification):
+                self.assertIn(verification, entry)
+        for forbidden in (
+            "GitHub API",
+            "push",
+            "merge",
+            "reset",
+            "rebase",
+            "worktree mutation",
+            "tag",
+            "release",
+            "commit",
+            "issue lifecycle",
+            "PR lifecycle",
+            "label lifecycle",
+            "generic lifecycle authority",
+            "inline execution from `release-gate`",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
+    def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "update-check-231")
+
+        for token in (
+            "notify-only",
+            "VERSION.json",
+            ".refactor-loop/state/update-check.json",
+            "restart-daemons",
+            "statusline-snapshot.json",
+            "test_update_check.py",
+            "test_statusline.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
+                self.assertIn(token, self.skill)
+        for forbidden in (
+            "copy/overwrite/reinstall",
+            "host config edit",
+            "GitHub lifecycle",
+            "installer",
+            "new daemon",
+            "apply/update command surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
-        targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66)-r\d+-judge\.md")
+        targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")
         checked_paths = (
             SKILL_MD,
             SKILL_ROOT / "scripts" / "codex_refactor_loop" / "release" / "gate.py",
@@ -113,8 +215,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "label",
             "tag",
             "release",
-            "source mutation",
-            "codex dispatch",
             "new daemon",
         )
         for token in required_denials:
@@ -155,6 +255,112 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
+
+    def test_phase9_router_open_state_gate_authorizes_only_state_read(self) -> None:
+        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's new source issue state read was absent from the mechanical runtime-exception mirror. New: source-regression locks the exact state-only read and lifecycle denials in both mirror and SKILL.
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+
+        for token in (
+            "`gh issue view <N> --json state`",
+            "state-only",
+            "`read-gh`",
+            "source-OPEN gate",
+            "phase9-source-not-open",
+            "phase9-source-state-unavailable",
+            "test_phase9_router_open_state_gate.py",
+            "test_cli_command_router.py",
+            "test_skill_reference_anchors.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, entry)
+                self.assertIn(token, self.skill)
+        for forbidden in (
+            "gh issue close",
+            "gh issue edit",
+            "gh label",
+            "gh pr merge",
+            "gh release",
+            "label lifecycle",
+            "issue close",
+            "PR merge",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+    def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "active-controller-lease-191")
+
+        for required in (
+            "single active controller lease",
+            "refs/heads/crnd/active-controller",
+            "active-controller.json",
+            "owner_device",
+            "lease_id",
+            "expires_at",
+            "git fetch origin <lease-ref>",
+            "git ls-remote --exit-code --heads origin <lease-ref>",
+            "git rev-parse",
+            "git show <commit>:active-controller.json",
+            "git hash-object -w --stdin",
+            "git mktree",
+            "git commit-tree",
+            "git push --force-with-lease=<old>:<lease-ref>",
+            "These commands may only read/build/publish the singleton lease blob CAS",
+            "restart-daemons",
+            "concurrency dispatch",
+            "phase9 router",
+            "comment/progress writes",
+            "dev-sync",
+            "controller lifecycle helpers",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+
+        for forbidden in (
+            "worker diff commit",
+            "issue create/edit/close",
+            "PR create/edit/merge/close",
+            "label mutation",
+            "tag",
+            "release",
+            "per-work claim",
+            "host-defined lease scope",
+            "cross-device floor aggregation",
+            "daemon ownership matrix",
+            "active-active scheduler",
+            "generic distributed lock library",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
+    def test_active_controller_git_allowlist_matches_implementation(self) -> None:
+        # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old:
+        # authorization anchors named only part of the lease CAS git surface.
+        # New: source-regression compares both anchors to active_controller.py.
+        entry = mirror_entry(self.mirror, "active-controller-lease-191")
+        skill_section = re.search(
+            r"(?ms)^## Named runtime exception - active controller lease\(per #191\).*?(?=^## )",
+            self.skill,
+        )
+        self.assertIsNotNone(skill_section)
+        assert skill_section is not None
+
+        expected = active_controller_git_subcommands()
+        self.assertEqual(
+            expected,
+            {"fetch", "ls-remote", "rev-parse", "show", "hash-object", "mktree", "commit-tree", "push"},
+        )
+        self.assertEqual(expected, documented_git_subcommands(entry))
+        self.assertEqual(expected, documented_git_subcommands(skill_section.group(0)))
+        mirror_allowlist = re.search(r"Lease-only git allowlist: .*?\.", entry)
+        skill_allowlist = re.search(r"Lease-only git allowlist: .*?\.", skill_section.group(0))
+        self.assertIsNotNone(mirror_allowlist)
+        self.assertIsNotNone(skill_allowlist)
+        assert mirror_allowlist is not None
+        assert skill_allowlist is not None
+        self.assertEqual(mirror_allowlist.group(0), skill_allowlist.group(0))
 
 
 if __name__ == "__main__":

@@ -89,6 +89,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
         return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
 
+    def assert_start_count(self, name: str, expected: int) -> None:
+        deadline = time.time() + 2
+        while time.time() < deadline:
+            if self.start_count(name) == expected:
+                return
+            time.sleep(0.02)
+        self.assertEqual(expected, self.start_count(name))
+
     def read_pid(self, name: str) -> int:
         return int((self.repo / ".refactor-loop" / "locks" / f"{name}.pid").read_text(encoding="utf-8").strip())
 
@@ -136,6 +144,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
+        self.assertEqual(5, len(DAEMON_COMMANDS))
 
     def test_help_exits_without_starting_daemons(self) -> None:
         with mock.patch.object(restart.RestartDaemons, "run") as run:
@@ -152,13 +161,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_restarts_dead_wrapper_pid_even_with_fresh_heartbeat(self) -> None:
         self.run_helper()
+        self.assert_start_count("concurrency_monitor", 1)
         old_pid = self.read_pid("concurrency_monitor")
         (self.repo / ".refactor-loop" / "heartbeats" / "concurrency_monitor.ts").write_text(f"{int(time.time())}\n", encoding="utf-8")
         self.terminate(old_pid)
         self.run_helper()
         new_pid = self.read_pid("concurrency_monitor")
         self.assertNotEqual(old_pid, new_pid)
-        self.assertEqual(2, self.start_count("concurrency_monitor"))
+        self.assert_start_count("concurrency_monitor", 2)
 
     def test_restarts_when_launch_fingerprint_changes(self) -> None:
         self.run_helper()
@@ -243,6 +253,54 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         (self.repo / ".refactor-loop" / "heartbeats" / "dev_sync_daemon.ts").write_text(f"{int(time.time())}\n", encoding="utf-8")
         self.run_helper()
         self.assertEqual(1, self.start_count("dev_sync_daemon"))
+
+    # Refactor (impl/issue191-single-active-controller): Old pattern:
+    # restart-daemons started controller write daemons on every device. New
+    # principle: non-owner restart-daemons writes active_controller=noop and
+    # starts no write daemon.
+    def test_non_owner_restart_daemons_writes_noop_and_starts_no_daemons(self) -> None:
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="restart-daemons", lease_id="lease", expires_at="")
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            helper = RestartDaemons(self.ctx, self.config)
+            helper.run()
+
+        self.assertEqual([], helper._wrappers)
+        status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", status["active_controller"])
+        for name in DAEMON_NAMES:
+            self.assertEqual(0, self.start_count(name))
+
+    def test_owner_restart_daemons_starts_static_allowlist(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            self.run_helper()
+
+        for name in DAEMON_NAMES:
+            self.assertEqual(1, self.start_count(name))
+
+    def test_update_check_runs_after_static_daemon_pass_and_is_nonblocking(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        calls: list[str] = []
+
+        def fake_start(helper: RestartDaemons, name: str, command: tuple[str, ...]) -> None:
+            calls.append(name)
+
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+                with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
+                    with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", return_value={"status": "disabled", "reason": "noop"}) as update:
+                        helper = RestartDaemons(self.ctx, self.config)
+                        self.assertEqual(0, helper.run())
+
+        self.assertEqual(list(DAEMON_NAMES), calls)
+        update.assert_called_once_with(self.ctx, startup=True)
+
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+                with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
+                    with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", side_effect=RuntimeError("network")):
+                        helper = RestartDaemons(self.ctx, self.config)
+                        self.assertEqual(0, helper.run())
 
     def test_restart_helper_source_mentions_launch_fingerprint_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")

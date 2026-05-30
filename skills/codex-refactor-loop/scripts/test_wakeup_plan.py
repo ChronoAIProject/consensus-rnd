@@ -104,6 +104,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     unknown_login)
                       printf '[{"number":10,"title":"unknown login issue","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
+                    maintainer_label_foreign_fresh)
+                      printf '[{"number":12,"title":"foreign maintainer label issue","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_foreign_stale)
+                      printf '[{"number":12,"title":"stale maintainer label issue","author":{"login":"bob"},"updatedAt":"2000-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_unknown_owner)
+                      printf '[{"number":12,"title":"unknown maintainer label issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_unknown_login)
+                      printf '[{"number":12,"title":"unknown login maintainer label issue","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
                     many_active)
                       printf '['
                       for i in 1 2 3 4 5 6; do
@@ -181,6 +193,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     ci_unknown_login)
                       printf '[{"number":31,"title":"unknown login red PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
                       ;;
+                    maintainer_label_pr_foreign_fresh)
+                      printf '[{"number":32,"title":"fresh foreign maintainer label PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_pr_foreign_stale)
+                      printf '[{"number":32,"title":"stale foreign maintainer label PR","author":{"login":"bob"},"updatedAt":"2000-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_pr_unknown_owner)
+                      printf '[{"number":32,"title":"unknown maintainer label PR","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
+                    maintainer_label_pr_unknown_login)
+                      printf '[{"number":32,"title":"unknown login maintainer label PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      ;;
                     milestone)
                       printf '[{"number":30,"title":"milestone PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
@@ -202,11 +226,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "api user" ]]; then
-                  [[ "$fixture" == "unknown_login" || "$fixture" == "ci_unknown_login" || "$fixture" == "unpushed_unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
+                  [[ "$fixture" == "unknown_login" || "$fixture" == "ci_unknown_login" || "$fixture" == "unpushed_unknown_login" || "$fixture" == "maintainer_label_unknown_login" || "$fixture" == "maintainer_label_pr_unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
-                  if [[ "$fixture" == "unknown_owner" || "$fixture" == "ci_unknown_owner" || "$fixture" == "unpushed_unknown_owner" ]]; then
+                  if [[ "$fixture" == "unknown_owner" || "$fixture" == "ci_unknown_owner" || "$fixture" == "unpushed_unknown_owner" || "$fixture" == "maintainer_label_unknown_owner" || "$fixture" == "maintainer_label_pr_unknown_owner" ]]; then
                     printf '{"comments":[]}\n'
                   else
                     printf '{"author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z"}\n'
@@ -488,6 +512,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(actions[0]["item"], "PR #31")
         self.assertEqual(actions[0]["ownership"], "stale-takeover")
 
+    def test_maintainer_label_skips_fresh_foreign_and_unknown_ownership(self) -> None:
+        fixtures = (
+            "maintainer_label_foreign_fresh",
+            "maintainer_label_unknown_owner",
+            "maintainer_label_unknown_login",
+            "maintainer_label_pr_foreign_fresh",
+            "maintainer_label_pr_unknown_owner",
+            "maintainer_label_pr_unknown_login",
+        )
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+
+                self.assertNotIn("maintainer-comment", [action["kind"] for action in plan["actions"]])
+
+    def test_maintainer_label_includes_stale_takeover_notice_metadata_for_issue_and_pr(self) -> None:
+        cases = (
+            ("maintainer_label_foreign_stale", "issue #12"),
+            ("maintainer_label_pr_foreign_stale", "PR #32"),
+        )
+        for fixture, item in cases:
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+
+                actions = [action for action in plan["actions"] if action["kind"] == "maintainer-comment"]
+                self.assertEqual(len(actions), 1)
+                self.assertEqual(actions[0]["item"], item)
+                self.assertEqual(actions[0]["ownership"], "stale-takeover")
+                self.assertGreaterEqual(actions[0]["stale_hours"], 3)
+                self.assertTrue(actions[0]["requires_takeover_notice"])
+
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
             "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
@@ -561,6 +616,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn('"--state", "open"', source)
         self.assertNotIn('"--state", "closed"', source)
         self.assertNotIn('"--state", "merged"', source)
+
+    def test_maintainer_label_action_uses_ownership_gate_and_stale_notice_metadata(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        start = source.index("def maintainer_comment_actions")
+        end = source.index("def no_gap_actions")
+        section = source[start:end]
+        self.assertIn("ownership = allowed_ownership(repo_root, item)", section)
+        self.assertIn("if not ownership.allowed:", section)
+        self.assertIn('"ownership": ownership.reason', section)
+        self.assertIn('"requires_takeover_notice"', section)
+        self.assertIn('"stale_hours"', section)
 
     def test_audit_fallback_when_latest_audit_is_not_none_zero(self) -> None:
         plan = self.run_plan()

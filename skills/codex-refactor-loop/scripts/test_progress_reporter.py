@@ -89,6 +89,43 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual(state["fix-pr47-r1"]["comment_id"], 123)
         self.assertEqual(state["fix-pr47-r1"]["finished"], "false")
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern:
+    # progress reporters on multiple devices could create/edit/delete GitHub
+    # comments. New principle: non-owner progress reporter does not mutate
+    # GitHub state.
+    def test_non_owner_progress_reporter_does_not_call_github_or_write_state(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
+        log.write_text("running\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="progress-reporter-write", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh should not be called")):
+                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
+                    reporter.post_or_update(log.stem, log)
+
+        self.assertEqual({}, reporter._state())
+
+    def test_owner_progress_reporter_keeps_existing_create_comment_path(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
+        log.write_text("running\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="progress-reporter-write", lease_id="lease", expires_at="")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args, check=True):
+            gh_calls.append(list(args))
+            if args[:2] == ["pr", "view"]:
+                return mock.Mock(returncode=1, stdout="", stderr="not pr")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/191#issuecomment-55\n", stderr="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "gh", side_effect=fake_gh):
+                reporter.post_or_update(log.stem, log)
+
+        self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
+        self.assertIn(log.stem, reporter._state())
+
 
 class ProgressReporterSourceRegressionTests(unittest.TestCase):
     def test_forbidden_lifecycle_tokens_are_absent(self) -> None:

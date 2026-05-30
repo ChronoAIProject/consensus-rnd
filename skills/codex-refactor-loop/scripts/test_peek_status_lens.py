@@ -247,7 +247,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn("推荐下一步", result.stdout)
         self.assertNotIn("→ implement codex", result.stdout)
 
-    def test_peek_shows_degradation_alert_tail_read_only(self) -> None:
+    def test_peek_does_not_render_degradation_alert_tail(self) -> None:
         alert = self.root / ".refactor-loop" / ".degradation-alert.log"
         alert.parent.mkdir(parents=True, exist_ok=True)
         alert.write_text("[2026-05-27T00:00:00Z] skill-degradation-alert returncode=1\n", encoding="utf-8")
@@ -255,8 +255,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         result = self.run_peek()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("Skill degradation alerts", result.stdout)
-        self.assertIn("skill-degradation-alert returncode=1", result.stdout)
+        self.assertNotIn("Skill degradation alerts", result.stdout)
+        self.assertNotIn("skill-degradation-alert returncode=1", result.stdout)
         self.assertEqual(alert.read_text(encoding="utf-8"), "[2026-05-27T00:00:00Z] skill-degradation-alert returncode=1\n")
 
     def test_peek_review_merge_readiness_uses_tail_only_review_done(self) -> None:

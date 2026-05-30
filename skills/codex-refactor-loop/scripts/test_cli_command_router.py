@@ -120,9 +120,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "progress-reporter",
                 "phase9-router",
                 "post-banner",
+                "release-commits",
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
+                "update-check",
             },
             set(COMMANDS),
         )
@@ -141,6 +143,14 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertIn("phase9-router", COMMANDS)
         self.assertIn("compatibility alias", COMMANDS["phase9-router"].description)
         self.assertIn("design-consensus router", COMMANDS["phase9-router"].description)
+
+    def test_phase9_router_declares_state_only_read_gh_authority_without_lifecycle_tokens(self) -> None:
+        # Refactor (fix/pr245-router-authority-anchor): Old: the CLI authority source did not expose phase9-router's source-OPEN GitHub state read. New: lock the read-gh token while preserving the no-lifecycle daemon boundary.
+        self.assertEqual(
+            ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
+            COMMANDS["phase9-router"].authority,
+        )
+        self.assertFalse(set(COMMANDS["phase9-router"].authority) & LIFECYCLE_TOKENS)
 
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
@@ -206,9 +216,17 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "sync-request",
             "release-publish",
             "publish-release",
+            "apply-update",
+            "check-update",
+            "install-update",
+            "update-apply",
         }:
             with self.subTest(command=command):
                 self.assertNotIn(command, COMMANDS)
+
+    def test_update_check_declares_exact_notify_only_authority(self) -> None:
+        self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
+        self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():
@@ -225,6 +243,24 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             if "project-rules" in name:
                 with self.subTest(command=name):
                     self.assertNotIn("write-source", spec.authority)
+
+    def test_release_commits_command_is_read_git_write_artifact_only(self) -> None:
+        self.assertEqual(("read-git", "write-artifact"), COMMANDS["release-commits"].authority)
+        forbidden = {
+            "read-gh",
+            "git-push",
+            "git-merge",
+            "git-reset",
+            "git-rebase",
+            "git-worktree",
+            "gh-close",
+            "gh-edit",
+            "gh-label",
+            "gh-merge",
+            "gh-open",
+        }
+        self.assertFalse(set(COMMANDS["release-commits"].authority) & forbidden)
+        self.assertNotIn("read-git", COMMANDS["release-gate"].authority)
 
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")

@@ -16,6 +16,7 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.sync.dev import IntegrationSyncDaemon, codex_resolve_in_flight, dispatch_codex_resolve, merge_in_progress
 
 
@@ -119,6 +120,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
     def daemon(self, fake: FakeGit, **overrides) -> IntegrationSyncDaemon:
         return IntegrationSyncDaemon(
+            context=overrides.get("context"),
             worktree=self.worktree,
             main_repo=self.repo,
             integration="auto-refact-dev",
@@ -286,6 +288,33 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual(["DEV_SYNC_PENDING:missing-integration-branch:auto-refact-dev"], self.pending_events())
         self.assertEqual(["git", "ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], fake.commands[0])
         self.assertFalse(any(command[:2] == ["git", "fetch"] for command in fake.commands))
+
+    # Refactor (impl/issue191-single-active-controller): Old pattern: a
+    # non-owner dev-sync daemon could touch the integration worktree and run
+    # #53 git actions. New principle: non-owner exits before any worktree/git
+    # or pending-event mutation.
+    def test_non_owner_dev_sync_does_not_touch_worktree_git_or_pending_events(self) -> None:
+        fake = FakeGit(ahead=2)
+        ctx = LoopContext.load(repo_root=self.repo)
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="dev-sync", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
+            self.daemon(fake, context=ctx).tick()
+
+        self.assertEqual([], fake.commands)
+        self.assertEqual([], self.pending_events())
+        self.assertEqual([], self.operation_jsons())
+
+    def test_owner_dev_sync_keeps_existing_git_allowlist_path(self) -> None:
+        fake = FakeGit(ahead=1)
+        ctx = LoopContext.load(repo_root=self.repo)
+        decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="dev-sync", lease_id="lease", expires_at="")
+
+        with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
+            self.daemon(fake, context=ctx).tick()
+
+        self.assertIn(["git", "ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], fake.commands)
+        self.assertEqual("push-local-ahead", self.operation_jsons()[0]["kind"])
 
     def test_resolver_in_flight_scopes_to_repo_or_worktree_and_skips_shell_wrappers(self) -> None:
         repo = Path("/tmp/repo")

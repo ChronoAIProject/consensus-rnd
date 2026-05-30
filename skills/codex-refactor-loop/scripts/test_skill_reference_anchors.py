@@ -214,6 +214,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_skill_documents_update_check_notify_only_contract(self) -> None:
+        section = section_after_heading(self.skill, "Notify-only update check(per #231)")
+        for needle in (
+            "VERSION.json",
+            "VersionSourceManifest",
+            ".version-bump.json",
+            "consensus-rnd-cli update-check",
+            "notify-only",
+            "$UPDATE_CHECK_ENABLE",
+            ".refactor-loop/state/update-check.json",
+            "host-owned",
+            "create a daemon",
+            "statusline-snapshot.json",
+            "test_statusline.py",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "copy, overwrite, reinstall",
+            "run installers",
+            "mutate `.git`",
+            "touches the network",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(
             "tail -n 0 -F .refactor-loop/.controller-pending-events.log .refactor-loop/.concurrency-alert.log 2>/dev/null \\",
@@ -290,7 +317,47 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
+        self.assertIn("`gh issue view <N> --json state`", self.skill)
+        self.assertIn("state-only", self.skill)
+        self.assertIn("phase9-source-not-open", self.skill)
+        self.assertIn("phase9-source-state-unavailable", self.skill)
+        self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+
+    def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # multi-device controller writes were described as local daemon facts.
+        # New principle: SKILL.md locks one cross-device active-controller
+        # lease and forbids per-work/distributed scheduler expansion.
+        for needle in (
+            "| Active controller |",
+            "## Named runtime exception - active controller lease(per #191)",
+            "GitHub/已 push git 面只承载一个 `ActiveControllerLease`",
+            "refs/heads/crnd/active-controller",
+            "active-controller.json",
+            "owner_device",
+            "lease_id",
+            "expires_at",
+            "git fetch origin <lease-ref>",
+            "git ls-remote --exit-code --heads origin <lease-ref>",
+            "git rev-parse",
+            "git show <commit>:active-controller.json",
+            "git hash-object -w --stdin",
+            "git mktree",
+            "git commit-tree",
+            "git push --force-with-lease=<old>:<lease-ref>",
+            "These commands may only read/build/publish the singleton lease blob CAS",
+            "active_controller=noop:not-owner",
+            "Worker throughput remains owner-local via `$CODEX_FLOOR`",
+            "no cross-device floor aggregation",
+            "per-work claim",
+            "host-defined lease scope",
+            "daemon ownership matrix",
+            "active-active scheduler",
+            "generic distributed lock library",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
 
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")

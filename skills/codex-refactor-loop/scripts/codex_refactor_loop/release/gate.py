@@ -6,7 +6,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -17,6 +16,7 @@ from typing import Any, Callable, Sequence
 from .. import labels as label_catalog
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
+from .versions import SEMVER_RE, bump_semver, compare_semver, parse_semver
 
 
 # Refactor (issue160-p3-auto-release-gate):
@@ -33,12 +33,6 @@ from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProje
 #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
 #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
 
-SEMVER_RE = re.compile(
-    r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
-    r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
-    r"(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?"
-    r"(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$"
-)
 SIGNAL_NAMES = (
     "required_checks_recent_green",
     "no_open_blocked_pr",
@@ -539,27 +533,6 @@ def resolve_field(data: Any, field: str) -> Any:
             raise KeyError(f"cannot resolve {part!r} in {field}")
         current = current[part]
     return current
-
-
-def parse_semver(version: Any) -> tuple[int, int, int]:
-    if not isinstance(version, str):
-        raise ValueError(f"invalid semver: {version}")
-    match = SEMVER_RE.match(version)
-    if not match:
-        raise ValueError(f"invalid semver: {version}")
-    return tuple(int(part) for part in match.group(1, 2, 3))
-
-
-def bump_semver(version: str, bump_type: str) -> str:
-    # Bumps apply to the core version and intentionally drop pre-release/build metadata.
-    major, minor, patch = parse_semver(version)
-    if bump_type == "major":
-        return f"{major + 1}.0.0"
-    if bump_type == "minor":
-        return f"{major}.{minor + 1}.0"
-    if bump_type == "patch":
-        return f"{major}.{minor}.{patch + 1}"
-    raise ValueError(f"invalid bump type: {bump_type}")
 
 
 def classify_bump(commits: list[CommitInfo]) -> str:

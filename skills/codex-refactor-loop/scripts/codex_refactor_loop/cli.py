@@ -22,10 +22,18 @@ from .restart import main as restart_main
 from .retention import main as retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
+from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
+
+
+def release_commits_command(argv: Sequence[str] | None) -> int:
+    # Refactor (fix/pr236-split-release-commits-command): Old pattern: release-gate inlined the git-reading release commit producer and gained read-git authority. New principle: release commits are produced by a separate narrow CLI surface whose only powers are read-git and write-artifact, keeping release-gate decider-only.
+    from .release.commits import main as release_commits_main
+
+    return release_commits_main(argv)
 
 
 @dataclass(frozen=True)
@@ -87,17 +95,28 @@ COMMANDS: dict[str, CommandSpec] = {
     "phase9-router": CommandSpec(
         phase9_router_main,
         "compatibility alias for the Python design-consensus router",
-        ("read-log", "write-event", "write-artifact", "spawn"),
+        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's public CommandSpec omitted the state-only GitHub read used by the source-OPEN gate. New: include read-gh in the closed-token authority tuple while keeping lifecycle mutation tokens absent.
+        ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(
         release_gate_main,
         "run the Python auto release gate",
         ("read-state", "read-gh", "write-artifact"),
     ),
+    "release-commits": CommandSpec(
+        release_commits_command,
+        "write the git-derived release commits projection",
+        ("read-git", "write-artifact"),
+    ),
     "release-required-checks": CommandSpec(
         release_required_checks_main,
         "check exact release required check-runs",
         ("read-gh",),
+    ),
+    "update-check": CommandSpec(
+        update_check_main,
+        "run the notify-only version update check probe",
+        ("read-source", "read-gh", "write-state"),
     ),
     "render-github-body": CommandSpec(
         github_body.main,

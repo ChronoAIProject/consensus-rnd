@@ -110,6 +110,32 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern: any
+    # device-local concurrency monitor could dispatch and archive queue entries.
+    # New principle: non-owner monitors preserve queue files and write no
+    # DISPATCH_FIRED side effect.
+    def test_non_owner_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
+        dispatch = self.write_dispatch("p1", "fix-pr44-round-3")
+        calls: list[list[str]] = []
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="concurrency-dispatch", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                fired = self.monitor.dispatch_one_from_queue()
+
+        self.assertIsNone(fired)
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        events = self.refactor_loop / ".controller-pending-events.log"
+        self.assertFalse(events.exists())
+
+    def test_floor_remains_local_code_floor_without_cross_device_aggregation(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.get("CODEX_FLOOR"', source)
+        self.assertNotIn("REMOTE_CODEX_FLOOR", source)
+        self.assertNotIn("cross_device_floor", source)
+
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
     #   New principle: structural consensus: dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md
@@ -368,7 +394,6 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("DISPATCH_FIRED:fix-pr44-round-3:p0:PR #44 r3 fix needed", events)
 
     def test_tick_p0_no_gap_with_queued_dispatch_fires_topup(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
         self.reload_monitor()
         self.write_dispatch("p0", "fix-pr57-round-1-a")
         self.write_dispatch("p0", "fix-pr57-round-1-b")
@@ -393,13 +418,56 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-a:p0:fix-pr57-round-1-a needed", events)
         self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
 
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: tick()
+    # only proved the owner/default-local queue top-up path. New: non-owner
+    # ticks keep read-only alert/status behavior but cannot dispatch or archive.
+    def test_tick_non_owner_p0_no_gap_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        dispatch_a = self.write_dispatch("p0", "fix-pr57-round-1-a")
+        dispatch_b = self.write_dispatch("p0", "fix-pr57-round-1-b")
+        calls: list[list[str]] = []
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                    with mock.patch.object(
+                        self.monitor,
+                        "list_auto_loop_issues",
+                        return_value=[{"number": 57, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                    ):
+                        self.monitor.tick()
+
+        self.assertEqual(calls, [])
+        self.assertTrue(dispatch_a.exists())
+        self.assertTrue(dispatch_b.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
+        self.assertIn("P0 no-gap-violation", alert)
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 0)
+        self.assertEqual(snapshot["expected"], 1)
+        self.assertEqual(snapshot["p0_streak"], 1)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("concurrency-alert P0 no-gap-violation", events)
+        self.assertNotIn("DISPATCH_FIRED", events)
+
     def test_tick_below_floor_with_non_empty_queue_dispatches(self) -> None:
         for i in range(3):
             self.write_dispatch("p1", f"floor-task-{i}")
         calls: list[list[str]] = []
         counts = [2, 3, 4]
         os.environ["CODEX_FLOOR"] = "4"
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
         self.reload_monitor()
 
         with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
@@ -411,9 +479,74 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 1)
 
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: below-floor
+    # tick coverage only asserted owner dispatch. New: non-owner below-floor
+    # queue repair is read-only and leaves the dispatch queue untouched.
+    def test_tick_non_owner_below_floor_with_non_empty_queue_does_not_top_up(self) -> None:
+        for i in range(3):
+            self.write_dispatch("p1", f"floor-task-{i}")
+        calls: list[list[str]] = []
+        os.environ["CODEX_FLOOR"] = "4"
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=2):
+                    with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+                        with mock.patch.object(self.monitor, "top_up_from_dispatch_queue", wraps=self.monitor.top_up_from_dispatch_queue) as top_up:
+                            self.monitor.tick()
+
+        top_up.assert_not_called()
+        self.assertEqual(calls, [])
+        remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
+        self.assertEqual(len(remaining), 3)
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 2)
+        self.assertEqual(snapshot["expected"], 0)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
+
+    # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: empty-queue
+    # deficit tests only covered owner hard-gate emission. New: non-owners
+    # preserve status snapshots without enqueueing controller write requests.
+    def test_tick_non_owner_below_floor_with_empty_queue_does_not_write_hard_gate(self) -> None:
+        os.environ["CODEX_FLOOR"] = "4"
+        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
+        self.reload_monitor()
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="concurrency-tick",
+            lease_id="",
+            expires_at="",
+        )
+
+        with mock.patch("codex_refactor_loop.monitors.concurrency.require_active_controller", return_value=decision):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=2):
+                with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+                    self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+        snapshot = json.loads((self.refactor_loop / "state" / "statusline-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(snapshot["actual"], 2)
+        self.assertEqual(snapshot["expected"], 0)
+        status = json.loads((self.refactor_loop / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual(status["active_controller"], "noop:not-owner")
+
     def test_tick_dispatches_toward_expected_count_not_just_floor(self) -> None:
         """When expected > floor, tick fires deficit toward expected (not just floor)."""
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
         self.reload_monitor()
         for i in range(4):
             self.write_dispatch("p1", f"expected-task-{i}")
@@ -585,104 +718,35 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("REPO_ROOT is unset", result.stderr)
 
-    def test_degradation_hook_writes_alert_and_existing_pending_event_only_on_failure(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.reload_monitor()
-        state: dict[str, object] = {}
-        result = self.module.subprocess.CompletedProcess(["checker"], 1, stdout="bad drift\n", stderr="")
+    # Refactor (impl/issue235-delete-downstream-watch): Old pattern: downstream concurrency ticks ran check-degradation against host roots. New principle: plugin-installed hosts have no degradation runtime watch, alert log, or pending event.
+    def test_downstream_plugin_installed_concurrency_once_has_no_degradation_watch_surface(self) -> None:
+        import subprocess as real_subprocess
+        fake_bin = self.repo / "bin"
+        fake_bin.mkdir()
+        fake_gh = fake_bin / "gh"
+        fake_gh.write_text("#!/bin/sh\nprintf '[]\\n'\n", encoding="utf-8")
+        fake_gh.chmod(0o755)
+        env = os.environ.copy()
+        env["REPO_ROOT"] = str(self.repo)
+        env["CODEX_FLOOR"] = "2"
+        env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
 
-        with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
-            self.monitor.maybe_run_skill_degradation_watch(state)
+        result = real_subprocess.run(
+            [sys.executable, str(CLI), "concurrency", "--once"],
+            cwd=str(self.repo),
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
 
-        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert returncode=1", alert)
-        self.assertIn("bad drift", alert)
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert returncode=1 log=.refactor-loop/.degradation-alert.log", events)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
+        pending_events = self.refactor_loop / ".controller-pending-events.log"
+        if pending_events.exists():
+            self.assertNotIn("skill-degradation-alert", pending_events.read_text(encoding="utf-8"))
         self.assertFalse((self.repo / "skills").exists())
-        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
-
-    def test_maybe_run_skill_degradation_watch_emits_alert_on_timeout(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.reload_monitor()
-        state: dict[str, object] = {}
-        timeout = self.module.subprocess.TimeoutExpired(cmd=["checker"], timeout=7)
-
-        with mock.patch.object(self.monitor, "run_skill_degradation_check", side_effect=timeout):
-            self.monitor.maybe_run_skill_degradation_watch(state)
-
-        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert checker-error", alert)
-        self.assertIn('"error": "timeout after 7s"', alert)
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log", events)
-
-    def test_maybe_run_skill_degradation_watch_emits_alert_on_generic_exception(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.reload_monitor()
-        state: dict[str, object] = {}
-
-        with mock.patch.object(
-            self.monitor,
-            "run_skill_degradation_check",
-            side_effect=RuntimeError("checker crashed"),
-        ):
-            self.monitor.maybe_run_skill_degradation_watch(state)
-
-        alert = (self.refactor_loop / ".degradation-alert.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert checker-error", alert)
-        self.assertIn("\"error\": \"RuntimeError('checker crashed')\"", alert)
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("skill-degradation-alert checker-error log=.refactor-loop/.degradation-alert.log", events)
-
-    def test_degradation_hook_is_throttled(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.reload_monitor()
-        state = {"last_degradation_watch_at": 1_000}
-
-        with mock.patch.object(self.module.time, "time", return_value=1_030):
-            with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
-                self.monitor.maybe_run_skill_degradation_watch(state)
-
-        run_check.assert_not_called()
-        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
-
-    def test_degradation_hook_success_writes_no_alert(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "60"
-        self.reload_monitor()
-        state: dict[str, object] = {}
-        result = self.module.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
-
-        with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result):
-            self.monitor.maybe_run_skill_degradation_watch(state)
-
-        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
-        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
-
-    def test_degradation_hook_defaults_to_enabled_interval_when_env_unset(self) -> None:
-        os.environ.pop("DEGRADATION_WATCH_INTERVAL_SECONDS", None)
-        self.reload_monitor()
-        state: dict[str, object] = {}
-        result = self.module.subprocess.CompletedProcess(["checker"], 0, stdout="skill-degradation: ok\n", stderr="")
-
-        self.assertEqual(self.monitor.degradation_watch_interval_seconds(), 1800)
-        with mock.patch.object(self.module.time, "time", return_value=1_800_123):
-            with mock.patch.object(self.monitor, "run_skill_degradation_check", return_value=result) as run_check:
-                self.monitor.maybe_run_skill_degradation_watch(state)
-
-        run_check.assert_called_once_with()
-        self.assertEqual(state["last_degradation_watch_at"], 1_800_123)
-        self.assertFalse((self.refactor_loop / ".degradation-alert.log").exists())
-        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
-
-    def test_degradation_hook_disabled_by_zero_interval(self) -> None:
-        os.environ["DEGRADATION_WATCH_INTERVAL_SECONDS"] = "0"
-        self.reload_monitor()
-
-        with mock.patch.object(self.monitor, "run_skill_degradation_check") as run_check:
-            self.monitor.maybe_run_skill_degradation_watch({})
-
-        run_check.assert_not_called()
 
 
 class SnapshotDaemonHealthFieldTests(unittest.TestCase):

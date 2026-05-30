@@ -16,7 +16,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
-from codex_refactor_loop.phase9.router import Phase9Router, main, parse_phase9_log_identity
+from codex_refactor_loop.phase9.router import (
+    Phase9Router,
+    Phase9SourceIssueDecision,
+    main,
+    parse_phase9_log_identity,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -35,7 +40,20 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         )
         self.env.start()
         self.commands: list[list[str]] = []
+        self.source_issue_states: dict[str, str] = {}
+        self.original_source_issue_reader = Phase9Router._read_source_issue_decision
+
+        def fake_source_issue_decision(issue: str) -> Phase9SourceIssueDecision:
+            state = self.source_issue_states.get(str(issue), "OPEN")
+            if state == "UNAVAILABLE":
+                return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+            normalized = state.upper()
+            if normalized == "OPEN":
+                return Phase9SourceIssueDecision(True, normalized, "phase9-source-open")
+            return Phase9SourceIssueDecision(False, normalized, "phase9-source-not-open")
+
         self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.router._read_source_issue_decision = fake_source_issue_decision  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.env.stop()
@@ -68,6 +86,14 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         path = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
 
+    def pending_event_payloads(self, prefix: str = "phase9-router-fallback") -> list[dict]:
+        payloads = []
+        for line in self.pending_events().splitlines():
+            if f" {prefix} " not in line:
+                continue
+            payloads.append(json.loads(line.split(f"{prefix} ", 1)[1]))
+        return payloads
+
     def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
@@ -78,6 +104,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     def enable_github_repo(self) -> None:
         (self.repo / ".refactor-loop" / "host.env").write_text("GH_REPO_SLUG=owner/repo\n", encoding="utf-8")
         self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.router._read_source_issue_decision = lambda issue: Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")  # type: ignore[method-assign]
 
     def write_stalled_ready_logs(self, issue: int, round_no: int = 3) -> None:
         for current_round in range(round_no - 2, round_no + 1):
@@ -217,6 +244,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.phase9.router.GitHubWorkOwnership") as ownership_cls:
             ownership_cls.return_value.decide.return_value = stale
             ownership_cls.return_value.post_takeover_notice.return_value = True
+            self.router._read_source_issue_decision = lambda issue: Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")  # type: ignore[method-assign]
             self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
@@ -352,6 +380,89 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         failure = next(entry for entry in entries if entry["key"] == "45-3-reflector-ownership-notice-failed")
         self.assertEqual(failure["route"], "3-reflector")
         self.assertEqual(failure["ownership"], "stale-takeover")
+
+    def test_phase9_router_closed_issue_suppresses_triplet_to_judge_and_appends_skip_event(self) -> None:
+        self.source_issue_states["37"] = "CLOSED"
+        self.solver_triplet(issue=37, round_no=4)
+
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue37-r4-judge.md").exists())
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-source-eligibility:37-4-solver_triplet_to_judge")
+        self.assertEqual(event["reason"], "phase9-source-not-open")
+        self.assertEqual(event["state"], "CLOSED")
+        self.assertEqual(event["issue"], "37")
+        self.assertEqual(event["round"], 4)
+        self.assertEqual(event["route"], "solver_triplet_to_judge")
+        self.assertEqual(event["marker"], "SOLVER_DONE:triplet")
+        self.assertIn(event["log_path"], {
+            ".refactor-loop/logs/phase9-issue37-r4-delete.log",
+            ".refactor-loop/logs/phase9-issue37-r4-minimal.log",
+            ".refactor-loop/logs/phase9-issue37-r4-structural.log",
+        })
+
+    def test_phase9_router_source_eligibility_fallback_restart_dedupe(self) -> None:
+        # Refactor (fix/pr245-source-open-restart-dedupe-test): Old: source-OPEN gate tests covered in-memory fallback dedupe only. New: recreate the router after a persisted source-eligibility fallback and prove restart seeding suppresses duplicate events.
+        cases = (
+            ("CLOSED", "phase9-source-not-open"),
+            ("UNAVAILABLE", "phase9-source-state-unavailable"),
+        )
+        for state, reason in cases:
+            with self.subTest(reason=reason):
+                self.tmp.cleanup()
+                self.setUp()
+                self.source_issue_states["37"] = state
+                self.solver_triplet(issue=37, round_no=4)
+
+                self.router.tick()
+                fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+                fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+                fresh_router.tick()
+
+                key = "phase9-source-eligibility:37-4-solver_triplet_to_judge"
+                events = self.pending_event_payloads()
+                self.assertEqual(len(events), 1)
+                self.assertEqual(events[0]["key"], key)
+                self.assertEqual(events[0]["reason"], reason)
+                self.assertIn(key, fresh_router._fallback_seen)
+                self.assertIn(key, fresh_router._load_persisted_fallback_seen())
+                self.assertEqual(self.pending_events().count(key), 1)
+                self.assertEqual(self.commands, [])
+                self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_issue_state_unavailable_fails_closed_without_ledger(self) -> None:
+        self.source_issue_states["37"] = "UNAVAILABLE"
+        self.solver_triplet(issue=37, round_no=4)
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["reason"], "phase9-source-state-unavailable")
+        self.assertIsNone(events[0]["state"])
+
+    def test_phase9_router_issue_state_reader_fails_closed_on_bad_gh_results(self) -> None:
+        cases = (
+            mock.Mock(returncode=1, stdout="", stderr="missing"),
+            mock.Mock(returncode=0, stdout="{not-json", stderr=""),
+            mock.Mock(returncode=0, stdout=json.dumps({}), stderr=""),
+            mock.Mock(returncode=0, stdout=json.dumps({"state": ""}), stderr=""),
+        )
+        for result in cases:
+            with self.subTest(stdout=result.stdout, returncode=result.returncode):
+                with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result):
+                    decision = self.original_source_issue_reader(self.router, "37")
+                self.assertFalse(decision.allowed)
+                self.assertIsNone(decision.state)
+                self.assertEqual(decision.reason, "phase9-source-state-unavailable")
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)
@@ -662,6 +773,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
 
+    def test_phase9_router_closed_issue_suppresses_converge_without_lifecycle_mutation(self) -> None:
+        self.source_issue_states["37"] = "CLOSED"
+        self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+
+        self.router.tick()
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["key"], "phase9-source-eligibility:37-5-converge_to_next_solvers")
+        self.assertEqual(events[0]["reason"], "phase9-source-not-open")
+        self.assertEqual(events[0]["route"], "converge_to_next_solvers")
+        self.assertEqual(events[0]["marker"], "META_JUDGE_DONE:converge:round-5:need-more")
+
     def test_solver_prompt_for_issue_driven_converge_has_source_header(self) -> None:
         self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
 
@@ -893,6 +1020,24 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(self.commands), 1)
         self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
+    def test_phase9_router_closed_issue_suppresses_stalled_reflector_dispatch(self) -> None:
+        self.source_issue_states["38"] = "CLOSED"
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=38, round_no=round_no, verdict="same")
+        self.write_ledger_key("38-1-judge")
+        self.write_ledger_key("38-2-judge")
+        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertNotIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["key"], "phase9-source-eligibility:38-3-stalled_to_reflector")
+        self.assertEqual(events[0]["reason"], "phase9-source-not-open")
+        self.assertEqual(events[0]["route"], "stalled_to_reflector")
+
     def test_phase9_router_accepts_meta_judge_issue_log_for_stalled(self) -> None:
         for round_no in (1, 2, 3):
             for role in ("minimal", "structural", "delete"):
@@ -1088,6 +1233,34 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                     f"consensus-rnd-cli phase9-router must not introduce forbidden boundary token: {forbidden}",
                 )
 
+    def test_phase9_router_source_issue_gate_is_state_only_read_without_lifecycle_authority(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        for required in (
+            "gh",
+            "issue",
+            "view",
+            "--json",
+            "state",
+            "OPEN",
+            "phase9-source-not-open",
+            "phase9-source-state-unavailable",
+            "phase9-router-fallback",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, src)
+        self.assertNotIn('"state,labels"', src)
+        self.assertNotIn('"labels"', src)
+        for forbidden in (
+            "gh issue close",
+            "gh issue edit",
+            "gh pr merge",
+            "gh pr create",
+            "gh release",
+            "label set",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, src)
+
     def test_phase9_router_marker_grammar_is_route_specific_not_ascii_payload_gate(self) -> None:
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
 
@@ -1116,7 +1289,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.solver_triplet(issue=37, round_no=4)
         commands: list[list[str]] = []
 
-        exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
+        with mock.patch.object(
+            Phase9Router,
+            "_read_source_issue_decision",
+            return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
+        ):
+            exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(commands), 1)

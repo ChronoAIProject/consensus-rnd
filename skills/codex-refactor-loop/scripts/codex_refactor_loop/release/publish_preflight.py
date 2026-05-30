@@ -12,6 +12,7 @@ from typing import Any, Callable
 from ..state import read_json
 from .gate import isoformat, load_host_env, parse_time, resolve_field
 from .required_checks import REQUIRED_RELEASE_CHECKS
+from .versions import compare_semver
 
 
 REQUIRED_CANDIDATE_SCHEMA = "decision-artifact-only/v2"
@@ -199,7 +200,11 @@ class ReleasePublishPreflight:
         if not isinstance(to_version, str) or not to_version:
             reasons.append("candidate_version_missing")
             return
-        if version != to_version:
+        try:
+            versions_match = compare_semver(version, to_version) == 0
+        except ValueError:
+            versions_match = False
+        if not versions_match:
             reasons.append("manifest_version_mismatch")
         if decision and decision.get("to_version") != to_version:
             reasons.append("decision_version_mismatch")

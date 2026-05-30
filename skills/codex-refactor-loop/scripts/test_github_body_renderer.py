@@ -57,8 +57,32 @@ class GitHubBodyRendererTests(unittest.TestCase):
         validate_self_contained_github_body("## 🤖 status\n\n普通评论。\n\n⟦AI:AUTO-LOOP⟧\n")
 
     def test_validator_requires_inline_details_for_authority_required_body(self) -> None:
-        with self.assertRaisesRegex(GitHubBodyError, "must inline artifact text"):
+        with self.assertRaisesRegex(GitHubBodyError, "must inline raw artifact text"):
             validate_self_contained_github_body("## 🤖 accepted\n\n结论已接受。\n\n⟦AI:AUTO-LOOP⟧\n", authority_required=True)
+
+    def test_validator_rejects_generic_markdown_details_as_authority(self) -> None:
+        body = (
+            "## 🤖 accepted\n\n"
+            "<details>\n"
+            "<summary>普通说明</summary>\n\n"
+            "```markdown\n完整共识正文\n```\n"
+            "</details>\n\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+        )
+        with self.assertRaisesRegex(GitHubBodyError, "must inline raw artifact text"):
+            validate_self_contained_github_body(body, authority_required=True)
+
+    def test_validator_rejects_run_path_inside_non_debug_details(self) -> None:
+        body = (
+            "## 🤖 accepted\n\n"
+            "<details>\n"
+            "<summary>普通说明</summary>\n\n"
+            "授权:.refactor-loop/runs/phase9-issue191-r2-judge.md\n"
+            "</details>\n\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+        )
+        with self.assertRaisesRegex(GitHubBodyError, "local .refactor-loop artifact path"):
+            validate_self_contained_github_body(body)
 
     def test_cli_renders_to_stdout_without_mutation_authority(self) -> None:
         result = subprocess.run(
@@ -122,6 +146,14 @@ class GitHubBodySourceRegressionTests(unittest.TestCase):
                 self.assertNotIn(forbidden, src)
         self.assertIn("read-only helper", src)
         self.assertIn("must not write files", src)
+
+    def test_issue191_refactor_documentation_pins_validator_contract(self) -> None:
+        src = (SCRIPT_DIR / "codex_refactor_loop" / "github_body.py").read_text(encoding="utf-8")
+        self.assertIn("Refactor (iter191/issue-191):", src)
+        self.assertIn("single active controller lease (no per-work claims, no cross-device floor)", src)
+        self.assertIn("authority/consensus/plan bodies inline raw artifacts", src)
+        self.assertIn("INLINE_ARTIFACT_DETAILS_RE", src)
+        self.assertIn("authority body must inline raw artifact text in inline artifact details", src)
 
     def test_controller_and_triage_call_same_validator(self) -> None:
         controller = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

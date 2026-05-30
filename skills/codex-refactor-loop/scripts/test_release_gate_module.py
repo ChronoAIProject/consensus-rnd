@@ -43,6 +43,7 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         ".codex-plugin/plugin.json",
         ".cursor-plugin/plugin.json",
         "gemini-extension.json",
+        "skills/codex-refactor-loop/VERSION.json",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -249,11 +250,16 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
     def test_source_has_no_release_lifecycle_or_daemon_event_authority(self) -> None:
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
+        cli_source = (SCRIPT_PATH.parent / "codex_refactor_loop/cli.py").read_text(encoding="utf-8")
         executable_source = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56", source)
         self.assertIn("decision-artifact-only", source)
         self.assertNotIn('["git"', executable_source)
         self.assertNotIn('"git"', executable_source)
+        self.assertNotIn("release.commits", source)
+        self.assertNotIn("write_release_commits", source)
+        self.assertNotIn("collect_release_commits", source)
+        self.assertNotIn("release_gate_with_pre_gate_commits", cli_source)
         for forbidden in (
             "dispatch_queue(",
             "pending_events(",

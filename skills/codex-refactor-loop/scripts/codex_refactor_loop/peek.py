@@ -19,7 +19,6 @@ from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
 
 REVIEW_MARKER_TAIL_LINES = 30
-DEGRADATION_ALERT_LOG = ".refactor-loop/.degradation-alert.log"
 
 
 class PeekStatusLens:
@@ -39,9 +38,7 @@ class PeekStatusLens:
         lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl", 10, "    "))
         lines.append("  pending events tail:")
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
-        lines.append("  Skill degradation alerts:")
-        tail_count = int(os.environ.get("DEGRADATION_ALERT_TAIL_LINES", "10"))
-        lines.extend(_prefixed_tail(self.ctx.repo_root / DEGRADATION_ALERT_LOG, tail_count, "    "))
+        # Refactor (impl/issue235-delete-downstream-watch): Old pattern: peek rendered a downstream skill-degradation alert log. New principle: downstream hosts have no skill-degradation alert log or peek lens.
         lines.extend(["", "▍Milestone (优先) issues:"])
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])

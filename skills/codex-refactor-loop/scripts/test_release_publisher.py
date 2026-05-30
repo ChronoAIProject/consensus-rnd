@@ -42,6 +42,7 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         ".codex-plugin/plugin.json",
         ".cursor-plugin/plugin.json",
         "gemini-extension.json",
+        "skills/codex-refactor-loop/VERSION.json",
     ):
         source = REPO_ROOT / relative
         target = repo / relative
@@ -111,6 +112,7 @@ def expected_success_commands() -> list[list[str]]:
             ".codex-plugin/plugin.json",
             ".cursor-plugin/plugin.json",
             "gemini-extension.json",
+            "skills/codex-refactor-loop/VERSION.json",
         ],
         ["git", "commit", "-m", "Release v2.0.0"],
         ["git", "rev-parse", "HEAD"],
@@ -225,6 +227,7 @@ class ReleasePublisherTests(unittest.TestCase):
                 ".codex-plugin/plugin.json",
                 ".cursor-plugin/plugin.json",
                 "gemini-extension.json",
+                "skills/codex-refactor-loop/VERSION.json",
             ]
             runner.failures[tuple(failed_add)] = subprocess.CompletedProcess(failed_add, 1, stdout="", stderr="add failed")
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)

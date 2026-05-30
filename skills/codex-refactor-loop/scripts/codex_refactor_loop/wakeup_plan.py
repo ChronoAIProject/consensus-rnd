@@ -517,16 +517,22 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
     for item in gh_items:
         labels = set(item.labels)
         if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
-            actions.append(
-                {
-                    "priority": 2,
-                    "kind": "maintainer-comment",
-                    "item": item.item,
-                    "phase": phase_from_labels(item.labels),
-                    "actor": "controller",
-                    "evidence": "human label present; sweep latest non-AI comments",
-                }
-            )
+            ownership = allowed_ownership(repo_root, item)
+            if not ownership.allowed:
+                continue
+            action = {
+                "priority": 2,
+                "kind": "maintainer-comment",
+                "item": item.item,
+                "phase": phase_from_labels(item.labels),
+                "actor": "controller",
+                "evidence": "human label present; sweep latest non-AI comments",
+                "ownership": ownership.reason,
+            }
+            if ownership.reason == "stale-takeover":
+                action["stale_hours"] = int(ownership.age_hours)
+                action["requires_takeover_notice"] = True
+            actions.append(action)
     return actions
 
 

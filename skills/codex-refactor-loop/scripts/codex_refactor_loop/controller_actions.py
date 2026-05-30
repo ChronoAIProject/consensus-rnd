@@ -13,6 +13,7 @@ from pathlib import Path
 from string import Template
 from typing import Mapping, Sequence
 
+from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
@@ -72,6 +73,8 @@ class ControllerActions:
         return result
 
     def apply_human_label_or_skip(self, pr_number: str, source_marker: str = "", reason: str = "") -> int:
+        if not self._require_owner_or_return("controller-label", code=3):
+            return 3
         if not pr_number:
             sys.stderr.write("apply_human_label_or_skip: missing pr_number\n")
             return 2
@@ -110,6 +113,8 @@ class ControllerActions:
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def safe_push(self, remote: str = "origin", branch: str = "") -> int:
+        if not self._require_owner_or_return("safe-push", code=3):
+            return 3
         branch = branch or self._current_branch()
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
@@ -146,6 +151,7 @@ class ControllerActions:
         candidate_path: str = ".refactor-loop/state/release-candidate.json",
         target_ref: str = "",
     ) -> ReleasePublishResult:
+        self._require_owner_or_raise("publish-release")
         # Refactor (iter217/issue-217):
         #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
         #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
@@ -156,6 +162,8 @@ class ControllerActions:
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
+        if not self._require_owner_or_return("safe-sync-main", code=3):
+            return 3
         branch = branch or self._current_branch()
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_sync_main: cannot determine branch; skipping\n")
@@ -196,6 +204,8 @@ class ControllerActions:
         return wt_path, branch
 
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
+        if not self._require_owner_or_return("merge-pr", code=3):
+            return 3
         if not pr:
             sys.stderr.write("merge_pr: missing pr number\n")
             return 1
@@ -248,6 +258,7 @@ class ControllerActions:
         return 0
 
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
+        self._require_owner_or_raise("open-pr")
         base = base or self.integration_branch
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
@@ -285,6 +296,7 @@ class ControllerActions:
         body_file: str,
         title: str = "Release rollup",
     ) -> tuple[int, str]:
+        self._require_owner_or_raise("open-release-rollup-pr")
         # Refactor (issue174-rollup-throwaway-head):
         # Old pattern: the rollup PR used the shared integration branch as
         # its head, so GitHub merge/delete-branch flows could delete the
@@ -388,6 +400,8 @@ class ControllerActions:
         Path(tmp).replace(path)
 
     def apply_triage_decision_marker(self, marker: str) -> int:
+        if not self._require_owner_or_return("apply-triage", code=3):
+            return 3
         # Refactor (iter201/issue-201): Old pattern: controller marker handling
         # subprocessed consensus-rnd-cli apply-triage, preserving public lifecycle
         # reachability. New principle: direct internal call keeps validation and
@@ -446,6 +460,24 @@ class ControllerActions:
             elif line == f"branch refs/heads/{branch}" and current:
                 return current
         return None
+
+    def _require_owner_or_return(self, action: str, *, code: int) -> bool:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # controller lifecycle helpers could mutate GitHub/git from any device.
+        # New principle: every lifecycle mutation fails closed unless this
+        # process owns the singleton active-controller lease.
+        decision = require_active_controller(self.ctx, action)
+        write_active_controller_status(self.ctx, decision)
+        if decision.allowed:
+            return True
+        sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
+        return False
+
+    def _require_owner_or_raise(self, action: str) -> None:
+        decision = require_active_controller(self.ctx, action)
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
 
 
 def _parse_time(value: object) -> datetime | None:
