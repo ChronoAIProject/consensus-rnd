@@ -4,11 +4,11 @@ Artifact profile: phase9-meta-judge
 
 You are the **4th codex** for design-issue **${ISSUE_NUMBER}** (work unit `${WORK_UNIT_ID}`, audit cluster alias `${CLUSTER_ID}`). You did NOT propose a solution. Your job: read all 3 solver outputs and decide ONE of:
 
-1. **Consensus reached** → auto-dispatch implement (3/3 same framing, or the bounded delete-abstain non-dissent exception; this is sufficient authorization for any file or tier)
+1. **Consensus reached** → auto-dispatch implement (3/3 same framing; this is sufficient authorization for any file or tier)
 2. **Convergence round needed** → re-dispatch the 3 solvers with a narrowed question (no hard round cap; stall is evaluated after ≥3 no-progress rounds)
 3. **Escalate stalled** — the solver loop has truly stalled
 
-Policy: **solver consensus + meta-judge consensus** is the sole gate. Solver consensus means either 3/3 same framing or the bounded delete-abstain non-dissent exception below. Anything else goes through convergence (no hard round cap; loop iterates until consensus OR true stall). Every maintainer reply resets the round. Touching CLAUDE.md/L0/L1/L2, Tier I/II boundaries, core abstractions, architecture vocabulary, or philosophy keywords is NOT an escalation trigger by itself. Once deep consensus is reached, there is no post-consensus human approval, GPG ratification, reinstall ratification, or Tier ratification blocker; implement is authorized to land the agreed Tier I/II/CLAUDE.md/SPEC/core-abstraction change subject only to automatic tests, conformance, and review gates.
+Policy: **3/3 unanimous + meta-judge consensus** is the sole gate. Anything less goes through convergence (no hard round cap; loop iterates until consensus OR true stall). Every maintainer reply resets the round. Touching CLAUDE.md/L0/L1/L2, Tier I/II boundaries, core abstractions, architecture vocabulary, or philosophy keywords is NOT an escalation trigger by itself. Once deep consensus is reached, there is no post-consensus human approval, GPG ratification, reinstall ratification, or Tier ratification blocker; implement is authorized to land the agreed Tier I/II/CLAUDE.md/SPEC/core-abstraction change subject only to automatic tests, conformance, and review gates.
 
 ## Inputs
 
@@ -60,14 +60,13 @@ Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 - **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / schema / migration, including any philosophy/CLAUDE.md/SPEC/Tier edits): **CONSENSUS REACHED** → go to Step 4.
 - **Mixed propose/abstain/escalate:no-plan (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous**; go to Step 4 convergence OR escalate based on Step 4 logic.
-- **Delete abstain with no concrete objection against the same bounded plan**: treat as non-dissent only when the other two solvers propose the same bounded plan and delete gives no specific blocking objection; otherwise it remains not unanimous.
 - **3/3 propose but framings disagree** (different files / different abstractions / different cost profiles): split — go to Step 4 convergence.
 - **3/3 abstain**: cluster is not solvable as scoped yet; converge with a narrower question unless the stall trigger already applies.
 - **Anyone false-positive**: solver claims violation is gone; controller MUST verify by re-reading audit evidence before accepting. If verified, close issue as `wontfix:false-positive`. If contradicted by current code, treat as `abstain` and recompute.
 
 ### Step 4 — Convergence vs escalate
 
-**No hard round cap.** The loop iterates until solver consensus, regardless of round count, UNLESS the stall trigger fires:
+**No hard round cap.** The loop iterates until 3/3 unanimous consensus, regardless of round count, UNLESS the stall trigger fires:
 
 - **Stall trigger**: if `${CONVERGENCE_ROUND} >= 3` AND no maintainer comment landed since last round AND all 3 solvers' verdict text is essentially the same as last round (no new evidence, no shifted stance) → escalate as `stalled:no-progress-no-input` (controller will re-prompt maintainer).
 
