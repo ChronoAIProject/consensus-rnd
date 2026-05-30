@@ -45,7 +45,11 @@ class ControllerActions:
         self.review_base_branch = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = ["gh", *args]
+        # Refactor (loop/gh-arg-coercion): Old pattern: gh() assumed every arg was
+        # already a str, so an int caller (e.g. a raw PR number via merge_pr) crashed
+        # with AttributeError on full[3].startswith before any gh process ran.
+        # New principle: coerce all args to str at the gh() boundary.
+        full = ["gh", *(str(a) for a in args)]
         if self.ctx.gh_repo_slug:
             insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
             full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
