@@ -70,6 +70,92 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
         self.assertFalse(non_owner.allowed)
         self.assertEqual("not-owner", non_owner.status)
 
+    def test_renew_missing_lease_ref_fails_closed(self) -> None:
+        renewed = self.store(self.a, "device-a").renew("missing-lease-id")
+
+        self.assertFalse(renewed.allowed)
+        self.assertEqual("missing-lease", renewed.status)
+        self.assertEqual("renew", renewed.action)
+        self.assertEqual("", renewed.owner_device)
+
+    def test_renew_expired_current_lease_fails_closed(self) -> None:
+        from codex_refactor_loop.active_controller import ActiveControllerLease, _format_time, _now
+        from datetime import timedelta
+
+        now = _now()
+        expired = ActiveControllerLease(
+            owner_device="device-a",
+            lease_id="expired-lease",
+            acquired_at=_format_time(now - timedelta(seconds=120)),
+            renewed_at=_format_time(now - timedelta(seconds=120)),
+            expires_at=_format_time(now - timedelta(seconds=60)),
+            repo="owner/repo",
+            reason="single-active-controller",
+            source_issue="191",
+        )
+        self.assertTrue(self.store(self.a, "device-a", ttl=1)._write_remote(expired, None))
+
+        renewed = self.store(self.a, "device-a").renew(expired.lease_id)
+
+        self.assertFalse(renewed.allowed)
+        self.assertEqual("expired", renewed.status)
+        self.assertEqual("device-a", renewed.owner_device)
+        self.assertEqual("expired-lease", renewed.lease_id)
+        current = self.store(self.b, "device-b").read()
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(expired, current)
+
+    def test_renew_force_with_lease_conflict_fails_closed_and_preserves_remote(self) -> None:
+        from codex_refactor_loop.active_controller import ActiveControllerLease, _format_time, _now
+        from datetime import timedelta
+
+        owner_store = self.store(self.a, "device-a")
+        acquired = owner_store.try_acquire("device-a", 1800)
+        self.assertTrue(acquired.allowed)
+        current_sha = owner_store._read_remote().commit_sha
+        self.assertIsNotNone(current_sha)
+        assert current_sha is not None
+
+        now = _now()
+        conflicting_lease = ActiveControllerLease(
+            owner_device="device-b",
+            lease_id="remote-winner",
+            acquired_at=_format_time(now),
+            renewed_at=_format_time(now),
+            expires_at=_format_time(now + timedelta(seconds=1800)),
+            repo="owner/repo",
+            reason="single-active-controller",
+            source_issue="191",
+        )
+        pushed_conflict = False
+
+        def racing_runner(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            nonlocal pushed_conflict
+            if command[3] == "push" and not pushed_conflict:
+                pushed_conflict = True
+                self.assertTrue(self.store(self.b, "device-b")._write_remote(conflicting_lease, current_sha))
+            return subprocess.run(command, cwd=str(cwd), capture_output=True, text=True, check=False)
+
+        renewed = ActiveControllerLeaseStore(
+            self.a,
+            owner_device="device-a",
+            lease_ref=DEFAULT_ACTIVE_CONTROLLER_REF,
+            ttl_seconds=1800,
+            repo_slug="owner/repo",
+            command_runner=racing_runner,
+        ).renew(acquired.lease_id)
+
+        self.assertTrue(pushed_conflict)
+        self.assertFalse(renewed.allowed)
+        self.assertEqual("cas-conflict", renewed.status)
+        self.assertEqual("device-a", renewed.owner_device)
+        self.assertEqual(acquired.lease_id, renewed.lease_id)
+        current = self.store(self.b, "device-b").read()
+        self.assertIsNotNone(current)
+        assert current is not None
+        self.assertEqual(conflicting_lease, current)
+
     def test_expired_lease_can_be_taken_over_by_other_device(self) -> None:
         from codex_refactor_loop.active_controller import ActiveControllerLease, _format_time, _now
         from datetime import timedelta
