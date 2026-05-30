@@ -27,7 +27,7 @@ schema, or source of new authority. The executable contract remains in
 - source_round: `r2-minimal`
 - source_marker: `SOLVER_DONE:minimal:propose:lock minimal boundary to read-git pre-gate release-commits producer; keep release-gate consumer-only`
 - skill_anchor: `#named-runtime-exception--autonomous-release-gateper-56`
-- allowed: read local git only to fetch tags, describe the latest release tag, resolve the target ref, and log the latest-tag-to-target range; atomically write `.refactor-loop/state/release-commits.json`.
+- allowed: `read-git` and `write-artifact` only: read local git only to fetch tags, describe the latest release tag, resolve the target ref, and log the latest-tag-to-target range; atomically write `.refactor-loop/state/release-commits.json`.
 - forbidden: no GitHub API, push, merge, reset, rebase, worktree mutation, tag, release, commit, issue lifecycle, PR lifecycle, label lifecycle, generic lifecycle authority, or inline execution from `release-gate`.
 - fact_source: local git tags and refs.
 - verification: `test_release_commits.py`, `test_cli_command_router.py`, `test_release_gate_module.py`
