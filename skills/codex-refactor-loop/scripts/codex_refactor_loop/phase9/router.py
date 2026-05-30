@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Literal, cast
 
+from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
 from ..workflow_stages import format_stage
@@ -208,6 +209,15 @@ class Phase9Router:
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
 
     def tick(self) -> None:
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # phase9 router instances on multiple devices could write prompts,
+        # append ledgers, spawn solvers, and emit fallback events in parallel.
+        # New principle: all router write routes require the global
+        # active-controller owner.
+        decision = require_active_controller(self.ctx, "phase9-router")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            return
         self.loop_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)

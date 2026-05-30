@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
+from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .retention import retain_logs
 
@@ -143,6 +144,15 @@ class RestartDaemons:
 
     def run(self) -> int:
         self._prepare_dirs()
+        # Refactor (impl/issue191-single-active-controller): Old pattern: every
+        # device could restart all five controller write daemons. New principle:
+        # only the active-controller owner starts or maintains those daemons;
+        # non-owners leave local noop status and do not kill/start wrappers.
+        decision = require_active_controller(self.ctx, "restart-daemons")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            self._log(f"active_controller=noop:not-owner owner={decision.owner_device} status={decision.status}")
+            return 0
         self._acquire_restart_lock()
         try:
             self._run_log_retention()

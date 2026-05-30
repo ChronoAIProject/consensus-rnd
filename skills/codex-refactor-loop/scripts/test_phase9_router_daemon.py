@@ -225,6 +225,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ".refactor-loop/logs/phase9-issue37-r4-structural.log",
         })
 
+    def test_phase9_router_source_eligibility_fallback_restart_dedupe(self) -> None:
+        # Refactor (fix/pr245-source-open-restart-dedupe-test): Old: source-OPEN gate tests covered in-memory fallback dedupe only. New: recreate the router after a persisted source-eligibility fallback and prove restart seeding suppresses duplicate events.
+        self.source_issue_states["37"] = "CLOSED"
+        self.solver_triplet(issue=37, round_no=4)
+
+        self.router.tick()
+        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+        fresh_router.tick()
+
+        key = "phase9-source-eligibility:37-4-solver_triplet_to_judge"
+        self.assertIn(key, fresh_router._fallback_seen)
+        self.assertEqual(self.pending_events().count(key), 1)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_issue_state_unavailable_fails_closed_without_ledger(self) -> None:
         self.source_issue_states["37"] = "UNAVAILABLE"
         self.solver_triplet(issue=37, round_no=4)

@@ -51,6 +51,29 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern:
+    # lifecycle helpers could mutate GitHub/git from any controller device. New
+    # principle: non-owner helpers fail closed before gh/git mutations.
+    def test_non_owner_lifecycle_helpers_fail_closed_before_gh_or_git(self) -> None:
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="controller", lease_id="", expires_at="")
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh mutation should not be called")):
+                with mock.patch.object(self.actions, "git", side_effect=AssertionError("git mutation should not be called")):
+                    self.assertEqual(3, self.actions.merge_pr("7"))
+                    self.assertEqual(3, self.actions.safe_push())
+                    self.assertEqual(3, self.actions.safe_sync_main())
+                    self.assertEqual(3, self.actions.apply_human_label_or_skip("7", "META_RESOLVED:escalate-human:reason"))
+                    self.assertEqual(3, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/x.json"))
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
+                        self.actions.open_pr_with_label("title", str(self.pr_body), head="branch")
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
+                        self.actions.open_release_rollup_pr_from_pending_event("{}", str(self.pr_body))
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
+                        self.actions.publish_release_candidate(target_ref="abc")
+
+        status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", status["active_controller"])
+
     def test_triage_apply_marker_rejects_unbounded_paths(self) -> None:
         self.assertEqual(2, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:x:accept:/tmp/out.json"))
 

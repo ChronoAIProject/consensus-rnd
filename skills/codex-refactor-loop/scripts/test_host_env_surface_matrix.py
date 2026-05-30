@@ -149,13 +149,24 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
+            "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
+            "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
+            "ACTIVE_CONTROLLER_REF": ("refs/heads/crnd/active-controller", "default singleton pushed ref"),
+            "COMMENT_MONITOR_INTERVAL": ("30", "unchanged `updatedAt` items skip comments queries"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
         }
         for key, (default, behavior) in cases.items():
             with self.subTest(key=key):
                 self.assertEqual(default, self.exports[key]["value"])
-                self.assertIn(f"`{default}`", self.rows[key]["Default/example"])
+                if default:
+                    self.assertIn(f"`{default}`", self.rows[key]["Default/example"])
                 self.assertIn(behavior, self.rows[key]["Missing/empty behavior"])
+
+        self.assertEqual("optional-noop", self.rows["ACTIVE_CONTROLLER_DEVICE_ID"]["Category"])
+        self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_TTL_SECONDS"]["Category"])
+        self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_REF"]["Category"])
+        self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
+        self.assertIn("Mixed old/new versions are not safe for multi-device mode", read(SKILL_MD))
 
         whitelist = self.rows["MAINTAINER_WHITELIST"]
         self.assertEqual("conditional-fail-closed", whitelist["Category"])
@@ -225,6 +236,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         comment_monitor = read(SCRIPTS_DIR / "codex_refactor_loop" / "monitors" / "comment.py")
         concurrency_monitor = read(SCRIPTS_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py")
         sync_dev = read(SCRIPTS_DIR / "codex_refactor_loop" / "sync" / "dev.py")
+        active_controller = read(SCRIPTS_DIR / "codex_refactor_loop" / "active_controller.py")
 
         self.assertIn('host_env.get("RELEASE_AUTO_ENABLE") != "true"', release_gate)
         self.assertIn("auto-release noop: RELEASE_AUTO_ENABLE is not true in host.env", release_gate)
@@ -236,6 +248,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertNotIn("DEGRADATION_WATCH_TIMEOUT_SECONDS", concurrency_monitor)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1", sync_dev)
+        self.assertIn('env.get("ACTIVE_CONTROLLER_DEVICE_ID", "")', active_controller)
+        self.assertIn('env.get("ACTIVE_CONTROLLER_REF", DEFAULT_ACTIVE_CONTROLLER_REF)', active_controller)
+        self.assertIn('env.get("ACTIVE_CONTROLLER_TTL_SECONDS"', active_controller)
 
 
 if __name__ == "__main__":

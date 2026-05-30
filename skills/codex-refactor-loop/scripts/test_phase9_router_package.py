@@ -115,6 +115,22 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertIn(str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"), joined)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
 
+    # Refactor (impl/issue191-single-active-controller): Old pattern: every
+    # device-local phase9 router could write prompts, ledgers, and fallback
+    # events. New principle: non-owner routers are read-only/noop.
+    def test_non_owner_router_writes_no_prompt_ledger_spawn_or_fallback(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(f"phase9-issue191-r2-{role}.log", f"SOLVER_DONE:{role}:same:summary")
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="phase9-router", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.require_active_controller", return_value=decision):
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "phase9").exists())
+        self.assertEqual(self.pending_events(), "")
+
     def test_package_router_converge_accepts_chinese_body_and_dispatches_solver_triplet(self) -> None:
         self.write_log(
             "phase9-issue149-r2-judge.log",
