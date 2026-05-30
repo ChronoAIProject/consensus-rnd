@@ -148,6 +148,7 @@ LABEL_SPECS: tuple[LabelSpec, ...] = (
     _spec("phase", "ci-running", "CI watch is active.", "fbca04", aliases=("⚙️ phase:ci-running",), exclusive_axis="phase", route_actor="controller-ci-watch"),
     _spec("phase", "blocked", "Work is blocked or explicitly waiting.", "b60205", aliases=("⏸️ phase:blocked",), exclusive_axis="phase", route_actor="controller"),
     _spec("phase", "merged", "Work has landed.", "0e8a16", aliases=("🎉 phase:merged",), exclusive_axis="phase", route_actor="controller"),
+    _spec("phase", "closed", "Closed terminal protocol state without merged evidence.", "ededed", exclusive_axis="phase", route_actor="closed-label-reconciler"),
     _spec("human", "auto", "Controller may continue without maintainer intervention.", "bfd4f2", aliases=("🤖 human:auto-推进", "🤖 human:codex"), exclusive_axis="human"),
     _spec("human", "maintainer-decision", "Maintainer decision is required.", "b60205", aliases=("👤 human:需-maintainer-决策", "needs-human-review"), exclusive_axis="human"),
     _spec("lifecycle", "managed", "Item is managed by codex-refactor-loop.", "ededed", aliases=("auto-loop",)),
@@ -197,6 +198,7 @@ PHASE_FIXING = canonical_name("phase", "fixing")
 PHASE_CI_RUNNING = canonical_name("phase", "ci-running")
 PHASE_BLOCKED = canonical_name("phase", "blocked")
 PHASE_MERGED = canonical_name("phase", "merged")
+PHASE_CLOSED = canonical_name("phase", "closed")
 
 
 def canonical_labels() -> tuple[str, ...]:

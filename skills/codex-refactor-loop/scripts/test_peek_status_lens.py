@@ -365,6 +365,15 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn('"actions"', result.stdout)
         self.assertNotIn('"schema": "wakeup-plan"', result.stdout)
 
+    def test_peek_closed_label_projection_has_no_remediation_text(self) -> None:
+        text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+
+        self.assertIn("plan_from_gh_item", text)
+        self.assertIn("terminal=", text)
+        self.assertNotIn("controller should clean up", text)
+        self.assertNotIn("gh issue edit", text)
+        self.assertNotIn("gh pr edit", text)
+
     def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
         text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
 

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import banners, github_body, project_rules, spawn, statusline
+from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
 from .labels import main as labels_main
@@ -64,6 +65,11 @@ COMMANDS: dict[str, CommandSpec] = {
         comment_monitor_main,
         "run the Python comment monitor daemon",
         ("read-gh", "gh-reaction", "gh-comment", "write-state", "write-event"),
+    ),
+    "closed-label-reconciler": CommandSpec(
+        closed_label_reconciler_main,
+        "run the closed managed item phase-label reconciler",
+        ("read-gh", "gh-label-closed-reconcile", "write-state"),
     ),
     "concurrency": CommandSpec(
         concurrency_main,

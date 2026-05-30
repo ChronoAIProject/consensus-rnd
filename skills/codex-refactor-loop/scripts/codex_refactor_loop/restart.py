@@ -21,10 +21,11 @@ from .retention import retain_logs
 from .update_check import maybe_run_update_check
 
 
-# Refactor (issue-160/phase2-shell-runtime): Old: restart-daemons.sh owned the
-# singleton wrappers. New: Python keeps the same five-daemon static allowlist,
-# actor-owned heartbeat contract, and no lifecycle authority outside local
-# wrapper pid/heartbeat files.
+# Refactor (issue238/closed-label-reconciler): Old: Python kept a five-daemon
+# static allowlist without a closed-item label reconciler. New: the sixth
+# restart-managed daemon is the named #238 closed-only phase-label reconciler;
+# wrapper authority remains local pid, actor-owned heartbeat, and fingerprint
+# maintenance.
 CLI_ENTRYPOINT_NAME = "consensus-rnd-cli"
 
 DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -33,6 +34,7 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("codex-progress-reporter", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "progress-reporter", "--daemon")),
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
     ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
+    ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
 )
 
 FORBIDDEN_LIFECYCLE_AUTHORITY = (
@@ -145,8 +147,8 @@ class RestartDaemons:
 
     def run(self) -> int:
         self._prepare_dirs()
-        # Refactor (impl/issue191-single-active-controller): Old pattern: every
-        # device could restart all five controller write daemons. New principle:
+        # Refactor (issue238/closed-label-reconciler): Old pattern: every
+        # device could restart all controller write daemons. New principle:
         # only the active-controller owner starts or maintains those daemons;
         # non-owners leave local noop status and do not kill/start wrappers.
         decision = require_active_controller(self.ctx, "restart-daemons")
@@ -234,7 +236,7 @@ class RestartDaemons:
         # Refactor (issue231-update-check):
         #   Old pattern: restart-daemons maintained only daemon wrappers and had
         #   no startup projection for installed skill version drift.
-        #   New principle: after the fixed five-daemon pass, run the opt-in
+        #   New principle: after the fixed daemon start/skip pass, run the opt-in
         #   notify-only probe and log warnings without blocking daemon restart.
         try:
             result = maybe_run_update_check(self.ctx, startup=True)

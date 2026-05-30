@@ -134,12 +134,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             pass
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:
+        self.assertEqual(6, len(DAEMON_COMMANDS))
+        self.assertIn("closed_label_reconciler", DAEMON_NAMES)
         for _name, command in DAEMON_COMMANDS:
             joined = " ".join(command)
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
+        self.assertIn(("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")), DAEMON_COMMANDS)
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
-        self.assertEqual(5, len(DAEMON_COMMANDS))
 
     def test_help_exits_without_starting_daemons(self) -> None:
         with mock.patch.object(restart.RestartDaemons, "run") as run:
