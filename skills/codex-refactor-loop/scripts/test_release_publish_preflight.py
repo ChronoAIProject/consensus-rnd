@@ -40,6 +40,7 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         ".codex-plugin/plugin.json",
         ".cursor-plugin/plugin.json",
         "gemini-extension.json",
+        "skills/codex-refactor-loop/VERSION.json",
     ):
         source = REPO_ROOT / relative
         target = repo / relative
@@ -336,6 +337,17 @@ class ReleasePublishPreflightTests(unittest.TestCase):
 
             self.assertFalse(result.allowed)
             self.assertIn("manifest_version_mismatch", result.reasons)
+
+    def test_manifest_version_compare_ignores_build_metadata(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, version="2.0.0+candidate")
+            set_mapped_version(repo, "2.0.0+manifest")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertTrue(result.allowed, result.reasons)
 
     def test_unsynchronized_mapped_manifests_fail_closed(self) -> None:
         with copy_repo_fixture() as tmp:

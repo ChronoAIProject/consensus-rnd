@@ -75,6 +75,9 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
+| `$UPDATE_CHECK_ENABLE` | optional-noop | update-check probe | `false` | false or empty exits 0 with noop reason and writes disabled update-check state | update-check, restart-daemons | `test_update_check.py`, `test_restart_daemons.py` |
+| `$UPDATE_CHECK_INTERVAL_SECONDS` | defaulted | update-check probe | `21600` | default to `21600` seconds; fresh local update-check state is reused for manual probes | update-check, concurrency snapshot projection | `test_update_check.py`, `test_concurrency_monitor_snapshot.py` |
+| `$UPDATE_CHECK_TIMEOUT_SECONDS` | defaulted | update-check probe | `5` | default to `5` seconds for GitHub release/tag reads; failures write unknown state and never block restart | update-check | `test_update_check.py` |
 | `$RELEASE_AUTO_MIN_MERGES` | defaulted | release-gate | `1` | default to `1` recent merge for stability scoring | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_AUTO_MIN_INTERVAL_HOURS` | defaulted | release-gate | `2` | default to `2` hours since last release decision | release-gate | `test_auto_release_gate.py` |
 | `$RELEASE_ROLLUP_MIN_COMMITS` | defaulted | sync helpers | `1` | default to `1` integration-ahead commit before release-rollup pending event | sync helpers | `test_sync_dev.py` |
@@ -85,6 +88,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$ACTIVE_CONTROLLER_TTL_SECONDS` | defaulted | active-controller lease | `1800` | missing or invalid defaults to `1800`; owner renews before expiry; expired lease may be acquired by another device | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
 | `$ACTIVE_CONTROLLER_REF` | defaulted | active-controller lease | `refs/heads/crnd/active-controller` | default singleton pushed ref; do not use host-defined per-work scopes | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
 | `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
+| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `self-doc-comment` | missing/empty normalizes to `self-doc-comment`; `none` disables refactor-history source comments; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -96,6 +100,9 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates HostWorkflowSpec at projection consumers; phase9 direct-spawn ignores host roles/dispatch/policies and keeps the built-in allowlist | workflow_spec, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py`, `test_phase9_router_package.py` |
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
+
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics: whether Old/New refactor comments are allowed, required, or rejected. `${HOST_COMMENT_RULE}` only supplies comment syntax in `self-doc-comment` mode; it does not override the policy.
 
 Host config rules:
 1. `host.env` is the only runtime fact injection point.
@@ -211,6 +218,15 @@ Stability requires all signals green and fail-closed handling on missing or red 
 <!-- Refactor (iter217/issue-217): Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界. New principle: controller-only publication via ReleasePublishPreflight+ReleasePublisher; release.yml is read-only preview(contents:read) and forbidden to create tags/releases. -->
 The release lifecycle surface consumes decision-artifact-only output through the controller only: a scheduled/on-demand controller may read `.refactor-loop/state/release-candidate.json`, re-check `$RELEASE_AUTO_ENABLE=true`, target ref, candidate expiry, decision digest, mapped manifest version, and required signals through `ReleasePublishPreflight`, then `ReleasePublisher` may run the existing version bump command, commit/push mapped manifests, create `v<to_version>` at the candidate target ref, and write `.refactor-loop/state/release-publish-result.json`. `consensus-rnd-cli release-gate` remains decider only; `release.yml` is read-only manual preview/verification with `contents: read` and no tag or GitHub Release authority. Forbidden: per-release maintainer emoji ratification, approval-ticket gating, release-candidate JSON authorization, workflow tag/release creation, or public `consensus-rnd-cli` release-publish commands.
 
+## Notify-only update check(per #231)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231`. `skills/codex-refactor-loop/VERSION.json` is the checked-in `VersionSourceManifest`: data-only fields are `schema`, `version`, `repository`, `release_source`, and `install_hint`; only `version` is listed in `.version-bump.json`.
+
+`consensus-rnd-cli update-check` is notify-only. It reads local `VERSION.json`, reads the GitHub latest release and then tags for `ChronoAIProject/consensus-rnd`, and atomically writes `.refactor-loop/state/update-check.json`. `$UPDATE_CHECK_ENABLE` missing, empty, or not true exits 0 and writes disabled state with a reason. GitHub/network/manifest errors write unknown state and do not block `restart-daemons`.
+
+Downstream apply remains host-owned: the probe must not copy, overwrite, reinstall, edit host config, run installers, mutate `.git`, commit, push, tag, release, open/close/edit issues or PRs, mutate labels, or create a daemon. `restart-daemons` may call `maybe_run_update_check(startup=True)` only after the fixed five daemon start/skip pass, and failures are warnings. `concurrency` may project fresh, positive update state into `statusline-snapshot.json`; `statusline` remains snapshot-only and never reads `update-check.json` directly or touches the network. When `update_available=true`, statusline displays `up:v<latest>`.
+
+Verification is locked by `test_update_check.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_concurrency_monitor_snapshot.py`, `test_statusline.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
+
 <!-- Refactor (iter1/issue-166): Old pattern: CLI command authority was represented by coarse read_only metadata and prose-only runtime exception text, so the matrix could under-report command surfaces. New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source, including named narrow carveouts such as dev-sync's integration-worktree git surface, and SKILL prose cannot grant missing runtime authority. -->
 <!-- Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed merge-pr/open-pr/safe-push/apply-sync/apply-triage lifecycle commands and wakeup_plan/peek rendered copyable suggested_command, forming generic lifecycle authority. New principle: delete public lifecycle CLI surface; COMMANDS covers public non-lifecycle commands only, controller lifecycle primitives stay internal, wakeup-plan emits fixed controller_action facts with no_lifecycle_authority:true, and dev-sync keeps only the #53 carveout. -->
 ## CLI runtime authority fact source(per #166)
@@ -218,6 +234,9 @@ The release lifecycle surface consumes decision-artifact-only output through the
 
 ## Named runtime exception — autonomous-release-gate lifecycle boundary(per #56)
 Host-agnostic, no lifecycle authority: only read repo/GitHub evidence and write durable decision/candidate artifacts; do not run `git`, bump mapped manifests, commit, push, tag, publish, open, close, label, approve, merge, or otherwise lifecycle-manage issues or PRs.
+
+## Named runtime exception - update-check(per #231)
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231`. Narrow allowlist: read checked-in `skills/codex-refactor-loop/VERSION.json`, read GitHub release/tag metadata, write `.refactor-loop/state/update-check.json`, and let `concurrency` project fresh positive update fields into `statusline-snapshot.json`. Forbidden: no copy/overwrite/reinstall, host config edit, git or GitHub lifecycle mutation, installer, new daemon, commit, push, merge, tag, release, issue/PR lifecycle, label lifecycle, or apply/update command surface.
 
 <a id="named-runtime-exception--active-controller-leaseper-191"></a>
 ## Named runtime exception - active controller lease(per #191)
@@ -241,10 +260,10 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 `skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; `consensus-rnd-cli release-gate` requires it beside `contract-tests` and `manifest-version-sync`. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
 
 ## Claude Code statusline(per #51 consensus)
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示)。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示、optional update notice)。
 
 **Producer**:`consensus-rnd-cli concurrency` 每 tick 末尾原子写 `.refactor-loop/state/statusline-snapshot.json`(reuse 现有 daemon,**无新 daemon**)。Snapshot 包含 `daemons` map(扫 `.refactor-loop/heartbeats/*.ts` 动态发现,每条记 `age_seconds` + `stale`,stale 阈值 90s)+ 汇总 `daemons_healthy` / `daemons_total`。
-**Consumer**:`consensus-rnd-cli statusline` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`。
+**Consumer**:`consensus-rnd-cli statusline` 读 snapshot,bash + jq < 200ms。任一 daemon stale → ⚠ 红色。显示形如 `⚙ 5/10 PR:1 issue:9 d:5/5`;当 snapshot 中 `update_available=true` 时追加 `up:v<latest>`。Statusline 不直读 `update-check.json`,不触网。
 
 **Install one-liner**(host project,**手动一行,无 installer script**):
 
@@ -648,7 +667,8 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 1. No new features; only clean the authorized violation or implement the consensus plan.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
-3. Code self-documents refactors with the host-required refactor comment format when touching source.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+3. Code self-documents refactors according to `$HOST_REFACTOR_COMMENT_POLICY`: `self-doc-comment` requires host-style refactor-history comments; `none` forbids those source comments and requires the rationale in external artifacts.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
@@ -2944,7 +2964,8 @@ Bash(
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
-3. **Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment of the form `// Refactor (iterN/cluster-XXX): Old pattern: …  New principle: …`.
+<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
+3. **Code self-documents the refactor according to policy** — `$HOST_REFACTOR_COMMENT_POLICY` empty/`self-doc-comment` requires a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; `none` forbids refactor-history source comments and moves the rationale to external artifacts.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.

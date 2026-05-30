@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -18,6 +18,7 @@ from ..context import LoopContext, LoopContextError
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
+from ..update_check import parse_time
 from ..work_items import ManagedWorkProjection
 
 
@@ -155,10 +156,44 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        update_projection = self.read_update_projection(now=now)
+        if update_projection:
+            payload.update(update_projection)
         self.statusline_snapshot.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, self.statusline_snapshot)
+
+    def read_update_projection(self, *, now: datetime) -> dict[str, object]:
+        raw = read_json(self.ctx.paths.state / "update-check.json", {})
+        if not isinstance(raw, dict):
+            return {}
+        if raw.get("status") in {"disabled", "unknown"}:
+            return {}
+        checked_at = parse_time(raw.get("checked_at"))
+        if checked_at is None:
+            return {}
+        interval = raw.get("interval_seconds")
+        ttl = int(interval) if isinstance(interval, int) and interval > 0 else 21600
+        if now - checked_at > timedelta(seconds=ttl * 2):
+            return {}
+        if raw.get("update_available") is not True:
+            return {}
+        latest = raw.get("latest_version")
+        source = raw.get("update_source")
+        release_url = raw.get("release_url")
+        if not isinstance(latest, str) or not latest:
+            return {}
+        projection: dict[str, object] = {
+            "update_available": True,
+            "update_latest_version": latest,
+            "update_checked_at": raw["checked_at"],
+        }
+        if isinstance(source, str) and source:
+            projection["update_source"] = source
+        if isinstance(release_url, str) and release_url:
+            projection["update_release_url"] = release_url
+        return projection
 
     def list_in_flight_codex_lines(self) -> list[str]:
         lines: list[str] = []

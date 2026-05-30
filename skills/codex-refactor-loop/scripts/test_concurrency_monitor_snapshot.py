@@ -61,6 +61,11 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         )
         return json.loads(self.snapshot_path().read_text(encoding="utf-8"))
 
+    def write_update_state(self, payload: dict[str, object]) -> None:
+        path = self.repo / ".refactor-loop" / "state" / "update-check.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
     def fake_gh(self, cmd: list[str]) -> SimpleNamespace:
         if cmd[:3] == ["gh", "issue", "list"]:
             return SimpleNamespace(
@@ -233,6 +238,42 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
         self.assertIn("last_p0_at", data)
         self.assertRegex(data["last_p0_at"], r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+    def test_snapshot_projects_only_fresh_positive_update_state(self) -> None:
+        now = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+        self.write_update_state(
+            {
+                "status": "ok",
+                "checked_at": "2026-05-31T11:00:00Z",
+                "interval_seconds": 21600,
+                "update_available": True,
+                "latest_version": "1.0.0-rc.1",
+                "update_source": "github-release",
+                "release_url": "https://example/release",
+            }
+        )
+
+        data = self.write_snapshot(now=now)
+
+        self.assertTrue(data["update_available"])
+        self.assertEqual("1.0.0-rc.1", data["update_latest_version"])
+        self.assertEqual("2026-05-31T11:00:00Z", data["update_checked_at"])
+        self.assertEqual("github-release", data["update_source"])
+        self.assertEqual("https://example/release", data["update_release_url"])
+
+    def test_snapshot_omits_disabled_unknown_and_stale_update_state(self) -> None:
+        now = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
+        cases = (
+            {"status": "disabled", "checked_at": "2026-05-31T11:00:00Z", "update_available": True, "latest_version": "1.0.0"},
+            {"status": "unknown", "checked_at": "2026-05-31T11:00:00Z", "update_available": True, "latest_version": "1.0.0"},
+            {"status": "ok", "checked_at": "2026-05-30T00:00:00Z", "interval_seconds": 10, "update_available": True, "latest_version": "1.0.0"},
+            {"status": "ok", "checked_at": "2026-05-31T11:00:00Z", "interval_seconds": 21600, "update_available": False, "latest_version": "1.0.0"},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.write_update_state(payload)
+                data = self.write_snapshot(now=now)
+                self.assertNotIn("update_available", data)
 
     def test_non_p0_tick_snapshot_path(self) -> None:
         state_path = self.repo / ".refactor-loop" / ".concurrency-monitor-state.json"

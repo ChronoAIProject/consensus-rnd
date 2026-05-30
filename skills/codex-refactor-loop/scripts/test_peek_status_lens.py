@@ -395,12 +395,13 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn("PR #256 has no `Closes #N` parent link", result.stdout)
         self.assertIn("ManagedWorkProjection", source)
 
-    def test_peek_drift_skips_zero_expected_worker_phase(self) -> None:
+    def test_peek_drift_treats_pr_open_parent_issue_as_non_action(self) -> None:
         result = self.run_peek(pr_open_issue=True)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn("issue #239 label=crnd:phase:pr-open but 0 codex", result.stdout)
         self.assertNotIn("label=crnd:phase:pr-open but 0 codex", result.stdout)
+        self.assertNotIn("has no `Closes #N` parent link", result.stdout)
 
     def test_peek_drift_skips_represented_parent_issue(self) -> None:
         result = self.run_peek(represented_parent=True)

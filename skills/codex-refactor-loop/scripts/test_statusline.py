@@ -81,6 +81,10 @@ class StatuslineCliTests(unittest.TestCase):
         self.write_snapshot({"actual": 7, "expected": 5, "floor": 4, "p0_streak": 0, "open_pr_count": 5, "open_issue_count": 4, "freeze_minutes": 0})
         self.assertNotIn(" d:", self.run_statusline())
 
+    def test_update_available_renders_latest_version_from_snapshot(self) -> None:
+        self.write_snapshot({"actual": 7, "expected": 5, "floor": 4, "p0_streak": 0, "open_pr_count": 5, "open_issue_count": 4, "freeze_minutes": 0, "update_available": True, "update_latest_version": "1.0.0-rc.1"})
+        self.assertIn("up:v1.0.0-rc.1", self.run_statusline())
+
 
 if __name__ == "__main__":
     unittest.main()

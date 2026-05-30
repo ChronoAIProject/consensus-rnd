@@ -148,6 +148,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
     def test_defaults_and_missing_behaviors_match(self) -> None:
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
+            "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
+            "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
+            "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
@@ -163,6 +166,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 self.assertIn(behavior, self.rows[key]["Missing/empty behavior"])
 
         self.assertEqual("optional-noop", self.rows["ACTIVE_CONTROLLER_DEVICE_ID"]["Category"])
+        self.assertEqual("optional-noop", self.rows["UPDATE_CHECK_ENABLE"]["Category"])
+        self.assertEqual("defaulted", self.rows["UPDATE_CHECK_INTERVAL_SECONDS"]["Category"])
+        self.assertEqual("defaulted", self.rows["UPDATE_CHECK_TIMEOUT_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_TTL_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_REF"]["Category"])
         self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
@@ -173,7 +179,11 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("comment-monitor/direct-mention intake", whitelist["Missing/empty behavior"])
         self.assertIn("fails closed", whitelist["Missing/empty behavior"])
 
-        host_rows = {key: row for key, row in self.rows.items() if key.startswith("HOST_")}
+        host_rows = {
+            key: row
+            for key, row in self.rows.items()
+            if key.startswith("HOST_") and key != "HOST_REFACTOR_COMMENT_POLICY"
+        }
         self.assertGreaterEqual(len(host_rows), 7)
         for key, row in host_rows.items():
             with self.subTest(key=key):
@@ -187,6 +197,37 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("do not invent a host language default", self.rows["HOST_CODE_FENCE_LANG"]["Missing/empty behavior"])
         self.assertIn("do not invent protobuf", self.rows["HOST_PROTO_POLICY"]["Missing/empty behavior"])
 
+    def test_refactor_comment_policy_is_defaulted_and_registered(self) -> None:
+        key = "HOST_REFACTOR_COMMENT_POLICY"
+        self.assertIn(key, self.rows)
+        self.assertIn(key, self.exports)
+
+        row = self.rows[key]
+        self.assertEqual("defaulted", row["Category"])
+        self.assertEqual("prompt templates", row["Owner"])
+        self.assertEqual("prompt templates", row["Consumer"])
+        self.assertIn("`self-doc-comment`", row["Default/example"])
+        self.assertEqual("self-doc-comment", self.exports[key]["value"])
+        self.assertIn("missing/empty normalizes to `self-doc-comment`", row["Missing/empty behavior"])
+        self.assertIn("`none` disables refactor-history source comments", row["Missing/empty behavior"])
+        self.assertIn("invalid and fail-closed", row["Missing/empty behavior"])
+        self.assertIn("test_refactor_comment_policy_prompt_contract.py", row["Test owner"])
+        self.assertIn("defaulted", self.exports[key]["section"])
+
+        text = "\n".join(
+            [
+                read(SKILL_MD),
+                read(HOST_ENV_EXAMPLE),
+                *(read(prompt) for prompt in PROMPTS_DIR.glob("*.md")),
+            ]
+        )
+        self.assertIn("${HOST_REFACTOR_COMMENT_POLICY}", text)
+        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=\"self-doc-comment\"", read(HOST_ENV_EXAMPLE))
+        for alias in ("HOST_SOURCE_COMMENT_POLICY", "HOST_REFACTOR_SELF_DOC_POLICY"):
+            with self.subTest(alias=alias):
+                self.assertNotIn(alias, text)
+                self.assertNotIn(alias, self.rows)
+
     def test_prompt_host_placeholders_are_registered(self) -> None:
         placeholders: set[str] = set()
         for prompt in PROMPTS_DIR.glob("*.md"):
@@ -196,7 +237,10 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertLessEqual(placeholders, set(self.rows))
         for key in placeholders:
             with self.subTest(key=key):
-                self.assertEqual("prompt-empty-infer", self.rows[key]["Category"])
+                if key == "HOST_REFACTOR_COMMENT_POLICY":
+                    self.assertEqual("defaulted", self.rows[key]["Category"])
+                else:
+                    self.assertEqual("prompt-empty-infer", self.rows[key]["Category"])
 
         rejected_aliases = {
             "HOST_LANGUAGE",
@@ -204,6 +248,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "HOST_TEST_FRAMEWORK",
             "HOST_SCHEMA_LANGUAGE",
             "HOST_DEFAULT_BRANCH",
+            "HOST_SOURCE_COMMENT_POLICY",
+            "HOST_REFACTOR_SELF_DOC_POLICY",
         }
         all_prompt_text = "\n".join(read(prompt) for prompt in PROMPTS_DIR.glob("*.md"))
         for alias in rejected_aliases:
@@ -244,6 +290,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("MAINTAINER_WHITELIST is unset; comment-monitor fails closed", comment_monitor)
         self.assertIn('os.environ.get("CODEX_FLOOR", "5")', concurrency_monitor)
         self.assertIn("return max(2, floor)", concurrency_monitor)
+        self.assertIn('env.get("UPDATE_CHECK_ENABLE")', read(SCRIPTS_DIR / "codex_refactor_loop" / "update_check.py"))
         self.assertNotIn("DEGRADATION_WATCH_INTERVAL_SECONDS", concurrency_monitor)
         self.assertNotIn("DEGRADATION_WATCH_TIMEOUT_SECONDS", concurrency_monitor)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
