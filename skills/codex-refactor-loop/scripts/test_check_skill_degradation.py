@@ -35,7 +35,6 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
-        "skills/codex-refactor-loop/authorizations/runtime-exceptions.md",
     ]
     for relative in paths:
         source = REPO_ROOT / relative
@@ -61,13 +60,13 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("skill-degradation: ok", result.stdout)
 
-    def test_checker_detects_missing_named_exception(self) -> None:
+    def test_checker_detects_missing_source_repo_validation_contract(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
             skill = repo / "skills/codex-refactor-loop/SKILL.md"
             skill.write_text(
                 skill.read_text(encoding="utf-8").replace(
-                    "## Named runtime exception — skill degradation watch(per #66)",
+                    "## Skill degradation source-repo validation",
                     "## Removed heading",
                 ),
                 encoding="utf-8",
@@ -76,7 +75,7 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 
         self.assertTrue(any(f.check == "skill-named-exception" for f in findings))
-        self.assertTrue(any("skill degradation watch" in f.message for f in findings))
+        self.assertTrue(any("source-repo validation" in f.message for f in findings))
 
     def test_checker_detects_forbidden_runtime_file(self) -> None:
         with copy_minimal_repo() as tmp:
@@ -97,6 +96,16 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 
         self.assertTrue(any(f.check in {"release-gate", "release-workflow"} for f in findings))
+
+    def test_checker_detects_downstream_runtime_watch_marker_drift(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            monitor = repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py"
+            monitor.write_text(monitor.read_text(encoding="utf-8") + "\nrun_skill_degradation_check()\n", encoding="utf-8")
+
+            findings = self.checker_module.SkillDriftChecker(repo).run_static()
+
+        self.assertTrue(any(f.check == "downstream-runtime-surface" and "run_skill_degradation_check" in f.message for f in findings))
 
     def test_checker_allows_forbidden_terms_only_in_denial_context(self) -> None:
         with copy_minimal_repo() as tmp:
