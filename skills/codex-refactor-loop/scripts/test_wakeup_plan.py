@@ -145,6 +145,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
                       printf '[{"number":77,"title":"worker output PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
+                    unpushed_foreign_fresh)
+                      printf '[{"number":77,"title":"fresh foreign worker output PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    unpushed_foreign_stale)
+                      printf '[{"number":77,"title":"stale foreign worker output PR","author":{"login":"bob"},"updatedAt":"2000-01-01T00:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    unpushed_unknown_owner)
+                      printf '[{"number":77,"title":"unknown owner worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
+                    unpushed_unknown_login)
+                      printf '[{"number":77,"title":"unknown login worker output PR","author":{"login":"bob"},"updatedAt":"2999-01-01T00:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      ;;
                     unpushed_head_dash)
                       printf '[{"number":78,"title":"unsafe dash head","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
@@ -190,11 +202,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "api user" ]]; then
-                  [[ "$fixture" == "unknown_login" || "$fixture" == "ci_unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
+                  [[ "$fixture" == "unknown_login" || "$fixture" == "ci_unknown_login" || "$fixture" == "unpushed_unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
-                  if [[ "$fixture" == "unknown_owner" || "$fixture" == "ci_unknown_owner" ]]; then
+                  if [[ "$fixture" == "unknown_owner" || "$fixture" == "ci_unknown_owner" || "$fixture" == "unpushed_unknown_owner" ]]; then
                     printf '{"comments":[]}\n'
                   else
                     printf '{"author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z"}\n'
@@ -372,6 +384,34 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
                 self.assertFalse(any("rev-parse --verify HEAD" in command for command in commands))
                 self.assertFalse(any("rev-list --count" in command for command in commands))
+
+    def test_unpushed_worker_output_skips_fresh_foreign_and_unknown_ownership_before_git_probes(self) -> None:
+        for fixture in ("unpushed_foreign_fresh", "unpushed_unknown_owner", "unpushed_unknown_login"):
+            with self.subTest(fixture=fixture):
+                command_log = self.repo / "git-commands.log"
+                if command_log.exists():
+                    command_log.unlink()
+
+                plan = self.run_plan(fixture=fixture)
+                commands = command_log.read_text(encoding="utf-8").splitlines() if command_log.exists() else []
+
+                self.assertNotIn("unpushed-worker-output", [action["kind"] for action in plan["actions"]])
+                self.assertFalse(any("fetch origin --quiet" in command for command in commands), commands)
+                self.assertFalse(any("worktree list --porcelain" in command for command in commands), commands)
+                self.assertFalse(any("rev-parse --verify HEAD" in command for command in commands), commands)
+                self.assertFalse(any("rev-list --count" in command for command in commands), commands)
+
+    def test_unpushed_worker_output_includes_stale_takeover_metadata(self) -> None:
+        plan = self.run_plan(fixture="unpushed_foreign_stale")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "unpushed-worker-output"]
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["item"], "PR #77")
+        self.assertEqual(actions[0]["controller_action"], "safe_push")
+        self.assertTrue(actions[0]["no_lifecycle_authority"])
+        self.assertEqual(actions[0]["ownership"], "stale-takeover")
+        self.assertGreaterEqual(actions[0]["stale_hours"], 3)
+        self.assertNotIn("suggested_command", actions[0])
 
     def test_unpushed_worker_output_uses_only_allowlisted_git_topology_probes(self) -> None:
         self.run_plan(fixture="unpushed")

@@ -680,7 +680,18 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
     # consensus-rnd-cli safe-push suggested_command, exposing public lifecycle
     # reachability. New principle: emit only a fixed controller_action fact with
     # no_lifecycle_authority; controller maps it to an internal primitive.
-    prs = [item for item in gh_items if item.kind == "PR" and safe_head_ref(item.head_ref)]
+    # Refactor (fix/pr200-unpushed-ownership-gate): Old pattern: local-ahead PRs could reach safe_push planning before GitHub-native ownership was checked.  New principle: safe-push facts use the same author.login ownership gate as ci-red and existing-issue planning before any worktree git probes.
+    prs: list[tuple[GhItem, str, OwnershipDecision]] = []
+    for item in gh_items:
+        if item.kind != "PR":
+            continue
+        head_ref = safe_head_ref(item.head_ref)
+        if not head_ref:
+            continue
+        ownership = allowed_ownership(repo_root, item)
+        if not ownership.allowed:
+            continue
+        prs.append((item, head_ref, ownership))
     if not prs:
         return []
     fetch = git_text(["git", "-C", str(repo_root), "fetch", "origin", "--quiet"], cwd=repo_root)
@@ -691,10 +702,7 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
         return []
     worktrees = parse_worktree_branches(listed.stdout)
     actions: list[dict[str, Any]] = []
-    for item in prs:
-        head_ref = safe_head_ref(item.head_ref)
-        if not head_ref:
-            continue
+    for item, head_ref, ownership in prs:
         worktree = worktrees.get(head_ref)
         if worktree is None:
             continue
@@ -710,24 +718,26 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
             continue
         if ahead_count <= 0:
             continue
-        actions.append(
-            {
-                "priority": 3,
-                "kind": "unpushed-worker-output",
-                "item": item.item,
-                "phase": "publish",
-                "route": "controller-push-required",
-                "actor": "controller",
-                "head_ref": head_ref,
-                "worktree": str(worktree),
-                "ahead_count": ahead_count,
-                "local_head": local.stdout.strip(),
-                "remote_head": remote.stdout.strip(),
-                "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
-                "controller_action": "safe_push",
-                "no_lifecycle_authority": True,
-            }
-        )
+        action = {
+            "priority": 3,
+            "kind": "unpushed-worker-output",
+            "item": item.item,
+            "phase": "publish",
+            "route": "controller-push-required",
+            "actor": "controller",
+            "head_ref": head_ref,
+            "worktree": str(worktree),
+            "ahead_count": ahead_count,
+            "local_head": local.stdout.strip(),
+            "remote_head": remote.stdout.strip(),
+            "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
+            "controller_action": "safe_push",
+            "no_lifecycle_authority": True,
+            "ownership": ownership.reason,
+        }
+        if ownership.reason == "stale-takeover":
+            action["stale_hours"] = int(ownership.age_hours)
+        actions.append(action)
     return actions
 
 
