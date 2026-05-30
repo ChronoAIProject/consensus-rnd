@@ -120,6 +120,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "progress-reporter",
                 "phase9-router",
                 "post-banner",
+                "release-commits",
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
@@ -225,6 +226,24 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             if "project-rules" in name:
                 with self.subTest(command=name):
                     self.assertNotIn("write-source", spec.authority)
+
+    def test_release_commits_command_is_read_git_write_artifact_only(self) -> None:
+        self.assertEqual(("read-git", "write-artifact"), COMMANDS["release-commits"].authority)
+        forbidden = {
+            "read-gh",
+            "git-push",
+            "git-merge",
+            "git-reset",
+            "git-rebase",
+            "git-worktree",
+            "gh-close",
+            "gh-edit",
+            "gh-label",
+            "gh-merge",
+            "gh-open",
+        }
+        self.assertFalse(set(COMMANDS["release-commits"].authority) & forbidden)
+        self.assertNotIn("read-git", COMMANDS["release-gate"].authority)
 
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")

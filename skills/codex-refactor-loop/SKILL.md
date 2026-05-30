@@ -190,9 +190,12 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 
 `consensus-rnd-cli release-gate` is decision-artifact-only. **禁止** decider 直接 bump/commit/push: it must not run `git`, bump mapped manifests, commit, push, tag, publish, merge, close, or otherwise exercise lifecycle authority. It only computes stability from GitHub/state artifacts and writes durable release decision/candidate artifacts for the controller-owned release publisher to consume.
 
+Before making the release decision, the controller runs `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then runs `consensus-rnd-cli release-gate`. `release-commits` is the independent narrow producer for `.refactor-loop/state/release-commits.json`. Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#release-commits-producer-232`. Allowed: read git by fetching tags, describing the latest release tag, resolving the target ref, and logging the release range; atomically write `.refactor-loop/state/release-commits.json`; authority tokens are `read-git` and `write-artifact` only. Forbidden: no gh, push, merge, reset, tag, release, lifecycle mutation, or inline execution inside release-gate. Fact source: local git tags and refs. Verification: behavior and source-regression coverage in test_release_commits.py and test_cli_command_router.py. Release-gate only reads `.refactor-loop/state/release-commits.json`; it does not run git and must remain a consumer-only decider.
+
 Command contract:
 | Command | Behavior |
 |---|---|
+| `python3 <skill-root>/scripts/consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH` | Pre-gate projection producer. Read local git tags/refs, derive commits since the latest release tag for the target ref, and atomically write `.refactor-loop/state/release-commits.json`; no GitHub or lifecycle authority. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate` | Dry-run. Compute stability, decide release type when ready, write `.refactor-loop/state/release-decision.json`, and print a summary. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller-owned publisher owns bump/commit/push/tag/release after preflight. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
@@ -955,7 +958,7 @@ The following excerpts preserve the detailed controller runbook in the single SK
 <a id="release-decision-schema"></a>
 ### Release decision schema
 
-`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. The decider is decision-artifact-only and does not run `git`; the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight.
+`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight. Controller scheduling order is fixed: first run `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then run `consensus-rnd-cli release-gate`.
 
 Stability score is the percentage of the eight boolean signals that pass. `ready=true` requires score 100 plus the release interval and at least one commit since the last release. Live signal inputs are intentionally narrow:
 
