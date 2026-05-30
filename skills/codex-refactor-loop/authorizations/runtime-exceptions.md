@@ -47,6 +47,20 @@ schema, or source of new authority. The executable contract remains in
 - verification: `test_release_commits.py`, `test_cli_command_router.py`, `test_release_gate_module.py`
 - no_new_runtime_authority: This mirror documents only the independent narrow producer; it does not widen `release-gate`, which remains no-git decision-artifact-only.
 
+<a id="closed-label-reconciler-238"></a>
+## closed-label-reconciler-238
+
+- surface: `consensus-rnd-cli closed-label-reconciler`
+- source_issue: `#238`
+- source_round: `r3`
+- source_marker: `META_JUDGE_DONE:consensus:closed-label-reconciler:option B named restart-managed closed-label-reconciler with crnd:phase:closed and gh-label-closed-reconcile authority`
+- skill_anchor: `#named-runtime-exception--closed-label-reconcilerper-238`
+- allowed: active-controller owner only; read CLOSED `crnd:lifecycle:managed` issue/PR labels and apply terminal phase-label reconciliation by removing phase labels, cleanup-only aliases, and `crnd:lifecycle:stuck`, then adding exactly one terminal phase label, either `crnd:phase:merged` when merged evidence is present or `crnd:phase:closed` when evidence is insufficient.
+- forbidden: no open item mutation, issue create/close/reopen/body/title edit, PR create/merge/close/body/title edit, human label mutation, triage label mutation, milestone label mutation, lifecycle label mutation beyond removing `crnd:lifecycle:stuck`, tag, release, generic `gh-label`, generic `gh-edit`, controller close-path inline reconcile, or generic lifecycle actor.
+- fact_source: GitHub CLOSED item state plus live labels, normalized by `closed_phase_labels.py`; `crnd:phase:closed` is a protocol terminal state, not a product verdict.
+- verification: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This mirror documents only the #238 closed managed item terminal phase-label reconciliation carveout and does not grant generic GitHub label/edit or lifecycle authority.
+
 <a id="integration-sync-daemon-53"></a>
 ## integration-sync-daemon-53
 

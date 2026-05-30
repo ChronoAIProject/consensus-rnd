@@ -23,6 +23,7 @@ ALL_AUTHORITY_TOKENS = {
     "gh-close",
     "gh-comment",
     "gh-edit",
+    "gh-label-closed-reconcile",
     "gh-label",
     "gh-merge",
     "gh-open",
@@ -56,6 +57,7 @@ MUTATION_TOKENS = {
 }
 
 DAEMON_COMMANDS = {
+    "closed-label-reconciler",
     "comment-monitor",
     "concurrency",
     "dev-sync",
@@ -107,6 +109,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "check-degradation",
                 "check-manifest",
                 "check-project-rules",
+                "closed-label-reconciler",
                 "labels",
                 "concurrency",
                 "dev-sync",
@@ -150,6 +153,20 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             COMMANDS["phase9-router"].authority,
         )
         self.assertFalse(set(COMMANDS["phase9-router"].authority) & LIFECYCLE_TOKENS)
+
+    def test_closed_label_reconciler_declares_only_closed_reconcile_label_authority(self) -> None:
+        self.assertEqual(
+            ("read-gh", "gh-label-closed-reconcile", "write-state"),
+            COMMANDS["closed-label-reconciler"].authority,
+        )
+        self.assertNotIn("reconcile-labels", COMMANDS)
+        for name, spec in COMMANDS.items():
+            with self.subTest(command=name):
+                if name == "closed-label-reconciler":
+                    continue
+                self.assertNotIn("gh-label-closed-reconcile", spec.authority)
+                self.assertNotIn("gh-label", spec.authority)
+                self.assertNotIn("gh-edit", spec.authority)
 
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(

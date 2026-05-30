@@ -76,6 +76,7 @@ class LabelContractSourceTests(unittest.TestCase):
     def test_canonical_crnd_literals_are_registered(self) -> None:
         allowed_paths = {
             SCRIPT_DIR / "codex_refactor_loop" / "labels.py",
+            SCRIPT_DIR / "codex_refactor_loop" / "closed_phase_labels.py",
             Path(__file__).resolve(),
         }
         registered = set(labels.canonical_labels())
@@ -87,6 +88,14 @@ class LabelContractSourceTests(unittest.TestCase):
             for literal in pattern.findall(text):
                 with self.subTest(path=path.relative_to(SKILL_ROOT), literal=literal):
                     self.assertIn(literal, registered)
+
+    def test_closed_phase_is_catalog_owned_ascii_phase_exclusive(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "labels.py").read_text(encoding="utf-8")
+
+        self.assertIn('PHASE_CLOSED = canonical_name("phase", "closed")', source)
+        self.assertIn('"closed"', source)
+        self.assertIn("Closed terminal protocol state", source)
+        self.assertEqual(labels.PHASE_CLOSED, "crnd:phase:closed")
 
     def test_runtime_code_has_no_legacy_routing_literals_outside_catalog(self) -> None:
         allow = {

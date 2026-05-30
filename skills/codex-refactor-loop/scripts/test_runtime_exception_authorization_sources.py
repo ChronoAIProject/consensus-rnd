@@ -24,6 +24,7 @@ TARGET_ANCHORS = {
     # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
     "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
+    "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
@@ -166,6 +167,48 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
+
+    def test_closed_label_reconciler_238_preserves_closed_only_terminal_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "closed-label-reconciler-238")
+
+        for required in (
+            "#238",
+            "closed-label-reconciler",
+            "active-controller owner only",
+            "CLOSED `crnd:lifecycle:managed`",
+            "terminal phase-label reconciliation",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+            "protocol terminal state",
+            "gh-label-closed-reconcile",
+            "closed_phase_labels.py",
+            "test_closed_label_reconciler.py",
+            "test_peek_status_lens.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no open item mutation",
+            "issue create/close/reopen/body/title edit",
+            "PR create/merge/close/body/title edit",
+            "human label mutation",
+            "triage label mutation",
+            "milestone label mutation",
+            "lifecycle label mutation beyond removing `crnd:lifecycle:stuck`",
+            "generic `gh-label`",
+            "generic `gh-edit`",
+            "controller close-path inline reconcile",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        self.assertIn("#238 是唯一 closed managed item phase-label reconciliation carveout", self.repo_rules)
+        self.assertIn("checked-in `closed-label-reconciler`", self.repo_rules)
+        self.assertIn("exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`", self.repo_rules)
 
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
         targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")
