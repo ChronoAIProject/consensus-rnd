@@ -166,12 +166,16 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("fails closed", whitelist["Missing/empty behavior"])
 
         host_rows = {key: row for key, row in self.rows.items() if key.startswith("HOST_")}
-        self.assertGreaterEqual(len(host_rows), 6)
+        self.assertGreaterEqual(len(host_rows), 7)
         for key, row in host_rows.items():
             with self.subTest(key=key):
-                self.assertEqual("prompt-empty-infer", row["Category"])
                 self.assertEqual("", self.exports[key]["value"])
-                self.assertRegex(row["Missing/empty behavior"], r"infer|mirror|match|omit|diff")
+                if key == "HOST_WORKFLOW_SPEC":
+                    self.assertEqual("optional-noop", row["Category"])
+                    self.assertIn("built-in behavior", row["Missing/empty behavior"])
+                else:
+                    self.assertEqual("prompt-empty-infer", row["Category"])
+                    self.assertRegex(row["Missing/empty behavior"], r"infer|mirror|match|omit|diff")
         self.assertIn("do not invent a host language default", self.rows["HOST_CODE_FENCE_LANG"]["Missing/empty behavior"])
         self.assertIn("do not invent protobuf", self.rows["HOST_PROTO_POLICY"]["Missing/empty behavior"])
 

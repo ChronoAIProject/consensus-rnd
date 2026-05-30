@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.workflow_stages import (  # noqa: E402
     WORKFLOW_STAGES,
+    WorkflowStage,
     assert_stage_slug,
     format_stage,
     stage_by_slug,
@@ -58,6 +59,15 @@ class WorkflowStageRegistryTests(unittest.TestCase):
                     stage_by_slug(bad_slug)
                 with self.assertRaises(ValueError):
                     assert_stage_slug(bad_slug)
+
+    def test_validated_host_stage_projection_is_additive_only(self) -> None:
+        host_stage = WorkflowStage("host:discovery", "Discovery", "Host projection only.", "host-discovery", -1)
+
+        self.assertEqual(stage_by_slug("host:discovery", (host_stage,)), host_stage)
+        self.assertEqual(format_stage("host:discovery", (host_stage,)), "Consensus-rnd Phase host:discovery")
+        with self.assertRaises(ValueError):
+            stage_by_slug("host:discovery")
+        self.assertEqual(tuple(stage.slug for stage in WORKFLOW_STAGES), EXPECTED_SLUGS)
 
     def test_legacy_numbers_are_private_migration_metadata(self) -> None:
         legacy_numbers = [stage.legacy_number for stage in WORKFLOW_STAGES]

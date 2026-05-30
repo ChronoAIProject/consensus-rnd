@@ -18,6 +18,7 @@ REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
 
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
+from codex_refactor_loop.workflow_spec import FORBIDDEN_FIELD_NAMES  # noqa: E402
 from codex_refactor_loop.workflow_stages import WORKFLOW_STAGES, format_stage  # noqa: E402
 
 
@@ -370,6 +371,108 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, router)
                 self.assertIn(token, self.skill)
         self.assertIn("parse_phase9_log_identity", router)
+
+    def test_host_workflow_spec_contract_locks_consensus_and_lifecycle_invariants(self) -> None:
+        for needle in (
+            "HOST_WORKFLOW_SPEC",
+            "HostWorkflowSpec",
+            "repo-relative JSON",
+            "Empty or unset keeps built-in behavior",
+            "data-only route vocabulary",
+            "events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings",
+            "reserved `host:` namespace",
+            "WorkflowInvariantValidator",
+            "rejects attempts to overwrite built-ins",
+            "public compatibility aliases",
+            "marker families",
+            "producers",
+            "cluster aliases",
+            "grants no lifecycle authority",
+            "command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import",
+            "cannot downgrade consensus",
+            "at least three independent solvers",
+            "exactly one independent judge",
+            "peer-output isolation",
+            "fixed marker families",
+            "First-version scope is bounded",
+            "not a DAG executor",
+            "does not create public marker aliases",
+            "router direct-spawn ignores host `roles`, `dispatch`, and `consensus_policies` completely",
+            "always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+        workflow_spec = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "workflow_spec.py").read_text(encoding="utf-8")
+        for token in (
+            "class HostWorkflowSpec",
+            "class WorkflowInvariantValidator",
+            "HOST_WORKFLOW_SPEC",
+            "FORBIDDEN_FIELD_NAMES",
+            "FIXED_MARKER_FAMILIES",
+            "peer_output_isolation",
+            "at least three independent solvers",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, workflow_spec)
+
+        contract = re.search(
+            r"HostWorkflowSpec grants no lifecycle authority: no (?P<fields>.*?) fields are allowed\.",
+            self.skill,
+        )
+        self.assertIsNotNone(contract)
+        documented_fields = {
+            item.strip().removeprefix("or ")
+            for item in contract.group("fields").split(",")
+        }
+        documented_fields.remove("label mutation")
+        documented_fields.add("label")
+        for field in documented_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, FORBIDDEN_FIELD_NAMES)
+
+    def test_phase9_direct_spawn_allowlist_ignores_host_workflow_spec_sources(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        router_section = router[router.index("class Phase9Router") :]
+        heading = "### Consensus-rnd Phase design-consensus router daemon command body"
+        start = self.skill.index(heading)
+        end = self.skill.index("### Daemon vs controller", start)
+        contract_section = self.skill[start:end]
+
+        for token in (
+            "HostWorkflowSpec is not a phase9 direct-spawn authority",
+            "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
+            "must not alter this allowlist or block the built-in router routes",
+            "SOLVER_DONE:<minimal|structural|delete>:*",
+            "round-N minimal/structural/delete solvers",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, contract_section)
+
+        for required in (
+            "ROLES = (\"minimal\", \"structural\", \"delete\")",
+            "JUDGE_ROLE = \"judge\"",
+            "return ROLES",
+            "return JUDGE_ROLE",
+            "Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, router)
+
+        for forbidden in (
+            "load_validated_workflow_spec",
+            "WorkflowSpecError",
+            "workflow_spec",
+            "consensus_policies",
+            "host_workflow_spec_path",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, router_section)
+
+    def test_phase9_router_filename_identity_source_regression_keeps_role_markers(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, router, helper))
         self.assertIn("Refactor (issue-100/router-filename-identity)", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)

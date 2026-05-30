@@ -15,6 +15,9 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class WorkflowStage:
+    # Refactor (iter219/issue-219):
+    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     slug: str
     title: str
     contract: str
@@ -98,20 +101,24 @@ WORKFLOW_STAGES: tuple[WorkflowStage, ...] = (
 _STAGES_BY_SLUG = {stage.slug: stage for stage in WORKFLOW_STAGES}
 
 
-def stage_by_slug(slug: str) -> WorkflowStage:
+def stage_by_slug(slug: str, extra_stages: tuple[WorkflowStage, ...] = ()) -> WorkflowStage:
+    # Refactor (iter219/issue-219):
+    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
+    stages = {**_STAGES_BY_SLUG, **{stage.slug: stage for stage in extra_stages}}
     try:
-        return _STAGES_BY_SLUG[slug]
+        return stages[slug]
     except KeyError as exc:
         raise ValueError(f"unknown workflow stage slug: {slug}") from exc
 
 
-def assert_stage_slug(slug: str) -> None:
-    stage_by_slug(slug)
+def assert_stage_slug(slug: str, extra_stages: tuple[WorkflowStage, ...] = ()) -> None:
+    stage_by_slug(slug, extra_stages)
 
 
-def format_stage(stage: WorkflowStage | str) -> str:
+def format_stage(stage: WorkflowStage | str, extra_stages: tuple[WorkflowStage, ...] = ()) -> str:
     if isinstance(stage, WorkflowStage):
         slug = stage.slug
     else:
-        slug = stage_by_slug(stage).slug
+        slug = stage_by_slug(stage, extra_stages).slug
     return f"Consensus-rnd Phase {slug}"

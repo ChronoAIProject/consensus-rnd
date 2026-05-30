@@ -18,6 +18,7 @@ from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .triage import apply_decision, load_triage_apply_config
+from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
 PR_LABELS_REMOVE = (
@@ -385,6 +386,9 @@ class ControllerActions:
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+        # Refactor (iter219/issue-219):
+        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
+        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
         values = dict(os.environ)
         if env:
             values.update(env)
@@ -399,11 +403,24 @@ class ControllerActions:
             "scope_paths": values.get("SCOPE_PATHS", ""),
             "verification_hints": values.get("VERIFICATION_HINTS", ""),
         }
-        template = Path(input_path).read_text(encoding="utf-8")
+        template_path = self._resolve_template_input(input_path)
+        template = template_path.read_text(encoding="utf-8")
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
         rendered = Template(template).safe_substitute(values)
         Path(output_path).write_text(rendered, encoding="utf-8")
+
+    def _resolve_template_input(self, input_path: str) -> Path:
+        if not input_path.startswith("host:"):
+            return Path(input_path)
+        try:
+            spec = load_validated_workflow_spec(self.ctx)
+        except WorkflowSpecError as exc:
+            raise RuntimeError(str(exc)) from exc
+        rel = spec.prompt_binding_path(input_path)
+        if not rel:
+            raise RuntimeError(f"unknown host prompt binding: {input_path}")
+        return self.ctx.repo_root / rel
 
     def _worktree_for_branch(self, branch: str) -> Path | None:
         result = self.git(["worktree", "list", "--porcelain"], check=False)
