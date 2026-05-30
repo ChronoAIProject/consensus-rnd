@@ -148,12 +148,14 @@ class HostWorkflowSpecTests(unittest.TestCase):
                 with self.assertRaises(WorkflowSpecError):
                     load_validated_workflow_spec(self.ctx(self.write_spec(data, f"workflow-{index}.json")))
 
-    def test_spec_rejects_lifecycle_or_command_fields(self) -> None:
-        data = self.valid_spec()
-        data["events"][0]["command"] = "gh issue close 1"
+    def test_spec_rejects_lifecycle_command_or_executor_fields(self) -> None:
+        for field in ("command", "executor"):
+            with self.subTest(field=field):
+                data = self.valid_spec()
+                data["events"][0][field] = "gh issue close 1"
 
-        with self.assertRaisesRegex(WorkflowSpecError, "forbidden lifecycle or command field"):
-            load_validated_workflow_spec(self.ctx(self.write_spec(data)))
+                with self.assertRaisesRegex(WorkflowSpecError, f"forbidden lifecycle or command field: events.0.{field}"):
+                    load_validated_workflow_spec(self.ctx(self.write_spec(data)))
 
     def test_spec_rejects_consensus_policy_below_three_solvers_or_without_peer_isolation(self) -> None:
         data = self.valid_spec()

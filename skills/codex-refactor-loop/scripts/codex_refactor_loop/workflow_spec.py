@@ -37,6 +37,7 @@ FORBIDDEN_FIELD_NAMES = {
     "delete_branch",
     "edit_label",
     "exec",
+    "executor",
     "force_push",
     "git",
     "import",

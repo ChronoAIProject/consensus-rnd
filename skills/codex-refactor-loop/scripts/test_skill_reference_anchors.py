@@ -18,6 +18,7 @@ REFERENCE_MD = SKILL_ROOT / "REFERENCE.md"
 
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
+from codex_refactor_loop.workflow_spec import FORBIDDEN_FIELD_NAMES  # noqa: E402
 from codex_refactor_loop.workflow_stages import WORKFLOW_STAGES, format_stage  # noqa: E402
 
 
@@ -384,6 +385,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, workflow_spec)
+
+        contract = re.search(
+            r"HostWorkflowSpec grants no lifecycle authority: no (?P<fields>.*?) fields are allowed\.",
+            self.skill,
+        )
+        self.assertIsNotNone(contract)
+        documented_fields = {
+            item.strip().removeprefix("or ")
+            for item in contract.group("fields").split(",")
+        }
+        documented_fields.remove("label mutation")
+        documented_fields.add("label")
+        for field in documented_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, FORBIDDEN_FIELD_NAMES)
 
     def test_phase9_direct_spawn_allowlist_ignores_host_workflow_spec_sources(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
