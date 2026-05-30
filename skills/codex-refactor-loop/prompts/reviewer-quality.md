@@ -57,7 +57,7 @@ verdict: approve | comment | reject
 ```
 
 Verdict semantics:
-<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Phase 8 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
+<!-- Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge gate + Consensus-rnd Phase review-gate 文案矛盾  New principle: 固定真值表 reject=0 && approve>=1 → MERGE;comment 是 advisory(#26 minimal option B 共识) -->
 
 - **approve**: code is readable, focused, no over/under-engineering smell, refactor self-docs are present and clear.
 - **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; host 项目的复杂度分析器 borderline.

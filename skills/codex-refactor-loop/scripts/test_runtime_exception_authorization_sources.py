@@ -139,10 +139,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn(expected_command, self.repo_rules)
         self.assertIn(expected_command, self.skill)
         self.assertIn(expected_command, integration_entry)
-        self.assertIn("read-only", integration_entry)
-        self.assertIn("remote integration branch existence only", integration_entry)
+        self.assertIn("daemon-owned execution", integration_entry)
+        self.assertIn("integration-branch git allowlist", integration_entry)
         self.assertIn("no worker-diff commit", integration_entry)
         self.assertIn("no PR create, merge, close, or edit", integration_entry)
+        for token in (
+            "reset --hard",
+            "rebase --rebase-merges",
+            "merge --ff-only|--no-ff",
+            "git push HEAD:$INTEGRATION_BRANCH",
+            "force-with-lease",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, integration_entry)
 
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -16,6 +17,10 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -47,8 +52,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 #!/usr/bin/env bash
                 fixture="${WAKEUP_PLAN_GH_FIXTURE:-empty}"
                 args="$*"
-                if [[ "$1 $2" == "issue list" ]]; then
+                cmd1="$1"
+                cmd2="$2"
+                label=""
+                while [[ "$#" -gt 0 ]]; do
+                  if [[ "$1" == "--label" ]]; then
+                    label="$2"
+                    break
+                  fi
+                  shift
+                done
+                if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" && "$args" == *" list "* && -n "$label" ]]; then
+                  printf '%s %s\n' "$cmd1" "$label" >> "$WAKEUP_PLAN_GH_QUERY_LOG"
+                fi
+                if [[ "$cmd1 $cmd2" == "issue list" ]]; then
                   case "$fixture" in
+                    managed_dual_read)
+                      case "$label" in
+                        crnd:lifecycle:managed)
+                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        auto-loop)
+                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"legacy issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"🤖 human:codex"}]}]\n'
+                          ;;
+                        phase9-auto-solve|refactor-design-needed)
+                          printf '[]\n'
+                          ;;
+                        *)
+                          printf '[]\n'
+                          ;;
+                      esac
+                      ;;
                     milestone)
                       printf '[{"number":20,"title":"milestone issue","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
@@ -75,14 +109,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       done
                       printf ']\n'
                       ;;
+                    non_action_statuses)
+                      printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
                   esac
                   exit 0
                 fi
-                if [[ "$1 $2" == "pr list" ]]; then
+                if [[ "$cmd1 $cmd2" == "pr list" ]]; then
                   case "$fixture" in
+                    managed_dual_read)
+                      case "$label" in
+                        crnd:lifecycle:managed)
+                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        auto-loop)
+                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                          ;;
+                        phase9-auto-solve)
+                          printf '[]\n'
+                          ;;
+                        refactor-design-needed)
+                          printf '[{"number":92,"title":"legacy PR","headRefName":"impl/legacy","labels":[{"name":"refactor-design-needed"},{"name":"🔍 phase:design-solving"},{"name":"🤖 human:auto-推进"}]}]\n'
+                          ;;
+                        *)
+                          printf '[]\n'
+                          ;;
+                      esac
+                      ;;
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
                       printf '[{"number":77,"title":"worker output PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
@@ -101,13 +157,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     milestone)
                       printf '[{"number":30,"title":"milestone PR","author":{"login":"alice"},"updatedAt":"2026-05-29T23:00:00Z","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
                       ;;
+                    non_action_statuses)
+                      printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
                   esac
                   exit 0
                 fi
-                if [[ "$1 $2" == "pr checks" ]]; then
+                if [[ "$cmd1 $cmd2" == "pr checks" ]]; then
                   if [[ "$fixture" == "ci_red" && "$args" == *"31"* ]]; then
                     printf '[{"bucket":"fail"}]\n'
                   else
@@ -115,11 +174,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   fi
                   exit 0
                 fi
-                if [[ "$1 $2" == "api user" ]]; then
+                if [[ "$cmd1 $cmd2" == "api user" ]]; then
                   [[ "$fixture" == "unknown_login" ]] && printf '{}\n' || printf '{"login":"alice"}\n'
                   exit 0
                 fi
-                if [[ "$1 $2" == "issue view" || "$1 $2" == "pr view" ]]; then
+                if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
                   if [[ "$fixture" == "unknown_owner" ]]; then
                     printf '{"comments":[]}\n'
                   else
@@ -225,6 +284,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
                 "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
+                "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
             }
         )
         result = subprocess.run(
@@ -268,7 +328,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["item"], "PR #77")
         self.assertEqual(plan["actions"][0]["line"], "UNPUSHED_WORKER_OUTPUT:77:2")
         self.assertEqual(plan["actions"][0]["head_ref"], "refactor/iter77-worker")
-        self.assertIn("safe-push origin refactor/iter77-worker", plan["actions"][0]["suggested_command"])
+        self.assertEqual(plan["actions"][0]["controller_action"], "safe_push")
+        self.assertTrue(plan["actions"][0]["no_lifecycle_authority"])
+        self.assertNotIn("suggested_command", plan["actions"][0])
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("completed-marker"))
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("existing-issue"))
@@ -371,6 +433,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(actions[0]["ownership"], "stale-takeover")
         self.assertGreaterEqual(actions[0]["stale_hours"], 3)
 
+    def test_load_github_items_queries_canonical_and_legacy_managed_labels_once(self) -> None:
+        plan = self.run_plan(fixture="managed_dual_read")
+
+        existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
+        self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
+        query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8").splitlines()
+        expected = [
+            f"{kind} {label}"
+            for kind in ("issue", "pr")
+            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+        ]
+        self.assertEqual(query_log, expected)
+
+    def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
+        plan = self.run_plan(fixture="non_action_statuses")
+
+        self.assertEqual([action for action in plan["actions"] if action["kind"] == "existing-issue"], [])
+
+        red_plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in red_plan["actions"]}
+        self.assertEqual(by_kind["ci-red"]["item"], "PR #31")
+        self.assertEqual([action for action in red_plan["actions"] if action["kind"] == "existing-issue"], [])
+
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
@@ -459,6 +544,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
+    def test_all_wakeup_actions_emit_registered_phase_slugs(self) -> None:
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").unlink()
+        heartbeats = self.repo / ".refactor-loop" / "heartbeats"
+        for path in heartbeats.glob("*.ts"):
+            path.unlink()
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").unlink()
+        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")
+
+        for fixture in ("ci_red", "milestone", "existing", "empty"):
+            with self.subTest(fixture=fixture):
+                plan = self.run_plan(fixture=fixture)
+                for action in plan["actions"]:
+                    assert_stage_slug(action["phase"])
+
+        plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        self.assertEqual(by_kind["completed-marker"]["phase"], "publish")
+        self.assertEqual(by_kind["completed-marker"]["route"], "publish-or-review-gate")
+        self.assertEqual(by_kind["bootstrap"]["phase"], "bootstrap")
+        self.assertEqual(by_kind["bootstrap"]["route"], "daemon-health")
+        self.assertEqual(by_kind["wake-source"]["phase"], "bootstrap")
+        self.assertEqual(by_kind["wake-source"]["route"], "wake-source")
+
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+        plan = self.run_plan(fixture="ci_red")
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        self.assertEqual(by_kind["no-gap-violation"]["phase"], "work-intake")
+        self.assertEqual(by_kind["no-gap-violation"]["route"], "no-gap-repair")
 
 
 if __name__ == "__main__":

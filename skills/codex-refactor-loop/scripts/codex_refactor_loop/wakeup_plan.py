@@ -39,8 +39,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.ownership import GitHubWorkOwnership, OwnershipDecision, STALE_AFTER, WorkTarget
+from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
@@ -63,25 +65,21 @@ DONE_PREFIXES = (
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
 )
-PHASE_ACTORS = (
-    ("🔍 phase:design-solving", "phase9-solver-or-judge"),
-    ("🛠️ phase:implementing", "implement-codex"),
-    ("🔧 phase:fixing", "fix-codex"),
-    ("👀 phase:reviewing", "reviewer-codex"),
-    ("⚙️ phase:ci-running", "controller-ci-watch"),
-    ("🚀 phase:pr-open", "reviewer-codex"),
-    ("✅ phase:consensus-reached", "implement-codex"),
-)
-PHASE_EXPECTED = {
-    "🔍 phase:design-solving": 1,
-    "🔧 phase:fixing": 1,
-    "👀 phase:reviewing": 1,
-    "🛠️ phase:implementing": 1,
-    "⚙️ phase:ci-running": 0,
-    "🚀 phase:pr-open": 0,
-    "✅ phase:consensus-reached": 0,
-    "🎉 phase:merged": 0,
-    "⏸️ phase:blocked": 0,
+PHASE_TO_STAGE = {
+    label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
+    label_catalog.PHASE_IMPLEMENTING: "implementation",
+    label_catalog.PHASE_FIXING: "review-gate",
+    label_catalog.PHASE_REVIEWING: "review-gate",
+    label_catalog.PHASE_CI_RUNNING: "ci-watch",
+    label_catalog.PHASE_PR_OPEN: "review-gate",
+    label_catalog.PHASE_CONSENSUS_REACHED: "implementation",
+    label_catalog.PHASE_BLOCKED: "bootstrap",
+    label_catalog.PHASE_MERGED: "publish",
+}
+NON_ACTION_PHASE_LABELS = {
+    label_catalog.PHASE_CI_RUNNING: "ci-running",
+    label_catalog.PHASE_BLOCKED: "blocked",
+    label_catalog.PHASE_MERGED: "merged",
 }
 
 
@@ -101,7 +99,7 @@ class GhItem:
 
     @property
     def milestone(self) -> bool:
-        return "🎯 milestone" in self.labels
+        return label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(self.labels).canonical
 
 
 def run_json(cmd: list[str], *, cwd: Path) -> Any:
@@ -219,10 +217,10 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
     total = 0
     for item in items:
         labels = set(item.labels)
-        if "👤 human:需-maintainer-决策" in labels:
+        if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
             continue
-        phase_label = next((label for label in item.labels if label in PHASE_EXPECTED), "")
-        expected = PHASE_EXPECTED.get(phase_label, 0)
+        phase_label = label_catalog.normalize_label_set(item.labels).phase or ""
+        expected = label_catalog.phase_expected_workers(phase_label)
         if expected <= 0:
             continue
         breakdown.append({"id": f"#{item.number}", "kind": item.kind.lower(), "phase": phase_label, "expected": expected})
@@ -339,17 +337,19 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
             continue
-        actions.append(
-            {
-                "priority": 3,
-                "kind": "completed-marker",
-                "item": infer_item_from_text(f"{log_path.name} {marker}"),
-                "phase": phase_from_marker(marker),
-                "actor": actor_from_marker(marker),
-                "marker": marker,
-                "evidence": str(log_path.relative_to(repo_root)),
-            }
-        )
+        action = {
+            "priority": 3,
+            "kind": "completed-marker",
+            "item": infer_item_from_text(f"{log_path.name} {marker}"),
+            "phase": phase_from_marker(marker),
+            "actor": actor_from_marker(marker),
+            "marker": marker,
+            "evidence": str(log_path.relative_to(repo_root)),
+        }
+        route = route_from_marker(marker)
+        if route:
+            action["route"] = route
+        actions.append(action)
     return actions
 
 
@@ -365,20 +365,40 @@ def infer_item_from_text(text: str) -> str | None:
 
 def phase_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
-        return "phase-4-open-pr-or-phase-8-review"
+        return "publish"
     if marker.startswith("REVIEW_DONE"):
-        return "phase-8-review-gate"
+        return "review-gate"
     if marker.startswith("FIX_DONE"):
-        return "phase-8-rereview"
+        return "review-gate"
     if marker.startswith("TEST_ADD_DONE"):
-        return "phase-5-ci-watch"
+        return "ci-watch"
     if marker.startswith("AUDIT_DONE"):
-        return "phase-1-audit-result"
+        return "work-intake"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "phase-9-consensus-route"
+        return "design-consensus"
     if marker.startswith("VERIFY_DONE"):
-        return "phase-4-controller-lifecycle"
-    return "marker-route"
+        return "publish"
+    return "work-intake"
+
+
+def route_from_marker(marker: str) -> str | None:
+    if marker.startswith("IMPLEMENT_DONE"):
+        return "publish-or-review-gate"
+    if not marker.startswith(
+        (
+            "AUDIT_DONE",
+            "SOLVER_DONE",
+            "META_JUDGE_DONE",
+            "META_RESOLVED",
+            "IMPLEMENT_DONE",
+            "VERIFY_DONE",
+            "REVIEW_DONE",
+            "FIX_DONE",
+            "TEST_ADD_DONE",
+        )
+    ):
+        return "marker-route"
+    return None
 
 
 def actor_from_marker(marker: str) -> str:
@@ -393,7 +413,7 @@ def actor_from_marker(marker: str) -> str:
     if marker.startswith("AUDIT_DONE"):
         return "controller"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "phase9-router-or-controller"
+        return "design-consensus-router-or-controller"
     if marker.startswith("VERIFY_DONE"):
         return "controller"
     return "controller"
@@ -408,7 +428,7 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "bootstrap",
                 "item": None,
-                "phase": "phase-0-bootstrap",
+                "phase": "bootstrap",
                 "actor": "controller",
                 "reason": "missing .refactor-loop/host.env",
             }
@@ -420,9 +440,10 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "bootstrap",
                 "item": None,
-                "phase": "daemon-health",
+                "phase": "bootstrap",
                 "actor": "controller",
                 "reason": "daemon heartbeat stale-or-missing",
+                "route": "daemon-health",
                 "suggested_command": "python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons",
                 "daemons": stale_names,
             }
@@ -435,8 +456,9 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "priority": 1,
                 "kind": "wake-source",
                 "item": None,
-                "phase": "wake-source",
+                "phase": "bootstrap",
                 "actor": "controller",
+                "route": "wake-source",
                 "reason": "missing daemon-event surfaces; confirm Monitor bridge",
             }
         )
@@ -459,14 +481,14 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
                         "priority": 2,
                         "kind": "maintainer-comment",
                         "item": infer_item_from_text(line),
-                        "phase": "phase-7-comment-intake",
+                        "phase": "design-intake",
                         "actor": "controller",
                         "evidence": line,
                     }
                 )
     for item in gh_items:
         labels = set(item.labels)
-        if "👤 human:需-maintainer-决策" in labels:
+        if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
             actions.append(
                 {
                     "priority": 2,
@@ -497,8 +519,9 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "priority": 5,
                 "kind": "no-gap-violation",
                 "item": infer_item_from_text(line),
-                "phase": "no-gap-repair",
+                "phase": "work-intake",
                 "actor": "controller",
+                "route": "no-gap-repair",
                 "evidence": line,
             }
         )
@@ -530,20 +553,23 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
     #   New principle: actions are derived only from open auto-loop issues/PRs.
     slug = github_repo_slug()
     items: list[GhItem] = []
-    for kind, command in (
-        ("issue", ["gh", "issue", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,author,updatedAt"]),
-        ("PR", ["gh", "pr", "list", *gh_args(slug), "--label", "auto-loop", "--state", "open", "--json", "number,title,labels,author,updatedAt,headRefName"]),
-    ):
-        data = run_json(command, cwd=repo_root)
-        if not isinstance(data, list):
-            continue
-        for raw in data:
-            if not isinstance(raw, dict):
-                continue
+    for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
+        rows: list[dict[str, Any]] = []
+        json_fields = "number,title,labels,author,updatedAt,headRefName" if kind == "PR" else "number,title,labels,author,updatedAt"
+        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+            command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
+            data = run_json(command, cwd=repo_root)
+            if isinstance(data, list):
+                rows.extend(item for item in data if isinstance(item, dict))
+        seen: set[int] = set()
+        for raw in rows:
             try:
                 number = int(raw["number"])
             except (KeyError, TypeError, ValueError):
                 continue
+            if number in seen:
+                continue
+            seen.add(number)
             labels = tuple(
                 label.get("name", "")
                 for label in raw.get("labels", [])
@@ -622,11 +648,10 @@ def safe_head_ref(value: str | None) -> str | None:
 
 
 def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
-    # Refactor (issue-190/unpushed-worker-output):
-    #   Old pattern: FIX_DONE/IMPLEMENT_DONE could leave committed worker output
-    #   only in a local worktree branch, so reviewers and CI read stale origin.
-    #   New principle: wakeup-plan owns a local read-only topology check; peek
-    #   may reuse this helper as status, but controller push remains external.
+    # Refactor (iter201/issue-201): Old pattern: wakeup_plan rendered a copyable
+    # consensus-rnd-cli safe-push suggested_command, exposing public lifecycle
+    # reachability. New principle: emit only a fixed controller_action fact with
+    # no_lifecycle_authority; controller maps it to an internal primitive.
     prs = [item for item in gh_items if item.kind == "PR" and safe_head_ref(item.head_ref)]
     if not prs:
         return []
@@ -662,7 +687,8 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
                 "priority": 3,
                 "kind": "unpushed-worker-output",
                 "item": item.item,
-                "phase": "controller-push-required",
+                "phase": "publish",
+                "route": "controller-push-required",
                 "actor": "controller",
                 "head_ref": head_ref,
                 "worktree": str(worktree),
@@ -670,7 +696,7 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
                 "local_head": local.stdout.strip(),
                 "remote_head": remote.stdout.strip(),
                 "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
-                "suggested_command": f"python3 <skill-root>/scripts/consensus-rnd-cli safe-push origin {head_ref}",
+                "controller_action": "safe_push",
                 "no_lifecycle_authority": True,
             }
         )
@@ -697,7 +723,7 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
                 "priority": 4,
                 "kind": "ci-red",
                 "item": item.item,
-                "phase": "phase-5-ci-red",
+                "phase": "ci-watch",
                 "actor": "remote-ci-fix-codex",
                 "fail_count": fail_count,
                 "ownership": ownership.reason,
@@ -716,7 +742,8 @@ def existing_issue_actions(items: list[GhItem], *, repo_root: Path | None = None
             if not ownership.allowed:
                 continue
         phase = phase_from_labels(item.labels)
-        if phase in {"blocked", "merged", "ci-running"}:
+        status = status_from_labels(item.labels)
+        if status in {"blocked", "merged", "ci-running"}:
             continue
         priority = 6 if item.milestone else 7
         action = {
@@ -737,27 +764,30 @@ def existing_issue_actions(items: list[GhItem], *, repo_root: Path | None = None
 
 
 def phase_from_labels(labels: tuple[str, ...]) -> str:
-    for label, phase in (
-        ("🔍 phase:design-solving", "phase-9-design-solving"),
-        ("🛠️ phase:implementing", "phase-2-implementing"),
-        ("🔧 phase:fixing", "phase-8-fixing"),
-        ("👀 phase:reviewing", "phase-8-reviewing"),
-        ("⚙️ phase:ci-running", "ci-running"),
-        ("🚀 phase:pr-open", "phase-8-reviewing"),
-        ("✅ phase:consensus-reached", "phase-2-implementing"),
-        ("⏸️ phase:blocked", "blocked"),
-        ("🎉 phase:merged", "merged"),
-    ):
-        if label in labels:
-            return phase
-    return "unlabeled-existing-issue"
+    phase = label_catalog.normalize_label_set(labels).phase
+    if phase:
+        stage = PHASE_TO_STAGE.get(phase, "work-intake")
+        assert_stage_slug(stage)
+        return stage
+    return "work-intake"
+
+
+def status_from_labels(labels: tuple[str, ...]) -> str | None:
+    projection = label_catalog.normalize_label_set(labels)
+    if projection.phase in NON_ACTION_PHASE_LABELS:
+        return NON_ACTION_PHASE_LABELS[projection.phase]
+    if not projection.phase:
+        return "unlabeled-existing-issue"
+    return None
 
 
 def actor_from_labels(labels: tuple[str, ...], kind: str) -> str:
-    if "👤 human:需-maintainer-决策" in labels or "⏸️ phase:blocked" in labels:
+    projection = label_catalog.normalize_label_set(labels)
+    if label_catalog.HUMAN_MAINTAINER_DECISION in projection.canonical or label_catalog.PHASE_BLOCKED in projection.canonical:
         return "controller"
-    for label, actor in PHASE_ACTORS:
-        if label in labels:
+    if projection.phase:
+        actor = label_catalog.actor_for_phase(projection.phase)
+        if actor:
             return actor
     return "controller-triage" if kind == "issue" else "reviewer-or-controller"
 

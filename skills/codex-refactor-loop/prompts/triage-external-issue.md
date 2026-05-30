@@ -2,14 +2,14 @@
 
 Artifact profile: marker-only-work-unit
 
-你是 triage codex,任务:把 maintainer 加了 `auto-loop-triage` label 的**外部 issue** 评估为:
-- **accept** — 是 concrete repository work unit suitable for consensus;reshape body 为 `manual-issue` WorkUnit-backed design issue + 切换 label 进入 Phase 9 三 solver 流程
+你是 triage codex,任务:把 maintainer 加了 `crnd:triage:pending` label 的**外部 issue** 评估为:
+- **accept** — 是 concrete repository work unit suitable for consensus;reshape body 为 `manual-issue` WorkUnit-backed design issue + 切换 label 进入 Consensus-rnd Phase design-consensus 三 solver 流程
 - **reject** — 不适合作为 consensus work unit(产品需求 / runtime bug report / 外部依赖 / duplicate / unclear / scope 过大),评论解释 + 移除 triage label
 
 ## Context
 
 - Issue: #${ISSUE_NUMBER}
-- 用户(maintainer 或非)加了 `auto-loop-triage` label,trigger 本流程
+- 用户(maintainer 或非)加了 `crnd:triage:pending` label,trigger 本流程
 - 当前 issue body / title / labels:由本 prompt 头部 fill(或你 `gh issue view ${ISSUE_NUMBER}` 自读)
 
 ## 你的任务
@@ -48,15 +48,15 @@ Artifact profile: marker-only-work-unit
    - `verification_hints`
    - 不写 `cluster_id` 或 `legacy_cluster_id`
 5. 写 proposed issue body 到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-body.md`,末尾独立一行 sentinel。
-6. 写 GitHub comment 正文到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md`,解释:"Triage 接受:identified as manual-issue work unit issue-${ISSUE_NUMBER};已写 durable decision artifact,等待 controller/helper reshape body + 切 label 进入 Phase 9 三 solver 流程",末尾独立一行 sentinel。
+6. 写 GitHub comment 正文到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md`,解释:"Triage 接受:identified as manual-issue work unit issue-${ISSUE_NUMBER};已写 durable decision artifact,等待 controller/helper reshape body + 切 label 进入 Consensus-rnd Phase design-consensus 三 solver 流程",末尾独立一行 sentinel。
 7. 写 `ManualIssueTriageDecision` JSON artifact 到 `$REPO_ROOT/.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json`,字段固定:
    - `schema: "ManualIssueTriageDecision"`
    - `issue_number: ${ISSUE_NUMBER}`
    - `verdict: "accept"`
    - `body_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-body.md"`
    - `comment_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md"`
-   - `add_labels: ["auto-loop","phase9-auto-solve","🔍 phase:design-solving","🤖 human:auto-推进","refactor-design-needed"]`
-   - `remove_labels: ["auto-loop-triage"]`
+   - `add_labels`: copy the catalog-derived accept label bundle from the controller header
+   - `remove_labels`: copy the catalog-derived triage removal label from the controller header
    - `sentinel_present: true`
    - `lifecycle_owner: "controller"`
    - `lifecycle_authority: false`
@@ -72,19 +72,19 @@ Artifact profile: marker-only-work-unit
    - `body_artifact_path: ""`
    - `comment_artifact_path: ".refactor-loop/runs/triage-issue-${ISSUE_NUMBER}-comment.md"`
    - `add_labels: []`
-   - `remove_labels: ["auto-loop-triage"]`
+   - `remove_labels`: copy the catalog-derived triage removal label from the controller header
    - `sentinel_present: true`
    - `lifecycle_owner: "controller"`
    - `lifecycle_authority: false`
-3. **不加** `auto-loop` 或 `wontfix`(让 maintainer 决定后续);controller/helper 只 post reject comment + 移除 triage label
+3. **不加** `crnd:lifecycle:managed` 或 `wontfix`(让 maintainer 决定后续);controller/helper 只 post reject comment + 移除 triage label
 4. 末尾打印 `TRIAGE_DECISION_DONE:${ISSUE_NUMBER}:reject:.refactor-loop/runs/triage-issue-${ISSUE_NUMBER}.json`
 
 ## 必读
 
 1. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` 强制条款全文(能适用时必须引证)
 2. `$REPO_ROOT/AGENTS.md`(若存在,辅助规则)
-3. 现有 open auto-loop issues:`gh issue list --label "auto-loop" --state open --json number,title`(查重)
-4. 现有 open auto-loop PRs:`gh pr list --label "auto-loop" --state open --json number,title`(查重)
+3. 现有 open loop-managed issues:`gh issue list --label "crnd:lifecycle:managed" --state open --json number,title`(查重)
+4. 现有 open loop-managed PRs:`gh pr list --label "crnd:lifecycle:managed" --state open --json number,title`(查重)
 
 ## 输出 artifact
 

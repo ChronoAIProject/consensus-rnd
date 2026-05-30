@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Project-rules fixed point and phase-4 runtime source contracts."""
+"""Project-rules fixed point and publish runtime source contracts."""
 
 from __future__ import annotations
 

@@ -58,8 +58,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for pattern in (
             r"^## Controller Contract Index$",
             r"^## Host .+$",
-            r"^## Phase Index$",
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Workflow Stage Index$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Loop control$",
             r"^## Label .+$",
             r"^## Hard rules .+$",
@@ -74,8 +74,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "⟦AI:AUTO-LOOP⟧",
             "#status-and-escalation-templates",
             "Controller = pure orchestration",
-            "#phase-0-details",
-            "Phase 0",
+            "#bootstrap-details",
+            "Consensus-rnd Phase bootstrap",
             "phase routing",
             "3/3",
             "CODEX_FLOOR",
@@ -93,11 +93,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
             "## Milestone priority",
-            "🎯 milestone",
+            "crnd:milestone:current",
             "orthogonal third axis",
+            "Legacy milestone labels are migration aliases only",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
-            "milestone members = GitHub `🎯 milestone` label",
+            "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
             ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
         )
         for needle in required:
@@ -107,7 +108,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_first_wakeup_bootstrap_obligations_are_ordered_in_skill_alone(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -161,7 +162,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         self.assertTrue(skeleton)
         self.assertIn("consensus-rnd-cli wakeup-plan", skeleton)
@@ -191,7 +192,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         skeleton = section_between(
             self.skill,
             r"^## Wakeup Skeleton$",
-            r"^## Phase Index$",
+            r"^## Workflow Stage Index$",
         )
         checklist = section_between(
             self.skill,
@@ -258,7 +259,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_phase0_bootstrap_uses_session_monitor_not_first_wakeup_substitute(self) -> None:
         phase0 = section_between(
             self.skill,
-            r"^## Phase 0 .+Bootstrap .+$",
+            r"^## Consensus-rnd Phase bootstrap .+Bootstrap .+$",
             r"^## Phase Routing$",
         )
         self.assertTrue(phase0)
@@ -325,7 +326,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
     def test_phase9_router_daemon_boundary_is_narrow(self) -> None:
         self.assertIn("consensus-rnd-cli phase9-router", self.skill)
-        self.assertIn("narrow Phase 9 allowlist", self.skill)
+        self.assertIn("narrow Consensus-rnd Phase design-consensus allowlist", self.skill)
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
@@ -419,6 +420,57 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("host.env` is the only runtime fact injection point", host_config)
         self.assertNotIn("| Variable | Meaning | Default / example |", host_config)
         self.assertNotIn("| Variable | Prompt meaning | Empty behavior |", host_config)
+
+    def test_issue205_dogfood_anti_rules_are_local_contract(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+        section = section_between(
+            self.skill,
+            r"^## Dogfood anti-rules\(per #205\)$",
+            r"^## Wakeup Skeleton$",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "only one active `audit-iter-N`",
+            "fails closed when `ITERATION` is empty",
+            "do not write `audit-iter-.md`",
+            "must be registered in `test_marker_emission_contract.py` prompt inventory",
+            "PROMPT_ALLOWLISTS",
+            "PROMPT_ARTIFACT_PROFILES",
+            "review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`",
+            "fall back to clean log-tail `REVIEW_DONE` markers",
+            "consensus-rnd-cli restart-daemons",
+            "must not hand-kill daemon processes",
+            "probe process lists as liveness authority",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        forbidden = ("WorkerCompletionEvidence", "AuditRunLease", "restart-daemons --force")
+        for token in forbidden:
+            with self.subTest(token=token):
+                self.assertNotIn(token, self.skill)
+
+    def test_issue205_audit_prompt_fails_closed_on_empty_iteration(self) -> None:
+        # Refactor (iter205/issue-205):
+        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
+        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
+        audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
+        section = section_between(
+            audit_prompt,
+            r"^## 渲染身份 fail-closed\(强制\)$",
+            r"^## 强制流程",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "`ITERATION` 为空",
+            "立即输出 `AUDIT_INCOMPLETE:missing-iteration`",
+            "禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`",
+            "`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`",
+            "audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
 
 if __name__ == "__main__":

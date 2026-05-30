@@ -16,6 +16,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
 from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
@@ -47,6 +48,39 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertTrue(is_controller_post("hello", "body\n⟦AI:AUTO-LOOP⟧"))
         self.assertTrue(is_controller_post("## 📊 status", "body"))
         self.assertFalse(is_controller_post("plain maintainer note", "plain maintainer note"))
+
+    def test_targets_queries_canonical_and_legacy_managed_labels_for_issues_and_prs(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        responses = {
+            ("issue", label_catalog.MANAGED): "8\n2\n",
+            ("issue", "auto-loop"): "2\n11\n",
+            ("issue", "phase9-auto-solve"): "11\n",
+            ("issue", "refactor-design-needed"): "",
+            ("pr", label_catalog.MANAGED): "3\n8\n",
+            ("pr", "auto-loop"): "1\n3\n",
+            ("pr", "phase9-auto-solve"): "",
+            ("pr", "refactor-design-needed"): "8\n",
+        }
+        calls: list[tuple[str, str]] = []
+
+        def fake_run(command, cwd, *, check):
+            del cwd, check
+            self.assertEqual(command[0], "gh")
+            kind = command[1]
+            label = command[command.index("--label") + 1]
+            calls.append((kind, label))
+            return mock.Mock(returncode=0, stdout=responses[(kind, label)], stderr="")
+
+        with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
+            self.assertEqual(monitor.targets(), ["1", "2", "3", "8", "11"])
+
+        expected_calls = {
+            (kind, label)
+            for kind in ("issue", "pr")
+            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+        }
+        self.assertEqual(set(calls), expected_calls)
+        self.assertEqual(len(calls), len(expected_calls))
 
     def test_team_comment_reacts_appends_pending_event_and_marks_seen(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)

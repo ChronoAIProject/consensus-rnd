@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop import labels
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
@@ -49,9 +51,62 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
 
-    def test_apply_marker_rejects_unbounded_paths(self) -> None:
-        self.assertEqual(2, self.actions.apply_dev_sync_request_marker("DEV_SYNC_REQUEST:/tmp/out.json"))
+    def test_triage_apply_marker_rejects_unbounded_paths(self) -> None:
         self.assertEqual(2, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:x:accept:/tmp/out.json"))
+
+    def test_triage_apply_marker_accepts_valid_marker_through_internal_apply_path(self) -> None:
+        runs = self.tmp / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        comment = runs / "triage-comment.md"
+        comment.write_text("comment\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        decision = runs / "triage-issue-53.json"
+        decision.write_text(
+            json.dumps(
+                {
+                    "schema": "ManualIssueTriageDecision",
+                    "issue_number": 53,
+                    "verdict": "reject",
+                    "body_artifact_path": "",
+                    "comment_artifact_path": ".refactor-loop/runs/triage-comment.md",
+                    "add_labels": [],
+                    "remove_labels": [labels.TRIAGE_PENDING],
+                    "sentinel_present": True,
+                    "lifecycle_owner": "controller",
+                    "lifecycle_authority": False,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, repo: Path, repo_slug: str | None = None) -> subprocess.CompletedProcess[str]:
+            self.assertEqual(self.tmp.resolve(), repo)
+            self.assertEqual("owner/repo", repo_slug)
+            calls.append(args)
+            return subprocess.CompletedProcess(["gh", *args], 0, "", "")
+
+        marker = "TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/triage-issue-53.json"
+        with mock.patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+            with mock.patch("codex_refactor_loop.triage.run_gh", fake_gh):
+                with mock.patch(
+                    "codex_refactor_loop.controller_actions.subprocess.run",
+                    side_effect=AssertionError("controller marker path must not shell through apply-triage"),
+                ):
+                    self.assertEqual(0, self.actions.apply_triage_decision_marker(marker))
+
+        self.assertEqual(
+            calls,
+            [
+                ["issue", "comment", "53", "--body-file", str(comment.resolve())],
+                ["issue", "edit", "53", "--remove-label", "auto-loop-triage"],
+            ],
+        )
+        applied = json.loads(
+            (runs / "triage-decisions-applied" / "triage-issue-53.applied.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("applied", applied["status"])
+        self.assertEqual("reject", applied["reason"])
 
     def test_open_release_rollup_pr_uses_throwaway_head_and_preserves_integration_ref(self) -> None:
         event = {
@@ -212,6 +267,16 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+        edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
+        self.assertEqual("77", edit_call[2])
+        self.assertEqual(
+            ",".join((labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO)),
+            edit_call[edit_call.index("--add-label") + 1],
+        )
+        self.assertNotIn("auto-loop", edit_call)
+        self.assertNotIn("🚀 phase:pr-open", edit_call)
+        self.assertNotIn("👀 phase:reviewing", edit_call)
+        self.assertNotIn("🤖 human:auto-推进", edit_call)
 
     def test_merge_pr_fresh_foreign_or_unknown_ownership_noops_before_merge(self) -> None:
         cases = (
@@ -266,10 +331,16 @@ class ControllerActionsTests(unittest.TestCase):
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_dev_sync_request_marker", "apply_triage_decision_marker", "render_template"):
+        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
+
+    def test_legacy_dev_sync_request_controller_apply_is_removed(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertNotIn("apply_dev_sync_request_marker", text)
+        self.assertNotIn("DEV_SYNC_REQUEST:", text)
+        self.assertNotIn("apply-sync", text)
 
     def test_rollup_helper_uses_throwaway_head_ref(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

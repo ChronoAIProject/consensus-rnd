@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Behavior tests for packaged integration sync request/apply modules."""
+"""Behavior tests for packaged integration sync operation/executor modules."""
 
 from __future__ import annotations
 
@@ -15,18 +15,18 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.sync import apply as sync_apply
 from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
-from codex_refactor_loop.sync.requests import (
-    IntegrationSyncRequest,
-    IntegrationSyncRequestError,
-    validate_request_dict,
-    write_request_artifact,
+from codex_refactor_loop.sync.executor import IntegrationSyncExecutor
+from codex_refactor_loop.sync.operations import (
+    IntegrationSyncOperation,
+    IntegrationSyncOperationError,
+    validate_operation_dict,
+    write_operation_artifact,
 )
 
 
-SYNC_APPLY = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "apply.py"
-SYNC_REQUESTS = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "requests.py"
+SYNC_EXECUTOR = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "executor.py"
+SYNC_OPERATIONS = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "operations.py"
 
 
 class FakeGit:
@@ -41,6 +41,7 @@ class FakeGit:
         dirty: bool = False,
         ff_fails: bool = False,
         ancestor_ok: bool = True,
+        unresolved: bool = False,
     ) -> None:
         self.remote_sha = remote_sha
         self.head_sha = head_sha
@@ -50,6 +51,7 @@ class FakeGit:
         self.dirty = dirty
         self.ff_fails = ff_fails
         self.ancestor_ok = ancestor_ok
+        self.unresolved = unresolved
         self.commands: list[list[str]] = []
         self.merge_head = Path("/tmp/no-merge-head")
 
@@ -67,6 +69,8 @@ class FakeGit:
             return subprocess.CompletedProcess(cmd, 1 if self.dirty else 0, "", "")
         if cmd[:3] == ["git", "diff", "--cached"]:
             return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:4] == ["git", "diff", "--name-only", "--diff-filter=U"]:
+            return subprocess.CompletedProcess(cmd, 0, "conflict.txt\n" if self.unresolved else "", "")
         if cmd[:3] == ["git", "rev-list", "--count"]:
             if cmd[3] == "origin/auto-refact-dev..HEAD":
                 return subprocess.CompletedProcess(cmd, 0, f"{self.ahead_count}\n", "")
@@ -79,10 +83,10 @@ class FakeGit:
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
 
-class PackagedIntegrationSyncRequestTests(unittest.TestCase):
-    def valid_request(self) -> dict:
+class PackagedIntegrationSyncOperationTests(unittest.TestCase):
+    def valid_operation(self) -> dict:
         return {
-            "schema": "IntegrationSyncRequest",
+            "schema": "IntegrationSyncOperation",
             "kind": "push-local-ahead",
             "integration_branch": "auto-refact-dev",
             "review_base_branch": "dev",
@@ -90,40 +94,37 @@ class PackagedIntegrationSyncRequestTests(unittest.TestCase):
             "expected_remote_sha": "remote-sha",
             "evidence": {"reason": "test"},
             "created_at": "2026-05-27T00:00:00Z",
-            "lifecycle_owner": "controller",
-            "lifecycle_authority": False,
+            "executor": "dev_sync_daemon",
+            "authority": "integration-branch-git-allowlist",
         }
 
-    def test_schema_accepts_existing_artifact_shape_and_rejects_command_envelope_fields(self) -> None:
-        request = validate_request_dict(self.valid_request())
-        self.assertEqual("IntegrationSyncRequest", request.schema)
-        self.assertEqual("controller", request.lifecycle_owner)
-        self.assertFalse(request.lifecycle_authority)
+    def test_operation_schema_has_daemon_executor_not_controller_owner(self) -> None:
+        operation = validate_operation_dict(self.valid_operation())
+        self.assertEqual("IntegrationSyncOperation", operation.schema)
+        self.assertEqual("dev_sync_daemon", operation.executor)
+        self.assertEqual("integration-branch-git-allowlist", operation.authority)
 
+        for field in ("lifecycle_owner", "lifecycle_authority"):
+            data = self.valid_operation()
+            data[field] = "controller"
+            with self.subTest(field=field):
+                with self.assertRaises(IntegrationSyncOperationError):
+                    validate_operation_dict(data)
+
+    def test_schema_rejects_command_envelope_fields(self) -> None:
         for field in ("argv", "args", "shell", "command", "commands", "cmd", "git", "git_verb", "target_ref"):
-            data = self.valid_request()
+            data = self.valid_operation()
             data[field] = "git push"
             with self.subTest(field=field):
-                with self.assertRaises(IntegrationSyncRequestError):
-                    validate_request_dict(data)
+                with self.assertRaises(IntegrationSyncOperationError):
+                    validate_operation_dict(data)
 
-    def test_schema_requires_controller_owner_and_no_lifecycle_authority(self) -> None:
-        data = self.valid_request()
-        data["lifecycle_owner"] = "daemon"
-        with self.assertRaisesRegex(IntegrationSyncRequestError, "lifecycle_owner must be controller"):
-            validate_request_dict(data)
-
-        data = self.valid_request()
-        data["lifecycle_authority"] = True
-        with self.assertRaisesRegex(IntegrationSyncRequestError, "lifecycle_authority must be false"):
-            validate_request_dict(data)
-
-    def test_write_request_artifact_preserves_existing_path_and_json_contract(self) -> None:
+    def test_write_operation_artifact_uses_operation_path_and_json_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            path = write_request_artifact(
+            path = write_operation_artifact(
                 repo,
-                IntegrationSyncRequest(
+                IntegrationSyncOperation(
                     kind="forward-sync-review-base",
                     integration_branch="auto-refact-dev",
                     review_base_branch="dev",
@@ -134,29 +135,27 @@ class PackagedIntegrationSyncRequestTests(unittest.TestCase):
                 ),
             )
 
-            self.assertRegex(path.as_posix(), r"\.refactor-loop/runs/integration-sync-request-forward_sync_review_base-[0-9]+\.json$")
+            self.assertRegex(path.as_posix(), r"\.refactor-loop/runs/integration-sync-operation-forward-sync-review-base-[0-9]+\.json$")
             payload = json.loads(path.read_text(encoding="utf-8"))
-            self.assertEqual("IntegrationSyncRequest", payload["schema"])
-            self.assertEqual("controller", payload["lifecycle_owner"])
-            self.assertFalse(payload["lifecycle_authority"])
+            self.assertEqual("IntegrationSyncOperation", payload["schema"])
+            self.assertEqual("dev_sync_daemon", payload["executor"])
+            self.assertEqual("integration-branch-git-allowlist", payload["authority"])
+            self.assertNotIn("lifecycle_owner", payload)
 
 
-class PackagedIntegrationSyncApplyTests(unittest.TestCase):
+class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         self.worktree = self.repo / "wt"
         self.worktree.mkdir()
-        self.request_path = self.repo / ".refactor-loop" / "runs" / "integration-sync-request-test.json"
-        self.request_path.parent.mkdir(parents=True)
-        self.write_request({})
+        self.executor = IntegrationSyncExecutor(record_stem="integration-sync-operation-test")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def valid_request(self) -> dict:
-        return {
-            "schema": "IntegrationSyncRequest",
+    def operation(self, **updates) -> IntegrationSyncOperation:
+        data = {
             "kind": "push-local-ahead",
             "integration_branch": "auto-refact-dev",
             "review_base_branch": "dev",
@@ -164,39 +163,30 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
             "expected_remote_sha": "remote-sha",
             "evidence": {"reason": "test"},
             "created_at": "2026-05-27T00:00:00Z",
-            "lifecycle_owner": "controller",
-            "lifecycle_authority": False,
         }
-
-    def write_request(self, updates: dict) -> None:
-        data = self.valid_request()
         data.update(updates)
-        self.request_path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+        return IntegrationSyncOperation(**data)
 
-    def applied_record(self) -> Path:
-        return self.repo / ".refactor-loop" / "runs" / "integration-sync-applied" / f"{self.request_path.stem}.applied.json"
+    def record(self, status: str) -> Path:
+        return self.repo / ".refactor-loop" / "runs" / "integration-sync-executions" / f"integration-sync-operation-test.{status}.json"
 
-    def rejected_record(self) -> Path:
-        return self.repo / ".refactor-loop" / "runs" / "integration-sync-applied" / f"{self.request_path.stem}.rejected.json"
-
-    def apply(self, fake: FakeGit) -> int:
+    def execute(self, operation: IntegrationSyncOperation, fake: FakeGit):
         if fake.merge_in_progress:
             fake.merge_head = self.worktree / ".git" / "MERGE_HEAD"
             fake.merge_head.parent.mkdir(parents=True, exist_ok=True)
             fake.merge_head.write_text("merge\n", encoding="utf-8")
-        return sync_apply.apply_request(
-            self.request_path,
+        return self.executor.execute(
+            operation,
             repo=self.repo,
             worktree=self.worktree,
             env={"INTEGRATION_BRANCH": "auto-refact-dev", "REVIEW_BASE_BRANCH": "dev"},
             command_runner=fake,
         )
 
-    def test_apply_kinds_preserve_controller_owned_git_allowlist_and_records(self) -> None:
+    def test_execute_kinds_preserve_daemon_git_allowlist_and_records(self) -> None:
         cases = [
             (
-                "push-local-ahead",
-                {},
+                self.operation(kind="push-local-ahead"),
                 FakeGit(),
                 [
                     ["git", "rev-list", "--count", "origin/auto-refact-dev..HEAD"],
@@ -204,17 +194,21 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
                 ],
             ),
             (
-                "continue-resolved-merge",
-                {},
+                self.operation(kind="reset-to-remote"),
+                FakeGit(),
+                [["git", "reset", "--hard", "origin/auto-refact-dev"]],
+            ),
+            (
+                self.operation(kind="continue-resolved-merge"),
                 FakeGit(merge_in_progress=True),
                 [
+                    ["git", "diff", "--name-only", "--diff-filter=U"],
                     ["git", "merge", "--continue"],
                     ["git", "push", "origin", "HEAD:auto-refact-dev"],
                 ],
             ),
             (
-                "forward-sync-review-base",
-                {},
+                self.operation(kind="forward-sync-review-base"),
                 FakeGit(),
                 [
                     ["git", "merge", "--ff-only", "origin/dev"],
@@ -222,8 +216,7 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
                 ],
             ),
             (
-                "adopt-merged-rollup",
-                {"old_rollup_head": "old-head", "old_rollup_ahead_count": 1},
+                self.operation(kind="adopt-merged-rollup", old_rollup_head="old-head", old_rollup_ahead_count=1),
                 FakeGit(replay_count=1),
                 [
                     ["git", "merge-base", "--is-ancestor", "old-head", "origin/auto-refact-dev"],
@@ -235,27 +228,27 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
             ),
         ]
 
-        for kind, updates, fake, expected in cases:
-            with self.subTest(kind=kind):
-                self.write_request({"kind": kind, **updates})
-                marker = self.applied_record()
+        for operation, fake, expected in cases:
+            with self.subTest(kind=operation.kind):
+                marker = self.record("applied")
                 if marker.exists():
                     marker.unlink()
 
-                self.assertEqual(0, self.apply(fake))
+                result = self.execute(operation, fake)
+                self.assertTrue(result.ok)
                 applied = json.loads(marker.read_text(encoding="utf-8"))
                 self.assertEqual("applied", applied["status"])
-                self.assertEqual(kind, applied["reason"])
+                self.assertEqual(operation.kind, applied["reason"])
                 for command in expected:
                     self.assertIn(command, fake.commands)
                 self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
 
     def test_forward_sync_review_base_falls_back_to_no_ff_merge_then_push(self) -> None:
-        self.write_request({"kind": "forward-sync-review-base"})
         fake = FakeGit(ff_fails=True)
 
-        self.assertEqual(0, self.apply(fake))
+        result = self.execute(self.operation(kind="forward-sync-review-base"), fake)
 
+        self.assertTrue(result.ok)
         self.assertIn(["git", "merge", "--ff-only", "origin/dev"], fake.commands)
         self.assertIn(
             [
@@ -263,7 +256,7 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
                 "merge",
                 "--no-ff",
                 "-m",
-                "Sync auto-refact-dev with dev (controller apply)",
+                "Sync auto-refact-dev with dev (daemon apply)",
                 "origin/dev",
             ],
             fake.commands,
@@ -271,11 +264,11 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
         self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
     def test_adopt_merged_rollup_zero_replay_resets_to_review_base_and_force_with_lease_pushes(self) -> None:
-        self.write_request({"kind": "adopt-merged-rollup", "old_rollup_head": "old-head", "old_rollup_ahead_count": 0})
         fake = FakeGit(replay_count=0)
 
-        self.assertEqual(0, self.apply(fake))
+        result = self.execute(self.operation(kind="adopt-merged-rollup", old_rollup_head="old-head", old_rollup_ahead_count=0), fake)
 
+        self.assertTrue(result.ok)
         self.assertIn(["git", "reset", "--hard", "origin/dev"], fake.commands)
         self.assertNotIn(["git", "reset", "--hard", "origin/auto-refact-dev"], fake.commands)
         self.assertNotIn(["git", "rebase", "--rebase-merges", "--onto", "origin/dev", "old-head"], fake.commands)
@@ -284,33 +277,34 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
             fake.commands,
         )
 
-    def test_apply_rechecks_live_state_and_rejects_stale_dirty_or_invalid_requests(self) -> None:
-        stale_remote = FakeGit(remote_sha="new-remote")
-        self.assertEqual(2, self.apply(stale_remote))
-        self.assertIn("stale expected_remote_sha", self.rejected_record().read_text(encoding="utf-8"))
+    def test_rechecks_live_state_and_rejects_stale_dirty_unresolved_or_invalid_operations(self) -> None:
+        result = self.execute(self.operation(), FakeGit(remote_sha="new-remote"))
+        self.assertFalse(result.ok)
+        self.assertIn("stale expected_remote_sha", self.record("rejected").read_text(encoding="utf-8"))
 
-        self.write_request({})
-        dirty = FakeGit(dirty=True)
-        self.assertEqual(2, self.apply(dirty))
-        self.assertIn("dirty non-merge worktree", self.rejected_record().read_text(encoding="utf-8"))
+        result = self.execute(self.operation(), FakeGit(dirty=True))
+        self.assertFalse(result.ok)
+        self.assertIn("dirty non-merge worktree", self.record("rejected").read_text(encoding="utf-8"))
 
-        self.write_request({"kind": "adopt-merged-rollup", "old_rollup_head": "old-head", "old_rollup_ahead_count": 1})
-        bad_ancestor = FakeGit(ancestor_ok=False)
-        self.assertEqual(2, self.apply(bad_ancestor))
-        self.assertIn("invalid rollup ancestry", self.rejected_record().read_text(encoding="utf-8"))
+        result = self.execute(self.operation(kind="continue-resolved-merge"), FakeGit(merge_in_progress=True, unresolved=True))
+        self.assertFalse(result.ok)
+        self.assertIn("merge has unresolved paths", self.record("rejected").read_text(encoding="utf-8"))
 
-    def test_apply_rejects_already_applied_marker_and_request_flag(self) -> None:
-        marker = self.applied_record()
+        result = self.execute(
+            self.operation(kind="adopt-merged-rollup", old_rollup_head="old-head", old_rollup_ahead_count=1),
+            FakeGit(ancestor_ok=False),
+        )
+        self.assertFalse(result.ok)
+        self.assertIn("invalid rollup ancestry", self.record("rejected").read_text(encoding="utf-8"))
+
+    def test_rejects_already_executed_record(self) -> None:
+        marker = self.record("applied")
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("{}\n", encoding="utf-8")
 
-        self.assertEqual(2, self.apply(FakeGit()))
-        self.assertIn("already-applied", self.rejected_record().read_text(encoding="utf-8"))
-
-        marker.unlink()
-        self.write_request({"applied": True})
-        self.assertEqual(2, self.apply(FakeGit()))
-        self.assertIn("already-applied", self.rejected_record().read_text(encoding="utf-8"))
+        result = self.execute(self.operation(), FakeGit())
+        self.assertFalse(result.ok)
+        self.assertIn("already-executed", self.record("rejected").read_text(encoding="utf-8"))
 
     def test_pr_targeted_apply_fresh_foreign_or_unknown_ownership_rejects_before_git_push(self) -> None:
         cases = (
@@ -319,49 +313,52 @@ class PackagedIntegrationSyncApplyTests(unittest.TestCase):
         )
         for decision in cases:
             with self.subTest(reason=decision.reason):
-                self.write_request({"pr_number": 77})
-                rejected = self.rejected_record()
+                operation = self.operation(pr_number=77)
+                rejected = self.record("rejected")
                 if rejected.exists():
                     rejected.unlink()
                 fake = FakeGit()
 
-                with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+                with mock.patch("codex_refactor_loop.sync.executor.GitHubWorkOwnership") as ownership_cls:
                     ownership_cls.return_value.decide.return_value = decision
-                    self.assertEqual(2, self.apply(fake))
+                    result = self.execute(operation, fake)
 
-                self.assertIn(f"ownership not allowed: {decision.reason}", self.rejected_record().read_text(encoding="utf-8"))
+                self.assertFalse(result.ok)
+                self.assertIn(f"ownership not allowed: {decision.reason}", self.record("rejected").read_text(encoding="utf-8"))
                 self.assertNotIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
     def test_pr_targeted_apply_stale_takeover_posts_notice_before_git_push(self) -> None:
-        self.write_request({"pr_number": 77})
+        operation = self.operation(pr_number=77)
         fake = FakeGit()
         stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
 
-        with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+        with mock.patch("codex_refactor_loop.sync.executor.GitHubWorkOwnership") as ownership_cls:
             ownership_cls.return_value.decide.return_value = stale
             ownership_cls.return_value.post_takeover_notice.return_value = True
-            self.assertEqual(0, self.apply(fake))
+            result = self.execute(operation, fake)
 
+        self.assertTrue(result.ok)
         ownership_cls.return_value.post_takeover_notice.assert_called_once_with(stale)
         self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
     def test_pr_targeted_apply_stale_takeover_notice_failure_rejects_before_git_push(self) -> None:
-        self.write_request({"pr_number": 77})
+        operation = self.operation(pr_number=77)
         fake = FakeGit()
         stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 77), "other", "alice", 4.0)
 
-        with mock.patch("codex_refactor_loop.sync.apply.GitHubWorkOwnership") as ownership_cls:
+        with mock.patch("codex_refactor_loop.sync.executor.GitHubWorkOwnership") as ownership_cls:
             ownership_cls.return_value.decide.return_value = stale
             ownership_cls.return_value.post_takeover_notice.return_value = False
-            self.assertEqual(2, self.apply(fake))
+            result = self.execute(operation, fake)
 
-        self.assertIn("ownership stale takeover notice failed", self.rejected_record().read_text(encoding="utf-8"))
+        self.assertFalse(result.ok)
+        self.assertIn("ownership stale takeover notice failed", self.record("rejected").read_text(encoding="utf-8"))
         self.assertNotIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
     def test_modules_are_import_safe_without_repo_root(self) -> None:
-        for module in ("codex_refactor_loop.sync.requests", "codex_refactor_loop.sync.apply"):
+        for module in ("codex_refactor_loop.sync.operations", "codex_refactor_loop.sync.executor"):
             with self.subTest(module=module):
                 result = subprocess.run(
                     [sys.executable, "-c", f"import {module}; print('ok')"],
@@ -373,33 +370,38 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
                 self.assertEqual(0, result.returncode, result.stderr)
                 self.assertEqual("ok", result.stdout.strip())
 
-    def test_source_preserves_artifact_markers_host_env_and_controller_boundary(self) -> None:
-        combined = SYNC_REQUESTS.read_text(encoding="utf-8") + "\n" + SYNC_APPLY.read_text(encoding="utf-8")
+    def test_source_preserves_artifact_host_env_and_daemon_boundary(self) -> None:
+        combined = SYNC_OPERATIONS.read_text(encoding="utf-8") + "\n" + SYNC_EXECUTOR.read_text(encoding="utf-8")
         for required in (
-            "IntegrationSyncRequest",
-            "DEV_SYNC_REQUEST:",
-            "INTEGRATION_SYNC_APPLIED:",
-            "INTEGRATION_SYNC_REJECTED:",
+            "IntegrationSyncOperation",
+            "dev_sync_daemon",
+            "integration-branch-git-allowlist",
             ".refactor-loop",
-            "integration-sync-request-",
-            "integration-sync-applied",
-            "REPO_ROOT",
-            "WORKTREE",
+            "integration-sync-operation-",
+            "integration-sync-executions",
             "INTEGRATION_BRANCH",
             "INTEGRATION",
             "REVIEW_BASE_BRANCH",
             "REVIEW_BASE",
-            "lifecycle_owner",
-            "lifecycle_authority",
-            "controller",
-            "false",
+            "reset-to-remote",
             "--force-with-lease=refs/heads/",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
 
+        for forbidden in (
+            "IntegrationSyncRequest",
+            "DEV_SYNC_REQUEST:",
+            "lifecycle_owner",
+            "lifecycle_authority",
+            "apply-sync",
+            "sync-request",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
+
     def test_source_keeps_narrow_allowlist_and_forbids_generic_lifecycle_tokens(self) -> None:
-        combined = SYNC_REQUESTS.read_text(encoding="utf-8") + "\n" + SYNC_APPLY.read_text(encoding="utf-8")
+        combined = SYNC_OPERATIONS.read_text(encoding="utf-8") + "\n" + SYNC_EXECUTOR.read_text(encoding="utf-8")
         for required in (
             '["git", "fetch", "origin", "--quiet"]',
             '["git", "rev-list", "--count"',
@@ -411,6 +413,7 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
             "forward-sync-review-base",
             "adopt-merged-rollup",
             "push-local-ahead",
+            "reset-to-remote",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined)

@@ -27,9 +27,9 @@ schema, or source of new authority. The executable contract remains in
 - source_round: `r7`
 - source_marker: `META_JUDGE_DONE:consensus`
 - skill_anchor: `#named-runtime-exception--integration-sync-daemonper-53`
-- allowed: detect and emit integration sync request artifacts in the dedicated integration worktree; run read-only `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` for remote integration branch existence only; use the existing narrow integration-branch git allowlist through controller-owned apply helpers.
-- forbidden: no worker-diff commit, no PR create, merge, close, or edit, no issue lifecycle, no label lifecycle, no tag, release, direct branch update, generic lifecycle actor, or lifecycle mutation verbs from the daemon.
-- verification: `test_dev_sync_daemon_state_machine.py`, `test_runtime_exception_authorization_sources.py`
+- allowed: write integration sync operation artifacts in the dedicated integration worktree; run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`; use the existing narrow integration-branch git allowlist through daemon-owned execution: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption.
+- forbidden: no worker-diff commit, no PR create, merge, close, or edit, no issue lifecycle, no label lifecycle, no tag, release, generic lifecycle actor, or git command outside the #53 allowlist.
+- verification: `test_sync_dev.py`, `test_sync_operations_executor.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
 <a id="observability-comment-writers-53"></a>
@@ -92,7 +92,7 @@ schema, or source of new authority. The executable contract remains in
 - source_round: `r3`
 - source_marker: `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`
 - skill_anchor: `#named-runtime-exception--anti-stop-restart-helperper-49`
-- allowed: cron or launchd helper maintains singleton wrappers plus actor-owned heartbeat leases for the existing daemon allowlist and runs 24h log retention.
+- allowed: cron or launchd helper maintains singleton wrappers, actor-owned heartbeat leases, and helper-private launch fingerprints at `.refactor-loop/locks/<daemon>.fingerprint.json` for the existing daemon allowlist; pid alive plus fresh heartbeat plus current fingerprint is the only skip condition, and missing, malformed, or mismatched fingerprint data fails closed to restart; runs 24h log retention.
 - forbidden: no codex spawn, commit, push, merge, label, archive, index, new daemon, issue lifecycle, PR lifecycle, tag, release, wrapper sidecar heartbeat writer, or generic lifecycle authority.
-- verification: `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
+- verification: `test_restart_daemons.py`, `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.

@@ -14,12 +14,17 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-CLI = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
+sys.path.insert(0, str(REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts"))
+
+from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.controller_actions import ControllerActions
 
 
 def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
@@ -67,8 +72,29 @@ class SafePushHelperTests(unittest.TestCase):
         env = os.environ.copy()
         env.update({"REPO_ROOT": str(self.local)})
         parts = fn_call.split()
-        command = {"safe_push": "safe-push", "safe_sync_main": "safe-sync-main"}[parts[0]]
-        return subprocess.run([sys.executable, str(CLI), command, *parts[1:]], env=env, text=True, capture_output=True)
+        stdout = StringIO()
+        stderr = StringIO()
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            os.environ.update(env)
+            actions = ControllerActions(LoopContext.load(env=env, cwd=self.local))
+            remote = parts[1] if len(parts) > 1 else "origin"
+            branch = parts[2] if len(parts) > 2 else ""
+            with redirect_stdout(stdout), redirect_stderr(stderr):
+                if parts[0] == "safe_push":
+                    returncode = actions.safe_push(remote, branch)
+                else:
+                    returncode = actions.safe_sync_main(remote, branch)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+        return subprocess.CompletedProcess(
+            ["controller-internal", *parts],
+            returncode,
+            stdout.getvalue(),
+            stderr.getvalue(),
+        )
 
     def test_safe_push_succeeds_when_remote_up_to_date(self) -> None:
         (self.local / "a.txt").write_text("a", encoding="utf-8")

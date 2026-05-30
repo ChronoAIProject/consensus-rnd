@@ -19,6 +19,8 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop import labels as label_catalog
+
 
 class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -117,6 +119,99 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         if cmd[:2] == ["ps", "-eo"]:
             return SimpleNamespace(returncode=0, stdout="")
         return SimpleNamespace(returncode=1, stdout="")
+
+    def test_list_auto_loop_issues_queries_canonical_and_legacy_managed_labels_once(self) -> None:
+        responses = {
+            ("issue", label_catalog.MANAGED): [
+                {
+                    "number": 71,
+                    "labels": [
+                        {"name": label_catalog.MANAGED},
+                        {"name": label_catalog.PHASE_IMPLEMENTING},
+                        {"name": label_catalog.HUMAN_AUTO},
+                    ],
+                }
+            ],
+            ("issue", "auto-loop"): [
+                {
+                    "number": 71,
+                    "labels": [
+                        {"name": label_catalog.MANAGED},
+                        {"name": label_catalog.PHASE_IMPLEMENTING},
+                        {"name": label_catalog.HUMAN_AUTO},
+                    ],
+                },
+                {
+                    "number": 72,
+                    "labels": [
+                        {"name": "auto-loop"},
+                        {"name": "🔧 phase:fixing"},
+                        {"name": "🤖 human:codex"},
+                    ],
+                },
+            ],
+            ("issue", "phase9-auto-solve"): [],
+            ("issue", "refactor-design-needed"): [],
+            ("pr", label_catalog.MANAGED): [
+                {
+                    "number": 73,
+                    "labels": [
+                        {"name": label_catalog.MANAGED},
+                        {"name": label_catalog.PHASE_REVIEWING},
+                        {"name": label_catalog.HUMAN_AUTO},
+                    ],
+                }
+            ],
+            ("pr", "auto-loop"): [
+                {
+                    "number": 73,
+                    "labels": [
+                        {"name": label_catalog.MANAGED},
+                        {"name": label_catalog.PHASE_REVIEWING},
+                        {"name": label_catalog.HUMAN_AUTO},
+                    ],
+                }
+            ],
+            ("pr", "phase9-auto-solve"): [],
+            ("pr", "refactor-design-needed"): [
+                {
+                    "number": 74,
+                    "labels": [
+                        {"name": "refactor-design-needed"},
+                        {"name": "🔍 phase:design-solving"},
+                        {"name": "🤖 human:auto-推进"},
+                    ],
+                }
+            ],
+        }
+        calls: list[tuple[str, str]] = []
+
+        def fake_by_label(cmd: list[str]) -> SimpleNamespace:
+            self.assertEqual(cmd[:2], ["gh", cmd[1]])
+            kind = cmd[1]
+            label = cmd[cmd.index("--label") + 1]
+            calls.append((kind, label))
+            return SimpleNamespace(returncode=0, stdout=json.dumps(responses[(kind, label)]))
+
+        with mock.patch.object(self.monitor, "run", side_effect=fake_by_label):
+            items = self.monitor.list_auto_loop_issues()
+
+        self.assertEqual(
+            [(item["kind"], item["number"], item["phase"]) for item in items],
+            [
+                ("issue", 71, label_catalog.PHASE_IMPLEMENTING),
+                ("issue", 72, label_catalog.PHASE_FIXING),
+                ("pr", 73, label_catalog.PHASE_REVIEWING),
+                ("pr", 74, label_catalog.PHASE_DESIGN_SOLVING),
+            ],
+        )
+        expected_calls = {
+            (kind, label)
+            for kind in ("issue", "pr")
+            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+        }
+        self.assertEqual(set(calls), expected_calls)
+        self.assertEqual(len(calls), len(expected_calls))
 
     def test_tick_writes_snapshot_json_with_required_fields(self) -> None:
         with mock.patch.object(self.monitor, "run", side_effect=self.fake_gh):
