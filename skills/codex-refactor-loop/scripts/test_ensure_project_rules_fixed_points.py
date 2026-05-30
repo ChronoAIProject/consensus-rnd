@@ -232,7 +232,6 @@ class RuntimeShellRemovalSourceTests(unittest.TestCase):
             combined,
         )
 
-
 class MetadataOnlyIssue193SourceTests(unittest.TestCase):
     # Refactor (iter193/issue-193):
     #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login

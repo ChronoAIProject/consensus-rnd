@@ -20,9 +20,6 @@ from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
 
 
-REVIEW_MARKER_TAIL_LINES = 30
-
-
 class PeekStatusLens:
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
@@ -49,8 +46,10 @@ class PeekStatusLens:
         lines.extend(self._unpushed_worker_output())
         lines.extend(["", "▍Monitor zero_streak (last 10 ticks):"])
         lines.extend(self._zero_streak())
-        lines.extend(["", "▍Mergeable PRs (controller should merge immediately):"])
-        lines.extend(self._mergeable_prs())
+        # Refactor (iter203/issue-203): Old pattern: controller decisions were
+        # split across peek, wakeup-plan, phase9-router, and concurrency. New
+        # principle: peek is observability-only; review-gate policy stays in
+        # existing wakeup-plan completed markers and controller truth tables.
         lines.extend(["", "▍Stale labels (CLOSED but still carrying in-flight phase labels):"])
         lines.extend(self._stale_labels())
         lines.extend(["", "▍Issue/PR linkage mismatch:"])
@@ -172,42 +171,6 @@ class PeekStatusLens:
         if values:
             out.append(f"  max: zero_streak={max(values)}")
             out.append(f"  current: zero_streak={values[-1]}")
-        return out
-
-    def _mergeable_prs(self) -> list[str]:
-        # Refactor (iter205/issue-205):
-        #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
-        #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
-        out = []
-        for num in self._list_by_any_label("pr", label_catalog.query_labels_for(label_catalog.MANAGED), "number"):
-            pr_num = str(num.get("number")) if isinstance(num, dict) else ""
-            if not pr_num:
-                continue
-            fail, pending, _passed = self._checks(pr_num)
-            if fail != 0 or pending != 0:
-                continue
-            max_round = self._latest_complete_review_round(pr_num)
-            if max_round == 0:
-                continue
-            approve = comment = reject = 0
-            for role in ("architect", "tests", "quality"):
-                verdict = extract_review_verdict(
-                    self.ctx.paths.runs / f"review-pr{pr_num}-{role}-r{max_round}.md",
-                    self.ctx.paths.logs / f"review-pr{pr_num}-{role}-r{max_round}.log",
-                    pr_num,
-                    role,
-                )
-                if verdict == "approve":
-                    approve += 1
-                elif verdict == "comment":
-                    comment += 1
-                elif verdict == "reject":
-                    reject += 1
-            state = self.gh_text(["pr", "view", pr_num, "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"]).strip()
-            if reject == 0 and approve >= 1:
-                out.append(f"  ✅ PR #{pr_num} [{state}] r{max_round}: MERGE_READY approve={approve} comment={comment} reject=0 — gh pr merge {pr_num} --admin --squash --delete-branch")
-            elif reject == 0 and approve == 0 and comment >= 1:
-                out.append(f"  ⏸ PR #{pr_num} [{state}] r{max_round}: WAIT_EXPLICIT_APPROVAL approve=0 comment={comment} reject=0 — do not merge")
         return out
 
     def _stale_labels(self) -> list[str]:
@@ -384,13 +347,6 @@ class PeekStatusLens:
         buckets = [item.get("bucket") for item in data if isinstance(item, dict)]
         return buckets.count("fail"), buckets.count("pending"), buckets.count("pass")
 
-    def _latest_complete_review_round(self, pr_num: str) -> int:
-        max_round = 0
-        for round_num in range(1, 7):
-            if len(list(self.ctx.paths.logs.glob(f"review-pr{pr_num}-*-r{round_num}.log"))) >= 3:
-                max_round = round_num
-        return max_round
-
     def gh_text(self, args: Sequence[str]) -> str:
         command = ["gh", *args]
         if self.ctx.gh_repo_slug:
@@ -405,44 +361,6 @@ class PeekStatusLens:
         except Exception:
             return default
         return default if parsed is None else parsed
-
-
-def extract_review_verdict_tail(log_path: Path, pr_num: str, role: str) -> str:
-    pattern = re.compile(rf"REVIEW_DONE:{re.escape(pr_num)}:{re.escape(role)}:(approve|comment|reject)")
-    verdict = ""
-    for line in _tail(log_path, REVIEW_MARKER_TAIL_LINES):
-        match = pattern.search(line)
-        if match:
-            verdict = match.group(1)
-    return verdict
-
-
-def extract_review_verdict(artifact_path: Path, log_path: Path, pr_num: str, role: str) -> str:
-    # Refactor (iter205/issue-205):
-    #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
-    #   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
-    verdict = _review_artifact_frontmatter_verdict(artifact_path)
-    if verdict:
-        return verdict
-    return extract_review_verdict_tail(log_path, pr_num, role)
-
-
-def _review_artifact_frontmatter_verdict(path: Path) -> str:
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return ""
-    if not text.startswith("---\n"):
-        return ""
-    end = text.find("\n---", 4)
-    if end == -1:
-        return ""
-    for line in text[4:end].splitlines():
-        match = re.match(r"\s*verdict\s*:\s*(approve|comment|reject)\s*$", line)
-        if match:
-            return match.group(1)
-    return ""
-
 
 def _tail(path: Path, count: int) -> list[str]:
     try:

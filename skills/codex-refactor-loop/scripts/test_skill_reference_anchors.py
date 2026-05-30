@@ -325,11 +325,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
-        # Refactor (iter193/issue-193):
-        #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
-        #   per-work ownership as a second authority for issue/PR writes.
-        #   New principle: author.login+updatedAt are metadata only; issue/PR
-        #   write permits come only from #191 ActiveControllerLease.
+        # Refactor (impl/issue191-single-active-controller): Old pattern:
+        # multi-device controller writes were described as local daemon facts.
+        # New principle: SKILL.md locks one cross-device active-controller
+        # lease and forbids per-work/distributed scheduler expansion.
         for needle in (
             "| Active controller |",
             "## Named runtime exception - active controller lease(per #191)",
