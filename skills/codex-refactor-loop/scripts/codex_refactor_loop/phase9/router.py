@@ -118,6 +118,16 @@ class Phase9LogIdentity:
     dialect: Literal["phase9", "solver", "meta-judge"]
 
 
+@dataclass(frozen=True)
+class Phase9SourceIssueDecision:
+    # Refactor (iter229/issue-229): refactor helper, no behavior change outside the source issue gate.
+    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
+    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
+    allowed: bool
+    state: str | None
+    reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
+
+
 PHASE9_LOG_RE = re.compile(
     r"^phase9-issue(?P<issue>\d+)-r(?P<round>\d+)-"
     r"(?P<actor>minimal|structural|delete|judge|reflector)\.log$"
@@ -158,6 +168,9 @@ def parse_phase9_log_identity(name: str) -> Phase9LogIdentity | None:
 
 
 class Phase9Router:
+    # Refactor (iter229/issue-229):
+    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
+    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
     # Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
     # New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
     def __init__(
@@ -192,11 +205,13 @@ class Phase9Router:
         # existing phase9-router-fallback lines in pending-events to seed the
         # dedup set, making restarts idempotent.
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
+        self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
 
     def tick(self) -> None:
         self.loop_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        self._source_issue_decisions = {}
         ledger = self._read_ledger()
         markers = self._collect_markers()
         self._dispatch_solver_triplets(markers, ledger)
@@ -341,6 +356,8 @@ class Phase9Router:
             key = event.get("key")
             if isinstance(key, str) and key.startswith("phase9-triplet-evidence-invalid:"):
                 seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-source-eligibility:"):
+                seen.add(key)
         return seen
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
@@ -365,6 +382,9 @@ class Phase9Router:
     #   New principle: keep row-level router-private ledger provenance and a
     #   narrow fail-closed peer artifact token check on this route; do not add a
     #   standalone evidence file, hash, or lifecycle authority.
+    # Refactor (iter229/issue-229):
+    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
+    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
         judge_role = self._judge_role()
@@ -380,6 +400,14 @@ class Phase9Router:
             key = self._key(issue, round_no, judge_role)
             log_path = self._log_path(issue, round_no, judge_role)
             if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, judge_role):
+                continue
+            if not self._require_open_source_issue(
+                issue,
+                round_no,
+                "solver_triplet_to_judge",
+                "SOLVER_DONE:triplet",
+                next(iter(role_markers.values())).log_path,
+            ):
                 continue
             violation = self._peer_solver_reference_violation(issue, round_no)
             if violation is not None:
@@ -405,6 +433,9 @@ class Phase9Router:
         #   New principle: only judge-role source logs may authorize a converge
         #   dispatch (JUDGE markers come from JUDGE logs), and `target_round`
         #   must be strictly greater than the source round (monotonic).
+        # Refactor (iter229/issue-229):
+        #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
+        #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
                 if marker.role != self._judge_role():
@@ -418,6 +449,14 @@ class Phase9Router:
                     key = self._key(marker.issue, target_round, role)
                     log_path = self._log_path(marker.issue, target_round, role)
                     if key in ledger or self._in_flight(log_path):
+                        continue
+                    if not self._require_open_source_issue(
+                        marker.issue,
+                        target_round,
+                        "converge_to_next_solvers",
+                        marker.marker,
+                        marker.log_path,
+                    ):
                         continue
                     prompt = self._write_prompt(
                         marker.issue,
@@ -438,6 +477,14 @@ class Phase9Router:
                 if key in ledger or self._in_flight(log_path):
                     continue
                 if not self._stalled_predicate_holds(marker.issue, marker.round):
+                    continue
+                if not self._require_open_source_issue(
+                    marker.issue,
+                    marker.round,
+                    "stalled_to_reflector",
+                    marker.marker,
+                    marker.log_path,
+                ):
                     continue
                 prompt = self._write_prompt(marker.issue, marker.round, "reflector", self._reflector_prompt(marker))
                 if self._spawn(prompt, log_path):
@@ -470,10 +517,14 @@ class Phase9Router:
             target_round = self._round_from_converge(marker.marker)
             if target_round is None or target_round <= marker.round:
                 return False
+            if f"phase9-source-eligibility:{marker.issue}-{target_round}-converge_to_next_solvers" in self._fallback_seen:
+                return True
             return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
         if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
             if marker.role != self._judge_role():
                 return False
+            if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
+                return True
             return self._key(marker.issue, marker.round, "reflector") in ledger
         return False
 
@@ -576,6 +627,85 @@ class Phase9Router:
             "key": f"fallback:{marker.issue}-{marker.round}",
             "marker": marker.marker,
             "log_path": self._artifact_path(marker.log_path),
+            "dispatched_at": self._now(),
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _require_open_source_issue(
+        self,
+        issue: str,
+        round_no: int,
+        route: str,
+        marker: str,
+        log_path: Path,
+    ) -> bool:
+        # Refactor (iter229/issue-229):
+        #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
+        #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
+        decision = self._source_issue_decision(issue)
+        if decision.allowed:
+            return True
+        self._append_source_issue_fallback_event(issue, round_no, route, marker, log_path, decision)
+        return False
+
+    def _source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
+        if issue not in self._source_issue_decisions:
+            self._source_issue_decisions[issue] = self._read_source_issue_decision(issue)
+        return self._source_issue_decisions[issue]
+
+    def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
+        command = ["gh", "issue", "view", issue, "--json", "state"]
+        if self.ctx.gh_repo_slug:
+            command.extend(["--repo", self.ctx.gh_repo_slug])
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        if result.returncode != 0:
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        state = payload.get("state")
+        if not isinstance(state, str) or not state.strip():
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        normalized = state.strip().upper()
+        if normalized == "OPEN":
+            return Phase9SourceIssueDecision(True, normalized, "phase9-source-open")
+        return Phase9SourceIssueDecision(False, normalized, "phase9-source-not-open")
+
+    def _append_source_issue_fallback_event(
+        self,
+        issue: str,
+        round_no: int,
+        route: str,
+        marker: str,
+        log_path: Path,
+        decision: Phase9SourceIssueDecision,
+    ) -> None:
+        event_key = f"phase9-source-eligibility:{issue}-{round_no}-{route}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": decision.reason,
+            "state": decision.state,
+            "issue": issue,
+            "round": round_no,
+            "route": route,
+            "marker": marker,
+            "log_path": self._artifact_path(log_path),
             "dispatched_at": self._now(),
         }
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
