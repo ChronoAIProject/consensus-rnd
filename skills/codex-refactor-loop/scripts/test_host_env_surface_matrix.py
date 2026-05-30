@@ -154,8 +154,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
-            "ACTIVE_CONTROLLER_REF": ("refs/heads/crnd/active-controller", "default singleton pushed ref"),
             "COMMENT_MONITOR_INTERVAL": ("30", "unchanged `updatedAt` items skip comments queries"),
+            "COMMENT_MONITOR_LOOKBACK": ("", "empty adds no lookback filter"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
         }
         for key, (default, behavior) in cases.items():
@@ -170,9 +170,13 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertEqual("defaulted", self.rows["UPDATE_CHECK_INTERVAL_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["UPDATE_CHECK_TIMEOUT_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_TTL_SECONDS"]["Category"])
-        self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_REF"]["Category"])
+        self.assertNotIn("ACTIVE_CONTROLLER_REF", self.rows)
+        self.assertNotIn("ACTIVE_CONTROLLER_REF", self.exports)
+        self.assertEqual("optional-noop", self.rows["COMMENT_MONITOR_LOOKBACK"]["Category"])
+        self.assertIn("GitHub `updated:` search qualifier", self.rows["COMMENT_MONITOR_LOOKBACK"]["Missing/empty behavior"])
         self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
         self.assertIn("Mixed old/new versions are not safe for multi-device mode", read(SKILL_MD))
+        self.assertIn("active-controller lease ref is a code-owned singleton constant", read(SKILL_MD))
 
         whitelist = self.rows["MAINTAINER_WHITELIST"]
         self.assertEqual("conditional-fail-closed", whitelist["Category"])
@@ -288,6 +292,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("auto-release noop: RELEASE_AUTO_ENABLE is not true in host.env", release_gate)
         self.assertIn("empty GH_REPO_SLUG, REVIEW_BASE_BRANCH, or INTEGRATION_BRANCH", release_gate)
         self.assertIn("MAINTAINER_WHITELIST is unset; comment-monitor fails closed", comment_monitor)
+        self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', comment_monitor)
+        self.assertIn('return f"updated:>={raw}"', comment_monitor)
         self.assertIn('os.environ.get("CODEX_FLOOR", "5")', concurrency_monitor)
         self.assertIn("return max(2, floor)", concurrency_monitor)
         self.assertIn('env.get("UPDATE_CHECK_ENABLE")', read(SCRIPTS_DIR / "codex_refactor_loop" / "update_check.py"))
@@ -296,7 +302,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1", sync_dev)
         self.assertIn('env.get("ACTIVE_CONTROLLER_DEVICE_ID", "")', active_controller)
-        self.assertIn('env.get("ACTIVE_CONTROLLER_REF", DEFAULT_ACTIVE_CONTROLLER_REF)', active_controller)
+        self.assertIn("lease_ref=DEFAULT_ACTIVE_CONTROLLER_REF", active_controller)
+        self.assertNotIn('env.get("ACTIVE_CONTROLLER_REF"', active_controller)
         self.assertIn('env.get("ACTIVE_CONTROLLER_TTL_SECONDS"', active_controller)
 
 
