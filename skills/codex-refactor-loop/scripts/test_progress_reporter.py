@@ -126,6 +126,47 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertIn(log.stem, reporter._state())
 
+    def test_parse_target_accepts_exact_owner_local_log_names(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+        cases = {
+            "review-pr47-quality-r2": "47",
+            "fix-pr47-r2": "47",
+            "fix-pr47-round2": "47",
+            "fix-pr47-round-2": "47",
+            "fix-pr47-round-2-retry": "47",
+            "phase9-issue81-r10-minimal": "81",
+            "phase9-issue81-r10-structural": "81",
+            "phase9-issue81-r10-delete": "81",
+            "phase9-issue81-r10-judge": "81",
+            "phase9-issue81-r10-reflector": "81",
+        }
+        for base, expected in cases.items():
+            with self.subTest(base=base):
+                self.assertEqual(expected, reporter.parse_target(base))
+
+    def test_parse_target_rejects_malformed_near_misses_without_prompt_fallback(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+        for base in (
+            "review-pr47",
+            "review-pr47-quality",
+            "fix-pr47",
+            "fix-pr47-r",
+            "phase9-issueX-r10-minimal",
+            "phase9-issue81-r10-architect",
+            "phase9-issue81-anything",
+        ):
+            with self.subTest(base=base):
+                self.assertEqual("", reporter.parse_target(base))
+
+    def test_parse_target_uses_prompt_fallback_only_when_prompt_exists(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+        base = "phase9-issue81-r10-architect"
+        self.assertEqual("", reporter.parse_target(base))
+        prompt = self.tmp / ".refactor-loop" / "prompts" / f"{base}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("Discuss #80 then final target #81.\n", encoding="utf-8")
+        self.assertEqual("81", reporter.parse_target(base))
+
 
 class ProgressReporterSourceRegressionTests(unittest.TestCase):
     def test_forbidden_lifecycle_tokens_are_absent(self) -> None:
@@ -134,6 +175,8 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
         self.assertIn("TEST_NO_LOOP", text)
+        executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotIn(r"^phase9-issue([0-9]+).*", executable)
 
 
 if __name__ == "__main__":
