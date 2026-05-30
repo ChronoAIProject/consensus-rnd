@@ -2548,14 +2548,16 @@ Concretely, this means:
 
 Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
+Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
+
 - `crnd:phase:design-solving` with 0 codex → dispatch Consensus-rnd Phase design-consensus solver triplet (round = current_round_or_1) for that issue
 - `crnd:phase:reviewing` with 0 codex → dispatch the missing reviewer(s) for the latest head SHA
 - `crnd:phase:fixing` with 0 codex → dispatch fix codex for next round
 - `crnd:phase:implementing` with 0 codex + IMPLEMENT_DONE absent → re-dispatch implementer (or block reason banner)
-- `crnd:phase:pr-open` with 0 codex → dispatch reviewers
+- PR review work is represented by the child PR; parent issue `crnd:phase:pr-open` is non-action, expected workers 0
 - `crnd:phase:consensus-reached` with 0 codex → dispatch implement codex
 
-Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing / pr-open issues sit 0-codex is a no-gap violation, not a floor refill.
+Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-managed issue/PR already has an in-flight codex matching its canonical phase label or has documented blocked-on-maintainer reason. Spawning fresh audit while existing design-solving / fixing work sits 0-codex is a no-gap violation, not a floor refill.
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 

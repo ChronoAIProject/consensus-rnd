@@ -20,9 +20,9 @@ class LabelRuntimeCallerTests(unittest.TestCase):
     def test_concurrency_expected_dual_reads_legacy_and_canonical(self) -> None:
         monitor = object.__new__(concurrency.ConcurrencyMonitor)
         items = [
-            {"number": 1, "kind": "issue", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"},
-            {"number": 2, "kind": "pr", "phase": labels.PHASE_REVIEWING, "human": labels.HUMAN_AUTO},
-            {"number": 3, "kind": "issue", "phase": "🛠️ phase:implementing", "human": "👤 human:需-maintainer-决策"},
+            {"number": 1, "kind": "issue", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进", "labels": ["auto-loop", "🔧 phase:fixing", "🤖 human:auto-推进"]},
+            {"number": 2, "kind": "pr", "phase": labels.PHASE_REVIEWING, "human": labels.HUMAN_AUTO, "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO]},
+            {"number": 3, "kind": "issue", "phase": "🛠️ phase:implementing", "human": "👤 human:需-maintainer-决策", "labels": ["auto-loop", "🛠️ phase:implementing", "👤 human:需-maintainer-决策"]},
         ]
 
         expected, breakdown = concurrency.ConcurrencyMonitor.compute_expected(monitor, items)
