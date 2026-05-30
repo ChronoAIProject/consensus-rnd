@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import importlib
 import shutil
 import subprocess
 import sys
@@ -18,6 +19,10 @@ CHECKER_PATH = SCRIPT_PATH.with_name("consensus-rnd-cli")
 
 
 def load_checker_module():
+    scripts_dir = str(SCRIPT_PATH.parent)
+    if sys.path[0] != scripts_dir:
+        sys.path.insert(0, scripts_dir)
+    importlib.invalidate_caches()
     from codex_refactor_loop.checks import degradation
     return degradation
 
@@ -102,6 +107,15 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("not-source-repo", result.stdout)
         self.assertNotIn("required-file: skills/codex-refactor-loop", result.stdout)
+
+    def test_run_static_treats_plugin_host_root_as_not_source_repo(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+
+            findings = self.checker_module.SkillDriftChecker(host).run_static()
+
+        self.assertEqual(findings, [])
 
     def test_static_checker_fails_closed_for_damaged_source_repo_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
