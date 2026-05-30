@@ -114,7 +114,7 @@ class ActiveControllerLeaseStore:
         return cls(
             ctx.repo_root,
             owner_device=env.get("ACTIVE_CONTROLLER_DEVICE_ID", ""),
-            lease_ref=env.get("ACTIVE_CONTROLLER_REF", DEFAULT_ACTIVE_CONTROLLER_REF),
+            lease_ref=DEFAULT_ACTIVE_CONTROLLER_REF,
             ttl_seconds=ttl,
             repo_slug=ctx.gh_repo_slug or "",
         )

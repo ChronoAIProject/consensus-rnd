@@ -10,12 +10,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import os
 import sys
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.active_controller import ActiveControllerLeaseStore, DEFAULT_ACTIVE_CONTROLLER_REF
+from codex_refactor_loop.context import LoopContext
 
 
 def git(repo: Path, *args: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
@@ -218,6 +220,35 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
         self.assertEqual("local-single-device", decision.owner_device)
         refs = git(self.a, "ls-remote", "--heads", "origin", DEFAULT_ACTIVE_CONTROLLER_REF)
         self.assertEqual("", refs.stdout.strip())
+
+    def test_context_ignores_host_selected_active_controller_ref(self) -> None:
+        repo = self.a
+        (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+        (repo / ".refactor-loop" / "host.env").write_text(
+            "\n".join(
+                [
+                    f'export REPO_ROOT="{repo}"',
+                    'export GH_REPO_SLUG="owner/repo"',
+                    'export ACTIVE_CONTROLLER_DEVICE_ID="device-a"',
+                    'export ACTIVE_CONTROLLER_REF="refs/heads/crnd/per-work-split"',
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        previous = os.environ.get("REPO_ROOT")
+        os.environ["REPO_ROOT"] = str(repo)
+        try:
+            store = ActiveControllerLeaseStore.from_context(LoopContext.load(repo_root=repo, skill_root=self.tmp))
+        finally:
+            if previous is None:
+                os.environ.pop("REPO_ROOT", None)
+            else:
+                os.environ["REPO_ROOT"] = previous
+
+        self.assertEqual(DEFAULT_ACTIVE_CONTROLLER_REF, store.lease_ref)
+        self.assertNotEqual("refs/heads/crnd/per-work-split", store.lease_ref)
 
     def test_json_blob_contains_required_fields(self) -> None:
         self.assertTrue(self.store(self.a, "device-a").try_acquire("device-a", 1800).allowed)

@@ -264,6 +264,35 @@ class CommentMonitorTests(unittest.TestCase):
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
         self.assertNotIn("_item_updated", state)
 
+    def test_comment_monitor_lookback_is_limited_to_updated_search_qualifier(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        captured: list[str] = []
+
+        def fake_graphql(query, variables):
+            del query
+            captured.append(variables["searchQuery"])
+            return mock.Mock(returncode=0, stdout=json.dumps({"data": {"search": {"nodes": []}}}), stderr="")
+
+        with (
+            mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "2026-05-01"}),
+            mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql),
+        ):
+            monitor.tick()
+
+        self.assertTrue(captured)
+        self.assertTrue(all("updated:>=2026-05-01" in query for query in captured))
+        self.assertTrue(all('label:"' in query for query in captured))
+
+        captured.clear()
+        with (
+            mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "updated:>=2026-05-02"}),
+            mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql),
+        ):
+            monitor.tick()
+
+        self.assertTrue(captured)
+        self.assertTrue(all("updated:>=2026-05-02" in query for query in captured))
+
     def _search_payload(self, number: str, updated_at: str) -> dict[str, object]:
         return {
             "data": {
@@ -294,6 +323,12 @@ class CommentMonitorSourceRegressionTests(unittest.TestCase):
         self.assertIn("last_updated_at", text)
         self.assertIn("updated_at > previous", text)
         self.assertIn("comments(last: 20)", text)
+
+    def test_comment_monitor_lookback_surface_is_locked(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+        self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', text)
+        self.assertIn('raw.startswith("updated:")', text)
+        self.assertIn('return f"updated:>={raw}"', text)
 
 
 if __name__ == "__main__":

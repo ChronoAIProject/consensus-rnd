@@ -31,8 +31,8 @@ repo = Path(os.environ["REPO_ROOT"])
 name = os.environ["RESTART_DAEMON_NAME"]
 hb = Path(os.environ["RESTART_DAEMON_HEARTBEAT_FILE"])
 hb.parent.mkdir(parents=True, exist_ok=True)
-hb.write_text(str(int(os.environ.get("TEST_HEARTBEAT_EPOCH", str(int(time.time()))))) + "\\n")
 (repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8").write(str(os.getpid()) + "\\n")
+hb.write_text(str(int(os.environ.get("TEST_HEARTBEAT_EPOCH", str(int(time.time()))))) + "\\n")
 running = True
 def stop(_signum, _frame):
     global running
@@ -40,7 +40,7 @@ def stop(_signum, _frame):
 signal.signal(signal.SIGTERM, stop)
 signal.signal(signal.SIGINT, stop)
 while running:
-    time.sleep(0.05)
+    signal.pause()
 """
 
 
@@ -90,11 +90,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
 
     def assert_start_count(self, name: str, expected: int) -> None:
-        deadline = time.time() + 2
-        while time.time() < deadline:
-            if self.start_count(name) == expected:
-                return
-            time.sleep(0.02)
         self.assertEqual(expected, self.start_count(name))
 
     def read_pid(self, name: str) -> int:
