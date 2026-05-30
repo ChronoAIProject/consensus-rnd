@@ -25,12 +25,25 @@ from ..context import LoopContext
 #   preserving every marker, required check name, authorization path, and narrow
 #   allowlist literal for future CLI import.
 # Refactor (impl/issue235-delete-downstream-watch): Old pattern: the checker required downstream runtime watch hooks and alert surfaces. New principle: skill-degradation is source-repo CI/release validation only; downstream hosts have no runtime watch surface.
+# Refactor (iter259/issue-259):
+#   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1)
+#   New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py
 
 CHECK_NAME = "skill-degradation"
 SKILL_RELATIVE = Path("skills/codex-refactor-loop")
 SCRIPT_RELATIVE = SKILL_RELATIVE / "scripts"
 CI_WORKFLOW = Path(".github/workflows/consensus-rnd-ci.yml")
 RELEASE_WORKFLOW = Path(".github/workflows/release.yml")
+
+SOURCE_REPO_SENTINELS = (
+    Path("skills/codex-refactor-loop/SKILL.md"),
+    Path(".version-bump.json"),
+    Path(".codex-plugin/plugin.json"),
+    Path(".claude-plugin/plugin.json"),
+    Path(".cursor-plugin/plugin.json"),
+    Path("gemini-extension.json"),
+    CI_WORKFLOW,
+)
 
 FORBIDDEN_RUNTIME_FILES = (
     SCRIPT_RELATIVE / "degradation_watchdog.py",
@@ -84,6 +97,7 @@ REQUIRED_SKILL_MARKERS = (
     "## Skill degradation source-repo validation",
     "consensus-rnd-cli check-degradation --static",
     "source-repo CI/release validation",
+    "not-source-repo",
     "downstream host has no runtime watch",
     "no alert log",
     "no pending event",
@@ -187,6 +201,8 @@ class SkillDriftChecker:
         self.repo_root = repo_root.resolve()
 
     def run_static(self) -> list[Finding]:
+        if not _looks_like_consensus_source_repo(self.repo_root):
+            return []
         findings: list[Finding] = []
         findings.extend(self.required_files_exist())
         findings.extend(self.forbidden_runtime_files_absent())
@@ -449,15 +465,29 @@ def discover_repo_root(start: Path) -> Path:
     for candidate in (current, *current.parents):
         if (candidate / SKILL_RELATIVE / "SKILL.md").exists():
             return candidate
-    raise RuntimeError("could not discover repo root containing skills/codex-refactor-loop/SKILL.md")
+    return current
 
 
 def run_static_check(repo_root: Path | None = None, *, ctx: LoopContext | None = None) -> list[Finding]:
     return SkillDriftChecker(repo_root, ctx=ctx).run_static()
 
 
+def _looks_like_consensus_source_repo(root: Path) -> bool:
+    return any((root / sentinel).exists() for sentinel in SOURCE_REPO_SENTINELS)
+
+
+def _not_source_repo_payload() -> dict[str, object]:
+    return {"ok": True, "reason": "not-source-repo", "findings": []}
+
+
 def findings_payload(findings: list[Finding]) -> dict[str, object]:
     return {"ok": not findings, "findings": [finding.as_dict() for finding in findings]}
+
+
+def format_not_source_repo(*, as_json: bool = False) -> str:
+    if as_json:
+        return json.dumps(_not_source_repo_payload(), indent=2, sort_keys=True)
+    return "skill-degradation: ok (not-source-repo)"
 
 
 def format_findings(findings: list[Finding], *, as_json: bool = False) -> str:
@@ -478,6 +508,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         root = args.repo_root or discover_repo_root(Path.cwd())
+        if not _looks_like_consensus_source_repo(root):
+            print(format_not_source_repo(as_json=args.json))
+            return 0
         findings = run_static_check(root)
     except Exception as exc:
         sys.stderr.write(f"skill-degradation: {exc}\n")

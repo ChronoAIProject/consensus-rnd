@@ -144,6 +144,27 @@ class PackageChecksTests(unittest.TestCase):
         self.assertIn("New: expose the same read-only checks", source)
         self.assertIn("Old pattern: the checker required downstream runtime watch hooks", source)
         self.assertIn("New principle: skill-degradation is source-repo CI/release validation only", source)
+        self.assertIn("not-source-repo", source)
+        self.assertIn("source-repo CI/release validation only", source)
+        for sentinel in (
+            "skills/codex-refactor-loop/SKILL.md",
+            ".version-bump.json",
+            ".codex-plugin/plugin.json",
+            ".claude-plugin/plugin.json",
+            ".cursor-plugin/plugin.json",
+            "gemini-extension.json",
+            ".github/workflows/consensus-rnd-ci.yml",
+        ):
+            with self.subTest(source_sentinel=sentinel):
+                self.assertIn(sentinel, source)
+        for forbidden_expansion in (
+            "from codex_refactor_loop.checks.source_context import",
+            "import source_context",
+            "source_context.py",
+            "class SourceRepoValidationContext",
+        ):
+            with self.subTest(forbidden_expansion=forbidden_expansion):
+                self.assertNotIn(forbidden_expansion, source)
 
         for forbidden in (
             "subprocess.run(",
