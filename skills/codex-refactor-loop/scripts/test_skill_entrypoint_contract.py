@@ -451,6 +451,28 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, self.skill)
 
+    def test_spawn_contract_isolates_background_spawns_from_fallible_calls(self) -> None:
+        # Old pattern: a spawn-codex background task batched with a fallible probe
+        # was silently cancelled when the probe exited non-zero (harness cancels
+        # every sibling in a parallel batch on one non-zero exit), leaving the
+        # floor unfilled with no real dispatch.
+        # New principle: each spawn-codex goes in its own tool-call message,
+        # isolated from fallible reads.
+        section = section_between(
+            self.skill,
+            r"^## Spawn Contract$",
+            r"^## ",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "same parallel tool-call batch",
+            "cancels every sibling call in a parallel batch when one of them exits non-zero",
+            "leaves the floor unfilled with no real dispatch",
+            "Dispatch each `spawn-codex` in its own tool-call message",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_issue205_audit_prompt_fails_closed_on_empty_iteration(self) -> None:
         # Refactor (iter205/issue-205):
         #   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。

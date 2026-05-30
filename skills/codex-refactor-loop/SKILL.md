@@ -520,7 +520,8 @@ Mainline spawn contract:
 4. Prompt files live under `.refactor-loop/prompts/`; logs live under `.refactor-loop/logs/`.
 5. Completion detection primary path is harness task notification; fallback is log tail `EXIT=0` sweep.
 6. If a codex was accidentally detached, do not kill and re-dispatch solely to regain tracking. Confirm the log is sweepable and confirm a wake source.
-7. Detailed invocation examples live in [codex invocation details](#codex-invocation-details).
+7. Never place a `spawn-codex` background task in the same parallel tool-call batch as any other fallible call (status probe, `grep`, `ls`, marker parse). The harness cancels every sibling call in a parallel batch when one of them exits non-zero, so a failing probe silently cancels the queued spawns and leaves the floor unfilled with no real dispatch. Dispatch each `spawn-codex` in its own tool-call message, isolated from fallible reads.
+8. Detailed invocation examples live in [codex invocation details](#codex-invocation-details).
 
 ## Label 系统 — 强制
 
