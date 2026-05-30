@@ -22,6 +22,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.old_env = os.environ.copy()
         os.environ["REPO_ROOT"] = str(self.repo)
         os.environ["CODEX_FLOOR"] = "2"
+        for key in ("GH_REPO_SLUG", "GH_REPO", "GH_OWNER", "GH_REPO_NAME"):
+            os.environ.pop(key, None)
         from codex_refactor_loop.context import LoopContext
         from codex_refactor_loop.monitors import concurrency as concurrency_module
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
@@ -208,7 +210,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-3.json").exists())
         self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
 
-    def test_dispatch_queue_skips_fresh_foreign_and_unknown_github_target_without_spawning_or_archiving(self) -> None:
+    def test_dispatch_queue_skips_fresh_foreign_and_unknown_inferred_legacy_github_target_without_spawning_or_archiving(self) -> None:
         from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 
         cases = (
@@ -224,7 +226,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 self.refactor_loop.mkdir(parents=True, exist_ok=True)
                 self.monitor.gh_repo_slug = "owner/repo"
                 task_id = "fix-pr44-round-3"
-                self.write_dispatch("p0", task_id, cd=self.repo / ".worktrees" / task_id, github_target={"kind": "pr", "number": 44})
+                self.write_dispatch("p0", task_id, reason="PR #44 fix needed", cd=self.repo / ".worktrees" / task_id)
                 calls: list[list[str]] = []
 
                 with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
@@ -238,21 +240,21 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
                 self.assertIn("DISPATCH_SKIPPED_FOREIGN_OWNER:fix-pr44-round-3:p0:ownership-not-allowed", events)
 
-    def test_dispatch_queue_posts_stale_takeover_notice_before_spawning_github_target(self) -> None:
+    def test_dispatch_queue_posts_stale_takeover_notice_before_spawning_inferred_legacy_github_target(self) -> None:
         from codex_refactor_loop.ownership import OwnershipDecision, WorkTarget
 
         self.monitor.gh_repo_slug = "owner/repo"
-        task_id = "fix-pr45-round-3"
-        self.write_dispatch("p0", task_id, cd=self.repo / ".worktrees" / task_id, github_target={"kind": "pr", "number": 45})
+        task_id = "fix-pr44-round-3"
+        self.write_dispatch("p0", task_id, reason="PR #44 fix needed", cd=self.repo / ".worktrees" / task_id)
         calls: list[list[str]] = []
-        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 45), "other", "alice", 4.0)
+        stale = OwnershipDecision(True, "stale-takeover", WorkTarget("pr", 44), "other", "alice", 4.0)
 
         with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             with mock.patch.object(self.module.GitHubWorkOwnership, "decide", return_value=stale):
                 with mock.patch.object(self.module.GitHubWorkOwnership, "post_takeover_notice", return_value=True) as post:
                     fired = self.monitor.dispatch_one_from_queue()
 
-        self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
+        self.assertEqual(fired, (task_id, "p0", "PR #44 fix needed"))
         post.assert_called_once_with(stale)
         self.assertEqual(len(calls), 1)
         self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())

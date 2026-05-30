@@ -448,7 +448,8 @@ class ConcurrencyMonitor:
         #   New principle: issue/PR targets must pass author.login ownership
         #   or updatedAt 3h stale takeover with a visible notice before spawn.
         target = WorkTargetResolver.from_payload(payload)
-        if target is None or not self.gh_repo_slug or "github_target" not in payload:
+        # Refactor (fix/pr200-ownership-gate): Old pattern: inferred legacy issue/PR targets skipped ownership unless github_target was explicit. New principle: every resolved issue/PR target must pass GitHub author.login ownership when repo context exists.
+        if target is None or not self.gh_repo_slug:
             return None
         return GitHubWorkOwnership(self.gh_repo_slug, cwd=self.repo_root).decide(target)
 
