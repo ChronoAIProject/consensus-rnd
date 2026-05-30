@@ -208,6 +208,30 @@ class RuntimeShellRemovalSourceTests(unittest.TestCase):
                 with self.subTest(path=path.name, token=token):
                     self.assertNotIn(token, text)
 
+    def test_refactor_self_doc_reject_wording_is_policy_gated(self) -> None:
+        checked = [SKILL_ROOT / "SKILL.md", *sorted((SKILL_ROOT / "prompts").glob("*.md"))]
+        combined = "\n".join(path.read_text(encoding="utf-8") for path in checked)
+
+        self.assertIn("HOST_REFACTOR_COMMENT_POLICY", combined)
+        self.assertIn("self-doc-comment", combined)
+        self.assertIn("none", combined)
+        self.assertNotIn(
+            "Code self-documents refactors with the host-required refactor comment format when touching source.",
+            combined,
+        )
+        self.assertNotIn(
+            "Code self-documents the refactor** — every refactored type/method gets a 3-5 line comment",
+            combined,
+        )
+        self.assertNotIn(
+            "missing/illegible self-doc on a major refactor, or scope creep into unrelated cleanup",
+            combined,
+        )
+        self.assertNotIn(
+            "缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。\n- 检查改动是否真正消除了",
+            combined,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
