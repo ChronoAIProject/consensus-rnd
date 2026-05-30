@@ -191,6 +191,12 @@ class Phase9RouterPackageTests(unittest.TestCase):
         router = Phase9Router(ctx=ctx, command_runner=self.commands.append)
         for role in ("host:a", "host:b", "host:c"):
             self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
+        router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
+
         for role in ("minimal", "structural", "delete"):
             self.write_log(f"phase9-issue219-r1-{role}.log", f"SOLVER_DONE:{role}:same")
         router.tick()

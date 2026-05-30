@@ -277,6 +277,52 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertNotIn("👀 phase:reviewing", edit_call)
         self.assertNotIn("🤖 human:auto-推进", edit_call)
 
+    def write_host_workflow_spec(self, data: dict) -> ControllerActions:
+        (self.tmp / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
+        ctx = LoopContext.load(
+            repo_root=self.tmp,
+            env={"REPO_ROOT": str(self.tmp), "GH_REPO_SLUG": "owner/repo", "HOST_WORKFLOW_SPEC": "workflow.json"},
+        )
+        return ControllerActions(ctx)
+
+    def valid_host_prompt_spec(self) -> dict:
+        (self.tmp / "prompts").mkdir(exist_ok=True)
+        (self.tmp / "prompts" / "host-render.md").write_text(
+            "Host ${HOST_NAME} handles {{work_unit_id}} from {{cluster_id}}.\n",
+            encoding="utf-8",
+        )
+        return {"prompt_bindings": {"host:render": "prompts/host-render.md"}}
+
+    def test_render_template_resolves_host_prompt_binding_from_valid_workflow_spec(self) -> None:
+        actions = self.write_host_workflow_spec(self.valid_host_prompt_spec())
+        output = self.tmp / "rendered.md"
+
+        actions.render_template(
+            "host:render",
+            str(output),
+            env={"HOST_NAME": "example-host", "WORK_UNIT_ID": "issue-219", "CLUSTER_ID": "cluster-219"},
+        )
+
+        self.assertEqual(output.read_text(encoding="utf-8"), "Host example-host handles issue-219 from cluster-219.\n")
+
+    def test_render_template_rejects_unknown_host_prompt_binding(self) -> None:
+        actions = self.write_host_workflow_spec(self.valid_host_prompt_spec())
+        output = self.tmp / "rendered.md"
+
+        with self.assertRaisesRegex(RuntimeError, "unknown host prompt binding: host:missing"):
+            actions.render_template("host:missing", str(output))
+
+        self.assertFalse(output.exists())
+
+    def test_render_template_rejects_invalid_host_workflow_spec(self) -> None:
+        actions = self.write_host_workflow_spec({"prompt_bindings": {"host:render": "../outside.md"}})
+        output = self.tmp / "rendered.md"
+
+        with self.assertRaisesRegex(RuntimeError, "prompt binding path must be repo-relative POSIX text"):
+            actions.render_template("host:render", str(output))
+
+        self.assertFalse(output.exists())
+
 
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
