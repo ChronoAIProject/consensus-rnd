@@ -154,6 +154,25 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertIn("Consensus-rnd Phase design-consensus minimal solver", prompt)
         self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
 
+    def test_package_router_converge_current_round_dispatches_adjacent_next_round(self) -> None:
+        self.write_log(
+            "phase9-issue244-r6-judge.log",
+            "META_JUDGE_DONE:converge:round-6:canonical-source-round",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue244-r7-minimal.log", logs)
+        self.assertIn("phase9-issue244-r7-structural.log", logs)
+        self.assertIn("phase9-issue244-r7-delete.log", logs)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["244-7-delete", "244-7-minimal", "244-7-structural"],
+        )
+        self.assertEqual(self.pending_events(), "")
+
     def test_converge_solver_prompt_declares_issue_source_ref(self) -> None:
         self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
 

@@ -60,6 +60,7 @@ Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 - **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / schema / migration, including any philosophy/CLAUDE.md/SPEC/Tier edits): **CONSENSUS REACHED** → go to Step 4.
 - **Mixed propose/abstain/escalate:no-plan (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous**; go to Step 4 convergence OR escalate based on Step 4 logic.
+- **Delete abstain with no concrete objection against the same bounded plan**: treat as non-dissent only when the other two solvers propose the same bounded plan and delete gives no specific blocking objection; otherwise it remains not unanimous.
 - **3/3 propose but framings disagree** (different files / different abstractions / different cost profiles): split — go to Step 4 convergence.
 - **3/3 abstain**: cluster is not solvable as scoped yet; converge with a narrower question unless the stall trigger already applies.
 - **Anyone false-positive**: solver claims violation is gone; controller MUST verify by re-reading audit evidence before accepting. If verified, close issue as `wontfix:false-positive`. If contradicted by current code, treat as `abstain` and recompute.
@@ -72,7 +73,7 @@ Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 Otherwise:
 - If divergence is on a NAMED specific technical question and there's progress vs prior rounds → CONVERGENCE: write the `convergence_question`, controller dispatches another round.
-- → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND_PLUS_ONE}:<one-line question>`
+- → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND}:<one-line question>` (canonical payload is the judge log source round; router dispatches the adjacent next solver round)
 - If divergence is named but no progress for 3+ rounds with no maintainer input → escalate as stalled (above).
 - If divergence is fundamental / unnamed AND not stalled → still converge (the next round may surface the right framing). Only true stall escalates.
 
@@ -105,7 +106,7 @@ decision: consensus | converge | escalate
 ## If converge
 - Convergence question (specific): <one sentence>
 - What each solver should address explicitly: <bullets>
-- Round number this fires: ${CONVERGENCE_ROUND_PLUS_ONE}
+- Round number this fires: ${CONVERGENCE_ROUND_PLUS_ONE}; marker payload uses source round `${CONVERGENCE_ROUND}`
 
 ## If escalate
 - Trigger category: <stalled>
@@ -120,7 +121,7 @@ decision: consensus | converge | escalate
 
 End with EXACTLY ONE marker:
 - `META_JUDGE_DONE:consensus:<framing>:<summary>` — controller auto-dispatches implement
-- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question
+- `META_JUDGE_DONE:converge:round-N:<question>` — controller re-runs Consensus-rnd Phase design-consensus with convergence question; canonical N is the current judge/source round, while the router dispatches the adjacent next solver round
 - `META_JUDGE_DONE:escalate:stalled:<short>` — controller adds `crnd:lifecycle:stuck` label + PushNotification
 
 ## Marker emission allowlist(强制)

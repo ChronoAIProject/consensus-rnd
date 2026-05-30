@@ -406,7 +406,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
 | `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Dispatch round N solvers; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; both dispatch r(S+1) solvers, while any non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
@@ -629,7 +629,7 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
-4. `converge:round-N` always routes to another solver round; no hard round cap.
+4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
 5. `escalate:stalled` routes to reflector, not directly to human.
 6. Maintainer replies reset the round when they materially change framing.
 7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
@@ -1250,7 +1250,7 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 |---|---|
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
-| META_JUDGE_DONE:converge:r+1 | r+1 三 solver |
+| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver; legacy r(S+1) payload remains compatible |
 | META_JUDGE_DONE:escalate:stalled | reflector(per Consensus-rnd Phase design-consensus 路由表) |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Consensus-rnd Phase review-gate reviewer × 3 |
@@ -1274,7 +1274,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
-| `converge:round-N` | 派 r-N 三 solver(不管 N 多大) | ❌ "round 多了"自升 escalate |
+| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
 | `escalate:stalled` | 派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
 | `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
@@ -1893,7 +1893,7 @@ Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemo
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
-- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → spawn round-N minimal/structural/delete solvers.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; both spawn r(S+1) minimal/structural/delete solvers; non-adjacent payload mismatch falls back.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 HostWorkflowSpec is not a phase9 direct-spawn authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
 Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 5-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
@@ -2238,7 +2238,7 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 | Decision | Category | Controller 动作 |
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action";implement 可改 Tier I/II/CLAUDE.md/SPEC/核心抽象) |
-| `converge:round-N:<question>` | — | 派 r-N+1 三 solver(把 convergence question prepend prompt); `consensus-rnd-cli phase9-router` may direct-dispatch this route |
+| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver(把 convergence question prepend prompt); non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
 | `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人; `consensus-rnd-cli phase9-router` may direct-dispatch only when the stalled predicate holds |
 | `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge` / `escalate:stalled`;**禁止**直接 label 人 |
 
