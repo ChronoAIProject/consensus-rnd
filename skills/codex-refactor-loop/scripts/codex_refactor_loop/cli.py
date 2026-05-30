@@ -16,6 +16,7 @@ from .monitors.comment import main as comment_monitor_main
 from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
+from .release.commits import write_release_commits
 from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
@@ -26,6 +27,27 @@ from .wakeup_plan import main as wakeup_plan_main
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
+
+
+def release_gate_with_pre_gate_commits(argv: Sequence[str] | None) -> int:
+    # Refactor (impl/issue232-release-commits-producer): Old pattern: release-gate read release-commits.json but the CLI path never produced it. New principle: the controller-facing command runs the git-reading producer before entering the git-free release decider.
+    args = list(argv or [])
+    repo_root = Path.cwd()
+    host_env: dict[str, str] = {}
+    try:
+        from .release.gate import inject_host_env, repo_root_from_env
+
+        repo_root = repo_root_from_env()
+        host_env = inject_host_env(repo_root)
+        review_base_branch = host_env.get("REVIEW_BASE_BRANCH")
+    except Exception:
+        review_base_branch = None
+    if "--score-only" in args:
+        return release_gate_main(argv)
+    if "--score-only" not in args and host_env.get("RELEASE_AUTO_ENABLE") != "true":
+        return release_gate_main(argv)
+    write_release_commits(repo_root, review_base_branch=review_base_branch)
+    return release_gate_main(argv)
 
 
 @dataclass(frozen=True)
@@ -90,9 +112,9 @@ COMMANDS: dict[str, CommandSpec] = {
         ("read-log", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(
-        release_gate_main,
+        release_gate_with_pre_gate_commits,
         "run the Python auto release gate",
-        ("read-state", "read-gh", "write-artifact"),
+        ("read-state", "read-gh", "read-git", "write-artifact"),
     ),
     "release-required-checks": CommandSpec(
         release_required_checks_main,

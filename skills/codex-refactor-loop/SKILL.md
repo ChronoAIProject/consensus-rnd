@@ -955,7 +955,7 @@ The following excerpts preserve the detailed controller runbook in the single SK
 <a id="release-decision-schema"></a>
 ### Release decision schema
 
-`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. The decider is decision-artifact-only and does not run `git`; the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight.
+`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight.
 
 Stability score is the percentage of the eight boolean signals that pass. `ready=true` requires score 100 plus the release interval and at least one commit since the last release. Live signal inputs are intentionally narrow:
 
