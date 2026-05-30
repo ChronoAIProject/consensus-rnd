@@ -311,6 +311,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "controller")
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
 
+    def test_review_done_completed_marker_remains_policy_free(self) -> None:
+        # Refactor (iter203/issue-203): Old pattern: controller decisions were
+        # split across peek, wakeup-plan, phase9-router, and concurrency. New
+        # principle: keep REVIEW_DONE as a completed marker, without adding
+        # review-gate readiness facts or lifecycle action vocabulary.
+        self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:approve")
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["phase"], "review-gate")
+        self.assertEqual(action["actor"], "controller-or-fix-codex")
+        self.assertEqual(action["item"], "PR #123")
+        self.assertNotIn("consensus", action)
+        self.assertNotIn("merge_command", action)
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("review-gate-readiness", action)
+        self.assertNotIn("review_gate_actions", action)
+
+    def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        for token in (
+            "review-gate-readiness",
+            "review_gate_actions",
+            "merge_command",
+            "MERGE_READY",
+            "WAIT_EXPLICIT_APPROVAL",
+            "gh pr merge",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, wakeup_source)
+
     def test_unpushed_worker_output_routes_before_completed_marker_ci_and_existing_issue(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
