@@ -7,9 +7,16 @@ import sys
 import time
 from pathlib import Path
 
+from .context import LoopContext
+
 
 class DaemonHeartbeatLease:
-    """Write and renew the daemon heartbeat from the actor process."""
+    """Write and renew the daemon heartbeat from the actor process.
+
+    Refactor (iter316/issue-316):
+      Old pattern: heartbeat fell back to cwd when repo root was absent.
+      New principle: require explicit repo root, canonical REPO_ROOT/LoopContext, or explicit heartbeat file.
+    """
 
     def __init__(
         self,
@@ -22,8 +29,8 @@ class DaemonHeartbeatLease:
         sleeper=time.sleep,
     ) -> None:
         self.name = name or os.environ.get("RESTART_DAEMON_NAME") or Path(sys.argv[0]).stem
-        root = Path(repo_root or os.environ.get("REPO_ROOT", ".")).resolve()
-        default_heartbeat_file = root / ".refactor-loop" / "heartbeats" / f"{self.name}.ts"
+        root = self._resolve_repo_root(repo_root, heartbeat_file)
+        default_heartbeat_file = root / ".refactor-loop" / "heartbeats" / f"{self.name}.ts" if root is not None else None
         env_heartbeat_file = None if repo_root is not None else os.environ.get("RESTART_DAEMON_HEARTBEAT_FILE")
         self.heartbeat_file = Path(
             heartbeat_file
@@ -33,6 +40,14 @@ class DaemonHeartbeatLease:
         self.heartbeat_interval = max(1, int(heartbeat_interval or os.environ.get("RESTART_DAEMON_HEARTBEAT_INTERVAL", "30")))
         self.clock = clock
         self.sleeper = sleeper
+
+    @staticmethod
+    def _resolve_repo_root(repo_root: Path | str | None, heartbeat_file: Path | str | None) -> Path | None:
+        if repo_root is not None:
+            return Path(repo_root).resolve()
+        if heartbeat_file is not None or os.environ.get("RESTART_DAEMON_HEARTBEAT_FILE"):
+            return None
+        return LoopContext.load(env=os.environ, cwd=Path.cwd(), read_only=True).repo_root
 
     def beat(self) -> None:
         """Atomically write the current integer epoch heartbeat."""

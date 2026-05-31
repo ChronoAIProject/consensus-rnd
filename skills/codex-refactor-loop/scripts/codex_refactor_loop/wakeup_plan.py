@@ -117,24 +117,6 @@ def run_json(cmd: list[str], *, cwd: Path) -> Any:
         return None
 
 
-def read_host_env(repo_root: Path) -> dict[str, str]:
-    env_path = repo_root / ".refactor-loop" / "host.env"
-    values: dict[str, str] = {}
-    if not env_path.exists():
-        return values
-    try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip("\"'")
-    return values
-
-
 def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]], str | None]:
     # Refactor (iter219/issue-219):
     #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
@@ -171,12 +153,11 @@ def configured_floor() -> int:
 
 
 def resolve_repo_root(arg_root: str | None) -> Path:
-    if arg_root:
-        return Path(arg_root).resolve()
-    env_root = os.environ.get("REPO_ROOT")
-    if env_root:
-        return Path(env_root).resolve()
-    return Path.cwd().resolve()
+    # Refactor (iter316/issue-316):
+    #   Old pattern: wakeup_plan guessed repo root from cwd and parsed host.env itself.
+    #   New principle: LoopContext owns repo-root/host.env loading; no private cwd default or parser.
+    ctx = LoopContext.load(repo_root=arg_root, env=os.environ, cwd=Path.cwd(), read_only=True)
+    return ctx.repo_root
 
 
 def import_concurrency_monitor(repo_root: Path) -> Any | None:
@@ -883,10 +864,8 @@ def latest_controller_validated_audit_none(repo_root: Path) -> bool:
 
 
 def build_plan(repo_root: Path) -> dict[str, Any]:
-    host_values = read_host_env(repo_root)
-    for key, value in host_values.items():
-        os.environ.setdefault(key, value)
-    os.environ["REPO_ROOT"] = str(repo_root)
+    ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+    os.environ.update(ctx.env_for_subprocess())
 
     health = daemon_health(repo_root)
     gh_items = load_github_items(repo_root)

@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .. import labels as label_catalog
+from ..context import parse_host_env
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
@@ -32,6 +33,10 @@ from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_versi
 # Refactor (iter217/issue-217):
 #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
 #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+#
+# Refactor (iter316/issue-316):
+#   Old pattern: release-gate parsed root and nested host.env with a private parser.
+#   New principle: use context.py shared host.env parser and read only .refactor-loop/host.env.
 
 SIGNAL_NAMES = (
     "required_checks_recent_green",
@@ -93,29 +98,9 @@ def isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def parse_host_env_value(raw: str) -> str:
-    value = raw.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-        return value[1:-1]
-    return value
-
-
 def load_host_env(repo_root: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for path in (repo_root / "host.env", repo_root / ".refactor-loop" / "host.env"):
-        if not path.exists():
-            continue
-        for line in path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if not stripped or stripped.startswith("#") or "=" not in stripped:
-                continue
-            if stripped.startswith("export "):
-                stripped = stripped[len("export "):].strip()
-            key, raw_value = stripped.split("=", 1)
-            key = key.strip()
-            if key:
-                values[key] = parse_host_env_value(raw_value)
-    return values
+    path = repo_root / ".refactor-loop" / "host.env"
+    return parse_host_env(path) if path.exists() else {}
 
 
 def inject_host_env(repo_root: Path) -> dict[str, str]:

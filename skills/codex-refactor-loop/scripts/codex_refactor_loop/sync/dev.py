@@ -48,9 +48,13 @@ def run(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subproc
 def load_dev_sync_config(env: dict[str, str] | None = None, cwd: Path | str | None = None) -> "DevSyncConfig":
     source_env = dict(os.environ if env is None else env)
     ctx = LoopContext.load(env=source_env, cwd=cwd or os.getcwd())
-    integration = source_env.get("INTEGRATION_BRANCH") or source_env.get("INTEGRATION") or DEFAULT_INTEGRATION_BRANCH
-    review_base = source_env.get("REVIEW_BASE_BRANCH") or source_env.get("REVIEW_BASE") or DEFAULT_REVIEW_BASE_BRANCH
-    worktree = Path(source_env.get("WORKTREE", str(ctx.repo_root / ".worktrees" / "dev-sync")))
+    merged_env = {**source_env, **ctx.host_env}
+    # Refactor (iter316/issue-316):
+    #   Old pattern: dev-sync accepted private branch/worktree aliases beside host.env.
+    #   New principle: use canonical LoopContext host facts only; derive the dedicated worktree.
+    integration = merged_env.get("INTEGRATION_BRANCH") or DEFAULT_INTEGRATION_BRANCH
+    review_base = merged_env.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH
+    worktree = ctx.repo_root / ".worktrees" / "dev-sync"
     interval = int(source_env.get("INTERVAL", str(DEFAULT_INTERVAL_SECONDS)))
     release_rollup_min_commits = int(source_env.get("RELEASE_ROLLUP_MIN_COMMITS", str(DEFAULT_RELEASE_ROLLUP_MIN_COMMITS)))
     release_rollup_cooldown_seconds = int(
