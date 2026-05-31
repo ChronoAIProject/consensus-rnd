@@ -284,7 +284,7 @@ class ControllerActions:
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if not match:
-            self._normalize_lifecycle_target_or_raise("", kind="pr", action="open-pr", source="github-pr-create-url")
+            # Refactor (issue-276): preserve the PR-create parse failure instead of routing it through target normalization.
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
         pr_target = self._normalize_lifecycle_target_or_raise(
             match.group(1),

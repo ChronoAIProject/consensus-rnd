@@ -151,11 +151,11 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_open_pr_with_label_rejects_malformed_create_url_before_post_create_edit(self) -> None:
         cases = (
-            ("missing-url", "created pull request 77\n"),
-            ("zero-pr", "https://github.com/owner/repo/pull/0\n"),
-            ("leading-zero-pr", "https://github.com/owner/repo/pull/077\n"),
+            ("missing-url", "created pull request 77\n", "failed to extract PR num", False),
+            ("zero-pr", "https://github.com/owner/repo/pull/0\n", "invalid pr target", True),
+            ("leading-zero-pr", "https://github.com/owner/repo/pull/077\n", "invalid pr target", True),
         )
-        for name, output in cases:
+        for name, output, expected_error, expects_invalid_target_event in cases:
             with self.subTest(name=name):
                 (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
                 gh_calls: list[list[str]] = []
@@ -167,15 +167,16 @@ class ControllerActionsTests(unittest.TestCase):
                     raise AssertionError(f"unexpected post-create gh call: {args}")
 
                 with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-                    with self.assertRaisesRegex(RuntimeError, "invalid pr target|failed to extract PR num"):
+                    with self.assertRaisesRegex(RuntimeError, expected_error):
                         self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
 
                 self.assertEqual(1, sum(1 for call in gh_calls if call[:2] == ["pr", "create"]))
                 self.assertFalse(any(call[:2] == ["pr", "edit"] for call in gh_calls), gh_calls)
-                self.assertIn(
-                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:pr:github-pr-create-url",
-                    self.pending_events(),
-                )
+                invalid_target_event = "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:pr:github-pr-create-url"
+                if expects_invalid_target_event:
+                    self.assertIn(invalid_target_event, self.pending_events())
+                else:
+                    self.assertNotIn(invalid_target_event, self.pending_events())
 
     def test_record_recent_pr_merge_rejects_invalid_argument_before_gh_or_projection(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
