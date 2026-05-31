@@ -148,6 +148,21 @@ in `SKILL.md` and the tests.
 - verification: `test_release_commits.py`, `test_cli_command_router.py`, `test_release_gate_module.py`
 - no_new_runtime_authority: This mirror documents only the independent narrow producer; it does not widen `release-gate`, which remains no-git decision-artifact-only.
 
+<a id="release-publication-322"></a>
+## release-publication-322
+
+<!-- Refactor (iter1/issue-322): Old pattern: ReleasePublisher controller writes lived only in SKILL prose. New principle: name release-publication-322, mirror its exact allowlist, and lock forbidden lifecycle surfaces with tests. -->
+- surface: `controller-owned ReleasePublisher release publication`
+- source_issue: `#322`
+- source_round: `r2 structural`
+- source_marker: `META_JUDGE_DONE:consensus:structural:ReleasePublisher release-publication-322 mirror with exact allowlist tests`
+- skill_anchor: `#named-runtime-exception--release-publicationper-322`
+- allowed: active-controller owner only after `ReleasePublishPreflight` validates `RELEASE_AUTO_ENABLE=true`, fresh `.refactor-loop/state/release-candidate.json`, fresh `.refactor-loop/state/release-decision.json`, matching `decision_digest`, matching `target_ref`, mapped manifest `from_version`, and required checks green; exact command allowlist is `python3 .github/scripts/bump_version.py --version <to_version>`, `git add .version-bump.json <mapped manifests>`, `git commit -m "Release v<to_version>"`, `git rev-parse HEAD`, `git fetch origin HEAD`, `git rev-list --count HEAD..origin/HEAD`, `git push origin HEAD`, and `gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`; write `.refactor-loop/state/release-publish-result.json`.
+- forbidden: no public `consensus-rnd-cli release-publish`, no public `consensus-rnd-cli publish-release`, no workflow tag/release creation, no `git tag`, no force-push, no `git merge`, no `git rebase`, no `git reset`, no GitHub Release edit/delete/upload, no approval-ticket/emoji gate, no issue lifecycle, PR lifecycle, label lifecycle, merge/close, or generic lifecycle actor.
+- fact_source: `ReleasePublishPreflight` consumes `.refactor-loop/state/release-candidate.json`, `.refactor-loop/state/release-decision.json`, `.refactor-loop/host.env`, `.version-bump.json`, mapped manifest files, and required check projections; `ReleasePublisher` consumes the approved preflight result and the fresh release commit SHA from `git rev-parse HEAD`.
+- verification: `test_release_publisher.py`, `test_release_publish_preflight.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_release_pipeline_contract.py`, `test_controller_actions.py`
+- no_new_runtime_authority: This entry names and mirrors the existing controller-owned ReleasePublisher path; it adds no public CLI, no workflow publication authority, and no production runtime behavior beyond the checked-in preflight plus publisher allowlist.
+
 <a id="closed-label-reconciler-238"></a>
 ## closed-label-reconciler-238
 
