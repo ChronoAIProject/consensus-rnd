@@ -294,6 +294,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
 
+    def test_skill_documents_controller_release_publisher_exact_sha_gate(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — release-publication(per #322)")
+
+        for needle in (
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#controller-release-publisher-334",
+            "release-pipeline-integrationpost-61",
+            "ReleaseRequiredChecksProjection",
+            "gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp",
+            "only then `gh release create v<to_version> --target <fresh release commit sha>",
+            "Missing `GH_REPO_SLUG`",
+            "pending/red/missing/stale exact-SHA required checks",
+            "invalid Checks API JSON",
+            "Checks API failure",
+            "fail closed before release creation",
+            "before `.refactor-loop/state/release-publish-result.json` is written",
+            "no tag target without exact-SHA green checks",
+            "no proof-ticket/resume system",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_skill_documents_issue_300_draft_then_ready_merge_contract(self) -> None:
         for needle in (
             "Refactor (issue-300)",
@@ -637,7 +658,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             actual = {
                 str(path.relative_to(SKILL_ROOT / "scripts" / "codex_refactor_loop"))
                 for path in production_files
-                if token in path.read_text(encoding="utf-8")
+                if token
+                in "\n".join(
+                    line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
+                )
             }
             with self.subTest(token=token):
                 self.assertLessEqual(actual, allowed_paths, actual - allowed_paths)

@@ -15,6 +15,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .. import labels as label_catalog
 from ..context import HostEnvLocator, parse_host_env
+from ..restart import restart_managed_daemon_names
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
@@ -48,13 +49,7 @@ SIGNAL_NAMES = (
     "fresh_heartbeats",
     "no_unresolved_human_escalation",
 )
-DAEMON_NAMES = (
-    "concurrency_monitor",
-    "codex-progress-reporter",
-    "comment-monitor",
-    "dev_sync_daemon",
-    "phase9_router_daemon",
-)
+DAEMON_NAMES = restart_managed_daemon_names()
 REQUIRED_CHECKS = REQUIRED_RELEASE_CHECKS
 HEARTBEAT_FRESH_SECONDS = 90
 
@@ -384,11 +379,16 @@ class AutoReleaseGate:
         return signal
 
     def fresh_heartbeats(self) -> dict[str, Any]:
-        # Refactor (iter1/issue-154):
-        #   Old pattern: release gate read phantom daemon-heartbeats.json.
-        #   New principle: read real .refactor-loop/heartbeats/*.ts while
-        #   preserving >=5 fresh @ HEARTBEAT_FRESH_SECONDS=90 semantics.
+        # Refactor (iterissue-331/issue-331):
+        #   Old pattern: release gate and wakeup_plan each kept local
+        #   daemon-name literals, drifting from restart.py DAEMON_COMMANDS and
+        #   duplicating the source of truth.
+        #   New principle: restart.py::restart_managed_daemon_names() is the
+        #   canonical daemon-name projection; release keeps DAEMON_NAMES only
+        #   as a derived alias, wakeup deletes EXPECTED_DAEMONS, and health
+        #   requires every restart-managed heartbeat to be fresh.
         now = self.now()
+        required_names = restart_managed_daemon_names()
         fresh: dict[str, bool] = {}
         if self.heartbeat_dir.is_dir():
             for heartbeat_file in sorted(self.heartbeat_dir.glob("*.ts")):
@@ -401,7 +401,9 @@ class AutoReleaseGate:
                     heartbeat
                     and timedelta(0) <= now - heartbeat <= timedelta(seconds=HEARTBEAT_FRESH_SECONDS)
                 )
-        passed = sum(1 for ok in fresh.values() if ok) >= 5
+        for name in required_names:
+            fresh.setdefault(name, False)
+        passed = all(fresh[name] for name in required_names)
         reason = None if passed else "heartbeat_stale"
         return {"passed": passed, "reason": reason, "heartbeats": fresh, "source": "heartbeats/*.ts"}
 
