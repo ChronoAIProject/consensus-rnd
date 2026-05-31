@@ -147,7 +147,7 @@ class PackageChecksTests(unittest.TestCase):
         )
         for required in (
             "skill-degradation",
-            "manifest-version-sync",
+            "HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
             "consensus-rnd-cli check-degradation --static",
             "source-repo CI/release validation",
             "downstream host has no runtime watch",

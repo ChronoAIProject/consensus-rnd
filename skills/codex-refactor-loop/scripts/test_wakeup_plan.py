@@ -1111,6 +1111,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(host_actions[0]["phase"], "host:qa")
         self.assertEqual(host_actions[0]["route"], "host-workflow-status-projection")
         self.assertTrue(host_actions[0]["no_lifecycle_authority"])
+        for forbidden in ("labels", "assignees", "milestones", "spawn", "merge"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, host_actions[0])
 
     def test_invalid_host_workflow_spec_is_noop_error_reason(self) -> None:
         (self.repo / "workflow.json").write_text(json.dumps({"events": [{"name": "host:x", "stage": "missing"}]}), encoding="utf-8")

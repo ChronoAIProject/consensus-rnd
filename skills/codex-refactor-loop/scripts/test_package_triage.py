@@ -245,6 +245,9 @@ class PackageTriageDecisionTests(unittest.TestCase):
 
         self.assertEqual(projection["producer"], "host:github-template")
         self.assertEqual(projection["lifecycle_authority"], "false")
+        for forbidden in ("labels", "assignees", "milestones", "spawn", "merge"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, projection)
 
         spec["issue_intake_mappings"][0]["producer"] = "manual-issue"
         (self.repo / "workflow.json").write_text(json.dumps(spec), encoding="utf-8")

@@ -16,10 +16,12 @@ NOW = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.release.required_checks import (
-    REQUIRED_RELEASE_CHECKS,
     ReleaseRequiredChecksProjection,
     isoformat,
+    required_release_checks,
 )
+
+FIXTURE_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
 
 
 def check_run(name: str, *, conclusion: str = "success", status: str = "completed", at: datetime = NOW) -> dict[str, str]:
@@ -52,8 +54,8 @@ class FakeRunner:
 
 class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
     def test_all_required_exact_check_run_names_success(self) -> None:
-        runner = FakeRunner([{"check_runs": [check_run(name) for name in REQUIRED_RELEASE_CHECKS]}])
-        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+        runner = FakeRunner([{"check_runs": [check_run(name) for name in FIXTURE_RELEASE_CHECKS]}])
+        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
         status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
 
@@ -64,7 +66,7 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
 
     def test_missing_required_check_fails_closed(self) -> None:
         runner = FakeRunner([{"check_runs": [check_run("consensus-rnd-ci")]}])
-        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
         status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
 
@@ -80,7 +82,7 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
             check_run("manifest-version-sync"),
             check_run("skill-degradation"),
         ]}])
-        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
         status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
 
@@ -94,7 +96,7 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
             check_run("manifest-version-sync"),
             check_run("skill-degradation"),
         ]}])
-        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
         status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2), wait_seconds=0)
 
@@ -109,7 +111,7 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
             check_run("manifest-version-sync"),
             check_run("skill-degradation"),
         ]}])
-        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+        projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
         status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
 
@@ -124,12 +126,32 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
         )
         for runner, expected in cases:
             with self.subTest(expected=expected):
-                projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW)
+                projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, required_checks=FIXTURE_RELEASE_CHECKS)
 
                 status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
 
                 self.assertFalse(status.passed)
                 self.assertEqual(status.reason, expected)
+
+    def test_required_release_checks_parse_only_host_env_key(self) -> None:
+        self.assertEqual(
+            required_release_checks({"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "unit, lint,types"}),
+            ("unit", "lint", "types"),
+        )
+        self.assertEqual(required_release_checks({"REQUIRED_RELEASE_CHECKS": "legacy"}), ())
+
+    def test_default_projection_fails_closed_when_host_required_checks_missing_or_empty(self) -> None:
+        for env in ({}, {"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": ""}):
+            with self.subTest(env=env):
+                runner = FakeRunner([{"check_runs": [check_run("contract-tests")]}])
+                projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, env=env)
+
+                status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
+
+                self.assertFalse(status.passed)
+                self.assertEqual(status.reason, "missing_host_required_release_checks")
+                self.assertEqual(status.checks, {})
+                self.assertEqual(runner.commands, [])
 
 
 if __name__ == "__main__":

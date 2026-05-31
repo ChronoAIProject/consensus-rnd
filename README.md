@@ -56,7 +56,7 @@ Copy `skills/<name>/` into the agent's personal skills directory, such as Claude
 
 ### Downstream Host Setup
 
-The host installation sequence for `codex-refactor-loop` is centralized in the [`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough). Use that walkthrough to install the skill, copy and fill the host-owned `host.env`, configure user-level cron or launchd, and connect the Claude Code `statusLine`; this README does not duplicate the command matrix.
+The host installation sequence for `codex-refactor-loop` is centralized in the [`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough). Use that walkthrough to install the skill, copy and fill the host-owned `host.env`, configure user-level cron or launchd, and connect the Claude Code `statusLine`; this README does not duplicate the command matrix. Host GitHub workflow portability uses the folded [`GitHub workflow portability checklist`](./skills/codex-refactor-loop/SKILL.md#github-workflow-portability-checklist), not a standalone setup skill.
 
 ## Architecture
 

@@ -121,7 +121,8 @@ REQUIRED_DETAILED_REFERENCE_MARKERS = (
     "Skill degradation source-repo validation details",
     "consensus-rnd-cli check-degradation --static",
     "CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`",
-    "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation`",
+    "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` does not name source-repo CI jobs directly",
+    "consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`",
     "Downstream plugin-installed hosts have no skill-degradation runtime watch",
     "no degradation alert log",
     "no degradation pending event",
@@ -144,10 +145,9 @@ REQUIRED_RELEASE_MARKERS = (
 )
 
 REQUIRED_RELEASE_PROJECTION_MARKERS = (
-    '"skill-degradation"',
-    '"contract-tests"',
-    '"manifest-version-sync"',
-    "REQUIRED_RELEASE_CHECKS",
+    "HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
+    "required_release_checks",
+    "ReleaseRequiredChecksProjection",
 )
 
 REQUIRED_RELEASE_GATE_MARKERS = (
@@ -316,12 +316,13 @@ class SkillDriftChecker:
                         f"shared release required-check projection missing {marker}",
                     )
                 )
-        if projection_text and '"skill-degradation"' not in projection_text:
+        host_env_example = self.read(SKILL_RELATIVE / "host.env.example")
+        if host_env_example and "HOST_GITHUB_RELEASE_REQUIRED_CHECKS" not in host_env_example:
             findings.append(
                 Finding(
                     "release-workflow",
-                    str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py"),
-                    "shared release required checks must include skill-degradation",
+                    str(SKILL_RELATIVE / "host.env.example"),
+                    "host.env.example must expose host-owned release required checks",
                 )
             )
         return findings
@@ -334,12 +335,12 @@ class SkillDriftChecker:
         )
         text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "gate.py")
         projection_text = self.read(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py")
-        if projection_text and '"skill-degradation"' not in projection_text:
+        if projection_text and "required_release_checks" not in projection_text:
             findings.append(
                 Finding(
                     "release-gate",
                     str(SCRIPT_RELATIVE / "codex_refactor_loop" / "release" / "required_checks.py"),
-                    "required_checks_recent_green must require skill-degradation",
+                    "required_checks_recent_green must use host.env configured required checks",
                 )
             )
         if text and "gh\", \"run\", \"list" in text:

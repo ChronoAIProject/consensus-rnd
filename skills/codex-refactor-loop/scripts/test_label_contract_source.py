@@ -29,6 +29,10 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertNotIn("issue/PR 状态 → 期望 label", text)
         self.assertNotIn("crnd:phase:pr-open + crnd:phase:reviewing", text)
         self.assertNotIn('"crnd:lifecycle:managed,crnd:phase:design-solving,crnd:human:auto"', text)
+        self.assertIn("exactly one loop-owned `crnd:phase:*` label", text)
+        self.assertIn("exactly one loop-owned\n`crnd:human:*` label", text)
+        self.assertIn("Host business labels may coexist", text)
+        self.assertIn("not\nrouting authority", text)
 
     def test_active_skill_sections_use_catalog_managed_labels(self) -> None:
         text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")

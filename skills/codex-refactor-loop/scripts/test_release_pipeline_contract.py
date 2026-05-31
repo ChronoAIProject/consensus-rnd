@@ -226,9 +226,12 @@ class ReleasePipelineContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.workflow)
-        for needle in ("contract-tests", "manifest-version-sync", "skill-degradation", "REQUIRED_RELEASE_CHECKS"):
+        for needle in ("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", "required_release_checks", "ReleaseRequiredChecksProjection"):
             with self.subTest(required_check_projection=needle):
                 self.assertIn(needle, self.required_checks)
+        for forbidden in ('"contract-tests"', '"manifest-version-sync"', '"skill-degradation"'):
+            with self.subTest(forbidden_runtime_default=forbidden):
+                self.assertNotIn(forbidden, self.required_checks)
 
     def test_release_publish_preflight_source_guards_candidate_artifact_path(self) -> None:
         for needle in (

@@ -86,6 +86,7 @@ def write_opt_in(
                 f"export GH_REPO_SLUG={repo_slug}",
                 f"export REVIEW_BASE_BRANCH={review_base}",
                 f"export INTEGRATION_BRANCH={integration}",
+                "export HOST_GITHUB_RELEASE_REQUIRED_CHECKS=contract-tests,manifest-version-sync,skill-degradation",
                 "",
             ]
         ),

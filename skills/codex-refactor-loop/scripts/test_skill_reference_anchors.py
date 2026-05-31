@@ -58,6 +58,18 @@ def section_after_heading(markdown: str, heading: str) -> str:
     return _section_after_first_heading(markdown[match.start() :])
 
 
+def section_after_anchor_until_heading(markdown: str, anchor: str, level: int) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    pattern = re.compile(rf"(?m)^#{{1,{level}}}\s+")
+    first_heading = pattern.search(after_anchor)
+    start = first_heading.end() if first_heading else 0
+    match = pattern.search(after_anchor, start)
+    return after_anchor[: match.start()] if match else after_anchor
+
+
 def _section_after_first_heading(markdown: str) -> str:
     lines = markdown.splitlines(keepends=True)
     if not lines:
@@ -363,11 +375,22 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
-    def test_guided_github_consensus_workflow_setup_is_artifact_only(self) -> None:
+    def test_github_workflow_portability_checklist_is_folded_into_skill(self) -> None:
         walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
-        self.assertIn("This walkthrough is the only downstream install runbook", walkthrough)
-        self.assertIn("### Guided GitHub consensus workflow setup", walkthrough)
+        checklist = section_after_anchor_until_heading(self.skill, "github-workflow-portability-checklist", 3)
+        self.assertIn("SKILL.md#github-workflow-portability-checklist", self.readme)
+        self.assertIn("Host GitHub workflow portability", self.readme)
         for needle in (
+            "#104 setup is folded into this skill's existing owner surface",
+            ".config/consensus-rnd/host.env",
+            "HOST_WORKFLOW_SPEC",
+            "exactly seven data-only surfaces",
+            "`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`",
+            "no host `.github` edits",
+            "no branch-protection probing or edits",
+            "Future #357 interactive configuration",
+            "must output these same host-owned artifacts",
+            "#### Guided GitHub consensus workflow setup",
             ".refactor-loop/runs/github-workflow-setup/<timestamp>/",
             "host-env.patch.md",
             "labels-plan.json",
@@ -387,7 +410,19 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "advisory only",
         ):
             with self.subTest(needle=needle):
-                self.assertIn(needle, walkthrough)
+                self.assertIn(needle, checklist)
+        self.assertIn("GitHub workflow portability checklist", walkthrough)
+        self.assertFalse((REPO_ROOT / "skills" / "consensus-github-workflow-setup").exists())
+        for forbidden in (
+            "HostWorkflowPortabilityProjection",
+            "GitHubHostPolicy",
+            "HOST_GITHUB_LABEL_MAP",
+            "branch-protection probe",
+            "Projects adapter",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.readme)
 
         for forbidden in (
             "summary.json",
@@ -416,12 +451,38 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "lifecycle surface",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertIn(forbidden, walkthrough)
+                self.assertIn(forbidden, checklist)
 
         self.assertNotIn("GuidedWorkflowSetupBundle", self.skill)
         self.assertFalse((REPO_ROOT / "skills" / "github-workflow-setup").exists())
         self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "setup.py").exists())
         self.assertEqual(0, len(list((SKILL_ROOT / "scripts" / "codex_refactor_loop").glob("*setup*"))))
+
+    def test_release_required_checks_contract_is_host_configurable(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        release_schema = section_after_anchor_until_heading(self.skill, "release-decision-schema", 3)
+        combined = "\n".join((source_repo_validation, details, release_schema))
+
+        for needle in (
+            "$HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
+            "required_release_checks()",
+            "host.env",
+            "host configures the exact required GitHub check-run names",
+            "release required checks are not hardcoded by source-repo CI job names",
+            "Shared Checks API projection sees exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`",
+            "auto-release with an empty list fails closed",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+        stale_contracts = (
+            "requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+            "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+        )
+        for stale in stale_contracts:
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
 
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
