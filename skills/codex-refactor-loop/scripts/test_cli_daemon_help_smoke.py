@@ -52,6 +52,21 @@ class CliDaemonHelpSmokeTests(unittest.TestCase):
                 offenders.append(f"{op}: {reason}")
         self.assertEqual(offenders, [], f"command main() import errors: {offenders}")
 
+    def test_peek_python_invocation_parses_help(self) -> None:
+        # Refactor (issue-303): controller docs invoke the Python CLI directly,
+        # so keep the targeted `python3 consensus-rnd-cli peek --help` path
+        # covered even if the broader operation list changes.
+        result = subprocess.run(
+            [sys.executable, str(CLI), "peek", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        blob = result.stdout + result.stderr
+        self.assertEqual(result.returncode, 0, blob)
+        self.assertIn("usage:", blob)
+        self.assertIn("peek", blob)
+
 
 if __name__ == "__main__":
     unittest.main()
