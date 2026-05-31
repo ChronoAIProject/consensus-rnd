@@ -4,11 +4,11 @@
 from __future__ import annotations
 
 import ast
-import io
 import tokenize
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -69,15 +69,22 @@ def has_refactor_history(text: str) -> bool:
     return any(token in text for token in REF_HISTORY_TOKENS)
 
 
-def source_files() -> list[Path]:
+def source_files(repo_root: Path = REPO_ROOT) -> list[Path]:
+    skill_root = repo_root / "skills" / "codex-refactor-loop"
+    python_source_roots = (
+        repo_root / ".github" / "scripts",
+        skill_root / "scripts" / "codex_refactor_loop",
+    )
     files: list[Path] = []
-    for root in PYTHON_SOURCE_ROOTS:
+    for root in python_source_roots:
+        if not root.exists():
+            continue
         files.extend(path for path in root.rglob("*.py") if path.name != "degradation.py")
     return sorted(files)
 
 
-def relative(path: Path) -> str:
-    return path.relative_to(REPO_ROOT).as_posix()
+def relative(path: Path, repo_root: Path = REPO_ROOT) -> str:
+    return path.relative_to(repo_root).as_posix()
 
 
 def build_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
@@ -155,7 +162,7 @@ def is_selected_string(node: ast.Constant, parent_map: dict[ast.AST, ast.AST]) -
     return False
 
 
-def comment_findings(path: Path) -> list[Finding]:
+def comment_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
     findings: list[Finding] = []
     with tokenize.open(path) as fh:
         tokens = tokenize.generate_tokens(fh.readline)
@@ -164,13 +171,13 @@ def comment_findings(path: Path) -> list[Finding]:
                 continue
             text = token.string
             if has_han(text):
-                findings.append(Finding(relative(path), "comment", token.start[0], "han-comment", text.strip()))
+                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "han-comment", text.strip()))
             if has_refactor_history(text):
-                findings.append(Finding(relative(path), "comment", token.start[0], "refactor-history-comment", text.strip()))
+                findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "refactor-history-comment", text.strip()))
     return findings
 
 
-def string_findings(path: Path) -> list[Finding]:
+def string_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
     parent_map = build_parent_map(tree)
@@ -184,18 +191,17 @@ def string_findings(path: Path) -> list[Finding]:
             reason = "han-docstring" if is_docstring_node(node, parent_map) else "han-string"
             if is_selected_string(node, parent_map) and reason != "han-docstring":
                 reason = "han-selected-string"
-            findings.append(Finding(relative(path), owner, node.lineno, reason, text[:160]))
+            findings.append(Finding(relative(path, repo_root), owner, node.lineno, reason, text[:160]))
         if has_refactor_history(text):
-            findings.append(Finding(relative(path), owner, node.lineno, "refactor-history-string", text[:160]))
+            findings.append(Finding(relative(path, repo_root), owner, node.lineno, "refactor-history-string", text[:160]))
     return findings
 
 
 def scan_python_source_language(repo_root: Path = REPO_ROOT) -> list[Finding]:
-    del repo_root
     findings: list[Finding] = []
-    for path in source_files():
-        findings.extend(comment_findings(path))
-        findings.extend(string_findings(path))
+    for path in source_files(repo_root):
+        findings.extend(comment_findings(path, repo_root))
+        findings.extend(string_findings(path, repo_root))
     return [finding for finding in findings if not is_allowlisted(finding)]
 
 
@@ -213,16 +219,35 @@ class SourceLanguagePolicyTests(unittest.TestCase):
         self.assertEqual([], findings, details)
 
     def test_scanner_rejects_han_comments_docstrings_and_refactor_history(self) -> None:
-        sample = io.StringIO(
-            '"""中文 docstring"""\n'
-            "# Refactor (iter1/example): Old pattern: broken\n"
-            "def f():\n"
-            "    raise ValueError('中文 error')\n"
-        )
-        tokens = list(tokenize.generate_tokens(sample.readline))
-        self.assertTrue(any(token.type == tokenize.COMMENT and has_refactor_history(token.string) for token in tokens))
-        self.assertTrue(has_han("中文 docstring"))
-        self.assertTrue(has_han("中文 error"))
+        with TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source_path = repo_root / ".github" / "scripts" / "prohibited_sample.py"
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(
+                '"""Chinese text in source: 中文 docstring"""\n'
+                "# Refactor (iter1/example): Old pattern: 中文 comment history\n"
+                "def run() -> None:\n"
+                '    raise ValueError("Chinese text in source: 中文 error")\n',
+                encoding="utf-8",
+            )
+
+            comment_results = comment_findings(source_path, repo_root)
+            string_results = string_findings(source_path, repo_root)
+            scan_results = scan_python_source_language(repo_root)
+
+        expected_path = ".github/scripts/prohibited_sample.py"
+        comment_reasons = {(finding.relative_path, finding.line, finding.reason) for finding in comment_results}
+        string_reasons = {(finding.relative_path, finding.owner, finding.reason) for finding in string_results}
+        scan_reasons = {(finding.relative_path, finding.line, finding.reason) for finding in scan_results}
+
+        self.assertIn((expected_path, 2, "han-comment"), comment_reasons)
+        self.assertIn((expected_path, 2, "refactor-history-comment"), comment_reasons)
+        self.assertIn((expected_path, "module-string", "han-docstring"), string_reasons)
+        self.assertIn((expected_path, "run", "han-selected-string"), string_reasons)
+        self.assertIn((expected_path, 1, "han-docstring"), scan_reasons)
+        self.assertIn((expected_path, 2, "han-comment"), scan_reasons)
+        self.assertIn((expected_path, 2, "refactor-history-comment"), scan_reasons)
+        self.assertIn((expected_path, 4, "han-selected-string"), scan_reasons)
 
     def test_allowlist_entries_match_current_literals(self) -> None:
         raw_findings: list[Finding] = []
