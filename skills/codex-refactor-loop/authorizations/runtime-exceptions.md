@@ -1,10 +1,109 @@
 # Runtime Exception Authorization Mirror
 
 This checked-in mirror preserves the durable authorization evidence for named
-runtime exceptions whose original Phase 9 judge logs live under ignored
-`.refactor-loop/runs/` runtime output paths. It is not a runtime API, loader,
-schema, or source of new authority. The executable contract remains in
-`SKILL.md` and the tests.
+runtime exceptions whose original Phase 9 judge logs or maintainer directive
+captures live under ignored `.refactor-loop/runs/` runtime output paths. It is
+the only checked-in runtime authorization evidence mirror. It is not a runtime
+API, loader, schema, or source of new authority. The executable contract remains
+in `SKILL.md` and the tests.
+
+<a id="maintainer-directive-concurrency-auto-topup"></a>
+## maintainer-directive-concurrency-auto-topup
+
+- source_kind: maintainer_directive
+- surface: `concurrency_monitor auto-topup`
+- source_date: `2026-05-26`
+- source_evidence: maintainer loning said "改一下监控,低于预期数就继续派发", "关于并发问题直接自己改", and "你直接先把并发检测的问题解决掉, 现在总是空闲"; commit evidence `91cb381 feat(skill): concurrency_monitor 改 alert+auto-topup(maintainer 实证 #56 路径) (#57)` and `f2854db chore(skill): 扩 CLAUDE.md 例外子句覆盖 maintainer-directive equivalence 路径(#54 r2 共识) (#48)`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`
+- affected_contracts: `SKILL.md` named runtime exception for `concurrency_monitor auto-topup`; `concurrency` dispatch-queue top-up behavior.
+- allowed_directive: only `skills/codex-refactor-loop/scripts/concurrency_monitor.py` / packaged concurrency monitor deficit handling may add `_try_topup` plus the tick deficit branch to consume `.refactor-loop/dispatch-queue/<p0|p1|p2>/*.dispatch.json`; behavior/source tests and the SKILL narrow exception may document that existing controller-enqueued work is dispatched when actual workers are below expectation.
+- forbidden_boundary: no issue/PR lifecycle, label lifecycle, commit, push, merge, tag, release, prompt-body decision, host fact invention, generic lifecycle actor, or authority outside the controller/actor-enqueued dispatch queue.
+- verification: `test_concurrency_monitor.py`, `test_ensure_project_rules_fixed_points.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry mirrors the existing maintainer-directive equivalence evidence; it does not grant new dispatch authority beyond the checked-in narrow queue consumer contract.
+
+<a id="maintainer-directive-progress-reporter-orphan-delete"></a>
+## maintainer-directive-progress-reporter-orphan-delete
+
+- source_kind: maintainer_directive
+- surface: `codex-progress-reporter orphan delete retry`
+- source_date: `2026-05-27`
+- source_evidence: maintainer loning, 2026-05-27 wakeup, said "这个 bug 直接改吧" for issue #69 accumulated progress comments; commit evidence `897a670 fix(skill): progress-reporter orphan delete retry (issue #69 实证) (#73)`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md`
+- affected_contracts: `SKILL.md` named runtime surface for progress reporter `TEST_NO_LOOP`; progress reporter orphan delete retry behavior.
+- allowed_directive: in `codex-progress-reporter`, mark `finished=true` only after delete success or 404, retry nonterminal delete failures on later ticks, allow terminal orphan retry when the log still exists, and expose `TEST_NO_LOOP=1` only as a source-time behavior-test seam.
+- forbidden_boundary: no daemon architecture rewrite, no interval default change, no GitHub cleanup of existing spam through this runtime path, no production use of `TEST_NO_LOOP`, no new state file, queue, lifecycle authority, host fact source, issue/PR lifecycle, label lifecycle, commit, push, merge, tag, or release authority.
+- verification: `test_progress_reporter.py`, `test_codex_progress_reporter_orphan.py`, `test_ensure_project_rules_fixed_points.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry mirrors the checked-in orphan retry bugfix authorization and does not widen progress reporter beyond its existing own-comment maintenance surface.
+
+<a id="maintainer-directive-existing-issue-priority-over-audit"></a>
+## maintainer-directive-existing-issue-priority-over-audit
+
+- source_kind: maintainer_directive
+- surface: `existing issue priority over audit fallback`
+- source_date: `2026-05-28`
+- source_evidence: maintainer loning@aelf.io said "改一下skills, 优先处理已经存在的issues,而不是派遣新的audit"; commit evidence `e5763d5 feat(skill): existing-issue priority strictly over audit fallback`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`
+- affected_contracts: `SKILL.md` Concurrency Floor and existing-issue priority route table; wakeup-plan existing work ordering.
+- allowed_directive: when codex-floor deficit exists, satisfy open managed issue/PR next-step work without in-flight coverage for its current phase before dispatching fresh audit; route design-solving, reviewing, fixing, implementing, pr-open, and consensus-reached work before ordinary audit fallback.
+- forbidden_boundary: no spawning fresh audit while existing design-solving/fixing/reviewing/implementing/pr-open/consensus-reached managed work has zero matching in-flight codex; no backlog-increasing audit as a substitute for actionable existing work; no issue/PR lifecycle, label lifecycle, commit, push, merge, tag, release, or generic lifecycle actor.
+- verification: `test_wakeup_plan.py`, `test_skill_entrypoint_contract.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry only records the priority ordering evidence; actual lifecycle actions remain controller-owned and separately gated.
+
+<a id="maintainer-directive-stale-issue-3h-revival"></a>
+## maintainer-directive-stale-issue-3h-revival
+
+- source_kind: maintainer_directive
+- surface: `3-hour stale issue/PR auto-revival`
+- source_date: `2026-05-28`
+- source_evidence: maintainer loning@aelf.io said "改skills 超过3小时没处理的已经存在的issues/pr就应该重新处理"; commit evidence `dbd5dfd feat(skill): 3-hour stale issue/PR auto-revival`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`
+- affected_contracts: `SKILL.md` stale-issue revival route table; wakeup-plan stale managed item routing.
+- allowed_directive: on each wakeup, compute a UTC 3-hour cutoff from GitHub `updatedAt`, re-dispatch open managed issue/PR next-step actors when stale, include unlabeled/default design route handling, and post visible `stale_hours=N` revival evidence through the normal controller path.
+- forbidden_boundary: no treating a current-looking phase label, prior marker, or "awaiting" comment as an exemption; stale `updatedAt` is routing metadata only and does not authorize GitHub comments, label edits, PR merges, issue closes, takeover, issue/PR lifecycle, commit, push, merge, tag, release, or generic lifecycle actor outside existing gates.
+- verification: `test_wakeup_plan.py`, `test_skill_entrypoint_contract.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry mirrors routing evidence only; write permits remain gated by active-controller ownership and existing controller primitives.
+
+<a id="maintainer-directive-floor-no-exemption"></a>
+## maintainer-directive-floor-no-exemption
+
+- source_kind: maintainer_directive
+- surface: `concurrency floor no exemption`
+- source_date: `2026-05-29`
+- source_evidence: maintainer loning explicit instruction "并发数不足无豁免,直接改skills"; commit evidence `b1ec9f4 feat(skill): 并发不足无豁免(删 no-work-after-audit escape)+ wakeup_plan→cli/filter-open(#162)`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md`
+- affected_contracts: `SKILL.md` Concurrency Floor; `wakeup_plan.py` hard gate; concurrency floor tests.
+- allowed_directive: when `deficit>0`, always emit/obey hard-gate dispatch for real work first and audit fallback when no actionable existing work exists; delete the `CONCURRENCY_LOW:no-work-after-audit-none` floor exemption and remove `AUDIT_DONE:none:0` as a floor immunity.
+- forbidden_boundary: no ending a wakeup with positive deficit, no low-floor exemption, no fabricating non-audit work, no issue/PR lifecycle, label lifecycle, commit, push, merge, tag, release, or generic lifecycle actor.
+- verification: `test_wakeup_plan.py`, `test_skill_floor_fill_not_optional.py`, `test_skill_entrypoint_contract.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry preserves the existing hard-gate routing rule and does not add lifecycle authority.
+
+<a id="maintainer-directive-milestone-priority"></a>
+## maintainer-directive-milestone-priority
+
+- source_kind: maintainer_directive
+- surface: `milestone priority`
+- source_date: `2026-05-29`
+- source_evidence: maintainer loning explicit instruction; commit evidence `4396eb9 feat(skill): milestone 优先级机制(🎯 milestone 标签,active 时优先派该 issue)`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md`
+- affected_contracts: `SKILL.md` Milestone priority; wakeup-plan ordering; label catalog normalization.
+- allowed_directive: use GitHub `crnd:milestone:current` as the sole milestone membership fact source; when at least one open managed issue/PR is milestone-labeled, dispatch milestone next-step work before non-milestone existing-issue work and ordinary audit fallback, while bootstrap/wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation remain higher priority.
+- forbidden_boundary: no parallel milestone state file, queue, marker, local cache, or work-unit field; no killing already-running non-milestone codex solely because milestone became active; no phase/human semantics change; no issue/PR lifecycle, label lifecycle, commit, push, merge, tag, release, or generic lifecycle actor.
+- verification: `test_wakeup_plan.py`, `test_skill_entrypoint_contract.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry mirrors dispatch priority evidence only; it does not grant new label mutation or lifecycle authority.
+
+<a id="maintainer-directive-wakeup-plan-script"></a>
+## maintainer-directive-wakeup-plan-script
+
+- source_kind: maintainer_directive
+- surface: `read-only wakeup-plan script`
+- source_date: `2026-05-29`
+- source_evidence: maintainer loning explicit instruction to add a mechanically called wakeup-plan script, plus the 2026-05-29 hard-gate addition; commit evidence `2c8091d feat(skill): wakeup_plan.py 机械化每次唤醒(daemon健康+按序取任务+milestone优先+并发缺口hard-gate+无任务推荐audit)`.
+- local_original_pointer: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md`
+- affected_contracts: `SKILL.md` Wakeup Skeleton and Controller Wakeup Checklist; `wakeup_plan.py` JSON authorization field; `test_wakeup_plan.py`.
+- allowed_directive: add a read-only script called every controller wakeup to report daemon health, ordered actionable tasks, audit recommendation, canonical concurrency actual/target/deficit, and `HARD_GATE:dispatch_required=N` from local evidence plus read-only GitHub/git checks.
+- forbidden_boundary: no restart, spawn, commit, push, checkout/switch, branch create/delete/update, worktree add/remove/prune, reset, rebase, merge, label mutation, issue/PR create-close-edit, tag, release, GitHub lifecycle mutation, or worker dispatch from the script.
+- verification: `test_wakeup_plan.py`, `test_skill_entrypoint_contract.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This entry mirrors the read-only recommendation surface and hard-gate evidence; the controller remains the lifecycle owner.
 
 <a id="autonomous-release-gate-56"></a>
 ## autonomous-release-gate-56

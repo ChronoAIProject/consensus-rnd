@@ -19,7 +19,7 @@ commands, no GitHub lifecycle mutation, no commit, push, checkout/switch,
 branch create/delete/update, worktree add/remove/prune, reset, rebase, merge,
 label, issue/PR create/close/edit, tag, release, or worker dispatch.
 Authorization source:
-`.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md`.
+`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script`.
 Issue-190 consensus source:
 `.refactor-loop/runs/phase9-issue190-r3-judge.md`.
 """
@@ -853,7 +853,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     return {
         "schema": "wakeup-plan",
         "repo_root": str(repo_root),
-        "authorization": ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+        "authorization": "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script",
         "mode": "read-only-recommendation",
         "no_lifecycle_authority": True,
         "daemon_health": health,

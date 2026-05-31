@@ -360,7 +360,7 @@ These are local controller contract rules learned from dogfood incidents:
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
-`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md` and `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
+`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script` and `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
 
 `consensus-rnd-cli peek` is a status lens, not routing authority; it remains useful for human-readable ambient state after the plan. `consensus-rnd-cli wakeup-plan` outputs prioritized routing recommendations from local evidence plus GitHub labels; `consensus-rnd-cli peek` displays status and does not decide next action.
 
@@ -444,7 +444,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
 | `META_RESOLVED:drop` | Close as no-op/wontfix with explanation. |
-| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `crnd:human:maintainer-decision`, passing the full marker source; the helper fails closed without that marker and posts the reason banner only if not skipped by maintainer-directive. |
+| `META_RESOLVED:escalate-human:<reason>` | Only then call `apply_human_label_or_skip` for `crnd:human:maintainer-decision`, passing the full marker source; the helper fails closed without that marker and does not treat local maintainer-directive captures as skip authority. |
 | `IMPLEMENT_DONE:ok` | Controller commits/pushes/opens PR, then dispatches Consensus-rnd Phase review-gate reviewers. |
 | `IMPLEMENT_DONE:blocked` | Route to recovery or Consensus-rnd Phase design-consensus depending on reason. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `MERGE` or `MERGE_WITH_COMMENTS` | Merge path; surface comments for `MERGE_WITH_COMMENTS`. |
@@ -541,14 +541,14 @@ The floor is local because it prevents loop stalls.
 - If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
-- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`.
-- **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`.
+- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
+- **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
 
 More detail is in [concurrency floor details](#concurrency-floor-details).
 
 ## Milestone priority(强制)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md`.
+Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-milestone-priority`.
 
 GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Legacy milestone labels are migration aliases only and must be normalized through `codex_refactor_loop.labels`.
 
@@ -570,7 +570,7 @@ Fact source is unique: milestone members = GitHub `crnd:milestone:current` as de
 - **Behavior tests**: `test_concurrency_monitor` 覆盖 priority order / overshoot prevention / dispatch_one / tick() 整链 / floor 边界 / archive collision / filename-derived task_id。
 - **Source-regression**: `test_ensure_project_rules_fixed_points` 字面断言本段标题 + "top_up_from_dispatch_queue" + "DISPATCH_FIRED" + "HARD_GATE:dispatch_required=N" + "narrow allowlist" 等关键字面。
 
-授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
+授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-concurrency-auto-topup`(per CLAUDE.md maintainer-directive equivalence 子句,PR #48 merged)。
 
 ## Named runtime surface — codex-progress-reporter TEST_NO_LOOP(per #69)
 
@@ -581,7 +581,7 @@ Fact source is unique: milestone members = GitHub `crnd:milestone:current` as de
 - **Fact source**: runtime truth remains `.refactor-loop/codex-progress-state.json`, `.refactor-loop/logs/*.log`, and GitHub comment existence via `gh api`. The test seam does not create a new state file, queue, lifecycle authority, or host fact source.
 - **Verification**: `python3 -m unittest skills/codex-refactor-loop/scripts/test_progress_reporter.py` covers failed-state and orphan delete retry behavior; `python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'` includes source-regression assertions for this narrow surface.
 
-授权来源:`.refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md`(maintainer-directive for issue #69 orphan progress comments)。
+授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-progress-reporter-orphan-delete`(maintainer-directive for issue #69 orphan progress comments)。
 
 ## Spawn Contract
 
@@ -625,9 +625,9 @@ one terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
 
 **DO NOT apply when**:
 - architect/quality reviewer 因 "needs Consensus-rnd Phase design-consensus artifact" reject → 开真 Consensus-rnd Phase design-consensus(reflector option A)
-- reviewer 与 maintainer prior session directive 冲突 → 把 directive 编码为 `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` artifact + 更新 reviewer prompts 含 "maintainer-directive precedence" 段
+- reviewer 与 maintainer prior session directive 冲突 → cite checked-in mirror anchor or self-contained GitHub maintainer evidence; local `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` is raw capture awaiting mirror
 - controller uncertain → reflector,不 label
-- reflector 自己 emit `META_RESOLVED:escalate-human` 但 controller 复审发现 maintainer 已授权 → 撤 label,以 maintainer-directive artifact 替代
+- reflector 自己 emit `META_RESOLVED:escalate-human` 但 controller 复审发现 maintainer 已授权 → 撤 label,以 checked-in maintainer-directive mirror anchor or self-contained GitHub maintainer evidence 替代
 
 **禁止**:把 `👤` label 作 architect/quality reject 的绕路工具。
 
@@ -2288,11 +2288,11 @@ reflector spawn 模板见 "Meta-layer escalation" 节。reflector 输出 `META_R
 
 ### Maintainer-directive artifact precedence
 
-When reviewer evidence conflicts with maintainer prior session directive, encode the directive as `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` before considering any human label. A maintainer-directive artifact is the durable replacement for verbal authorization and has precedence over reviewer uncertainty about authorization.
+When reviewer evidence conflicts with maintainer prior session directive, a current-session `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` file is raw capture only. Durable route authority must be a checked-in mirror anchor in `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-*` or self-contained GitHub maintainer evidence. A mirrored maintainer-directive authorization has precedence over reviewer uncertainty about authorization.
 
-If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `crnd:human:maintainer-decision`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, encode or reuse the maintainer-directive artifact and reframe Consensus-rnd Phase design-consensus with that directive as evidence. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
+If architect or quality rejects because the PR "needs Consensus-rnd Phase design-consensus artifact", do not apply `crnd:human:maintainer-decision`. Open a real Consensus-rnd Phase design-consensus path. If maintainer already authorized that topic in-session, cite the checked-in maintainer-directive mirror anchor or self-contained GitHub maintainer evidence and reframe Consensus-rnd Phase design-consensus with that evidence. Local directive captures awaiting mirror are not route authority. This is the Consensus-rnd Phase design-consensus-artifact replacement path; the label is not an interchange format for architect/quality reject.
 
-Controller label application must use internal `ControllerActions.apply_human_label_or_skip(pr_number, source_marker, reason)` with the full `META_RESOLVED:escalate-human:<reason>` marker as `source_marker`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the primitive. If it finds a matching `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md`, it prints `skip-label: maintainer-directive 已覆盖,见 .refactor-loop/runs/maintainer-directives/` and leaves the item automatic.
+Controller label application must use internal `ControllerActions.apply_human_label_or_skip(pr_number, source_marker, reason)` with the full `META_RESOLVED:escalate-human:<reason>` marker as `source_marker`. `META_JUDGE_DONE:*` and `FIX_BLOCKED:*` must route through reflector/meta-layer and must not call the primitive. The helper is a strict active-controller plus marker-gated label primitive; it does not scan local maintainer-directive captures and does not treat raw local files as durable authorization.
 
 ### Historical anti-pattern:`crnd:human:maintainer-decision` 误用 (2026-05-26)
 
@@ -2545,7 +2545,7 @@ Policy:the loop continues until 3/3 unanimous consensus, true stall reaches refl
   - `re-design` → reset Consensus-rnd Phase design-consensus round counter,prompt 重写带 reflector 总结的新 framing 角度
   - `re-cluster` → close design issue + audit re-split(下 iter 拆 cluster)
   - `drop` → close design issue with `wontfix`
-  - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(仅 reflector 也无解;helper skip 时改走 maintainer-directive artifact)
+  - `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(仅 reflector 也无解;checked-in maintainer-directive mirror anchor or self-contained GitHub maintainer evidence 才能替代 human label route)
 - **Maintainer reply RESETS stall counter** — fresh round dispatched with their comment as constraint; stall counter goes back to 0.
 - Solver may not repeat a framing that prior rounds showed to be underspecified without adding new exact text/evidence; doing so counts toward stall detection.
 - Cumulative solver runtime across all rounds capped at 12h per issue (raised from 6h to account for maintainer-reset iterations); over → escalate as `stalled:budget-exhausted`.
@@ -2580,7 +2580,7 @@ Concretely, this means:
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
+Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
 Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
 
@@ -2595,7 +2595,7 @@ Audit fallback (`audit-iter-N+1`) is valid **only after** every open catalog-man
 
 ### Stale-issue revival(3h) details(per 2026-05-28 maintainer-directive)
 
-Authorization: `.refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
+Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`. Open catalog-managed issue/PR whose latest `updatedAt` (from `gh issue view --json updatedAt` / `gh pr view --json updatedAt`) is older than **3 hours UTC** MUST be re-dispatched to its next-step actor on the next wakeup, even if (a) the phase label looks current, or (b) an earlier round already produced markers, or (c) prior comments suggest "awaiting" something. The 3h cutoff is wall-clock; do not weaken it because in-flight tasks elsewhere are busy.
 
 Stale revival selects the actor by current phase label using the Existing-issue priority routes above; for unlabeled `crnd:lifecycle:managed` items the default revival is Consensus-rnd Phase design-consensus r1 solver triplet. Each re-dispatch posts a banner noting `stale_hours=N` from `updatedAt`.
 
@@ -2671,7 +2671,7 @@ NEEDED=$(( FLOOR - ACTIVE ))
 - ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
 - ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → 继续 `HARD_GATE:dispatch_required=N`;无 open actionable work 时派 audit
 
-结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `.refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md` removes the former audit-none floor exemption.
+结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption` removes the former audit-none floor exemption.
 
 ### Sync to remote in time (强制)
 
@@ -2925,7 +2925,7 @@ Controller 读 marker 后路由:
 - `re-design` → 关 PR / 撤回 commits / re-Consensus-rnd Phase design-consensus with constraint = reject evidence pattern
 - `re-cluster` → 关 PR / audit re-split(产新 cluster 在 next iter)
 - `drop` → close PR + close issue with `wontfix` label + 转 phase merged-no-op
-- `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(只 meta-layer 也无路时;helper skip 时改走 maintainer-directive artifact)
+- `escalate-human` → `apply_human_label_or_skip` with the full `META_RESOLVED:escalate-human:<reason>` marker for `crnd:human:maintainer-decision` + reason banner + PushNotification(只 meta-layer 也无路时;checked-in maintainer-directive mirror anchor or self-contained GitHub maintainer evidence 才能替代 human label route)
 
 ### 反面(❌ 禁止)
 
