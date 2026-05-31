@@ -275,6 +275,66 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_guided_github_consensus_workflow_setup_is_artifact_only(self) -> None:
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
+        self.assertIn("This walkthrough is the only downstream install runbook", walkthrough)
+        self.assertIn("### Guided GitHub consensus workflow setup", walkthrough)
+        for needle in (
+            ".refactor-loop/runs/github-workflow-setup/<timestamp>/",
+            "host-env.patch.md",
+            "labels-plan.json",
+            "scheduler.md",
+            "statusline.json",
+            "host-workflow-spec.json",
+            "walkthrough.md",
+            "Host env surface matrix",
+            "host.env.example",
+            "scripts/codex_refactor_loop/labels.py",
+            "consensus-rnd-cli restart-daemons",
+            "consensus-rnd-cli statusline",
+            "workflow_spec.py",
+            "WorkflowInvariantValidator",
+            "`host:` namespace",
+            "repo-relative paths",
+            "advisory only",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, walkthrough)
+
+        for forbidden in (
+            "summary.json",
+            "host-workflow-spec.example.json",
+            "renderer",
+            "CLI command",
+            "setup skill",
+            "installer",
+            "template directory",
+            "root install document",
+            "host `.git`",
+            "`.github`",
+            "CI",
+            "policy",
+            "branch protection",
+            "GitHub labels",
+            "issues",
+            "PRs",
+            "commits",
+            "pushes",
+            "merges",
+            "closes",
+            "tags",
+            "releases",
+            "settings",
+            "lifecycle surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, walkthrough)
+
+        self.assertNotIn("GuidedWorkflowSetupBundle", self.skill)
+        self.assertFalse((REPO_ROOT / "skills" / "github-workflow-setup").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "setup.py").exists())
+        self.assertEqual(0, len(list((SKILL_ROOT / "scripts" / "codex_refactor_loop").glob("*setup*"))))
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (

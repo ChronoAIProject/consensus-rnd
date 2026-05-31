@@ -183,6 +183,19 @@ export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env
 
 Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. Legacy `.refactor-loop/host.env` remains a compatibility read fallback only.
 
+### Guided GitHub consensus workflow setup
+
+When a host user asks for guided setup, do not add a renderer, CLI command, setup skill, installer, template directory, or root install document. Follow this walkthrough and write advisory artifacts by hand under `.refactor-loop/runs/github-workflow-setup/<timestamp>/`:
+
+- `host-env.patch.md`: derive a suggested host-owned `.config/consensus-rnd/host.env` patch from the Host env surface matrix and `host.env.example`; `.refactor-loop/host.env` remains only a legacy/runtime read fallback.
+- `labels-plan.json`: derive the label plan from `scripts/codex_refactor_loop/labels.py`; do not run `gh label create`, `gh label edit`, or `gh label delete`.
+- `scheduler.md`: point at the existing cron/launchd `consensus-rnd-cli restart-daemons` examples below; do not install a scheduler.
+- `statusline.json`: point at the existing read-only `consensus-rnd-cli statusline`; do not write Claude Code settings.
+- `host-workflow-spec.json`: optional data-only `HOST_WORKFLOW_SPEC` draft when the host needs workflow invariants; use the existing `workflow_spec.py` / `WorkflowInvariantValidator` contract, `host:` namespace entries, repo-relative paths, and no command, git, label, merge, or lifecycle fields.
+- `walkthrough.md`: summarize what the host still needs to review and apply.
+
+Do not produce `summary.json` or `host-workflow-spec.example.json`. These artifacts are advisory only: they must not modify host `.git`, `.github`, CI, policy, branch protection, GitHub labels, issues, PRs, commits, pushes, merges, closes, tags, releases, installers, settings, or any lifecycle surface.
+
 ### Keep existing daemons alive
 
 Install exactly one user-level scheduler. The command must `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before it execs the checked-in helper; this preserves values with spaces and keeps all loop runtime facts in the host env file.
