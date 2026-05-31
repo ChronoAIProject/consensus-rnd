@@ -116,6 +116,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "log-retention",
                 "spawn-codex",
                 "peek",
+                "pr-checks",
                 "wakeup-plan",
                 "restart-daemons",
                 "statusline",
@@ -201,7 +202,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "peek", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
@@ -278,6 +279,10 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         }
         self.assertFalse(set(COMMANDS["release-commits"].authority) & forbidden)
         self.assertNotIn("read-git", COMMANDS["release-gate"].authority)
+
+    def test_pr_checks_command_declares_read_gh_only_and_no_lifecycle_authority(self) -> None:
+        self.assertEqual(("read-gh",), COMMANDS["pr-checks"].authority)
+        self.assertFalse(set(COMMANDS["pr-checks"].authority) & LIFECYCLE_TOKENS)
 
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")

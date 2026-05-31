@@ -315,12 +315,48 @@ class ControllerActions:
             self.gh(args, check=False)
         return int(pr_target), match.group(0)
 
+    def open_design_issue_with_labels(self, title: str, body_file: str) -> tuple[int, str]:
+        self._require_owner_or_raise("open-design-issue")
+        # Refactor (issue-297): Old: controller runbook exposed raw issue-open
+        # plus label recipes. New: design issue opening is a narrow internal
+        # ControllerActions primitive gated by the active controller lease.
+        if not title.strip():
+            raise RuntimeError("open_design_issue_with_labels: title required")
+        self._validate_design_issue_body_file(body_file)
+        created = self.gh(
+            [
+                "issue",
+                "create",
+                "--title",
+                title,
+                "--label",
+                ",".join(labels.design_issue_label_bundle()),
+                "--body-file",
+                body_file,
+            ],
+            check=False,
+        )
+        output = created.stdout + created.stderr
+        match = re.search(r"https://github\.com/[^/]+/[^/]+/issues/([0-9]+)", output)
+        if created.returncode != 0 or not match:
+            raise RuntimeError(f"open_design_issue_with_labels: failed to extract issue num from: {output.strip()}")
+        return int(match.group(1)), match.group(0)
+
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)
         if not body_path.is_absolute():
             body_path = self.ctx.repo_root / body_path
         try:
             validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=False)
+        except GitHubBodyError as exc:
+            raise RuntimeError(str(exc)) from exc
+
+    def _validate_design_issue_body_file(self, body_file: str) -> None:
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        try:
+            validate_self_contained_github_body(body_path.read_text(encoding="utf-8"), authority_required=True)
         except GitHubBodyError as exc:
             raise RuntimeError(str(exc)) from exc
 
