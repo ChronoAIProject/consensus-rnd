@@ -114,7 +114,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         self.assertTrue(phase0)
         obligations = (
-            "source .refactor-loop/host.env",
+            'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"',
             "fail closed",
             "ProjectRulesFixedPointProbe",
             "consensus-rnd-cli check-project-rules",
@@ -597,9 +597,44 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "| Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |",
             host_config,
         )
-        self.assertIn("host.env` is the only runtime fact injection point", host_config)
+        self.assertIn("`host.env` is the only loop runtime fact injection point", host_config)
         self.assertNotIn("| Variable | Meaning | Default / example |", host_config)
         self.assertNotIn("| Variable | Prompt meaning | Empty behavior |", host_config)
+
+    def test_refactor_loop_is_skill_private_not_host_production_ssot(self) -> None:
+        host_config = section_between(
+            self.skill,
+            r"^## Host .+$",
+            r"^## Skill Root Contract$",
+        )
+        for needle in (
+            "$CONSENSUS_RND_HOST_ENV",
+            "locates the host-owned `host.env` loop runtime injection file",
+            "not host production configuration schema",
+            "legacy `.refactor-loop/host.env`",
+            "`.refactor-loop/` is the skill-private runtime home",
+            "Host production facts, branch topology, durable ledger authority, and host-owned config SSOT must live in host-owned config/rules/artifacts, not in `.refactor-loop/`.",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, host_config)
+
+    def test_audit_and_solver_prompts_forbid_host_production_facts_in_refactor_loop(self) -> None:
+        prompt_names = (
+            "audit.md",
+            "solver-minimal.md",
+            "solver-structural.md",
+            "solver-delete.md",
+            "meta-judge.md",
+            "implement.md",
+            "reviewer-architect.md",
+        )
+        for name in prompt_names:
+            text = read(SKILL_ROOT / "prompts" / name)
+            with self.subTest(prompt=name):
+                self.assertIn(".refactor-loop/`", text)
+                self.assertRegex(text, r"skill-private runtime(?:/cache/log)?")
+                self.assertIn("host-owned config", text)
+                self.assertIn("durable ledger authority", text)
 
     def test_issue205_dogfood_anti_rules_are_local_contract(self) -> None:
         # Refactor (iter205/issue-205):

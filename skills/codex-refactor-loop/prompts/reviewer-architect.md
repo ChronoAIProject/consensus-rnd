@@ -24,6 +24,7 @@ You are **one of N independent reviewers**; you do not see the other reviewers' 
 - [ ] **Single business entity per actor**: no new `*WriteActor` / `*ReadActor` / `*Store` splits of one entity.
 - [ ] **No new external repo references** ($EXTERNAL_REPOS).
 - [ ] **Schema/protocol changes**: apply `${HOST_PROTO_POLICY}` when non-empty. Otherwise, review only schema/protocol files actually present in the diff and rules actually stated in `$PROJECT_RULES`; do not assume a schema technology.
+- [ ] **Host production SSOT boundary**: reject if the PR moves host tools config, branch topology, machine paths, durable ledger authority, or host artifacts into `.refactor-loop/` or `.refactor-loop/host.env`. `.refactor-loop/` is skill-private runtime/cache/log state only; production facts must use host-owned config/rules/artifacts.
 - [ ] **Deletion-first**: the cluster wasn't supposed to add a compat shim. If the diff introduces an empty-forwarding interface / dead wrapper / parallel pathway, → comment.
 
 ## Out of scope for this role (other reviewers handle)

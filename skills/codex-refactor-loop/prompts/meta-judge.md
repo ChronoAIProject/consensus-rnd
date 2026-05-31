@@ -31,6 +31,10 @@ Use only the router-injected validated transition projection for transition asse
 
 ## Procedure
 
+### Step 0 — Host production SSOT boundary
+
+Reject or converge any solver plan that makes `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state; accepted plans must use host-owned config, host rules, or host-owned artifacts for production facts.
+
 ### Step 1 — Read each solver's marker
 
 For each solver, classify their verdict from the marker line:

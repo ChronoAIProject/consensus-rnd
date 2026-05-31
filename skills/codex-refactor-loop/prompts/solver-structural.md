@@ -21,6 +21,7 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 
 ## Procedure
 
+0. **Host production SSOT boundary**: design plans must not make `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state. If the issue or audit asks for that direction, rewrite the plan to host-owned config/rules/artifacts or mark false-positive/abstain.
 1. **Restate the violation** in PROJECT_RULES-clause-precise terms. Which clause is it, exactly? Quote it. PROJECT_RULES clauses and evidence may come from the issue body/comments, manual-issue reshaped fields, a local source artifact, audit evidence, or repo rules. Require an audit `evidence:` block only for audit-backed sources; do not fabricate one for issue-driven work.
 2. **Map the clean structural solution**:
    - Which existing repo primitives apply (`IAsyncEnumerable`, `Channel`, actor inbox, projection pipeline, event envelope, etc.)?
