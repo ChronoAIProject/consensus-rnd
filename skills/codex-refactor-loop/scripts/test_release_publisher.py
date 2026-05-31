@@ -54,10 +54,16 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
 class FakePreflight:
     def __init__(self, result: PublishPreflightResult) -> None:
         self.result = result
-        self.calls: list[tuple[str | Path, str]] = []
+        self.calls: list[dict[str, str | Path | None]] = []
 
     def validate(self, *, candidate_path: str | Path, target_ref: str, manifest_version: str | None = None) -> PublishPreflightResult:
-        self.calls.append((candidate_path, target_ref))
+        self.calls.append(
+            {
+                "candidate_path": candidate_path,
+                "target_ref": target_ref,
+                "manifest_version": manifest_version,
+            }
+        )
         return self.result
 
 
@@ -140,7 +146,16 @@ class ReleasePublisherTests(unittest.TestCase):
             result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
-            self.assertEqual(preflight.calls, [(".refactor-loop/state/release-candidate.json", "abc123")])
+            self.assertEqual(
+                preflight.calls,
+                [
+                    {
+                        "candidate_path": ".refactor-loop/state/release-candidate.json",
+                        "target_ref": "abc123",
+                        "manifest_version": None,
+                    }
+                ],
+            )
             self.assertEqual(runner.commands, expected_success_commands())
 
     def test_publisher_records_result_and_uses_bump_commit_tag_target(self) -> None:
