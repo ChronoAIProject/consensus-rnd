@@ -380,7 +380,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 10. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
 11. Spawn the next codexes with harness background tasks if actionable work exists.
 12. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
-13. Run `consensus-rnd-cli peek | tail -80` again after spawn, merge, banner, or close actions.
+13. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` again after spawn, merge, banner, or close actions.
 
 `consensus-rnd-cli wakeup-plan` named read-only surface:
 
@@ -1251,7 +1251,7 @@ gh issue view <N> --json comments --jq '
 - **Controller 自己 post banner** 使用 `maintainer` 或 host 配置的安全称谓,不写裸人名。
 - **@-mention whitelist** 来自 `$MAINTAINER_WHITELIST`,并且必须经 git blame / host 配置验证。
 
-### Wakeup 第一动作:`bash <skill-root>/scripts/consensus-rnd-cli peek`(强制)
+### Wakeup 第一动作:`python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80`(强制)
 
 减少人工 grep / parse 错误。一眼看全:
 - 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
@@ -1274,7 +1274,7 @@ gh issue view <N> --json comments --jq '
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `consensus-rnd-cli spawn-codex` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
-**Controller wakeup 第一动作**:`bash <skill-root>/scripts/consensus-rnd-cli peek`。如果活跃 codex == 0:
+**Controller wakeup 第一动作**:`python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
 2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
 3. 如果所有 active issue/PR 都真在等 maintainer(全是 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
@@ -1542,7 +1542,7 @@ The default work-unit producer is `audit`. Producer normalization is documented 
 triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
-2. Replace `{{iteration}}` placeholder.
+2. Replace the literal `${ITERATION}` placeholders with N using a targeted replacement; leave runtime placeholders such as `$REPO_ROOT`, `${PROJECT_RULES:-CLAUDE.md}`, and `$SOURCE_GLOBS` intact for the audit codex runtime.
 3. Dispatch:
 
    ```bash
@@ -1943,7 +1943,7 @@ dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converg
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
 python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons
 python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only >/dev/null
-bash <skill-root>/scripts/consensus-rnd-cli peek | tail -80
+python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 heartbeat stale/missing/malformed → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper 重启。
@@ -2065,7 +2065,7 @@ Policy: AI keeps iterating until the fixed Consensus-rnd Phase review-gate truth
 Loop:
 
 1. **Round entry** — derive the next fix round from review/fix artifacts. If `fix_round > max_fix_rounds`, escalate (see below).
-2. **Dispatch fix codex** in PR's own worktree:
+2. **Render and dispatch fix codex** in PR's own worktree. Before spawn, call `ControllerActions.render_review_fix_prompt(PR, N, env)` or an equivalent controller-internal render action; this binds `FIX_OUTPUT_PATH=.refactor-loop/runs/fix-pr${PR}-round-${N}-report.md` into the rendered prompt artifact:
    ```bash
    <skill-root>/scripts/consensus-rnd-cli spawn-codex \
      --cd "$PR_WORKTREE" --add-dir "$REPO_ROOT" \
@@ -2073,7 +2073,8 @@ Loop:
      --log .refactor-loop/logs/fix-pr${PR}-round-${N}.log \
      --stall 3600
    ```
-   Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `FIX_REPORT.md`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
+   <!-- Refactor (issue-267): Old: fix worker wrote root FIX_REPORT.md by convention. New: controller-rendered FIX_OUTPUT_PATH points to .refactor-loop/runs/. -->
+   Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `${FIX_OUTPUT_PATH}` under `.refactor-loop/runs/`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
 3. **Controller commits + pushes** the fix codex's changes to the PR's HEAD branch (codex itself doesn't push, per hard rule 4). Commit message includes round number and applied/blocked counts.
 4. **Re-dispatch all 3 reviewers** against the new HEAD SHA (drop prior consensus).
 5. **Re-evaluate**:
@@ -2152,7 +2153,7 @@ Required PR comments (controller posts via `gh pr comment <PR> --body-file <file
 | Consensus-rnd Phase review-gate event | PR comment content |
 |---|---|
 | Reviewer round N complete | 中文 table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
-| Fix codex round N complete (FIX_DONE) | 中文 FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
+| Fix codex round N complete (FIX_DONE) | 中文 fix artifact excerpt from `${FIX_OUTPUT_PATH}`: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
 | Fix codex blocked (FIX_BLOCKED) | 中文: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
 | Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | 中文: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
 | Escalation triggered | Add `crnd:human:maintainer-decision` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |

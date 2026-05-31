@@ -36,9 +36,9 @@ Categorize each demand into one of:
 
 - **(A) Fixable in-scope** — concrete code change within `scope_paths` of this cluster. Apply it.
 - **(B) Fixable but scope-extend** — concrete code change outside scope_paths. Record `scope-extend: <file> <reason>` in the fix report and apply it ONLY if rejecting this demand would block consensus AND the file is in the same logical refactor (e.g. add missing test file for the new public method).
-- **(C) False positive** — the reviewer mis-read (e.g. cited a file not in the PR, cited a deletion that never happened, demand contradicts `$PROJECT_RULES`). Do NOT apply. Record in `FIX_REPORT.md` with evidence proving it's a false positive.
-- **(D) Conflicting demands** — Architect demands X, Quality demands ¬X. Do NOT apply either side without resolution. Record both sides in `FIX_REPORT.md` and emit `FIX_BLOCKED:conflict:<short>` at the end.
-- **(E) Outside fix-codex authority** — demand requires a design decision (e.g. "delete this feature entirely" / "split this into 3 PRs" / "rename core type that other clusters depend on"). Record in `FIX_REPORT.md` and emit `FIX_BLOCKED:human-decision:<short>`.
+- **(C) False positive** — the reviewer mis-read (e.g. cited a file not in the PR, cited a deletion that never happened, demand contradicts `$PROJECT_RULES`). Do NOT apply. Record in the fix artifact at `${FIX_OUTPUT_PATH}` with evidence proving it's a false positive.
+- **(D) Conflicting demands** — Architect demands X, Quality demands ¬X. Do NOT apply either side without resolution. Record both sides in the fix artifact at `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:conflict:<short>` at the end.
+- **(E) Outside fix-codex authority** — demand requires a design decision (e.g. "delete this feature entirely" / "split this into 3 PRs" / "rename core type that other clusters depend on"). Record in the fix artifact at `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:human-decision:<short>`.
 
 ### Step 2 — Apply (A) and selected (B) fixes
 
@@ -61,7 +61,7 @@ cd $REPO_ROOT && \
 
 Pick the test projects whose code you changed; do NOT run the full solution test suite (too slow). If build fails → fix or `FIX_BLOCKED:build:<short>`.
 
-### Step 4 — Write FIX_REPORT
+### Step 4 — Write fix artifact
 
 Write `${FIX_OUTPUT_PATH}` with this structure:
 
@@ -112,8 +112,8 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - **You do NOT install new packages.**
 - **You do NOT touch files outside the PR's diff unless emitting `SCOPE_EXTEND` first.**
 - **You do NOT modify other cluster's PRs** (only this PR's HEAD branch).
-- **False-positive demands must have proof** in FIX_REPORT — don't dismiss without evidence.
-- **FIX_REPORT 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-r<N>.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
+- **False-positive demands must have proof** in the fix artifact at `${FIX_OUTPUT_PATH}` — don't dismiss without evidence.
+- **Fix artifact 写入路径强制 `${FIX_OUTPUT_PATH}`**(典型 `.refactor-loop/runs/fix-pr<N>-round-<R>-report.md`)— **禁止**写到 repo root `FIX_REPORT.md`(会污染 worktree + rebase conflict)。若 `${FIX_OUTPUT_PATH}` 空(env var 漏传),emit `FIX_BLOCKED:env-missing:FIX_OUTPUT_PATH` 不要瞎写默认路径。
 - **A demand citing `$PROJECT_RULES` verbatim is presumed valid** — burden of proof is on you to show it's a misreading.
 
 ## Anti-patterns (forbidden — emit FIX_BLOCKED instead of doing these)
