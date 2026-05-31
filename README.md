@@ -10,7 +10,7 @@ This repository is not an application runtime. Its deliverables are skills under
 
 | skill | What it is for | Runtime shape |
 |---|---|---|
-| `codex-refactor-loop` | Heavy autonomous loop for ongoing repository work: daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
+| `codex-refactor-loop` | Heavy autonomous Consensus R&D work-unit loop for issue/PR resolution, ongoing repository R&D, daemon supervision, Codex workers, GitHub orchestration, review gates, and automated release publication when the host opts in. Audit/refactor is a fallback issue producer when no actionable managed work is open. | Uses checked-in scripts, `.refactor-loop/` state, GitHub, git, and host-provided `host.env` facts. |
 | `sshx` | Lightweight worker-delegated inline consensus methodology (轻量 worker-delegated inline 共识方法论) for high-risk decisions or implementation plans that need isolated perspectives but do not need daemon, GitHub, or git orchestration. | WorkerMode dispatches isolated thinking and review workers; no daemon, no lifecycle authority, no runtime control plane, and not a duplicate alias for `codex-refactor-loop`. |
 
 ## Core
@@ -84,7 +84,7 @@ Host projects inject runtime facts through `host.env`: repository root, GitHub s
 
 ## Roadmap
 
-The public product identity is Consensus R&D. `codex-refactor-loop` remains the heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should generalize the engine spine so the work-unit source can vary, parameterize host assumptions where appropriate, and keep runtime authority narrow enough to verify mechanically.
+The public product identity is Consensus R&D. Refactoring, issue-solving, and repository R&D are different entry surfaces for the same work-unit loop. `codex-refactor-loop` remains the stable heavy autonomous loop entrypoint, while `sshx` carries the same consensus philosophy as a lightweight worker-delegated inline method, not as a duplicate alias for the heavy loop. Future work should continue generalizing host/project assumptions and producer inputs while keeping runtime authority narrow enough to verify mechanically.
 
 ## License
 

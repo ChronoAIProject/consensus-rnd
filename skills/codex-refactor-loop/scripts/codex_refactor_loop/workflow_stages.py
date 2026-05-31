@@ -36,7 +36,7 @@ WORKFLOW_STAGES: tuple[WorkflowStage, ...] = (
     WorkflowStage(
         "work-intake",
         "Work Intake",
-        "Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate.",
+        "Fallback issue production when no actionable managed issue/PR exists; audit is the built-in compatibility producer.",
         "work-unit-contract",
         1,
     ),
