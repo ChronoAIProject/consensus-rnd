@@ -1,0 +1,182 @@
+"""Read-only status projection for restart-helper-managed daemons."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Sequence
+
+from .context import LoopContext, LoopContextError
+from .restart import (
+    DaemonProcessInventory,
+    DaemonTarget,
+    RestartConfig,
+    daemon_targets,
+    expected_launch_fingerprint,
+    heartbeat_is_fresh,
+    pid_alive,
+    read_daemon_pid,
+    read_heartbeat_age_seconds,
+    read_stored_launch_fingerprint,
+)
+
+
+# Refactor (issue-298): Old: controller daemon health was inferred by
+# restart-daemons side effects or local process probes. New: daemon-status is a
+# read-only projection over RestartDaemons facts and cached active-controller
+# status; repair/reload stays exclusively with restart-daemons.
+@dataclass(frozen=True)
+class DaemonStatusProjection:
+    name: str
+    status: str
+    pid: int | None
+    heartbeat_age_seconds: int | None
+    heartbeat_fresh: bool
+    fingerprint_current: bool
+    duplicate_canonical_wrappers: int
+    active_controller: str
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "status": self.status,
+            "pid": self.pid,
+            "heartbeat_age_seconds": self.heartbeat_age_seconds,
+            "heartbeat_fresh": self.heartbeat_fresh,
+            "fingerprint_current": self.fingerprint_current,
+            "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
+            "active_controller": self.active_controller,
+        }
+
+
+@dataclass(frozen=True)
+class DaemonStatusReport:
+    repo_root: str
+    active_controller: str
+    generated_at: str
+    daemons: tuple[DaemonStatusProjection, ...]
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "repo_root": self.repo_root,
+            "active_controller": self.active_controller,
+            "generated_at": self.generated_at,
+            "daemons": [daemon.to_json() for daemon in self.daemons],
+        }
+
+
+def collect(target: str = "all", *, repo_root: str | Path | None = None, skill_root: str | Path | None = None) -> DaemonStatusReport:
+    ctx = LoopContext.load(repo_root=repo_root, skill_root=skill_root, read_only=True, allow_git_root_fallback=True)
+    config = RestartConfig()
+    active_controller = _cached_active_controller_status(ctx.paths.state / "active-controller-status.json")
+    inventory = DaemonProcessInventory.collect()
+    projections = tuple(
+        _project_target(ctx, config, inventory, daemon, active_controller)
+        for daemon in daemon_targets(ctx, target)
+    )
+    return DaemonStatusReport(
+        repo_root=str(ctx.repo_root),
+        active_controller=active_controller,
+        generated_at=_utc_now(),
+        daemons=projections,
+    )
+
+
+def _project_target(
+    ctx: LoopContext,
+    config: RestartConfig,
+    inventory: DaemonProcessInventory,
+    target: DaemonTarget,
+    active_controller: str,
+) -> DaemonStatusProjection:
+    pid = read_daemon_pid(target)
+    heartbeat_age = read_heartbeat_age_seconds(target)
+    heartbeat_fresh = heartbeat_is_fresh(target, config)
+    stored = read_stored_launch_fingerprint(target)
+    expected = expected_launch_fingerprint(ctx, target)
+    fingerprint_current = stored is not None and stored.matches(expected)
+    live_wrappers = inventory.live_canonical_wrappers(
+        name=target.name,
+        repo_root=ctx.repo_root,
+        pid_file=target.pid_file,
+        died_file=target.died_file,
+        command=target.command,
+    )
+    duplicate_count = max(0, len(live_wrappers) - 1)
+    running = pid is not None and pid_alive(pid) and heartbeat_fresh and fingerprint_current and duplicate_count == 0
+    status = _daemon_status(active_controller, pid, running, heartbeat_fresh, fingerprint_current, duplicate_count)
+    return DaemonStatusProjection(
+        name=target.name,
+        status=status,
+        pid=pid,
+        heartbeat_age_seconds=heartbeat_age,
+        heartbeat_fresh=heartbeat_fresh,
+        fingerprint_current=fingerprint_current,
+        duplicate_canonical_wrappers=duplicate_count,
+        active_controller=active_controller,
+    )
+
+
+def _daemon_status(
+    active_controller: str,
+    pid: int | None,
+    running: bool,
+    heartbeat_fresh: bool,
+    fingerprint_current: bool,
+    duplicate_count: int,
+) -> str:
+    if active_controller.startswith("noop:not-owner"):
+        return "not-owner"
+    if running:
+        return "running"
+    if pid is None:
+        return "dead"
+    if not heartbeat_fresh or not fingerprint_current or duplicate_count:
+        return "stale"
+    if not pid_alive(pid):
+        return "dead"
+    return "stale"
+
+
+def _cached_active_controller_status(path: Path) -> str:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return "unknown"
+    value = payload.get("active_controller") if isinstance(payload, dict) else None
+    return value if isinstance(value, str) and value else "unknown"
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Read restart-helper-managed daemon status")
+    parser.add_argument("target", nargs="?", default="all", help="daemon name or all")
+    parser.add_argument("--json", action="store_true", help="print JSON status")
+    args = parser.parse_args(argv)
+    try:
+        report = collect(args.target)
+    except ValueError as exc:
+        sys.stderr.write(f"FATAL: {exc}\n")
+        return 2
+    except LoopContextError as exc:
+        sys.stderr.write(f"FATAL: {exc}\n")
+        return 2
+    if args.json:
+        print(json.dumps(report.to_json(), sort_keys=True))
+    else:
+        for daemon in report.daemons:
+            pid = daemon.pid if daemon.pid is not None else "-"
+            age = daemon.heartbeat_age_seconds if daemon.heartbeat_age_seconds is not None else "-"
+            print(f"{daemon.name}\t{daemon.status}\tpid={pid}\theartbeat_age={age}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

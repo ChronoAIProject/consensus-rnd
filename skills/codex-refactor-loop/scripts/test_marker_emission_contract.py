@@ -90,7 +90,6 @@ PROMPT_ALLOWLISTS = {
     "meta-judge.md": (
         "META_JUDGE_DONE:consensus:<framing>:<summary>",
         "META_JUDGE_DONE:converge:round-N:<question>",
-        "META_JUDGE_DONE:escalate:stalled:<short>",
     ),
     "meta-reflector-stalled.md": (
         "META_RESOLVED:retry-fix:<reason>",
@@ -271,6 +270,18 @@ class MarkerEmissionContractTests(unittest.TestCase):
                     profile_tokens,
                     f"{filename} allowlist tokens must fit profile {profile}",
                 )
+
+    def test_meta_judge_prompt_does_not_authorize_fresh_stalled_marker(self) -> None:
+        # Refactor (issue-304): Old: meta-judge allowlist authorized a fresh
+        # `META_JUDGE_DONE:escalate:stalled` output. New: only router-owned
+        # predicate logic can derive the stalled reflector continuation.
+        body = (PROMPTS_DIR / "meta-judge.md").read_text(encoding="utf-8")
+        section = allowlist_section(body)
+
+        self.assertNotIn("META_JUDGE_DONE:escalate:stalled:<short>", section)
+        self.assertNotIn("Escalate stalled", body)
+        self.assertIn("meta-judge emits only consensus/converge", body)
+        self.assertIn("router-owned stalled predicate", body)
 
     def test_github_post_rules_declares_post_body_artifact_profile(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
