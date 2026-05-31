@@ -27,6 +27,9 @@ class ClosedLabelReconciler:
         self.ctx = ctx
         self.dry_run = dry_run
 
+    # Refactor (iter370/issue-370): keep the #238 reconciler alive across mixed closed-item drift.
+    # Old pattern: one slow or failing item could stall the whole tick and let the daemon heartbeat expire.
+    # New principle: renew during the tick and isolate each item so closed-only phase reconciliation continues.
     def run_once(self, beat: Callable[[], None] | None = None) -> int:
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
         write_active_controller_status(self.ctx, decision)
@@ -92,6 +95,9 @@ class ClosedLabelReconciler:
         self._gh(command)
         return live_plan
 
+    # Refactor (iter370/issue-370): verify only the terminal phase label this daemon is authorized to own.
+    # Old pattern: post-edit verification required a human label and coupled #238 cleanup to human authority.
+    # New principle: fail closed on terminal phase drift without widening the reconciler into human labels.
     def verify_plan(self, plan: ClosedPhaseLabelPlan) -> None:
         item = self._view_item(plan.kind, plan.number)
         live_labels = _label_names(item)
