@@ -169,11 +169,12 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                   printf '[{"number":%s,"title":"stub PR","labels":[]}]\\n' "$pr"
                   exit 0
                 fi
-                if [[ "$1 $2" == "pr checks" ]]; then
-                  if [[ "$args" == *'bucket=="fail"'* || "$args" == *'bucket==\\"fail\\"'* ]]; then printf '0\\n'; exit 0; fi
-                  if [[ "$args" == *'bucket=="pending"'* || "$args" == *'bucket==\\"pending\\"'* ]]; then printf '0\\n'; exit 0; fi
-                  if [[ "$args" == *'bucket=="pass"'* || "$args" == *'bucket==\\"pass\\"'* ]]; then printf '3\\n'; exit 0; fi
-                  printf '0\\n'
+                if [[ "$1" == "api" ]]; then
+                  if [[ "$3" == "--paginate" && "$4" == "--slurp" ]]; then
+                    printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"success"},{"name":"lint","status":"completed","conclusion":"success"},{"name":"types","status":"completed","conclusion":"success"}]}]\n'
+                    exit 0
+                  fi
+                  printf '{"head":{"sha":"peek-sha"}}\n'
                   exit 0
                 fi
                 if [[ "$1 $2" == "pr view" ]]; then
@@ -322,7 +323,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("▍Consensus-rnd Phase design-consensus router / pending events:", result.stdout)
         self.assertIn("▍Open auto-loop PRs:", result.stdout)
-        self.assertIn("PR #123 [CLEAN] CI: fail=0 pending=0 pass=0", result.stdout)
+        self.assertIn("PR #123 [CLEAN] CI: fail=0 pending=0 pass=3", result.stdout)
         self.assertIn("▍Unpushed worker output:", result.stdout)
         self.assertNotIn("Mergeable PRs", result.stdout)
         self.assertNotIn("MERGE_READY", result.stdout)

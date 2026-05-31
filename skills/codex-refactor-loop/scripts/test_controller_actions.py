@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import shutil
 import subprocess
 import tempfile
@@ -17,6 +18,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
+from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.git import Git
@@ -52,6 +54,255 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
 
+    def pending_events(self) -> str:
+        path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    # Refactor (iter276/issue-276): Old pattern: controller lifecycle targets
+    # accepted empty or non-canonical GitHub ids before gh calls. New principle:
+    # fail closed on non-canonical GitHub ids and leave a pending-event audit.
+    def test_merge_pr_rejects_invalid_pr_targets_before_gh_or_git(self) -> None:
+        invalid_targets = ("", " ", "0", "-1", "abc", "01", "https://github.com/owner/repo/pull/77")
+        for target in invalid_targets:
+            with self.subTest(target=target):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                        self.assertEqual(1, self.actions.merge_pr(target))
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:merge-pr:pr:argument",
+                    self.pending_events(),
+                )
+
+    def test_apply_human_label_rejects_invalid_pr_targets_before_gh_or_git(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(2, self.actions.apply_human_label_or_skip("01", "META_RESOLVED:escalate-human:reason"))
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:apply-human-label:pr:argument",
+            self.pending_events(),
+        )
+
+    def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(1, self.actions.merge_pr("77", linked_issue="01"))
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:merge-pr:issue:argument",
+            self.pending_events(),
+        )
+
+    def test_merge_pr_rejects_invalid_body_linked_issue_before_merge_or_label_edit(self) -> None:
+        cases = ("Closes #abc\n", "Closes #\n", "Closes #0\n", "Closes #01\n")
+        for body in cases:
+            with self.subTest(body=body.strip()):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                        return mock.Mock(returncode=0, stdout=body, stderr="")
+                    raise AssertionError(f"unexpected gh side effect after invalid body link: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                        self.assertEqual(1, self.actions.merge_pr("77"))
+
+                self.assertEqual([["pr", "view", "77", "--json", "body", "--jq", ".body"]], gh_calls)
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:close:issue:body-link",
+                    self.pending_events(),
+                )
+
+    def test_merge_pr_accepts_valid_explicit_linked_issue_target(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue239",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77", linked_issue="239"))
+
+        ready_index = gh_calls.index(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"])
+        merge_index = gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"])
+        self.assertLess(ready_index, merge_index)
+        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertFalse(any(call[:5] == ["pr", "view", "77", "--json", "body"] for call in gh_calls), gh_calls)
+        self.assertTrue(any(call[:3] == ["pr", "edit", "77"] for call in gh_calls), gh_calls)
+        self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
+        issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
+        self.assertEqual(labels.PHASE_MERGED, issue_edit[issue_edit.index("--add-label") + 1])
+
+    def test_merge_pr_marks_draft_ready_before_merge(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args[:3] == ["pr", "ready", "77"]:
+                return mock.Mock(returncode=0, stdout="Ready\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue300",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "ready", "77"], gh_calls)
+        self.assertLess(gh_calls.index(["pr", "ready", "77"]), gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"]))
+
+    def test_merge_pr_ready_failure_fails_closed_before_merge_side_effects(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args[:3] == ["pr", "ready", "77"]:
+                return mock.Mock(returncode=9, stdout="", stderr="ready failed")
+            raise AssertionError(f"unexpected gh side effect after ready failure: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(9, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "ready", "77"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+
+    def test_merge_pr_already_ready_merges_without_pr_ready_call(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="false\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue300",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "ready"] for call in gh_calls), gh_calls)
+        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+
+    def test_open_pr_with_label_rejects_malformed_create_url_before_post_create_edit(self) -> None:
+        cases = (
+            ("missing-url", "created pull request 77\n", "failed to extract PR num", False),
+            ("zero-pr", "https://github.com/owner/repo/pull/0\n", "invalid pr target", True),
+            ("leading-zero-pr", "https://github.com/owner/repo/pull/077\n", "invalid pr target", True),
+        )
+        for name, output, expected_error, expects_invalid_target_event in cases:
+            with self.subTest(name=name):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:2] == ["pr", "create"]:
+                        return mock.Mock(returncode=0, stdout=output, stderr="")
+                    raise AssertionError(f"unexpected post-create gh call: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with self.assertRaisesRegex(RuntimeError, expected_error):
+                        self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+                self.assertEqual(1, sum(1 for call in gh_calls if call[:2] == ["pr", "create"]))
+                self.assertFalse(any(call[:2] == ["pr", "edit"] for call in gh_calls), gh_calls)
+                invalid_target_event = "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:pr:github-pr-create-url"
+                if expects_invalid_target_event:
+                    self.assertIn(invalid_target_event, self.pending_events())
+                else:
+                    self.assertNotIn(invalid_target_event, self.pending_events())
+
+    def test_record_recent_pr_merge_rejects_invalid_argument_before_gh_or_projection(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with self.assertRaisesRegex(RuntimeError, "invalid pr target"):
+                self.actions.record_recent_pr_merge("01")
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:record-recent-pr-merge:pr:argument",
+            self.pending_events(),
+        )
+
+    def test_record_recent_pr_merge_rejects_invalid_github_fact_number_before_projection(self) -> None:
+        facts = {
+            "number": "01",
+            "mergedAt": "2026-05-29T00:00:00Z",
+            "mergeCommit": {"oid": "abc123"},
+            "baseRefName": "dev",
+            "headRefName": "feature",
+        }
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout=json.dumps(facts), stderr="")):
+            with self.assertRaisesRegex(RuntimeError, "invalid pr target"):
+                self.actions.record_recent_pr_merge("7")
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:record-recent-pr-merge:pr:github-facts",
+            self.pending_events(),
+        )
+
     # Refactor (impl/issue191-single-active-controller): Old pattern:
     # lifecycle helpers could mutate GitHub/git from any controller device. New
     # principle: non-owner helpers fail closed before gh/git mutations.
@@ -67,6 +318,8 @@ class ControllerActionsTests(unittest.TestCase):
                     self.assertEqual(3, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/x.json"))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.open_pr_with_label("title", str(self.pr_body), head="branch")
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
+                        self.actions.open_design_issue_with_labels("title", str(self.pr_body))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.open_release_rollup_pr_from_pending_event("{}", str(self.pr_body))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
@@ -161,6 +414,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(77, pr_num)
         self.assertIn(["push", "origin", "abc123:refs/heads/rollup/abc123"], git_calls)
         create_call = next(call for call in gh_calls if call[:2] == ["pr", "create"])
+        self.assertIn("--draft", create_call)
         self.assertIn("--head", create_call)
         self.assertEqual("rollup/abc123", create_call[create_call.index("--head") + 1])
         self.assertNotEqual("auto-refact-dev", create_call[create_call.index("--head") + 1])
@@ -313,6 +567,8 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+        create_call = next(call for call in gh_calls if call[:2] == ["pr", "create"])
+        self.assertIn("--draft", create_call)
         edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
         self.assertEqual("77", edit_call[2])
         self.assertEqual(
@@ -350,6 +606,62 @@ class ControllerActionsTests(unittest.TestCase):
             issue_edit[issue_edit.index("--add-label") + 1],
         )
 
+    def write_design_issue_body(self) -> Path:
+        body = self.tmp / "design-issue-body.md"
+        body.write_text(
+            "## 🤖 Design issue\n\n"
+            "### TL;DR\n"
+            "- Self-contained design body.\n\n"
+            "<details>\n"
+            "<summary>内联 artifact 1: decision.md</summary>\n\n"
+            "```markdown\n"
+            "consensus artifact text\n"
+            "```\n\n"
+            "</details>\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return body
+
+    def test_open_design_issue_with_labels_uses_catalog_bundle_and_body_file(self) -> None:
+        body = self.write_design_issue_body()
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["issue", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/297\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            number, url = self.actions.open_design_issue_with_labels("[refactor-design] issue-297", str(body))
+
+        self.assertEqual(297, number)
+        self.assertEqual("https://github.com/owner/repo/issues/297", url)
+        self.assertEqual(len(gh_calls), 1)
+        create = gh_calls[0]
+        self.assertEqual(create[:2], ["issue", "create"])
+        self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
+        self.assertEqual(str(body), create[create.index("--body-file") + 1])
+
+    def test_open_design_issue_with_labels_rejects_bad_body_before_create(self) -> None:
+        bad_body = self.tmp / "bad-design-body.md"
+        bad_body.write_text("## body\n\nAuthority: .refactor-loop/runs/x.md\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/297\n", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "local .refactor-loop artifact path"):
+                self.actions.open_design_issue_with_labels("title", str(bad_body))
+
+        self.assertFalse(gh_calls)
+
+    def test_open_design_issue_with_labels_is_internal_not_public_cli(self) -> None:
+        self.assertNotIn("open-design-issue", COMMANDS)
+
     def test_open_pr_with_label_does_not_guess_when_body_closes_multiple_issues(self) -> None:
         self.pr_body.write_text(
             "## 🤖 PR ready\n\nSelf-contained body.\n\nCloses #239\nCloses #240\n\n⟦AI:AUTO-LOOP⟧\n",
@@ -368,6 +680,23 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertFalse(any(call[:2] == ["issue", "edit"] for call in gh_calls), gh_calls)
+
+    def test_open_pr_with_label_rejects_invalid_body_linked_issue_before_create(self) -> None:
+        cases = ("Closes #abc\n", "Closes #\n", "Closes #0\n", "Closes #01\n")
+        for body_link in cases:
+            with self.subTest(body=body_link.strip()):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                self.pr_body.write_text(
+                    f"## 🤖 PR ready\n\nSelf-contained body.\n\n{body_link}\n⟦AI:AUTO-LOOP⟧\n",
+                    encoding="utf-8",
+                )
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "invalid issue target from body-link"):
+                        self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:issue:body-link",
+                    self.pending_events(),
+                )
 
     def test_merge_pr_closes_single_linked_issue_from_body(self) -> None:
         gh_calls: list[list[str]] = []
@@ -403,6 +732,39 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
         issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
         self.assertEqual(labels.PHASE_MERGED, issue_edit[issue_edit.index("--add-label") + 1])
+
+    def test_merge_pr_accepts_body_link_with_escaped_newline_boundary(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="Ready.\n\nCloses #239\\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue239",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
 
     def test_merge_pr_does_not_guess_issue_when_body_closes_multiple_issues(self) -> None:
         gh_calls: list[list[str]] = []
@@ -545,7 +907,7 @@ class ControllerActionsTests(unittest.TestCase):
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
+        for needle in ("merge_pr", "open_pr_with_label", "open_design_issue_with_labels", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
@@ -564,9 +926,73 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
 
     def test_merge_pr_uses_single_linked_issue_parser_for_body_linkage(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        self.assertIn('body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout', text)
-        self.assertIn("linked_issue = _single_linked_issue(body)", text)
+        self.assertIn('body = self.gh(["pr", "view", pr_target, "--json", "body", "--jq", ".body"], check=False).stdout', text)
+        self.assertIn('linked_issue = self._single_body_linked_issue_or_block(body, action="close")', text)
         self.assertIn("return str(numbers[0]) if len(numbers) == 1 else \"\"", text)
+
+    def test_body_linked_issue_parser_validates_malformed_closing_refs(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn("BODY_CLOSING_ISSUE_TARGET_RE", text)
+        self.assertIn("source=\"body-link\"", text)
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}", text)
+
+    def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn("Refactor (issue-300)", text)
+        self.assertIn('"pr", "create", "--draft"', text)
+        self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
+        self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)
+        self.assertIn('"pr", "ready", pr_target', text)
+        self.assertIn("ready = self._ensure_pr_ready_for_merge(pr_target)", text)
+        self.assertLess(text.index("ready = self._ensure_pr_ready_for_merge(pr_target)"), text.index('"pr", "merge", pr_target'))
+        self.assertNotIn("ReviewGateAction", text)
+        self.assertNotIn("review_gate.py", text)
+
+    def test_lifecycle_gh_subject_slots_use_normalized_target_locals(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        allowed = {"pr_target", "issue_target"}
+        raw = {"pr", "pr_number", "linked_issue", "pr_num"}
+        offenders: list[str] = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "gh"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+            ):
+                continue
+            if not node.args or not isinstance(node.args[0], ast.List):
+                continue
+            items = node.args[0].elts
+            if len(items) < 3:
+                continue
+            first = items[0].value if isinstance(items[0], ast.Constant) else None
+            second = items[1].value if isinstance(items[1], ast.Constant) else None
+            if (first, second) not in {
+                ("pr", "view"),
+                ("pr", "edit"),
+                ("pr", "merge"),
+                ("issue", "close"),
+                ("issue", "edit"),
+            }:
+                continue
+            subject = items[2]
+            if isinstance(subject, ast.Name):
+                if subject.id not in allowed:
+                    offenders.append(f"line {node.lineno}: {first} {second} uses {subject.id}")
+            elif isinstance(subject, ast.Call) and isinstance(subject.func, ast.Name) and subject.func.id == "str":
+                if subject.args and isinstance(subject.args[0], ast.Name):
+                    offenders.append(f"line {node.lineno}: {first} {second} uses str({subject.args[0].id})")
+            else:
+                offenders.append(f"line {node.lineno}: {first} {second} uses non-local subject")
+
+        for name in raw:
+            self.assertFalse(any(f"uses {name}" in offender or f"str({name})" in offender for offender in offenders))
+        self.assertEqual([], offenders)
 
 
 if __name__ == "__main__":

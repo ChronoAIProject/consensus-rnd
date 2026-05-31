@@ -17,6 +17,7 @@ from .monitors.comment import main as comment_monitor_main
 from .monitors.concurrency import main as concurrency_main
 from .monitors.progress import main as progress_reporter_main
 from .peek import main as peek_main
+from .pr_checks import main as pr_checks_main
 from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
@@ -55,6 +56,11 @@ COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
+    "pr-checks": CommandSpec(
+        pr_checks_main,
+        "read PR-head check-runs through the narrow Checks API projection",
+        ("read-gh",),
+    ),
     "restart-daemons": CommandSpec(
         restart_main,
         "run the Python daemon restart helper",

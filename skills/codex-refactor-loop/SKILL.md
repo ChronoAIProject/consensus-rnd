@@ -362,7 +362,9 @@ These are local controller contract rules learned from dogfood incidents:
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
-`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script` and `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
+<!-- Refactor (issue-277): Old: 并发 floor 把 audit fallback 当成无限可重复派发,会和 #205 单 active audit 规则冲突。New: floor 无通用豁免,`AUDIT_DONE:none:0` 仍不豁免;但同一 iteration ordinary audit fallback 只有一个 active slot,slot 占用且无其他合法 work 时输出 WAIT + blocked_deficit,不重复 audit。 -->
+
+`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script` and `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得用通用 low-floor exemption 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open and no same-iteration audit is active, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`; if the single active audit slot is already occupied, it emits `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; no duplicate same-iteration audit.
 
 `consensus-rnd-cli peek` is a status lens, not routing authority; it remains useful for human-readable ambient state after the plan. `consensus-rnd-cli wakeup-plan` outputs prioritized routing recommendations from local evidence plus GitHub labels; `consensus-rnd-cli peek` displays status and does not decide next action.
 
@@ -385,9 +387,9 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - **Allowed**: read `.refactor-loop` files, scan `.refactor-loop/heartbeats/*.ts`, read clean-exit log tails, run read-only GitHub list/check/view commands, and print JSON recommendations.
 - **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
-- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup. There is no `AUDIT_DONE:none:0` exemption.
+- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or legal audit fallback before ending the wakeup. There is no general low-floor exemption, and `AUDIT_DONE:none:0` still does not exempt the floor. The only single active audit boundary is when no actionable open work and no queue candidate exists, expected is 0, and the same-iteration `audit-iter-N` is already active; then the plan emits `WAIT:single-active-audit`, `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N` instead of duplicating the same audit; no duplicate same-iteration audit.
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `crnd:milestone:current` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
-- If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
+- If no actionable open work exists, it emits `RECOMMEND:audit`; ordinary audit is the floor fallback only when no same-iteration audit is already active.
 
 ## Workflow Stage Index
 
@@ -525,7 +527,7 @@ Controller non-duties:
 
 The floor is local because it prevents loop stalls.
 
-<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 audit fallback is mandatory, and AUDIT_DONE:none:0 no longer exempts a positive deficit.(2026-05-29 maintainer-directive floor-no-exemption overrides issue-86 immunity) -->
+<!-- Refactor (issue-277): Old: "floor 不足时 audit fallback is mandatory" 未区分合法 audit 与重复 same-iteration audit,和 #205 单 active audit anti-rule 冲突。New: no general low-floor exemption;`AUDIT_DONE:none:0` still does not exempt;ordinary audit fallback 同一时刻一个 same-iteration active slot;slot 占用且无其他 legal work 时 expose blocked_deficit as WAIT,不 duplicate audit。 -->
 
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
@@ -540,9 +542,10 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
-- `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
-- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
+- If `deficit>0`, there is no general exemption: dispatch existing/open actionable work first, then legal audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
+- `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
+- Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
+- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
 - **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
 - **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
 
@@ -1363,6 +1366,16 @@ documented as public consensus-rnd-cli/controller-actions shell commands.
 New principle: lifecycle operations are controller-internal ControllerActions
 methods/direct package calls, never worker-visible public CLI verbs. -->
 
+<!-- Refactor (issue-276): Old pattern: controller lifecycle PR/issue targets
+could be empty, inferred, or non-canonical GitHub identifiers before gh/git
+side effects. New principle: lifecycle targets are normalized through a private
+canonical positive-decimal boundary before any lifecycle side effect. -->
+
+<!-- Refactor (issue-300): Old pattern: controller-opened PRs could be mergeable
+before the review-gate consensus decision. New principle: open PRs as draft by
+default and mark ready only inside post-decision merge_pr after MERGE or
+MERGE_WITH_COMMENTS has already been decided. -->
+
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + shell 变量传值 bug。统一用 controller-internal `ControllerActions` primitives, not public CLI commands:
 
 ```python
@@ -1376,9 +1389,11 @@ actions.apply_human_label_or_skip(pr_number, source_marker, reason)
 
 **强制**:
 - 派 codex 前必须 validate rendered prompt output — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 internal `merge_pr(pr)` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
+- Controller-opened PRs must use internal `open_pr_with_label(...)`; it creates open PRs as draft by default (`gh pr create --draft`) before labels are applied.
+- merge PR 必须用 internal `merge_pr(pr)` — post-decision ready+merge + auto-close + label cleanup,不留尾巴。`merge_pr` first checks draft state and, only when the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`, marks the PR ready before `gh pr merge`; it never computes Consensus-rnd Phase review-gate reviewer policy.
 - worktree 创建必须用 internal `safe_worktree(iteration, cluster, base)` — 处理 "already exists" race
 - PR 号捕获必须用 internal `open_pr_with_label(...)` returned tuple — **禁止** shell `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- Lifecycle PR/issue targets entering `apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge` must pass `_normalize_lifecycle_target` and become canonical positive decimals before any `gh` or `git` side effect; empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed and write `CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>` to the controller pending-event log. PR creation target capture stays limited to `open_pr_with_label(...)` URL extraction followed by the same normalization.
 - `safe_push`, `safe_sync_main`, triage apply, and human-label apply are internal primitives/direct package calls only; `consensus-rnd-cli merge-pr/open-pr/open-release-rollup-pr/apply-human-label/safe-push/safe-sync-main/apply-sync/apply-triage` must fail closed as unknown public commands.
 
 **Label 生命周期(强制状态机)**:
@@ -1583,15 +1598,14 @@ the work-unit fields documented in [work-unit contract](#work-unit-contract) (`w
 
 For every cluster with `requires_design: true`:
 
-1. Open a GitHub issue via `gh issue create`:
-   ```bash
-   gh issue create \
-     --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
-     --label "$(python3 <skill-root>/scripts/consensus-rnd-cli labels design-issue-labels)" \
-     --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
-   ```
-   The label expression is catalog-derived; do not inline the active label bundle
-   in SKILL.md or prompts.
+1. Open a GitHub design issue through the active-controller-gated
+   `ControllerActions.open_design_issue_with_labels(title, body_file)` internal
+   primitive. It validates the self-contained body file and applies the
+   catalog-derived design issue label bundle from `labels.design_issue_label_bundle()`.
+   <!-- Refactor (issue-297): Old: controller runbook exposed copyable issue
+   create and label commands. New: design issue creation is routed through a
+   narrow active-controller-gated ControllerActions contract. -->
+   Do not inline the active label bundle in SKILL.md or prompts.
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record design-pending status on GitHub: the issue body/comment links the source work unit,
    `work_unit_id`, opened timestamp, and current status. Future routing reads GitHub labels,
@@ -1609,25 +1623,16 @@ Update GitHub-visible state, advance to Consensus-rnd Phase implementation (with
 
 **强制 pre-audit 步骤**(每次派 audit codex 前 controller 执行):
 
-```bash
-# 1. List worktrees,标记 main + active 之外的 stale
-git worktree list
-
-# 2. 对每个非 main / 非 active(active = in-flight cluster impl 用的)worktree:
-#    - 若对应 PR 已 merged → 删
-#    - 若对应 PR 已 closed(superseded / drop)→ 删
-#    - 若对应 branch 已不在 origin → 删
-git worktree remove <stale-wt> --force
-git worktree prune
-git branch -D <stale-branch>  # 同 step 一起清
-
-# 3. 验收:`git worktree list` 只剩 main + dev-sync + 当前 in-flight cluster wt
-```
+Use the owner-local worktree primitives instead of copyable git cleanup
+recipes: read the worktree projection, classify stale worktrees against open PR
+state, and perform cleanup only from the active controller's checked-in
+maintenance path. The desired postcondition is main + dev-sync + current
+in-flight cluster worktrees only.
 
 **反面禁止**:
 - ❌ 派 audit codex 前不 clean worktrees → bogus evidence + 浪费 5400s codex 时间
 - ❌ 见 audit-iter-N 的 cluster 直接 trust → 必须 controller 抽查 3 个 evidence file:line 真存在(且不在 stale wt)
-- ❌ "可能下次还要用" → worktree 是 disposable;branch 在 git history,需要时 `git worktree add -b <new-branch> <path> <commit>` 重建
+- ❌ "可能下次还要用" → worktree 是 disposable;branch 在 git history,需要时由 owner-local worktree primitive 重建
 
 如果发现 audit 输出含 stale-worktree evidence(典型征兆:file path 在 main `git ls-files` 中找不到):
 1. archive 该 audit md/ndjson 加 `.STALE-WORKTREES.md` 后缀
@@ -1640,13 +1645,10 @@ git branch -D <stale-branch>  # 同 step 一起清
 
 For each cluster in the current batch:
 
-1. Create worktree:
-
-   ```bash
-   mkdir -p "$REPO_ROOT/.worktrees"
-   git worktree add -b refactor/iterN-<cluster-id> \
-     "$REPO_ROOT/.worktrees/iterN-<cluster-id>" HEAD
-   ```
+1. Create or reuse the implementation worktree through
+   `ControllerActions.safe_worktree(iteration, cluster, base)`, which owns the
+   branch/path naming contract and keeps controller worktrees under
+   `$REPO_ROOT/.worktrees/`.
 
 2. Materialize prompt: copy `prompts/implement.md`, replace placeholders (`{{work_unit_id}}`,
    `{{cluster_id}}`, `{{worktree_path}}`, `{{branch}}`, `{{old_pattern}}`, `{{new_principle}}`,
@@ -1715,7 +1717,11 @@ bash -lc "$BUILD_CMD"
 
 结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
 
-**cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd "$REPO_ROOT/.worktrees/<id>"` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
+**cwd discipline (critical)**: trunk-side git and GitHub mutations are
+active-controller-owned operations. Use the checked-in `ControllerActions`
+primitives from `$REPO_ROOT`, never from a worktree directory. Cwd persists
+across Bash invocations in the harness, so chained commands that include
+`cd "$REPO_ROOT/.worktrees/<id>"` leak cwd into the next call.
 
 For each `pass` cluster, serially:
 
@@ -1733,7 +1739,8 @@ For each `pass` cluster, serially:
    ```
    On fail → `git reset --soft HEAD~1` (undo the commit), mark cluster `rework`, re-dispatch implement codex with the failure log.
 
-3. **Push cluster branch**: `cd $REPO_ROOT && git push origin refactor/iterN-<cluster-id>`.
+3. **Push cluster branch** through `ControllerActions.safe_push(remote, branch)`;
+   it owns the active-controller lease check and remote-behind handling.
 
 4. **Branch off** by `pr_mode`:
 
@@ -1786,29 +1793,29 @@ For each `pass` cluster, serially:
     🤖 Auto-loop / codex-refactor-loop iter<N>
     ```
 
-    Run via:
-    ```bash
-    cd "$REPO_ROOT" && \
-    gh pr create \
-      --base "<base_branch>" \
-      --head "refactor/iterN-<cluster-id>" \
-      --title "<cluster id>: <short imperative title — same English title; PR title is not bilingual since GitHub UI truncates>" \
-      --body-file <generated_body_file>
-    ```
+    Open the PR through
+    `ControllerActions.open_pr_with_label(title, body_file, base, head)`. The
+    helper validates the self-contained body, opens the PR, and applies the
+    catalog-managed PR label bundle, including `crnd:lifecycle:managed`, in
+    the same active-controller-gated path.
 
     Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
 
-7b. **立刻给 PR 加 catalog-managed label**:`gh pr edit <PR> --add-label "crnd:lifecycle:managed"` via the label catalog helper. **漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked 在 `gh pr create` 成功后立刻 chain 这条 catalog-backed label sync,不能延后到下一 turn。
+7b. The PR open helper must add the catalog-managed label bundle immediately.
+**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked cannot defer this label sync to the next turn.
 
 7b. Record the PR number in the GitHub banner/comment and run artifact for the active work unit.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
     - For each downstream cluster whose `dependencies` contained it:
-      - `git -C <worktree> rebase --onto integration_branch <old_upstream_branch>` (or `gh pr edit <pr> --base integration_branch` if stacked-on-stacked is no longer needed).
+      - Rebase the downstream worktree through the controller's checked-in stack-rebase path (or record a maintainer retarget request if stacked-on-stacked is no longer needed).
       - Re-run local CI in worktree; on conflict, mark cluster `rework` and re-dispatch implement codex with conflict diff.
-      - Force-push the cluster branch: `git push --force-with-lease origin refactor/iterN-<cluster-id>`.
+      - Force-push only through the stack-rebase path's guarded remote update.
 9b. Goto Consensus-rnd Phase ci-watch (remote CI watch on the cluster's PR).
 10b. After **all** iteration clusters have merged into `integration_branch`, Consensus-rnd Phase integration-sync may emit `DEV_SYNC_PENDING:release-rollup-needed:<json>`. Controller re-checks for an open rollup PR covering the same integration SHA to `$REVIEW_BASE_BRANCH` and, only when none exists, creates it through `open_release_rollup_pr_from_pending_event <event-json> <body-file>`. That helper pushes a one-time `rollup/<integration_sha>` head and opens `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`; merge auto-delete may delete only the throwaway head, never `$INTEGRATION_BRANCH`. Daemon only detects/writes the event; PR create, labels, review gate, CI, and merge policy stay controller-owned.
-After merge of the cluster branch into its target → `git worktree remove "$REPO_ROOT/.worktrees/<cluster-id>"`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
+After merge of the cluster branch into its target → request cleanup through the
+owner-local worktree cleanup primitive. **Do NOT** delete the cluster branch yet
+under `stacked` mode — downstream PRs may still reference it as base; let
+GitHub auto-delete on merge.
 
 If no clusters left in current batch → start next batch (Consensus-rnd Phase implementation again). If no batches left → start next iteration (Consensus-rnd Phase work-intake again) or **start Consensus-rnd Phase ci-watch if there is an open PR for the trunk/cluster branches**.
 
@@ -1841,7 +1848,16 @@ If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 ### Read the watch
 
 <!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
-Do not run a controller-authored shell poller for remote CI. Every controller wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`. For each red PR, the controller then reads the failed check details with `gh pr checks "$PR_NUMBER" --json name,bucket,state,link`, selects `bucket: fail`, and uses the check `name` plus `link` for the focused remote-CI fix route.
+<!-- Refactor (issue-297): Old: controller runbook copied PR checks CLI
+recipes. New: PR-head check facts route through the named read-only
+`pr-checks` projection and wakeup-plan consumes that same projection. -->
+Do not run a controller-authored shell poller for remote CI. Every controller
+wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan
+--repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`.
+For each red PR, the controller reads failed check details through
+`python3 <skill-root>/scripts/consensus-rnd-cli pr-checks --repo "$GH_REPO_SLUG"
+--pr "$PR_NUMBER" --json`, selects `bucket: fail`, and uses the check `name`
+plus `link` for the focused remote-CI fix route.
 
 The persistent daemon-event Monitor bridge remains the wake source for pending controller events; remote CI triage is driven by `consensus-rnd-cli wakeup-plan` output, not by an executable fenced shell watch in SKILL.md.
 
@@ -1851,7 +1867,7 @@ For each `bucket: fail` check:
 
 1. Fetch the failure logs:
    ```bash
-   RUN_URL=$(gh pr checks "$PR_NUMBER" --json name,link --jq '.[] | select(.name=="<check>") | .link')
+   RUN_URL=<link from consensus-rnd-cli pr-checks JSON for the failing check>
    RUN_ID=$(basename "$(dirname "$RUN_URL")")  # parse from link
    gh run view "$RUN_ID" --log-failed > .refactor-loop/logs/remote-ci-<check>-<sha>.log 2>&1 || \
      gh run view "$RUN_ID" --log | tail -200 > .refactor-loop/logs/remote-ci-<check>-<sha>.log
@@ -2036,11 +2052,11 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 | Preconditions | Latest complete required round | Controller action |
 |---|---|
-| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>`. |
-| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>`. |
-| Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not merge, do not dispatch fix. |
-| Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
-| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; never merge. |
+| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge, do not dispatch fix. |
+| Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; do not ready, do not merge; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
+| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
 
 ### Fix-retry loop (AI iterates until consensus)
 
@@ -2601,7 +2617,9 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` no longer exempts a positive deficit。
+<!-- Refactor (issue-277): Old: Concurrency floor details used absolute audit fallback wording, allowing duplicate same-iteration audit as fake dispatch authority. New: keep no general exemption and `AUDIT_DONE:none:0` still not exempt, but represent occupied single audit slot as WAIT with blocked_deficit when no other legal work exists. -->
+
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` still does not exempt a positive deficit; ordinary audit fallback has one same-iteration active slot, so an occupied slot with no other legal work is `WAIT:single-active-audit` plus `blocked_deficit`, not duplicate audit。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -2613,14 +2631,14 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
 2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
 3. **Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
-4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` does not exempt a positive deficit.
-5. **Visible hard gate** — when no real open work exists, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; do not stop with a low-floor exemption.
+4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` still does not exempt a positive deficit, and there is no duplicate same-iteration audit.
+5. **Visible hard gate / blocked boundary** — when no real open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; when the same-iteration audit slot is occupied, emit `WAIT:single-active-audit`, `dispatch_required=0`, and `blocked_deficit=N`; do not stop with a low-floor exemption.
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
-- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 必须继续 hard-gate dispatch;无 open actionable work 时派 audit
+- ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ expose `WAIT:single-active-audit` + `blocked_deficit`,不要 duplicate same-iteration audit
+- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 仍不豁免;无 active audit 且无 open actionable work 时继续 hard-gate dispatch audit
 - ❌ 一次性派 `>= 15` 个 codex 凑吞吐。大 burst 会压 API,更容易触发 transient stream-disconnect,并让 prompt 回显误判与追踪问题一起放大。
 
 ### Transient stream-disconnect 处理(强制)
@@ -2650,16 +2668,16 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 # 按优先级派 NEEDED 个 codex:
 # queue -> actionable marker / maintainer comment / CI red / no-gap / Consensus-rnd Phase design-intake/9 route
-# -> audit fallback, including after AUDIT_DONE:none:0
-# -> HARD_GATE:dispatch_required=N until deficit is gone
+# -> audit fallback, including after AUDIT_DONE:none:0 when no same-iteration audit is active
+# -> HARD_GATE:dispatch_required=N or WAIT:single-active-audit blocked_deficit=N until deficit is gone or no legal dispatch remains
 ```
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派真实 work 提升并发
-- ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
+- ❌ 多个 same-iteration audit 同时跑(`audit-iter-N` active 还派同 N)→ 资源浪费,重复 evidence;必须 expose `blocked_deficit`
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
-- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
-- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → 继续 `HARD_GATE:dispatch_required=N`;无 open actionable work 时派 audit
+- ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ no duplicate same-iteration audit
+- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → no general exemption;无 active audit 且无 open actionable work 时继续 `HARD_GATE:dispatch_required=N`
 
 结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption` removes the former audit-none floor exemption.
 
@@ -2670,7 +2688,8 @@ Policy:controller must sync with remote promptly before deriving GitHub and bran
 - After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
 - After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / maintainer all need to see latest state, not yesterday's local state.
 - Consensus-rnd Phase integration-sync sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
-- Consensus-rnd Phase ci-watch CI watch reads `gh pr checks <PR>` (always remote), never a local cached value.
+- Consensus-rnd Phase ci-watch CI watch reads `consensus-rnd-cli pr-checks`
+  (PR-head Checks API projection, always remote), never a local cached value.
 - Consensus-rnd Phase design-intake/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.
 
 If a push fails (network, conflict, branch protection): controller MUST surface the failure inline and either fix-and-retry or escalate within the same turn — never silently leave local changes uncommitted/unpushed.
@@ -3288,22 +3307,19 @@ Mitigations encoded in skill defaults:
 
 ### Consensus-rnd Phase publish PR creation idempotency
 
-`gh pr create` errors if a PR already exists for the same head→base. Detect first:
-
-```bash
-existing=$(gh pr list --head "<branch>" --base "<base>" --state open --json number --jq '.[0].number')
-if [[ -n "$existing" ]]; then
-  PR_NUMBER=$existing
-else
-  PR_NUMBER=$(gh pr create --base "<base>" --head "<branch>" --title "<title>" --body "<body>" --json number --jq .number)
-fi
-```
+`ControllerActions.open_pr_with_label(title, body_file, base, head)` is the
+controller-owned PR open primitive. Before calling it, read the open head/base PR projection from the controller's named GitHub read surface and
+reuse the existing PR number when one is already open.
 
 Re-running the loop after partial failure must NOT create duplicate PRs.
 
 ### Consensus-rnd Phase ci-watch long-running bash
 
-The Consensus-rnd Phase ci-watch Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command and it hangs at architecture_guards.sh (observed in practice — appears stuck after the merge section), `TaskStop` it and run the remaining steps in separate foreground Bash calls. Do not assume the chain completed.
+The Consensus-rnd Phase ci-watch Monitor polls the `pr-checks` projection for
+up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command
+and it hangs at architecture_guards.sh (observed in practice — appears stuck
+after the merge section), `TaskStop` it and run the remaining steps in separate
+foreground Bash calls. Do not assume the chain completed.
 
 ### Trunk branch moved while batch was in flight
 

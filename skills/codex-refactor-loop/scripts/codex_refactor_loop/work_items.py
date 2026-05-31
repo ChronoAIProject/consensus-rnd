@@ -29,6 +29,14 @@ class IssuePrLink:
 
 
 _CLOSING_ISSUE_RE = re.compile(r"(?im)\bCloses\s+#([0-9]+)\b")
+NON_ACTION_OPEN_PHASES = frozenset(
+    {
+        label_catalog.PHASE_PR_OPEN,
+        label_catalog.PHASE_CI_RUNNING,
+        label_catalog.PHASE_BLOCKED,
+        label_catalog.PHASE_MERGED,
+    }
+)
 
 
 def extract_closing_issue_numbers(body: str) -> tuple[int, ...]:
@@ -139,6 +147,29 @@ def represented_issue_numbers(items: Iterable[ManagedItem | Mapping[str, object]
 
 def effective_worker_items(items: Iterable[ManagedItem | Mapping[str, object]]) -> tuple[ManagedItem, ...]:
     return ManagedWorkProjection(items).effective_worker_items()
+
+
+def open_actionable_managed_items(items: Iterable[ManagedItem | Mapping[str, object]]) -> tuple[ManagedItem, ...]:
+    # Shared by wakeup_plan existing-issue routing and the daemon's
+    # single-active-audit boundary: zero expected workers is not the same as
+    # no dispatchable open managed work.
+    projection = ManagedWorkProjection(items)
+    represented = projection.represented_issue_numbers()
+    actionable: list[ManagedItem] = []
+    for item in projection.items:
+        if item.state != "open" or not _is_managed(item):
+            continue
+        if item.kind == "issue" and item.number in represented:
+            continue
+        phase = item.phase or label_catalog.normalize_label_set(item.labels).phase
+        if phase in NON_ACTION_OPEN_PHASES:
+            continue
+        actionable.append(item)
+    return tuple(actionable)
+
+
+def has_open_actionable_managed_work(items: Iterable[ManagedItem | Mapping[str, object]]) -> bool:
+    return bool(open_actionable_managed_items(items))
 
 
 def linkage_mismatches(items: Iterable[ManagedItem | Mapping[str, object]]) -> tuple[str, ...]:

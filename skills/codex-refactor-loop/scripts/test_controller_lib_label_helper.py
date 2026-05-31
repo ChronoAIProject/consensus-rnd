@@ -207,7 +207,16 @@ class ControllerLibRecentMergeProjectionTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _write_fake_gh(self, *, merge_exit: int, fact_json: str, body: str = "Closes #145\n", head: str = "refactor/issue145") -> None:
+    def _write_fake_gh(
+        self,
+        *,
+        merge_exit: int,
+        fact_json: str,
+        body: str = "Closes #145\n",
+        head: str = "refactor/issue145",
+        is_draft: str = "false",
+        ready_exit: int = 0,
+    ) -> None:
         fake_gh = self.root / "gh"
         fake_gh.write_text(
             f"""#!/usr/bin/env bash
@@ -215,6 +224,13 @@ printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json body"* ]]; then
   printf '%s\\n' {json.dumps(body)}
   exit 0
+fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json isDraft"* ]]; then
+  printf '%s\\n' {json.dumps(is_draft)}
+  exit 0
+fi
+if [[ "$1 $2 $3" == "pr ready 55" ]]; then
+  exit {ready_exit}
 fi
 if [[ "$1 $2 $3" == "pr merge 55" ]]; then
   printf 'merge output\\n'
@@ -317,6 +333,8 @@ exit 0
         self.assertEqual(merges[0]["sha"], "abc123")
         self.assertEqual(merges[0]["merged_at"], "2026-05-29T01:02:03Z")
         calls = self.gh_calls()
+        self.assertIn("pr view 55 --repo test-owner/test-repo --json isDraft --jq .isDraft", calls)
+        self.assertNotIn("pr ready 55 --repo test-owner/test-repo", calls)
         self.assertIn("pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch", calls)
         expected_pr_edit = ["pr", "edit", "55", "--repo", "test-owner/test-repo"]
         for label in (
@@ -423,6 +441,43 @@ exit 0
         self.assertFalse((self.root / ".refactor-loop/state/recent-pr-merges.json").exists())
         calls = "\n".join(self.gh_calls())
         self.assertIn("pr merge 55", calls)
+        self.assertNotIn("pr edit 55", calls)
+        self.assertNotIn("issue close 145", calls)
+        self.assertNotIn("worktree remove", self.git_log.read_text(encoding="utf-8") if self.git_log.exists() else "")
+
+    def test_merge_pr_marks_draft_ready_before_merge(self) -> None:
+        self._write_fake_gh(
+            merge_exit=0,
+            fact_json=json.dumps({
+                "number": 55,
+                "mergedAt": "2026-05-29T01:02:03Z",
+                "mergeCommit": {"oid": "abc123"},
+                "baseRefName": "auto-refact-dev",
+                "headRefName": "refactor/issue145",
+            }),
+            is_draft="true",
+        )
+
+        result = self.run_merge_pr("55", "145")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.gh_calls()
+        ready_call = "pr ready 55 --repo test-owner/test-repo"
+        merge_call = "pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch"
+        self.assertIn(ready_call, calls)
+        self.assertIn(merge_call, calls)
+        self.assertLess(calls.index(ready_call), calls.index(merge_call))
+
+    def test_merge_pr_ready_failure_fails_closed_before_projection_or_cleanup(self) -> None:
+        self._write_fake_gh(merge_exit=0, fact_json="{}", is_draft="true", ready_exit=7)
+
+        result = self.run_merge_pr("55", "145")
+
+        self.assertEqual(result.returncode, 7, result.stderr)
+        self.assertFalse((self.root / ".refactor-loop/state/recent-pr-merges.json").exists())
+        calls = "\n".join(self.gh_calls())
+        self.assertIn("pr ready 55", calls)
+        self.assertNotIn("pr merge 55", calls)
         self.assertNotIn("pr edit 55", calls)
         self.assertNotIn("issue close 145", calls)
         self.assertNotIn("worktree remove", self.git_log.read_text(encoding="utf-8") if self.git_log.exists() else "")

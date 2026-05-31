@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Sequence
 from . import labels as label_catalog
 from .closed_phase_labels import plan_from_gh_item
 from .context import LoopContext, LoopContextError
+from .pr_checks import PrChecksProjection
 from .work_items import ManagedWorkProjection
 from .workflow_stages import format_stage
 from .wakeup_plan import load_github_items, unpushed_worker_output_actions
@@ -341,10 +342,14 @@ class PeekStatusLens:
         return rows
 
     def _checks(self, pr_num: str) -> tuple[int, int, int]:
-        data = self.gh_json(["pr", "checks", pr_num, "--json", "bucket"], [])
-        if not isinstance(data, list):
+        # Refactor (issue-297): Old: peek counted check buckets through a naked
+        # PR checks CLI. New: reuse the narrow read-only PR-head projection.
+        if not self.ctx.gh_repo_slug:
             return 0, 0, 0
-        buckets = [item.get("bucket") for item in data if isinstance(item, dict)]
+        status = PrChecksProjection(cwd=self.ctx.repo_root).check_pr(self.ctx.gh_repo_slug, pr_num)
+        if not status.ok:
+            return 0, 0, 0
+        buckets = [item.bucket for item in status.runs]
         return buckets.count("fail"), buckets.count("pending"), buckets.count("pass")
 
     def gh_text(self, args: Sequence[str]) -> str:

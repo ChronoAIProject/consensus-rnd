@@ -248,15 +248,23 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "no GitHub lifecycle mutation",
             "`RECOMMEND:audit`",
             "`AUDIT_DONE:none:0` no longer exempts",
+            "`AUDIT_DONE:none:0` still does not exempt",
             "deficit hard-gate",
-            "controller 不得带 `deficit>0` 结束唤醒",
+            "no general low-floor exemption",
             "`HARD_GATE:dispatch_required=N`",
+            "`WAIT:single-active-audit`",
+            "`reason=single_active_audit_in_flight`",
+            "`blocked_deficit=N`",
+            "no duplicate same-iteration audit",
             "structured `hard_gate`",
             "not advisory",
             "`consensus-rnd-cli peek` is a status lens",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
+        for forbidden in ("AuditLaneIdentity", "AUDIT_LANE_ID", "audit-iter-N-laneK"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
 
     def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
         script = read(PACKAGE_WAKEUP_PLAN)
@@ -359,6 +367,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
+    def test_issue276_lifecycle_target_normalization_contract_is_documented(self) -> None:
+        section = section_between(
+            self.skill,
+            r"^### Controller-internal lifecycle primitives.+$",
+            r"^### ",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "<!-- Refactor (issue-276): Old pattern:",
+            "`apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge`",
+            "`_normalize_lifecycle_target`",
+            "canonical positive decimals",
+            "before any `gh` or `git` side effect",
+            "empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed",
+            "`CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>`",
+            "`open_pr_with_label(...)` URL extraction followed by the same normalization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_runtime_surface_boundary_keeps_peek_human_and_wakeup_plan_machine(self) -> None:
         self.assertIn("`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader", self.skill)
         self.assertIn("`consensus-rnd-cli peek` is a status lens, not routing authority", self.skill)
@@ -388,7 +416,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
         required = (
             "kind: \"ci-red\"",
-            'gh pr checks "$PR_NUMBER" --json name,bucket,state,link',
+            "consensus-rnd-cli pr-checks --repo \"$GH_REPO_SLUG\"",
             "concurrency --count-only",
             "--list-codex",
             "ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)",
@@ -396,6 +424,37 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+    def test_issue297_controller_runbook_uses_named_projections_and_actions(self) -> None:
+        # Refactor (issue-297): Old: controller-facing SKILL runbook exposed
+        # copyable gh/git lifecycle recipes. New: source-regression locks named
+        # read projections and active-controller-gated ControllerActions.
+        forbidden = (
+            "gh issue create",
+            "gh pr edit <PR> --add-label",
+            "gh pr list --json",
+            "gh pr checks",
+            "git push origin refactor",
+            "git worktree add",
+            "git worktree remove",
+            "git worktree prune",
+            "git branch -D",
+        )
+        allowed_history = "must not run `gh pr create`"
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, skill_without_forbidden_history)
+        for required in (
+            "ControllerActions.open_design_issue_with_labels(title, body_file)",
+            "ControllerActions.safe_worktree(iteration, cluster, base)",
+            "ControllerActions.safe_push(remote, branch)",
+            "ControllerActions.open_pr_with_label(title, body_file, base, head)",
+            "consensus-rnd-cli pr-checks",
+            "open head/base PR projection",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.skill)
 
     def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
         forbidden = (
