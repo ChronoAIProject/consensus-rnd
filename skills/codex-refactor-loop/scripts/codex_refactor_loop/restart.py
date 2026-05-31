@@ -213,13 +213,13 @@ def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) 
 
 
 def daemon_targets(ctx: LoopContext, target: str = "all") -> tuple[DaemonTarget, ...]:
-    names = {name for name, _command in DAEMON_COMMANDS}
+    names = {daemon_name for daemon_name, _command_template in DAEMON_COMMANDS}
     if target != "all" and target not in names:
         raise ValueError(f"unknown daemon target: {target}")
     return tuple(
-        daemon_target(ctx, name, command)
-        for name, command in DAEMON_COMMANDS
-        if target == "all" or name == target
+        daemon_target(ctx, daemon_name, command_template)
+        for daemon_name, command_template in DAEMON_COMMANDS
+        if target == "all" or daemon_name == target
     )
 
 

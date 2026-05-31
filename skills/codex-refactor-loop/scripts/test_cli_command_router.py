@@ -3,8 +3,10 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from dataclasses import fields
 from pathlib import Path
@@ -224,6 +226,49 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         for forbidden in ("def start(", "def stop(", "def restart(", "def reload(", "spawn-daemon", "write-state"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, daemon_status)
+
+    def test_daemon_status_cli_json_and_unknown_target_contract(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="daemon-status-cli-") as raw_tmp:
+            repo = Path(raw_tmp) / "repo"
+            for rel in (".refactor-loop/locks", ".refactor-loop/heartbeats", ".refactor-loop/state"):
+                (repo / rel).mkdir(parents=True, exist_ok=True)
+            (repo / ".refactor-loop" / "host.env").write_text(
+                f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="example/repo"\n',
+                encoding="utf-8",
+            )
+            (repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+                json.dumps({"active_controller": "owner"}) + "\n",
+                encoding="utf-8",
+            )
+
+            result = subprocess.run(
+                [sys.executable, str(CLI), "daemon-status", "--json"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(0, result.returncode, result.stderr)
+            payload = json.loads(result.stdout)
+            self.assertEqual(str(repo.resolve()), payload["repo_root"])
+            self.assertEqual("owner", payload["active_controller"])
+            self.assertIn("generated_at", payload)
+            self.assertEqual(
+                "concurrency_monitor",
+                payload["daemons"][0]["name"],
+            )
+            self.assertEqual("dead", payload["daemons"][0]["status"])
+            self.assertIn("duplicate_canonical_wrappers", payload["daemons"][0])
+
+            unknown = subprocess.run(
+                [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],
+                cwd=repo,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(2, unknown.returncode)
+            self.assertIn("unknown daemon target: not-allowlisted", unknown.stderr)
 
     def test_daemon_commands_do_not_gain_lifecycle_authority(self) -> None:
         for name in DAEMON_COMMANDS:

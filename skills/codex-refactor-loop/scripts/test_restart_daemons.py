@@ -97,10 +97,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     helper.run()
         return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
 
-    def collect_status_with_fake_allowlist(self):
+    def collect_status_with_fake_allowlist(self, inventory: DaemonProcessInventory | None = None):
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory or DaemonProcessInventory(())):
+                return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -441,6 +442,39 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
         report = self.collect_status_with_fake_allowlist()
         self.assertEqual({"not-owner"}, {daemon.status for daemon in report.daemons})
+
+    def test_daemon_status_reports_duplicate_wrappers_without_repair(self) -> None:
+        self.run_helper()
+        old_pid = self.read_pid("concurrency_monitor")
+        duplicate_pid = 424242
+        command = (
+            sys.executable,
+            "-c",
+            FAKE_DAEMON,
+            "concurrency_monitor",
+            str(self.ctx.repo_root),
+            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
+            str(self.ctx.paths.logs / "concurrency_monitor.died"),
+            sys.executable,
+            "-c",
+            FAKE_DAEMON,
+        )
+        inventory = DaemonProcessInventory(
+            (
+                DaemonProcess(old_pid, " ".join(command)),
+                DaemonProcess(duplicate_pid, " ".join(command)),
+            )
+        )
+
+        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
+            with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
+                report = self.collect_status_with_fake_allowlist(inventory)
+
+        by_name = {daemon.name: daemon for daemon in report.daemons}
+        self.assertEqual("stale", by_name["concurrency_monitor"].status)
+        self.assertEqual(1, by_name["concurrency_monitor"].duplicate_canonical_wrappers)
+        self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
+        self.assert_start_count("concurrency_monitor", 1)
 
     def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
         targets = daemon_targets(self.ctx)
