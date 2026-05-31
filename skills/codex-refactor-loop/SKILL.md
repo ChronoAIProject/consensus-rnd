@@ -2065,7 +2065,7 @@ Policy: AI keeps iterating until the fixed Consensus-rnd Phase review-gate truth
 Loop:
 
 1. **Round entry** — derive the next fix round from review/fix artifacts. If `fix_round > max_fix_rounds`, escalate (see below).
-2. **Dispatch fix codex** in PR's own worktree:
+2. **Render and dispatch fix codex** in PR's own worktree. Before spawn, call `ControllerActions.render_review_fix_prompt(PR, N, env)` or an equivalent controller-internal render action; this binds `FIX_OUTPUT_PATH=.refactor-loop/runs/fix-pr${PR}-round-${N}-report.md` into the rendered prompt artifact:
    ```bash
    <skill-root>/scripts/consensus-rnd-cli spawn-codex \
      --cd "$PR_WORKTREE" --add-dir "$REPO_ROOT" \
@@ -2073,7 +2073,8 @@ Loop:
      --log .refactor-loop/logs/fix-pr${PR}-round-${N}.log \
      --stall 3600
    ```
-   Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `FIX_REPORT.md`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
+   <!-- Refactor (issue-267): Old: fix worker wrote root FIX_REPORT.md by convention. New: controller-rendered FIX_OUTPUT_PATH points to .refactor-loop/runs/. -->
+   Fix codex reads all 3 reviewer outputs, applies in-scope fixes, validates locally, writes `${FIX_OUTPUT_PATH}` under `.refactor-loop/runs/`, emits `FIX_DONE:${PR}:round-${N}:applied-<N>:rejected-<M>:blocked-<K>` OR `FIX_BLOCKED:${PR}:round-${N}:<reason>:<short>`.
 3. **Controller commits + pushes** the fix codex's changes to the PR's HEAD branch (codex itself doesn't push, per hard rule 4). Commit message includes round number and applied/blocked counts.
 4. **Re-dispatch all 3 reviewers** against the new HEAD SHA (drop prior consensus).
 5. **Re-evaluate**:
@@ -2152,7 +2153,7 @@ Required PR comments (controller posts via `gh pr comment <PR> --body-file <file
 | Consensus-rnd Phase review-gate event | PR comment content |
 |---|---|
 | Reviewer round N complete | 中文 table of 3 verdicts + reject demands per role + "next action" (fix-retry dispatched OR auto-merge OR escalation). Link to commit SHA reviewed. |
-| Fix codex round N complete (FIX_DONE) | 中文 FIX_REPORT excerpt: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
+| Fix codex round N complete (FIX_DONE) | 中文 fix artifact excerpt from `${FIX_OUTPUT_PATH}`: applied / rejected-as-false-positive / blocked counts, build+test status, files changed. Link to fix commit SHA. |
 | Fix codex blocked (FIX_BLOCKED) | 中文: which reason category (conflict / human-decision / build-broken), reviewer demand text, controller's escalation decision. |
 | Consensus reached (`MERGE` / `MERGE_WITH_COMMENTS`) | 中文: round count, final reviewer outputs, surfaced comment evidence when present, "auto-merging now". Then merge + a second "merged at <commit>" comment. |
 | Escalation triggered | Add `crnd:human:maintainer-decision` label. Comment includes: full round history, latest verdicts, why escalation criteria hit, what controller tried. PushNotification mirrors the headline. |

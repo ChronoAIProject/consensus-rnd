@@ -18,6 +18,7 @@ from . import labels
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
+from .review_fix_dispatch import ReviewFixDispatchSpec
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -541,6 +542,27 @@ class ControllerActions:
             template = template.replace("{{" + key + "}}", value)
         rendered = Template(template).safe_substitute(values)
         Path(output_path).write_text(rendered, encoding="utf-8")
+
+    def render_review_fix_prompt(
+        self,
+        pr_number: int,
+        round_number: int,
+        env: Mapping[str, str] | None = None,
+    ) -> ReviewFixDispatchSpec:
+        # Refactor (issue-267): Old: FIX_OUTPUT_PATH was a prompt-only oral
+        # variable and workers could drift to root FIX_REPORT.md. New:
+        # controller render binds the canonical runs artifact before dispatch.
+        spec = ReviewFixDispatchSpec.for_round(pr_number, round_number)
+        render_env = dict(env or {})
+        render_env.update(spec.as_render_env())
+        prompt_path = self.ctx.repo_root / spec.prompt_path
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "review-fix.md"),
+            str(prompt_path),
+            env=render_env,
+        )
+        return spec
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):
