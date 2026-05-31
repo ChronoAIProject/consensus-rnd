@@ -70,10 +70,6 @@ class CommentMonitor:
         self._poll_once()
 
     def _poll_once(self) -> None:
-        # Refactor (fix/comment-monitor-only-new): Old pattern: every tick fetched
-        # recent comments for every managed item. New principle: use the search
-        # node updatedAt as the per-item freshness gate before spending a comments
-        # query.
         for number, updated_at in self._search_active().items():
             if not self._should_fetch_comments(number, updated_at):
                 continue
@@ -207,10 +203,6 @@ class CommentMonitor:
             self.mark_seen(comment_id)
             print(f"new-outsider-comment: {number} {author} {comment_id} (skipped reply per security gate)", flush=True)
             return
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # comment monitors on multiple devices could react and post banners for
-        # the same maintainer comment. New principle: GitHub comment mutations
-        # are active-controller-owner-only; non-owners stay read-only.
         decision = require_active_controller(self.ctx, "comment-monitor-write")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:

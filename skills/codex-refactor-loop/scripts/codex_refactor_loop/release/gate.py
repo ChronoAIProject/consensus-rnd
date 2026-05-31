@@ -21,24 +21,6 @@ from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProje
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
 
 
-# Refactor (issue160-p3-auto-release-gate):
-#   Old pattern: scripts/auto_release_gate.py owned release-decision behavior as
-#   a top-level script, which made later package CLI routing import-unsafe.
-#   New principle: keep every gate signal and artifact byte-for-byte compatible,
-#   but expose package functions/classes from codex_refactor_loop.release.gate.
-#   This module remains decision-artifact-only per
-#   skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56;
-#   it has no lifecycle authority and does not bump, commit, push, tag,
-#   publish, merge, close, or mutate issue/PR labels.
-#
-# Refactor (iter217/issue-217):
-#   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-#   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
-#
-# Refactor (iter316/issue-316):
-#   Old pattern: release-gate parsed root and nested host.env with a private parser.
-#   New principle: use context.py shared host.env parser and locator contract.
-
 SIGNAL_NAMES = (
     "required_checks_recent_green",
     "no_open_blocked_pr",
@@ -94,9 +76,6 @@ def isoformat(value: datetime) -> str:
 
 
 def load_host_env(repo_root: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
-    # Refactor (iter1/fix-release-hostenv):
-    #   Old pattern: release authority read only legacy .refactor-loop/host.env, bypassing CONSENSUS_RND_HOST_ENV.
-    #   New principle: release authority uses HostEnvLocator, matching LoopContext's explicit-first host.env contract.
     location = HostEnvLocator.resolve(repo_root, os.environ if env is None else env, repo_root)
     return parse_host_env(location.path) if location is not None else {}
 
@@ -253,11 +232,6 @@ class AutoReleaseGate:
             return {"passed": False, "reason": reason, "source": "env"}
         branches = (review_base, integration)
         print(f"check branches: {review_base}, {integration}")
-        # Refactor (issue157 release gate):
-        #   Old pattern: gh run list matched workflow run names, so a workflow
-        #   called consensus-rnd-ci could not prove exact required check-runs.
-        #   New principle: read the shared Checks API projection by exact
-        #   check-run name for both release branches, fail-closed on drift.
         projection = ReleaseRequiredChecksProjection(
             runner=lambda cmd: self.runner(cmd, self.repo_root),
             now=self.now,
@@ -354,11 +328,6 @@ class AutoReleaseGate:
         return {"passed": streak <= 3 and recent_lines <= 3, "zero_streak": streak, "recent_p0_alerts": recent_lines, "source": "state"}
 
     def recent_pr_merges_min(self, since: datetime, minimum: int) -> dict[str, Any]:
-        # Refactor (iter1/issue-145):
-        #   Old pattern: merge_pr success did not write recent-pr-merges.json,
-        #   so recent_pr_merges_min stayed red and blocked release.
-        #   New principle: read the controller-owned post-merge projection only;
-        #   the release gate does not discover merge facts from git or GitHub.
         raw = read_json(self.recent_merges_path, {})
         count = raw.get("count") if isinstance(raw, dict) else None
         if count is None and minimum <= 0:
@@ -379,14 +348,6 @@ class AutoReleaseGate:
         return signal
 
     def fresh_heartbeats(self) -> dict[str, Any]:
-        # Refactor (iterissue-331/issue-331):
-        #   Old pattern: release gate and wakeup_plan each kept local
-        #   daemon-name literals, drifting from restart.py DAEMON_COMMANDS and
-        #   duplicating the source of truth.
-        #   New principle: restart.py::restart_managed_daemon_names() is the
-        #   canonical daemon-name projection; release keeps DAEMON_NAMES only
-        #   as a derived alias, wakeup deletes EXPECTED_DAEMONS, and health
-        #   requires every restart-managed heartbeat to be fresh.
         now = self.now()
         required_names = restart_managed_daemon_names()
         fresh: dict[str, bool] = {}
@@ -434,9 +395,6 @@ class AutoReleaseGate:
         return commits
 
     def decide_release(self, stability: StabilityResult, min_interval_hours: int) -> dict[str, Any]:
-        # Refactor (iter272/issue-272):
-        #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
-        #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
         now = self.now()
         from_version = self.current_version()
         interval = self.release_interval_status(now, min_interval_hours)
@@ -477,9 +435,6 @@ class AutoReleaseGate:
         write_json(self.candidate_path, self.release_candidate(decision))
 
     def release_candidate(self, decision: dict[str, Any]) -> dict[str, Any]:
-        # Refactor (iter217/issue-217):
-        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
         now = self.now()
         required_signals = {
             name: {

@@ -23,9 +23,6 @@ PUBLISH_PREFLIGHT_NAME = "controller-release-publish-preflight"
 class PublishPreflightResult:
     """Release publication authorization result.
 
-    Refactor (iter217/issue-217):
-      Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-      New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     """
 
     allowed: bool
@@ -42,9 +39,6 @@ class PublishPreflightResult:
 class ReleasePublishPreflight:
     """Validate controller release publication inputs before mutation.
 
-    Refactor (iter217/issue-217):
-      Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-      New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     """
 
     def __init__(
@@ -65,9 +59,6 @@ class ReleasePublishPreflight:
         target_ref: str,
         manifest_version: str | None = None,
     ) -> PublishPreflightResult:
-        # Refactor (iter217/issue-217):
-        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
         reasons: list[str] = []
         candidate_file, candidate_path_error = self._resolve_repo_path(candidate_path)
         if candidate_path_error:
@@ -196,9 +187,6 @@ class ReleasePublishPreflight:
         return next(iter(versions))
 
     def _validate_version(self, candidate: dict[str, Any], decision: dict[str, Any], version: str, reasons: list[str]) -> None:
-        # Refactor (iter279/issue-279):
-        #   Old pattern: preflight compared pre-bump manifests against to_version and rejected valid beta.N to beta.N+1 candidates.
-        #   New principle: preflight validates current manifests against from_version, while coordinate validation still gates from_version to to_version.
         to_version = candidate.get("to_version")
         if not isinstance(to_version, str) or not to_version:
             reasons.append("candidate_version_missing")

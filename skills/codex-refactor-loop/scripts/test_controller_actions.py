@@ -1001,7 +1001,9 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
 
     def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        self.assertIn("Refactor (issue-300)", text)
+        self.assertNotIn("Refactor (issue-300)", text)
+        self.assertNotIn("Old pattern", text)
+        self.assertNotIn("New principle", text)
         self.assertIn('"pr", "create", "--draft"', text)
         self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
         self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)

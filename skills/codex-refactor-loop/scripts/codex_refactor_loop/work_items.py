@@ -55,11 +55,6 @@ closing_issue_numbers = extract_closing_issue_numbers
 
 
 class ManagedWorkProjection:
-    # Refactor (impl/issue239-linkage):
-    #   Old pattern: controller, concurrency, wakeup, and peek each interpreted
-    #   PR body `Closes #N` linkage independently or not at all.
-    #   New principle: one read-only projection owns the represented-parent
-    #   semantics; lifecycle mutations stay in ControllerActions.
     def __init__(self, items: Iterable[ManagedItem | Mapping[str, object]]) -> None:
         self.items = tuple(_coerce_item(item) for item in items)
         self.links = self._links()

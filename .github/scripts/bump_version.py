@@ -114,7 +114,6 @@ def load_targets(root: Path = ROOT) -> list[ManifestTarget]:
     return targets
 
 
-# Refactor (iter3/skill-release-pipeline): Old: 无机械 release 管道  New: bump_version + release.yml minimal option A(#32 minimal 共识)
 def assert_versions_sync(targets: list[ManifestTarget]) -> str:
     versions = {target.version for target in targets}
     if len(versions) != 1:
@@ -124,7 +123,6 @@ def assert_versions_sync(targets: list[ManifestTarget]) -> str:
     return targets[0].version
 
 
-# Refactor (iter3/skill-release-pipeline): Old: 无机械 release 管道  New: bump_version + release.yml minimal option A(#32 minimal 共识)
 def write_version(targets: list[ManifestTarget], version: str, dry_run: bool) -> None:
     parse_version(version)
     for target in targets:
@@ -135,7 +133,6 @@ def write_version(targets: list[ManifestTarget], version: str, dry_run: bool) ->
         write_json(target.path, target.data)
 
 
-# Refactor (iter3/skill-release-pipeline): Old: 无机械 release 管道  New: bump_version + release.yml minimal option A(#32 minimal 共识)
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="validate mapped manifest versions are synchronized")

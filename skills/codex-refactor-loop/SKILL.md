@@ -111,7 +111,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$ACTIVE_CONTROLLER_TTL_SECONDS` | defaulted | active-controller lease | `1800` | missing or invalid defaults to `1800`; owner renews before expiry; expired lease may be acquired by another device | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
 | `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
 | `$COMMENT_MONITOR_LOOKBACK` | optional-noop | comment-monitor | empty or `YYYY-MM-DD` / `updated:>=YYYY-MM-DD` search fragment | empty adds no lookback filter; non-empty is limited to a GitHub `updated:` search qualifier and must not change labels, ownership, or write behavior | comment-monitor | `test_comment_monitor.py`, `test_host_env_surface_matrix.py` |
-| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `self-doc-comment` | missing/empty normalizes to `self-doc-comment`; `none` disables refactor-history source comments; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py` |
+| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `none` | missing/empty/default normalizes to `none`; rationale belongs in external artifacts; explicit `self-doc-comment` is downstream compatibility opt-in and must obey source English-only; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py`, `test_source_language_policy.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -124,8 +124,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics: whether Old/New refactor comments are allowed, required, or rejected. `${HOST_COMMENT_RULE}` only supplies comment syntax in `self-doc-comment` mode; it does not override the policy.
+`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics. Missing, empty, or default policy is `none`, which rejects Old/New refactor-history source comments and keeps rationale in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in; `${HOST_COMMENT_RULE}` only supplies comment syntax in that mode and does not override source English-only.
 
 Host config rules:
 1. `host.env` is the only loop runtime fact injection point. It is not host production configuration schema.
@@ -724,8 +723,7 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 1. No new features; only clean the authorized violation or implement the consensus plan.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-3. Code self-documents refactors according to `$HOST_REFACTOR_COMMENT_POLICY`: `self-doc-comment` requires host-style refactor-history comments; `none` forbids those source comments and requires the rationale in external artifacts.
+3. Code refactor rationale follows `$HOST_REFACTOR_COMMENT_POLICY`: missing, empty, or default policy is `none`, which forbids refactor-history source comments and keeps rationale in external artifacts; explicit `self-doc-comment` is a downstream compatibility opt-in and must still obey source English-only.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
@@ -3028,8 +3026,7 @@ Bash(
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-3. **Code self-documents the refactor according to policy** — `$HOST_REFACTOR_COMMENT_POLICY` empty/`self-doc-comment` requires a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; `none` forbids refactor-history source comments and moves the rationale to external artifacts.
+3. **Code refactor rationale follows policy** — `$HOST_REFACTOR_COMMENT_POLICY` missing/empty/default is `none`: source refactor-history comments are forbidden and rationale belongs in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in for a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; it must still obey source English-only.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.

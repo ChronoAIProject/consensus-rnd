@@ -1,9 +1,4 @@
 #!/usr/bin/env python3
-# Refactor (iter3/skill-daemon-first-refactor): Old pattern: all numeric design-consensus routes
-# were manually dispatched by the LLM controller, which easily missed markers.
-# New principle: narrow allowlist daemon directly dispatches SOLVER_DONE
-# triplet/converge/stalled routes; all other markers append fallback events
-# (#37 structural B consensus).
 """Narrow design-consensus deterministic router daemon.
 
 This daemon owns only three design-consensus direct-dispatch routes:
@@ -56,12 +51,6 @@ MARKER_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUD
 
 
 class Phase9MarkerGrammar:
-    # Refactor (iter1/issue-149): refactor helper, no behavior change outside existing routes.
-    #   Old pattern: phase9_router_daemon marker parsing rejected judge markers
-    #   with non-ASCII convergence bodies or route suffixes, so triplet judge
-    #   and converge dispatches fell back to the controller.
-    #   New principle: route-specific marker grammar keeps non-ASCII bodies
-    #   valid for route markers without adding a design-consensus round projection layer.
     ROUTE_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     VERDICT_TOKEN = re.compile(r"^[A-Za-z0-9_./-]+$")
     CONVERGE_RE = re.compile(r"^META_JUDGE_DONE:converge:round-(\d+)(?::.*)?$")
@@ -122,9 +111,6 @@ class Phase9LogIdentity:
 
 @dataclass(frozen=True)
 class Phase9SourceIssueDecision:
-    # Refactor (iter229/issue-229): refactor helper, no behavior change outside the source issue gate.
-    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
-    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
     allowed: bool
     state: str | None
     reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
@@ -132,9 +118,6 @@ class Phase9SourceIssueDecision:
 
 @dataclass(frozen=True)
 class MetaJudgePromptContext:
-    # Refactor (issue-262): Old: meta-judge prompt context had no validated
-    # transition projection. New: carry the same read-only sidecar projection
-    # used by solver headers without creating a second prompt injection path.
     issue: str
     round: int
     solver_paths: dict[str, str]
@@ -151,9 +134,6 @@ class MetaJudgePromptContext:
 
 
 class MetaJudgePromptRenderer:
-    # Refactor (iter9/issue-260):
-    #   Old pattern: phase9-router meta-judge dispatch rendered a short no-rubric stub prompt.
-    #   New principle: render full prompts/meta-judge.md with same issue/round scoped solver paths and fail closed on template/scope errors.
     PLACEHOLDERS = {
         "ISSUE_NUMBER",
         "WORK_UNIT_ID",
@@ -234,11 +214,6 @@ def parse_phase9_log_identity(name: str) -> Phase9LogIdentity | None:
 
 
 class Phase9Router:
-    # Refactor (iter229/issue-229):
-    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
-    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
-    # Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
-    # New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
     def __init__(
         self,
         repo_root: Path | None = None,
@@ -265,20 +240,10 @@ class Phase9Router:
         self.lock_path = self.loop_dir / "phase9-router.lock"
         self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
-        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
-        # memory-only dedup was lost on daemon restart, re-emitting historical
-        # fallback events and flooding Monitor. New principle: __init__ scans
-        # existing phase9-router-fallback lines in pending-events to seed the
-        # dedup set, making restarts idempotent.
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
 
     def tick(self) -> None:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # phase9 router instances on multiple devices could write prompts,
-        # append ledgers, spawn solvers, and emit fallback events in parallel.
-        # New principle: all router write routes require the global
-        # active-controller owner.
         decision = require_active_controller(self.ctx, "phase9-router")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
@@ -305,24 +270,11 @@ class Phase9Router:
             lock.flush()
             yield
 
-    # Refactor (iter5/skill-marker-tail-only-scope):
-    #   Old pattern: scan entire log body for markers; codex worker logs that
-    #   happen to echo prompt-body / test-fixture / grep-output marker text
-    #   (e.g. `META_JUDGE_DONE:converge:round-3:echoed-from-prompt-body` from
-    #   test_phase9_router_daemon.py source listing) were classified as real
-    #   verdicts and triggered cascading dispatches.
-    #   New principle: real worker verdict markers always appear in the tail
-    #   alongside `EXIT=0`. Scan only the last MARKER_TAIL_LINES of each log.
-    #   Body-position prompt-body echoes never reach the marker parser.
     MARKER_TAIL_LINES = 30
-    TAIL_READ_BYTES = 8192  # Refactor (iter5/issue122-phase9-tail-perf): bound tail read to ~8KB so per-tick scan stays O(num_logs), not O(total log bytes).
+    TAIL_READ_BYTES = 8192
 
     @staticmethod
     def _read_tail_lines(path: Path, num_lines: int) -> list[str]:
-        # Refactor (iter5/issue122-phase9-tail-perf): Old: read full log via
-        # read_text() then splitlines()[-N:]. New: seek to file end and read
-        # only the last TAIL_READ_BYTES, decode, return tail num_lines. Keeps
-        # per-tick CPU bounded as logs/ grows.
         try:
             with path.open("rb") as fh:
                 fh.seek(0, 2)
@@ -357,11 +309,6 @@ class Phase9Router:
         return markers
 
     def _extract_marker(self, line: str) -> str | None:
-        # Refactor (iter1/issue-149):
-        #   Old pattern: phase9_router_daemon marker parsing rejected judge
-        #   markers with non-ASCII convergence bodies or route suffixes.
-        #   New principle: route-specific marker grammar accepts all route
-        #   markers, including non-ASCII bodies, without broad payload gates.
         stripped = line.strip().strip("`")
         if self._is_placeholder_or_echo(stripped):
             return None
@@ -388,11 +335,6 @@ class Phase9Router:
             return True
         if "round-n" in lowered:
             return True
-        # Refactor (iter4/skill-router-fallback-flood-fix): common traits of
-        # regex/grep alternation or template placeholders are `|` choices,
-        # `\"` escaped quotes, `r+1` placeholders, and `*` wildcards. These
-        # lines are almost certainly prompt-template or grep-command marker
-        # references, not real codex output.
         if "|" in text and any(prefix in text for prefix in KNOWN_PREFIXES):
             return True
         if "\\\"" in text or '\\"' in text:
@@ -440,35 +382,14 @@ class Phase9Router:
         return seen
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
-        # Refactor (issue-100/router-filename-identity): Old pattern: one loose regex
-        # accepted non-owned design-consensus-ish names. New principle: router-private filename
-        # identity allowlist accepts only phase9-issue, solver-issue, and meta-judge-issue
-        # dialects; public markers remain role-local.
         return parse_phase9_log_identity(path.name)
 
     def _is_clean_exit(self, path: Path) -> bool:
-        # Refactor (iter5/issue122-phase9-tail-perf): tail-only read via
-        # _read_tail_lines bounds CPU as logs/ grows.
         tail = self._read_tail_lines(path, 5)
         if not tail:
             return False
         return any(re.match(r"^EXIT=0$", line) for line in tail)
 
-    # Refactor (iter1/issue-167):
-    #   Old pattern: solver triplet handoff recorded only the base dispatch row,
-    #   so judge dispatch could proceed without durable triplet provenance or a
-    #   visible same-round peer artifact reference failure.
-    #   New principle: keep row-level router-private ledger provenance and a
-    #   narrow fail-closed peer artifact token check on this route; do not add a
-    #   standalone evidence file, hash, or lifecycle authority.
-    # Refactor (iter229/issue-229):
-    #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
-    #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
-    # Refactor (iter284/issue-284):
-    #   Old pattern: target log exists / in-flight and ledgered triplet
-    #   duplicates were both silent, hiding unledgered solver-triplet suppression.
-    #   New principle: ledgered duplicates stay silent; unledgered suppression
-    #   appends one existing-format fallback event with a narrow private reason.
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
         judge_role = self._judge_role()
@@ -515,28 +436,6 @@ class Phase9Router:
                 ledger.add(key)
 
     def _dispatch_meta_judge_routes(self, markers: list[Marker], ledger: set[str]) -> None:
-        # Refactor (iter5/skill-converge-source-and-monotonic-guard):
-        #   Old pattern: any log with `META_JUDGE_DONE:converge:round-N` marker
-        #   could trigger solver dispatch, and `target_round` was accepted even
-        #   if it equaled or preceded the source log's round. Result: solver
-        #   logs echoing prompt-body marker examples plus judge-self-referential
-        #   verdicts spawned cascading r3..r8 solver rounds with judge gaps.
-        #   New principle: only judge-role source logs may authorize a converge
-        #   dispatch (JUDGE markers come from JUDGE logs), and converge
-        #   projection must stay adjacent to the source round.
-        # Refactor (iter229/issue-229):
-        #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
-        #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
-        # Refactor (iter6/issue-244): Old pattern: converge payload was treated as
-        # target round only, so clean rS judge logs with canonical round-S
-        # markers fell back. New principle: accept source-round and legacy
-        # adjacent payloads locally, both dispatching r(S+1).
-        # Refactor (issue-304): Old pattern: fresh judge-emitted
-        # `META_JUDGE_DONE:escalate:stalled` was normal stalled authority.
-        # New principle: judge emits converge; before spawning r(S+1) solvers,
-        # router-owned stalled predicate may dispatch the round-S reflector and
-        # suppress solver churn. Legacy stalled markers remain read-only replay
-        # compatibility under the same predicate/source gates.
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
                 if marker.role != self._judge_role():
@@ -577,13 +476,6 @@ class Phase9Router:
                 self._dispatch_stalled_reflector(marker, ledger)
 
     def _append_fallbacks(self, markers: list[Marker], ledger: set[str]) -> None:
-        # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: dedup
-        # used a (log_path, marker) tuple, but marker text changes with extractor
-        # tweaks, so it was unstable across versions/restarts. New principle:
-        # dedup by log_path only. Once any marker from a log has surfaced to the
-        # controller, later markers from that log are not re-emitted; the
-        # controller can read the log directly if it needs details. This keeps
-        # dedup stable across versions.
         for marker in markers:
             if self._directly_handled(marker, ledger):
                 continue
@@ -621,10 +513,6 @@ class Phase9Router:
         return Phase9MarkerGrammar.parse_converge_round(marker)
 
     def _converge_target_round(self, marker_text: str, source_round: int) -> int | None:
-        # Refactor (iter6/issue-244): Old pattern: target-round math was
-        # duplicated at dispatch and fallback dedupe. New principle: one
-        # router-local adjacent helper maps canonical source-round and legacy
-        # next-round payloads to r(S+1); non-adjacent payloads fall back.
         payload_round = Phase9MarkerGrammar.parse_converge_round(marker_text)
         if payload_round in {source_round, source_round + 1}:
             return source_round + 1
@@ -673,11 +561,6 @@ class Phase9Router:
         return recent[0] == recent[1] == recent[2]
 
     def _collect_markers_from_path(self, path: Path) -> list[str]:
-        # Refactor (iter5/skill-marker-tail-only-scope): same tail-only invariant
-        # as _collect_markers: _stalled_predicate_holds must not trust body-
-        # position SOLVER_DONE echoes when classifying convergence verdicts.
-        # Refactor (iter5/issue122-phase9-tail-perf): tail-only read via
-        # _read_tail_lines bounds CPU as logs/ grows.
         if not path.exists():
             return []
         tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
@@ -779,9 +662,6 @@ class Phase9Router:
         marker: str,
         log_path: Path,
     ) -> bool:
-        # Refactor (iter229/issue-229):
-        #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
-        #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
         decision = self._source_issue_decision(issue)
         if decision.allowed:
             return True
@@ -1037,13 +917,6 @@ class Phase9Router:
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
         )
 
-    # Refactor (issue-114/phase9-issue-source-header):
-    #   Old pattern: converge-dispatched solver prompts had issue and round only,
-    #   so issue-driven Path A depended on hidden prompt-template fallback and
-    #   could be mistaken for a mandatory audit-backed cluster.
-    #   New principle: render a router-private source header from known issue
-    #   identity only; do not add state, producer registries, or lifecycle
-    #   authority.
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
         transition_lines = "\n".join(projection_lines(self._transition_assessment(issue)))
@@ -1080,12 +953,6 @@ class Phase9Router:
             )
         )
 
-    # Refactor (iter5/issue-85-stalled-reflector-template):
-    #   Old pattern: generic 3-line fallback reflector prompt without template
-    #   body or solver evidence.
-    #   New principle: embed the full meta-reflector-stalled.md template plus
-    #   9 solver log-path evidence lines; missing template fails closed with an
-    #   explicit missing-template prompt containing META_RESOLVED:escalate-human.
     def _reflector_prompt(self, marker: Marker) -> str:
         template = self._stalled_reflector_template()
         evidence_lines = "\n".join(self._stalled_evidence_lines(marker.issue, marker.round))
@@ -1224,9 +1091,6 @@ class Phase9Router:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def _solver_roles(self) -> tuple[str, ...]:
-        # Refactor (iter219/issue-219):
-        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely and keeps the built-in allowlist.
         return ROLES
 
     def _judge_role(self) -> str:
@@ -1259,10 +1123,6 @@ def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], No
         if args.once:
             router.tick()
             return 0
-        # Refactor (iter1/issue-143):
-        #   Old pattern: restart wrapper sidecar refreshed heartbeat even if this loop hung.
-        #   New principle: actor loop beats after tick/caught exception, then lease-sleeps.
-        #   --once stays outside the lease loop; daemon mode owns heartbeat progress.
         lease = DaemonHeartbeatLease("phase9_router_daemon", repo_root)
         while True:
             try:

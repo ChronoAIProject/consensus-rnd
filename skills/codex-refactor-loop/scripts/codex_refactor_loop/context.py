@@ -45,19 +45,7 @@ class LoopPaths:
 
 @dataclass(frozen=True)
 class LoopContext:
-    """Resolved host repository and skill context.
-
-    Refactor (iter219/issue-219):
-      Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-      New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-
-    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
-    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
-
-    Refactor (iter316/issue-316):
-      Old pattern: host runtime facts were parsed in wakeup_plan/release-gate/sync/controller_actions/heartbeat and read legacy aliases plus root host.env.
-      New principle: LoopContext/context.py is the single shared host.env parser; read only CONSENSUS_RND_HOST_ENV or legacy .refactor-loop/host.env; no root host.env or unlisted aliases.
-    """
+    """Resolved host repository, host.env, and durable artifact context."""
 
     repo_root: Path
     skill_root: Path
@@ -176,9 +164,6 @@ class HostEnvLocator:
         root = repo_root.resolve()
         raw_explicit = env.get(cls.EXPLICIT_ENV)
         if raw_explicit is not None:
-            # Refactor (iter1/issue-310):
-            #   Old pattern: host.env lookup made .refactor-loop/host.env look like the host production fact home.
-            #   New principle: CONSENSUS_RND_HOST_ENV is only a locator for a host-owned loop runtime injection file; .refactor-loop/host.env stays a compatibility read.
             return HostEnvLocation(
                 path=cls._resolve_explicit(root, raw_explicit),
             )
@@ -290,9 +275,6 @@ def _github_repo_slug(env: Mapping[str, str]) -> str | None:
 
 
 def _paths(repo_root: Path) -> LoopPaths:
-    # Refactor (iter1/issue-310):
-    #   Old pattern: .refactor-loop paths could be read as host production configuration or ledger authority.
-    #   New principle: .refactor-loop is only the skill-private runtime home while callers keep the historical Path contract.
     refactor_loop = repo_root / ".refactor-loop"
     state = refactor_loop / "state"
     return LoopPaths(

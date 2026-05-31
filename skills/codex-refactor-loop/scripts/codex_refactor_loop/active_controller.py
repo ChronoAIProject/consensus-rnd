@@ -81,10 +81,6 @@ class _LeaseRead:
 
 
 class ActiveControllerLeaseStore:
-    # Refactor (impl/issue191-single-active-controller): Old pattern: each device
-    # could run controller write daemons independently. New principle: one
-    # pushed-ref CAS lease elects a single active controller; non-owners fail
-    # closed before controller writes.
     def __init__(
         self,
         repo_root: Path,

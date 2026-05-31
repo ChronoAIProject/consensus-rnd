@@ -94,10 +94,6 @@ def single_active_audit_boundary(
     gh_items: Any | None,
     queue_state: Any | None,
 ) -> Boundary | None:
-    # Refactor (issue-277):
-    #   Old pattern: floor deficits treated audit fallback as endlessly repeatable.
-    #   New principle: one active same-iteration audit occupies the only ordinary
-    #   fallback slot; callers expose blocked capacity without duplicate audit.
     if has_open_actionable_managed_work(gh_items or []):
         return None
     if not _queue_state_empty(repo_root, monitor, queue_state):
@@ -350,15 +346,8 @@ class ConcurrencyMonitor:
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
-        # Refactor (iter3/skill-human-label-taxonomy):
-        #   Old: four Human labels, including two escalation labels, scattered no-gap and escalation decisions across the codebase.
-        #   New principle: exactly two active Human labels; causes move to the reason surface (#15 structural consensus).
         breakdown = []
         total = 0
-        # Refactor (impl/issue239-linkage):
-        #   Old pattern: parent issues and child PRs were counted independently.
-        #   New principle: shared ManagedWorkProjection folds an issue represented
-        #   by an open managed PR body `Closes #N` before worker expectation math.
         for item in ManagedWorkProjection(items).effective_worker_items():
             if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([item.human]).canonical:
                 continue
@@ -407,13 +396,7 @@ class ConcurrencyMonitor:
         path.unlink()
         return archive
 
-    # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
-    #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def validate_dispatch_cwd(self, payload: dict, task_id: str) -> tuple[bool, str]:
-        # Refactor (iter81/issue-81):
-        #   Old pattern: 文件/分支/marker/label/role 命名混乱;松散 regex(parse_target ^phase9-issue([0-9]+).*)解析,缺 owner-local operational-name 契约
-        #   New principle: owner-local operational-name contract:CLAUDE.md 扩写命名不动点为 operational-name invariant + SKILL.md 增 owner map;收窄现有 owner parser/validation(progress.py parse_target 精确文法、safe_worktree 字段校验);behavior test + source-regression production-literal allowlist 防偷抄;**无**生产 OperationalNameRegistry/names.py/check_naming.py/全仓审美 lint
         cd_raw = payload.get("cd")
         if not cd_raw:
             return False, "missing-cd"
@@ -443,9 +426,6 @@ class ConcurrencyMonitor:
             return False, "worktrees-root-cd"
         return True, "worktrees-cd"
 
-    # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
-    #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def archive_rejected(self, path: Path, payload: dict, task_id: str, priority: str, reason: str) -> Path:
         self.dispatch_rejected.mkdir(parents=True, exist_ok=True)
         payload["rejected_at"] = utc_ts()
@@ -480,14 +460,7 @@ class ConcurrencyMonitor:
             start_new_session=True,
         )
 
-    # Refactor (iter6/issue-133):
-    #   Old pattern: concurrency monitor passed queue payload[cd] straight to spawn-codex.sh --cd, letting a mutable task run in the repo-root/main worktree.
-    #   New principle: structural consensus dispatch queue mutable-prefix cwd guard, no shared workspace policy. See .refactor-loop/runs/phase9-issue133-r4-judge.md.
     def dispatch_one_from_queue(self) -> tuple[str, str, str] | None:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # concurrency monitors on multiple devices could consume/archive the
-        # same local queue and spawn duplicate workers. New principle: dispatch
-        # and queue archive require the single active-controller owner.
         decision = require_active_controller(self.ctx, "concurrency-dispatch")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
@@ -513,9 +486,6 @@ class ConcurrencyMonitor:
             return task_id, priority, reason
         return None
 
-    # Refactor (iter4/concurrency-auto-topup):
-    #   Old pattern: monitor only alerted; actual<floor waited for the LLM controller's next wakeup.
-    #   New principle: monitor automatically consumes dispatch-queue entries until the floor is satisfied or queue is empty.
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
         if actual >= floor:
             return actual
@@ -529,13 +499,9 @@ class ConcurrencyMonitor:
                 break
         return actual
 
-    # Refactor (iter4/concurrency-auto-topup):
-    #   Old pattern: single no-gap sentinel path could alert and leave deficit repair to a later controller wakeup.
-    #   New principle: no-gap alerting continues into deficit detection so queued work can be fired in the same tick.
     def tick(self) -> None:
         state = self.load_state()
         zero_streak = int(state.get("zero_streak", 0))
-        # Refactor (impl/issue235-delete-downstream-watch): Old pattern: concurrency tick ran source-repo skill-degradation checks against downstream host roots. New principle: downstream hosts have no skill-degradation runtime watch; source-repo static validation stays in CI/release gates.
         decision = require_active_controller(self.ctx, "concurrency-tick")
         write_active_controller_status(self.ctx, decision)
         owner_allowed = decision.allowed

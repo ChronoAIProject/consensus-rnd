@@ -12,11 +12,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Iterable, Sequence
 
 
-# Refactor (issue157 release gate):
-#   Old pattern: release.yml and release-gate each interpreted required checks
-#   through separate readers, including workflow-run names from gh run list.
-#   New principle: one read-only Checks API projection owns exact check-run name
-#   matching for release required checks; it never mutates lifecycle state.
 REQUIRED_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
 
 

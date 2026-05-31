@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-# Refactor (iter4/issue-183): Old pattern: legacy emoji, Chinese, and
-# auto-loop label literals were scattered across controller code, prompts, and
-# SKILL prose. New principle: one crnd:<group>:<slug> catalog owns canonical
-# labels, legacy aliases, and dual-read migration planning.
 import argparse
 import json
 import os

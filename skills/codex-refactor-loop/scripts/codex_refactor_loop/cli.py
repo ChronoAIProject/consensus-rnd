@@ -33,7 +33,6 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1]
 
 
 def release_commits_command(argv: Sequence[str] | None) -> int:
-    # Refactor (fix/pr236-split-release-commits-command): Old pattern: release-gate inlined the git-reading release commit producer and gained read-git authority. New principle: release commits are produced by a separate narrow CLI surface whose only powers are read-git and write-artifact, keeping release-gate decider-only.
     from .release.commits import main as release_commits_main
 
     return release_commits_main(argv)
@@ -46,13 +45,6 @@ class CommandSpec:
     authority: tuple[str, ...]
 
 
-# Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed
-# lifecycle commands and wakeup_plan/peek rendered copyable suggested_command,
-# forming a generic lifecycle authority surface. New principle: COMMANDS keeps
-# only public non-lifecycle CLI primitives; controller lifecycle actions stay
-# controller-internal, with dev-sync's narrow integration-worktree carveout.
-# Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
-# New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
@@ -67,10 +59,6 @@ COMMANDS: dict[str, CommandSpec] = {
         "run the Python daemon restart helper",
         ("spawn-daemon", "write-state", "delete-log"),
     ),
-    # Refactor (issue-298): Old: public CLI had restart-daemons as the only
-    # daemon health surface, nudging controllers toward write-side repair for
-    # status reads. New: daemon-status is read-only and restart-daemons remains
-    # the sole repair/reload command.
     "daemon-status": CommandSpec(
         daemon_status_main,
         "read restart-helper-managed daemon status",
@@ -117,7 +105,6 @@ COMMANDS: dict[str, CommandSpec] = {
     "phase9-router": CommandSpec(
         phase9_router_main,
         "compatibility alias for the Python design-consensus router",
-        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's public CommandSpec omitted the state-only GitHub read used by the source-OPEN gate. New: include read-gh in the closed-token authority tuple while keeping lifecycle mutation tokens absent.
         ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
     ),
     "release-gate": CommandSpec(

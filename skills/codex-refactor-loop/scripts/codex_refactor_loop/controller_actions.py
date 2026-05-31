@@ -40,33 +40,17 @@ ISSUE_LABELS_REMOVE = (
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
-# Refactor (issue-276): validate body-linked lifecycle targets without swallowing escaped line boundaries.
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 
 
 class ControllerActions:
-    # Refactor (iter201/issue-201): Old pattern: public consensus-rnd-cli exposed
-    # merge/open/safe-push/apply lifecycle commands as generic callable verbs.
-    # New principle: keep these as controller-internal primitives only; callers
-    # construct ControllerActions directly and public CLI routing cannot reach them.
-    #
-    # Refactor (iter217/issue-217):
-    #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-    #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         merged_env = {**os.environ, **ctx.host_env}
-        # Refactor (iter316/issue-316):
-        #   Old pattern: controller actions accepted legacy branch aliases from process env.
-        #   New principle: use ctx.host_env or canonical process env only, then defaults.
         self.integration_branch = merged_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"
         self.review_base_branch = merged_env.get("REVIEW_BASE_BRANCH") or "dev"
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        # Refactor (loop/gh-arg-coercion): Old pattern: gh() assumed every arg was
-        # already a str, so an int caller (e.g. a raw PR number via merge_pr) crashed
-        # with AttributeError on full[3].startswith before any gh process ran.
-        # New principle: coerce all args to str at the gh() boundary.
         full = ["gh", *(str(a) for a in args)]
         if self.ctx.gh_repo_slug:
             insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
@@ -153,9 +137,6 @@ class ControllerActions:
         target_ref: str = "",
     ) -> ReleasePublishResult:
         self._require_owner_or_raise("publish-release")
-        # Refactor (iter217/issue-217):
-        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
         target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
         if not target:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
@@ -191,9 +172,6 @@ class ControllerActions:
         return 0
 
     def safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
-        # Refactor (iter81/issue-81):
-        #   Old pattern: 文件/分支/marker/label/role 命名混乱;松散 regex(parse_target ^phase9-issue([0-9]+).*)解析,缺 owner-local operational-name 契约
-        #   New principle: owner-local operational-name contract:CLAUDE.md 扩写命名不动点为 operational-name invariant + SKILL.md 增 owner map;收窄现有 owner parser/validation(progress.py parse_target 精确文法、safe_worktree 字段校验);behavior test + source-regression production-literal allowlist 防偷抄;**无**生产 OperationalNameRegistry/names.py/check_naming.py/全仓审美 lint
         _validate_safe_worktree_fields(str(iteration), cluster)
         wt_path = self.ctx.repo_root / ".worktrees" / f"iter{iteration}-{cluster}"
         branch = f"refactor/iter{iteration}-{cluster}"
@@ -209,9 +187,6 @@ class ControllerActions:
         return wt_path, branch
 
     def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:
-        # Refactor (issue-300): PRs are opened as draft by default; merge_pr is
-        # the controller-owned post-decision boundary that marks them ready only
-        # after MERGE or MERGE_WITH_COMMENTS has already been decided.
         draft = self.gh(["pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"], check=False)
         if draft.returncode != 0:
             return draft.returncode
@@ -305,7 +280,6 @@ class ControllerActions:
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if not match:
-            # Refactor (issue-276): preserve the PR-create parse failure instead of routing it through target normalization.
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
         pr_target = self._normalize_lifecycle_target_or_raise(
             match.group(1),
@@ -338,9 +312,6 @@ class ControllerActions:
 
     def open_design_issue_with_labels(self, title: str, body_file: str) -> tuple[int, str]:
         self._require_owner_or_raise("open-design-issue")
-        # Refactor (issue-297): Old: controller runbook exposed raw issue-open
-        # plus label recipes. New: design issue opening is a narrow internal
-        # ControllerActions primitive gated by the active controller lease.
         if not title.strip():
             raise RuntimeError("open_design_issue_with_labels: title required")
         self._validate_design_issue_body_file(body_file)
@@ -394,12 +365,6 @@ class ControllerActions:
         title: str = "Release rollup",
     ) -> tuple[int, str]:
         self._require_owner_or_raise("open-release-rollup-pr")
-        # Refactor (issue174-rollup-throwaway-head):
-        # Old pattern: the rollup PR used the shared integration branch as
-        # its head, so GitHub merge/delete-branch flows could delete the
-        # integration branch itself. New principle: re-check the pending-event
-        # SHA, push a controller-owned rollup/<integration_sha> head, and open
-        # the PR from that disposable head only.
         try:
             event = json.loads(event_json)
         except json.JSONDecodeError as exc:
@@ -510,10 +475,6 @@ class ControllerActions:
     def apply_triage_decision_marker(self, marker: str) -> int:
         if not self._require_owner_or_return("apply-triage", code=3):
             return 3
-        # Refactor (iter201/issue-201): Old pattern: controller marker handling
-        # subprocessed consensus-rnd-cli apply-triage, preserving public lifecycle
-        # reachability. New principle: direct internal call keeps validation and
-        # applied/rejected artifacts without exposing a public lifecycle command.
         match = re.fullmatch(r"TRIAGE_DECISION_DONE:([0-9]+):(accept|reject):(\.refactor-loop/runs/.*\.json)", marker)
         if not match:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
@@ -523,9 +484,6 @@ class ControllerActions:
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
-        # Refactor (iter219/issue-219):
-        #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
         values = dict(os.environ)
         if env:
             values.update(env)
@@ -553,9 +511,6 @@ class ControllerActions:
         round_number: int,
         env: Mapping[str, str] | None = None,
     ) -> ReviewFixDispatchSpec:
-        # Refactor (issue-267): Old: FIX_OUTPUT_PATH was a prompt-only oral
-        # variable and workers could drift to root FIX_REPORT.md. New:
-        # controller render binds the canonical runs artifact before dispatch.
         spec = ReviewFixDispatchSpec.for_round(pr_number, round_number)
         render_env = dict(env or {})
         render_env.update(spec.as_render_env())
@@ -591,10 +546,6 @@ class ControllerActions:
         return None
 
     def _require_owner_or_return(self, action: str, *, code: int) -> bool:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # controller lifecycle helpers could mutate GitHub/git from any device.
-        # New principle: every lifecycle mutation fails closed unless this
-        # process owns the singleton active-controller lease.
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
         if decision.allowed:
@@ -609,10 +560,6 @@ class ControllerActions:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
 
     def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
-        # Refactor (iter276/issue-276): Old pattern: controller lifecycle
-        # targets accepted empty or non-canonical GitHub ids before gh calls.
-        # New principle: require canonical positive decimal target ids and
-        # record invalid target blocks before lifecycle side effects.
         try:
             return _normalize_lifecycle_target(value, kind=kind, action=action, source=source)
         except ValueError as exc:
@@ -632,12 +579,6 @@ class ControllerActions:
             handle.write(f"CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}\n")
 
     def _single_body_linked_issue_or_block(self, body: str, *, action: str) -> str | None:
-        # Refactor (issue-276): Old pattern: body-derived `Closes #...`
-        # targets used the read-only projection parser, so malformed body links
-        # looked identical to no link and skipped lifecycle target validation.
-        # New principle: body-link lifecycle targets fail closed before any
-        # gh side effect; absent or ambiguous valid links still mean no issue
-        # lifecycle mutation.
         for target in _body_closing_issue_targets(body):
             if self._normalize_lifecycle_target_or_block(
                 target,
@@ -676,11 +617,6 @@ def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source
 
 
 def _single_linked_issue(body: str) -> str:
-    # Refactor (impl/issue239-linkage):
-    #   Old pattern: controller parsed `Closes #N` with a caller-local regex
-    #   while other runtime surfaces used different interpretations.
-    #   New principle: use the shared managed-work projection parser and only
-    #   mutate a parent issue when there is exactly one durable PR-body link.
     numbers = extract_closing_issue_numbers(body)
     return str(numbers[0]) if len(numbers) == 1 else ""
 

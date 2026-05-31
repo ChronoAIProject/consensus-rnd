@@ -1,27 +1,6 @@
 #!/usr/bin/env python3
 """Read-only wakeup planner for codex-refactor-loop controllers.
 
-Refactor (iter1/wakeup-plan-script):
-  Old pattern: controller wakeups assembled priority from peek.sh, log greps,
-  GitHub checks, and floor rules by hand, making milestone and audit-none
-  ordering easy to drift.
-  New principle: one read-only prioritized-next-action script emits structured
-  JSON from local evidence plus GitHub labels while leaving every lifecycle
-  action to the controller.
-
-Allowed: read `.refactor-loop` files, read daemon heartbeats, run read-only
-GitHub list/check/view commands, observe git topology with the issue-190
-allowlist (`git fetch origin --quiet`, `git worktree list --porcelain`,
-`git rev-parse --verify HEAD`, `git rev-parse --verify refs/remotes/origin/<head>`,
-and `git rev-list --count refs/remotes/origin/<head>..HEAD`), and print JSON
-recommendations. Forbidden: no restart/spawn, no git lifecycle or mutation
-commands, no GitHub lifecycle mutation, no commit, push, checkout/switch,
-branch create/delete/update, worktree add/remove/prune, reset, rebase, merge,
-label, issue/PR create/close/edit, tag, release, or worker dispatch.
-Authorization source:
-`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script`.
-Issue-190 consensus source:
-`.refactor-loop/runs/phase9-issue190-r3-judge.md`.
 """
 
 from __future__ import annotations
@@ -112,9 +91,6 @@ def run_json(cmd: list[str], *, cwd: Path) -> Any:
 
 
 def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]], str | None]:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     try:
         ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
         spec = load_validated_workflow_spec(ctx)
@@ -147,20 +123,11 @@ def configured_floor() -> int:
 
 
 def resolve_repo_root(arg_root: str | None) -> Path:
-    # Refactor (iter316/issue-316):
-    #   Old pattern: wakeup_plan guessed repo root from cwd and parsed host.env itself.
-    #   New principle: LoopContext owns repo-root/host.env loading; no private cwd default or parser.
     ctx = LoopContext.load(repo_root=arg_root, env=os.environ, cwd=Path.cwd(), read_only=True)
     return ctx.repo_root
 
 
 def import_concurrency_monitor(repo_root: Path) -> Any | None:
-    # Refactor (iter2/wakeup-plan-hardgate):
-    #   Old pattern: wakeup routing could finish with a hidden concurrency gap
-    #   because only the daemon knew the canonical count.
-    #   New principle: wakeup_plan imports the daemon's read-only count/expected
-    #   helpers after pinning REPO_ROOT, so the controller sees a hard gate before
-    #   it can end the wakeup.
     os.environ["REPO_ROOT"] = str(repo_root)
     try:
         module_name = "codex_refactor_loop.monitors.concurrency"
@@ -219,10 +186,6 @@ def canonical_expected_from_active_tasks(monitor: Any | None) -> tuple[int, list
 def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, Any]]]:
     breakdown: list[dict[str, Any]] = []
     total = 0
-    # Refactor (impl/issue239-linkage):
-    #   Old pattern: wakeup hard-gate counted parent issue and child PR as
-    #   separate active work. New principle: share ManagedWorkProjection with
-    #   the daemon so represented parents are non-action expected_workers=0.
     for item in ManagedWorkProjection(_projection_items(items)).effective_worker_items():
         labels = set(item.labels)
         if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
@@ -237,11 +200,6 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
 
 
 def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhItem] | None = None) -> dict[str, Any]:
-    # Refactor (issue-277):
-    #   Old pattern: AUDIT_DONE:none:0 converted a positive deficit into an
-    #   exemption, then floor-no-exemption made audit repeatable without a slot.
-    #   New principle: positive deficits stay visible; duplicate same-iteration
-    #   audit is not legal dispatch when that audit is already active.
     concurrency_module = import_concurrency_monitor(repo_root)
     monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
@@ -287,14 +245,6 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
 
 
 def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
-    # Refactor (iterissue-331/issue-331):
-    #   Old pattern: release gate and wakeup_plan each kept local daemon-name
-    #   literals, drifting from restart.py DAEMON_COMMANDS and duplicating the
-    #   source of truth.
-    #   New principle: restart.py::restart_managed_daemon_names() is the
-    #   canonical daemon-name projection; release keeps DAEMON_NAMES only as a
-    #   derived alias, wakeup deletes EXPECTED_DAEMONS, and health requires
-    #   every restart-managed heartbeat to be fresh.
     if now is None:
         now = time.time()
     heartbeat_dir = repo_root / ".refactor-loop" / "heartbeats"
@@ -572,10 +522,6 @@ def github_repo_slug() -> str | None:
 
 
 def load_github_items(repo_root: Path) -> list[GhItem]:
-    # Refactor (issue-162/wakeup-open-only):
-    #   Old pattern: action planning risked mixing closed or merged auto-loop
-    #   records into dispatch candidates.
-    #   New principle: actions are derived only from open auto-loop issues/PRs.
     slug = github_repo_slug()
     items: list[GhItem] = []
     for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
@@ -641,10 +587,6 @@ def safe_head_ref(value: str | None) -> str | None:
 
 
 def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
-    # Refactor (iter201/issue-201): Old pattern: wakeup_plan rendered a copyable
-    # consensus-rnd-cli safe-push suggested_command, exposing public lifecycle
-    # reachability. New principle: emit only a fixed controller_action fact with
-    # no_lifecycle_authority; controller maps it to an internal primitive.
     prs = [item for item in gh_items if item.kind == "PR" and safe_head_ref(item.head_ref)]
     if not prs:
         return []
@@ -705,8 +647,6 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     for item in items:
         if item.kind != "PR":
             continue
-        # Refactor (issue-297): Old: ci-red routed through a naked PR checks CLI.
-        # New: wakeup-plan consumes the named PR-head Checks API projection.
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
@@ -732,9 +672,6 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
     actionable = open_actionable_managed_items(_projection_items(items))
-    # Refactor (issue-262): Old: existing issue ranking only used milestone,
-    # kind, and number. New: a checked-in caller may use the validated
-    # transition_assessment sidecar bucket before the existing tie-breakers.
     ordered = sorted(actionable, key=lambda item: _existing_issue_sort_key(item, repo_root))
     for item in ordered:
         raw = raw_by_key.get((item.kind, item.number))

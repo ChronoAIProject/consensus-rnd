@@ -1,6 +1,6 @@
 """Read-only GitHub body renderer and self-contained authority validator.
 
-Runtime boundary: this module may read local artifact files and print rendered
+Runtime boundary: this read-only helper may read local artifact files and print rendered
 Markdown to stdout. It must not write files, call Git/GitHub, spawn background processes, or
 change controller state; behavior and source-regression tests verify that
 boundary.
@@ -45,18 +45,7 @@ def render_github_body(
     debug_paths: Sequence[str | Path] = (),
     max_bytes: int = MAX_BODY_BYTES,
 ) -> str:
-    """Render a self-contained Chinese GitHub body from local artifacts.
-
-    Refactor (iter191/issue-191):
-    Old pattern: multi-device / multi-loop runtime lacks a single-active-controller guard; GitHub-facing authority/consensus bodies risk referencing local .refactor-loop paths instead of inlining artifacts
-    New principle: single active controller lease (no per-work claims, no cross-device floor); strengthen the self-contained github_body.py validator so authority/consensus/plan bodies inline raw artifacts and .refactor-loop/runs/*.md appears only as debug detail
-
-    Refactor (issue192/self-contained-github-body):
-    Old pattern: GitHub bodies could cite `.refactor-loop/runs/*.md` as the
-    sole authorization source, leaving reviewers with machine-local dead links.
-    New principle: this read-only helper inlines the complete artifact text and
-    demotes local paths to optional debug hints under a collapsed section.
-    """
+    """Render a self-contained Chinese GitHub body from local artifacts."""
 
     _validate_kind(kind)
     if not title.strip():
@@ -121,12 +110,7 @@ def validate_self_contained_github_body(
     authority_required: bool = False,
     max_bytes: int = MAX_BODY_BYTES,
 ) -> None:
-    """Fail closed when a GitHub body uses local run paths as sole authority.
-
-    Refactor (iter191/issue-191):
-    Old pattern: multi-device / multi-loop runtime lacks a single-active-controller guard; GitHub-facing authority/consensus bodies risk referencing local .refactor-loop paths instead of inlining artifacts
-    New principle: single active controller lease (no per-work claims, no cross-device floor); strengthen the self-contained github_body.py validator so authority/consensus/plan bodies inline raw artifacts and .refactor-loop/runs/*.md appears only as debug detail
-    """
+    """Fail closed when a GitHub body uses local run paths as sole authority."""
 
     if not isinstance(text, str) or not text.strip():
         raise GitHubBodyError("empty GitHub body")

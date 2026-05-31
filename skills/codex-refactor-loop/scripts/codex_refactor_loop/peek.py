@@ -38,7 +38,6 @@ class PeekStatusLens:
         lines.extend(_prefixed_tail(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl", 10, "    "))
         lines.append("  pending events tail:")
         lines.extend(_prefixed_tail(self.ctx.paths.pending_events, 10, "    "))
-        # Refactor (impl/issue235-delete-downstream-watch): Old pattern: peek rendered a downstream skill-degradation alert log. New principle: downstream hosts have no skill-degradation alert log or peek lens.
         lines.extend(["", "▍Milestone (优先) issues:"])
         lines.extend(self._milestone_items())
         lines.extend(["", "▍Open auto-loop PRs:"])
@@ -47,10 +46,6 @@ class PeekStatusLens:
         lines.extend(self._unpushed_worker_output())
         lines.extend(["", "▍Monitor zero_streak (last 10 ticks):"])
         lines.extend(self._zero_streak())
-        # Refactor (iter203/issue-203): Old pattern: controller decisions were
-        # split across peek, wakeup-plan, phase9-router, and concurrency. New
-        # principle: peek is observability-only; review-gate policy stays in
-        # existing wakeup-plan completed markers and controller truth tables.
         lines.extend(["", "▍Stale labels (CLOSED but still carrying in-flight phase labels):"])
         lines.extend(self._stale_labels())
         lines.extend(["", "▍Issue/PR linkage mismatch:"])
@@ -147,10 +142,6 @@ class PeekStatusLens:
         return lines
 
     def _unpushed_worker_output(self) -> list[str]:
-        # Refactor (iter201/issue-201): Old pattern: peek displayed a copyable
-        # consensus-rnd-cli safe-push command, making a status lens look like a
-        # lifecycle dispatcher. New principle: show fixed facts only; controller
-        # lifecycle execution remains internal and non-public.
         out = []
         for action in unpushed_worker_output_actions(self.ctx.repo_root, load_github_items(self.ctx.repo_root)):
             out.append(
@@ -175,10 +166,6 @@ class PeekStatusLens:
         return out
 
     def _stale_labels(self) -> list[str]:
-        # Refactor (issue238/closed-label-reconciler):
-        #   Old pattern: peek printed remediation text that told the controller
-        #   to clean labels. New principle: peek remains a read-only display of
-        #   the closed-label-reconciler projection and emits no edit guidance.
         out = []
         for kind in ("issue", "pr"):
             for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,state,labels", state="closed", limit="30"):
@@ -193,10 +180,6 @@ class PeekStatusLens:
         return out
 
     def _linkage_mismatch(self) -> list[str]:
-        # Refactor (impl/issue239-linkage):
-        #   Old pattern: peek searched implementing issues locally and guessed
-        #   PR linkage. New principle: render the shared read-only projection so
-        #   missing or ambiguous `Closes #N` links remain visible.
         return list(self._managed_work_projection().linkage_mismatches())
 
     def _spawn_drop(self) -> list[str]:
@@ -258,9 +241,6 @@ class PeekStatusLens:
         return ManagedWorkProjection(items)
 
     def _stale_worktrees(self) -> list[str]:
-        # Refactor (iter/issue-332):
-        #   Old pattern: peek 只读 status lens 在输出里打印可复制的破坏性 lifecycle cleanup 命令(git worktree remove --force && git branch -D)
-        #   New principle: read-only lens 只报 fact 字段(path/branch/remote_missing/cleanup_owner/no_lifecycle_authority),lifecycle cleanup 命令只属授权 controller runbook;保留 stale worktree 只读检测
         out = []
         result = subprocess.run(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"], capture_output=True, text=True, check=False)
         current: Path | None = None
@@ -348,8 +328,6 @@ class PeekStatusLens:
         return rows
 
     def _checks(self, pr_num: str) -> tuple[int, int, int]:
-        # Refactor (issue-297): Old: peek counted check buckets through a naked
-        # PR checks CLI. New: reuse the narrow read-only PR-head projection.
         if not self.ctx.gh_repo_slug:
             return 0, 0, 0
         status = PrChecksProjection(cwd=self.ctx.repo_root).check_pr(self.ctx.gh_repo_slug, pr_num)
@@ -404,12 +382,6 @@ def _safe_int(value: object) -> int | None:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    # Refactor (iter1/issue-116):
-    #   Old pattern: `peek --help` ignored argv, loaded LoopContext, fetched
-    #   git, and ran the live status sweep, so bounded help could hang.
-    #   New principle: argparse owns the human status-lens help surface before
-    #   any repository, git, or GitHub access. `peek` remains text-only; the
-    #   machine-readable next-action surface is `wakeup-plan`.
     parser = argparse.ArgumentParser(
         prog="consensus-rnd-cli peek",
         description="render the human-readable codex-refactor-loop status lens",
