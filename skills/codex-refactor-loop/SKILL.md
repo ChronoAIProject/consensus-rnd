@@ -3053,7 +3053,22 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 The work-unit contract describes the fields carried through audit artifacts, GitHub design issues,
 prompt artifacts, and implementation/review run artifacts. Do not add migrated queue containers,
-envelope wrappers, a normalizer helper, or a root state migration for this contract.
+normalizer helpers, root state migrations, producer abstractions, registry helpers, or envelope
+wrappers, except the optional read-only `transition_assessment` sidecar documented here.
+<!-- Refactor (issue-262): Old/New
+Old: transition ranking and prompt context had no narrow checked-in sidecar boundary.
+New: optional read-only transition_assessment is the only sidecar exception for ranking/prompt projection.
+-->
+
+The optional read-only `transition_assessment` sidecar is a ranking/prompt projection fact keyed
+by `work_unit_id` and `source_ref`. It is not stable candidate NDJSON, not a work-unit envelope wrapper,
+and not a WorkUnit producer. Missing/malformed/untrusted -> unknown with confidence 0.
+The only canonical path is `.refactor-loop/runs/transition-assessments/<safe-work-unit-id>.json`,
+where `<safe-work-unit-id>` matches `[A-Za-z0-9._-]+`; no explicit path, directory scan, writer,
+controller alias, host command, host lens, `bedc_ci.py` call, marker change, branch change, or
+work-unit token change is part of this sidecar. Transition bucket order is
+`positive-discovery > classifier-shift > formal-hardening > ledger-repair > record-growth > unknown`.
+`positive-discovery` requires both classifier-surface delta and `net_positive_signal=true`.
 
 Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
 remains the stable installed skill entrypoint. `refactor` is a valid development/work-unit
@@ -3105,6 +3120,10 @@ The controller recognizes exactly these producer values:
 This is a documented normalization boundary, not a new producer framework. Do not add new
 producer abstractions, registry helpers, envelope wrappers, or migrated work-unit state containers
 for this contract.
+
+The sidecar `producer` field is assessment provenance only and does not extend the WorkUnit
+producer enum. The only allowed sidecar provenance values are `audit` and `manual-issue`;
+`host:<slug>` is not allowed in the first version.
 
 ### `audit` producer
 
@@ -3198,9 +3217,12 @@ Goal: parallel safety. Two clusters can be in the same batch **only if** all fou
 
 Greedy bin-packing:
 
-1. Sort candidate work units by `risk` (low first), then `leverage` (high first).
-2. For each cluster, assign to first batch where it's compatible with every existing member.
-3. Each batch has at most `max_parallel_clusters`.
+1. For checked-in callers that read the optional `transition_assessment` sidecar, sort by
+   transition bucket before `risk` and `leverage`; missing/malformed/untrusted sidecars are
+   `unknown, confidence=0`, preserving existing ordering among units with no sidecar.
+2. Sort candidate work units by `risk` (low first), then `leverage` (high first).
+3. For each cluster, assign to first batch where it's compatible with every existing member.
+4. Each batch has at most `max_parallel_clusters`.
 
 If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a new batch for it.
 

@@ -63,6 +63,29 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         path.write_text(body, encoding="utf-8")
         return path
 
+    def write_transition_assessment(self, issue: int, transition_type: str = "positive-discovery") -> None:
+        path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{issue}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "transition_type": transition_type,
+                    "confidence": 0.75,
+                    "evidence_refs": [f".refactor-loop/runs/issue-{issue}.md"],
+                    "classifier_surface_delta": ["classifier delta"],
+                    "ledger_delta": [],
+                    "formal_delta": [],
+                    "record_growth_delta": [],
+                    "net_positive_signal": transition_type == "positive-discovery",
+                    "notes": "",
+                    "producer": "manual-issue",
+                    "source_ref": f"gh-issue-{issue}",
+                    "work_unit_id": f"issue-{issue}",
+                }
+            ),
+            encoding="utf-8",
+        )
+
     def ledger_entries(self) -> list[dict]:
         path = self.repo / ".refactor-loop" / "phase9-router-ledger.jsonl"
         if not path.exists():
@@ -493,6 +516,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(path.read_text(encoding="utf-8").splitlines()), 4)
 
     def test_phase9_router_judge_prompt_references_dispatch_ledger_evidence(self) -> None:
+        self.write_transition_assessment(169)
         self.solver_triplet(issue=169, round_no=8)
 
         self.router.tick()
@@ -512,6 +536,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "Round number this fires: 9",
             "Write `.refactor-loop/runs/phase9-issue169-r8-judge.md`",
             "gh issue view 169",
+            "TRANSITION_TYPE=positive-discovery",
+            "TRANSITION_CONFIDENCE=0.75",
+            "TRANSITION_EVIDENCE_REFS=.refactor-loop/runs/issue-169.md",
+            "Use only this router-validated transition projection",
             "Router-scoped input boundary",
         ):
             with self.subTest(token=token):
@@ -787,6 +815,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(events[0]["marker"], "META_JUDGE_DONE:converge:round-5:need-more")
 
     def test_solver_prompt_for_issue_driven_converge_has_source_header(self) -> None:
+        self.write_transition_assessment(114)
         self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
 
         self.router.tick()
@@ -804,6 +833,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "WORK_UNIT_KIND=manual-work-unit",
             "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
             "WORK_UNIT_SOURCE_REF=gh-issue-114",
+            "TRANSITION_TYPE=positive-discovery",
+            "TRANSITION_CONFIDENCE=0.75",
+            "TRANSITION_EVIDENCE_REFS=.refactor-loop/runs/issue-114.md",
             "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-structural.md",
             "gh issue view 114",
             "issue body/comments are the scope spec when no local audit artifact is provided",
@@ -814,6 +846,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.assertIn(needle, prompt)
         self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
         self.assertNotIn("cluster spec", prompt)
+
+    def test_solver_prompt_for_missing_transition_assessment_uses_unknown_projection(self) -> None:
+        self.write_log("phase9-issue115-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        self.router.tick()
+
+        prompt = (
+            self.repo
+            / ".refactor-loop"
+            / "prompts"
+            / "phase9"
+            / "phase9-issue115-r2-minimal.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("TRANSITION_TYPE=unknown", prompt)
+        self.assertIn("TRANSITION_CONFIDENCE=0", prompt)
+        self.assertIn("TRANSITION_EVIDENCE_REFS=none", prompt)
 
     def test_phase9_router_converge_accepts_non_ascii_reason(self) -> None:
         self.write_log(
