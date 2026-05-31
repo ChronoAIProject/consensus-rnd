@@ -102,8 +102,6 @@ class FakeGit:
             stdout = f"{self.review_base_sha}\n"
         elif cmd[:3] == ["git", "rev-parse", "--git-path"]:
             stdout = f"{(cwd or Path('/tmp')) / '.git' / cmd[3]}\n"
-        elif len(cmd) >= 6 and cmd[:2] == ["git", "-C"] and cmd[3:5] == ["rev-parse", "--git-path"]:
-            stdout = f"{Path(cmd[2]) / '.git' / cmd[5]}\n"
         elif cmd[:3] == ["git", "diff", "--quiet"]:
             returncode = 1 if self.dirty else 0
         elif cmd[:3] == ["git", "diff", "--cached"]:
@@ -321,20 +319,6 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertIn(["git", "merge", "--ff-only", "origin/dev"], fake.commands)
         self.assertIn(["git", "push", "origin", "HEAD:auto-refact-dev"], fake.commands)
 
-    def test_clean_worktree_with_stale_merge_msg_falls_through_to_forward_sync(self) -> None:
-        # Refactor (issue-264): Old: stale MERGE_MSG caused continue-resolved-merge loops.
-        # New: MERGE_MSG without MERGE_HEAD is ignored so clean worktrees can forward-sync.
-        merge_msg = self.worktree / ".git" / "MERGE_MSG"
-        merge_msg.parent.mkdir(parents=True, exist_ok=True)
-        merge_msg.write_text("stale message\n", encoding="utf-8")
-        fake = FakeGit(behind=3, merge_base_adopted=True, remote_sha="head-sha")
-
-        self.daemon(fake, merge_detector=lambda cwd: merge_in_progress(cwd, fake)).tick()
-
-        self.assertEqual("forward-sync-review-base", self.operation_jsons()[0]["kind"])
-        self.assertIn(["git", "merge", "--ff-only", "origin/dev"], fake.commands)
-        self.assertFalse(any(command[:3] == ["git", "merge", "--continue"] for command in fake.commands))
-
     def test_daemon_reset_to_remote_rejects_dirty_non_merge(self) -> None:
         fake = FakeGit(remote_sha="remote-sha", head_sha="old-local", dirty=True, merge_base_adopted=True)
         self.daemon(fake, dirty_detector=lambda _cwd: False).tick()
@@ -471,25 +455,6 @@ class SyncDevBehaviorTests(unittest.TestCase):
             return subprocess.CompletedProcess(cmd, 0, f"{target}\n", "")
 
         self.assertTrue(merge_in_progress(self.worktree, command_runner))
-
-    def test_merge_in_progress_uses_merge_head_only(self) -> None:
-        # Refactor (issue-264): Old: MERGE_MSG-only was treated as an active merge.
-        # New: MERGE_HEAD is the only live merge predicate.
-        merge_head = self.repo / ".git" / "worktrees" / "dev-sync" / "MERGE_HEAD"
-        merge_msg = self.repo / ".git" / "worktrees" / "dev-sync" / "MERGE_MSG"
-        merge_head.parent.mkdir(parents=True)
-        merge_msg.write_text("stale\n", encoding="utf-8")
-        commands: list[list[str]] = []
-
-        def command_runner(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
-            commands.append(cmd)
-            target = merge_head if cmd[-1] == "MERGE_HEAD" else merge_msg
-            return subprocess.CompletedProcess(cmd, 0, f"{target}\n", "")
-
-        self.assertFalse(merge_in_progress(self.worktree, command_runner))
-        merge_head.write_text("abc\n", encoding="utf-8")
-        self.assertTrue(merge_in_progress(self.worktree, command_runner))
-        self.assertTrue(all(command[-1] == "MERGE_HEAD" for command in commands))
 
     def test_conflict_resolver_prompt_stores_relative_paths_but_spawn_argv_absolute(self) -> None:
         worktree = self.repo / ".worktrees" / "dev-sync"

@@ -134,53 +134,6 @@ class DaemonLaunchFingerprint:
         }
 
 
-# Refactor (issue-264): Old: one fresh pidfile wrapper could hide duplicate canonical wrappers.
-# New: helper-private process inventory reconciles static-allowlist duplicates before skip/start.
-@dataclass(frozen=True)
-class DaemonProcess:
-    """refactor helper, no behavior change outside duplicate reconciliation."""
-
-    pid: int
-    command: str
-
-
-@dataclass(frozen=True)
-class DaemonProcessInventory:
-    """refactor helper, no behavior change outside restart helper duplicate detection."""
-
-    processes: tuple[DaemonProcess, ...]
-
-    @classmethod
-    def collect(cls, *, command_runner=None) -> "DaemonProcessInventory":
-        runner = command_runner or run_process_inventory
-        result = runner(["ps", "-eo", "pid=,command="])
-        if result.returncode != 0:
-            return cls(())
-        return cls(tuple(_parse_process_inventory(result.stdout)))
-
-    def live_canonical_wrappers(
-        self,
-        *,
-        name: str,
-        repo_root: Path,
-        pid_file: Path,
-        died_file: Path,
-        command: Sequence[str],
-    ) -> tuple[int, ...]:
-        expected_suffix = _normalize_process_command(" ".join([name, str(repo_root), str(pid_file), str(died_file), *command]))
-        pids = []
-        for process in self.processes:
-            if process.pid <= 0 or not pid_alive(process.pid):
-                continue
-            command_line = _normalize_process_command(process.command)
-            if f"{sys.executable} -c " not in command_line:
-                continue
-            if not command_line.endswith(expected_suffix):
-                continue
-            pids.append(process.pid)
-        return tuple(sorted(set(pids)))
-
-
 # Refactor (iter204/issue-204):
 #   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
 #   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
@@ -218,24 +171,11 @@ class RestartDaemons:
         fingerprint_file = self._fingerprint_path(name)
         hb_file = self.ctx.paths.heartbeats / f"{name}.ts"
         log_file = self.ctx.paths.logs / f"{name}.log"
-        died_file = self.ctx.paths.logs / f"{name}.died"
         command = [
             part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
             for part in command_template
         ]
         current_fingerprint = self._current_fingerprint(name, command)
-        inventory = DaemonProcessInventory.collect()
-        duplicates_remain = self._reconcile_duplicate_canonical_wrappers(
-            name,
-            command,
-            current_fingerprint=current_fingerprint,
-            inventory=inventory,
-            pid_file=pid_file,
-            died_file=died_file,
-        )
-        if duplicates_remain:
-            self._log(f"{name} skip: duplicate canonical wrappers reconciled; waiting for next tick")
-            return
         if self._singleton_check_fresh(name, current_fingerprint):
             self._log(f"{name} skip: alive pid={pid_file.read_text(encoding='utf-8').strip()} heartbeat=fresh")
             return
@@ -260,7 +200,7 @@ class RestartDaemons:
                 name,
                 str(self.ctx.repo_root),
                 str(pid_file),
-                str(died_file),
+                str(self.ctx.paths.logs / f"{name}.died"),
                 *command,
             ],
             cwd=str(self.ctx.repo_root),
@@ -347,47 +287,6 @@ class RestartDaemons:
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
         )
-
-    def _reconcile_duplicate_canonical_wrappers(
-        self,
-        name: str,
-        command: Sequence[str],
-        *,
-        current_fingerprint: DaemonLaunchFingerprint,
-        inventory: DaemonProcessInventory,
-        pid_file: Path,
-        died_file: Path,
-    ) -> bool:
-        live = inventory.live_canonical_wrappers(
-            name=name,
-            repo_root=self.ctx.repo_root,
-            pid_file=pid_file,
-            died_file=died_file,
-            command=command,
-        )
-        if len(live) <= 1:
-            return False
-        keeper = self._canonical_wrapper_keeper(name, live)
-        pid_file.write_text(f"{keeper}\n", encoding="utf-8")
-        current_fingerprint.write(self._fingerprint_path(name))
-        for pid in live:
-            if pid != keeper:
-                _terminate_pid(pid, self.config.stop_grace_seconds)
-        return True
-
-    def _canonical_wrapper_keeper(self, name: str, live: Sequence[int]) -> int:
-        pid = _read_pid(self.ctx.paths.refactor_loop / "locks" / f"{name}.pid")
-        if pid in live and self._heartbeat_is_fresh(name):
-            stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
-            if stored_fingerprint is not None:
-                current_command = next((command for daemon, command in DAEMON_COMMANDS if daemon == name), ())
-                resolved = tuple(
-                    part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
-                    for part in current_command
-                )
-                if stored_fingerprint.matches(self._current_fingerprint(name, resolved)):
-                    return pid
-        return min(live)
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
         hb = self.ctx.paths.heartbeats / f"{name}.ts"
@@ -489,30 +388,6 @@ def pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
-
-
-def run_process_inventory(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, capture_output=True, text=True)
-
-
-def _parse_process_inventory(stdout: str) -> list[DaemonProcess]:
-    processes: list[DaemonProcess] = []
-    for line in stdout.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        try:
-            raw_pid, command = stripped.split(None, 1)
-        except ValueError:
-            continue
-        if not raw_pid.isdigit():
-            continue
-        processes.append(DaemonProcess(int(raw_pid), command))
-    return processes
-
-
-def _normalize_process_command(command: str) -> str:
-    return " ".join(command.split())
 
 
 def _read_pid(path: Path) -> int | None:

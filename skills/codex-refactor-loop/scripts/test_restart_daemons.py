@@ -21,7 +21,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import restart
-from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons
+from codex_refactor_loop.restart import DAEMON_COMMANDS, RestartConfig, RestartDaemons
 
 
 DAEMON_NAMES = tuple(name for name, _command in DAEMON_COMMANDS)
@@ -79,21 +79,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def run_helper(self) -> subprocess.CompletedProcess[str]:
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=DaemonProcessInventory(())):
-                with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
-                    helper = RestartDaemons(self.ctx, self.config)
-                    self.helpers.append(helper)
-                    helper.run()
-        return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
-
-    def run_helper_with_inventory(self, inventory: DaemonProcessInventory) -> subprocess.CompletedProcess[str]:
-        command = (sys.executable, "-c", FAKE_DAEMON)
-        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=inventory):
-                with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
-                    helper = RestartDaemons(self.ctx, self.config)
-                    self.helpers.append(helper)
-                    helper.run()
+            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+                helper = RestartDaemons(self.ctx, self.config)
+                self.helpers.append(helper)
+                helper.run()
         return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
 
     def start_count(self, name: str) -> int:
@@ -262,95 +251,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(1, self.start_count("dev_sync_daemon"))
 
-    def test_duplicate_canonical_wrappers_are_reconciled_without_spawn(self) -> None:
-        # Refactor (issue-264): Old: one fresh wrapper let duplicate canonical wrappers persist.
-        # New: duplicate static-allowlist wrappers are terminated before skip/start re-evaluation.
-        self.run_helper()
-        old_pid = self.read_pid("concurrency_monitor")
-        duplicate_pid = 424242
-        command = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
-            str(self.ctx.paths.logs / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        inventory = DaemonProcessInventory(
-            (
-                DaemonProcess(old_pid, " ".join(command)),
-                DaemonProcess(duplicate_pid, " ".join(command)),
-            )
-        )
-
-        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
-            with mock.patch("codex_refactor_loop.restart._terminate_pid") as terminate:
-                self.run_helper_with_inventory(inventory)
-
-        terminate.assert_called_once_with(duplicate_pid, self.config.stop_grace_seconds)
-        self.assert_start_count("concurrency_monitor", 1)
-        self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
-
-    def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
-        command = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
-            str(self.ctx.paths.logs / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        other_repo = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            "/tmp/other-repo",
-            str(self.repo / ".refactor-loop" / "locks" / "concurrency_monitor.pid"),
-            str(self.repo / ".refactor-loop" / "logs" / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        non_allowlist = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "not_allowlisted",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "not_allowlisted.pid"),
-            str(self.ctx.paths.logs / "not_allowlisted.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        inventory = DaemonProcessInventory(
-            (
-                DaemonProcess(111, " ".join(command)),
-                DaemonProcess(222, " ".join(other_repo)),
-                DaemonProcess(333, " ".join(non_allowlist)),
-            )
-        )
-
-        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
-            live = inventory.live_canonical_wrappers(
-                name="concurrency_monitor",
-                repo_root=self.ctx.repo_root,
-                pid_file=self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid",
-                died_file=self.ctx.paths.logs / "concurrency_monitor.died",
-                command=(sys.executable, "-c", FAKE_DAEMON),
-            )
-
-        self.assertEqual((111,), live)
-
     # Refactor (impl/issue191-single-active-controller): Old pattern:
     # restart-daemons started controller write daemons on every device. New
     # principle: non-owner restart-daemons writes active_controller=noop and
@@ -403,7 +303,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
         for needle in (
             "DaemonLaunchFingerprint",
-            "DaemonProcessInventory",
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",

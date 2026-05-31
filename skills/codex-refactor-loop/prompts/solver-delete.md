@@ -22,7 +22,6 @@ You explicitly resist adding code. If after honest evaluation the feature must s
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments.
 2. Work-unit scope source, by precedence:
    - Read the prompt header `WORK_UNIT_SOURCE_REF` / `source_ref` first.
-   - Use only the router-injected validated transition projection lines (`TRANSITION_TYPE`, `TRANSITION_CONFIDENCE`, `TRANSITION_EVIDENCE_REFS`) for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override the meta-judge truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
    - If it points to an existing local artifact or audit section, read that source and verify it.
    - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.

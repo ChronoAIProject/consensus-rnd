@@ -322,9 +322,7 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 <!-- Refactor (iter1/issue-143): Old pattern: consensus-rnd-cli restart-daemons wrapper sidecar wrote heartbeat while daemon loop hangs.
 New principle: singleton wrapper + actor-owned heartbeat lease; stale means actor loop stopped renewing.
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
-<!-- Refactor (issue-264): Old: restart skip trusted one fresh pidfile wrapper and missed duplicate canonical instances.
-New: skip additionally requires zero duplicate canonical live wrapper for the same static allowlist command; process inventory is helper-private daemon-maintained state, not controller probing. -->
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)且 fingerprint current 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
 Before starting or repairing any of the six write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
@@ -335,7 +333,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat + matching fingerprint skip / stale/missing/malformed heartbeat repair / dead pid repair / missing/malformed/mismatched fingerprint restart / CLI entrypoint and package tree fingerprint restart / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
@@ -3056,21 +3054,7 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 The work-unit contract describes the fields carried through audit artifacts, GitHub design issues,
 prompt artifacts, and implementation/review run artifacts. Do not add migrated queue containers,
 normalizer helpers, root state migrations, producer abstractions, registry helpers, or envelope
-wrappers, except the optional read-only `transition_assessment` sidecar documented here.
-<!-- Refactor (issue-262): Old/New
-Old: transition ranking and prompt context had no narrow checked-in sidecar boundary.
-New: optional read-only transition_assessment is the only sidecar exception for ranking/prompt projection.
--->
-
-The optional read-only `transition_assessment` sidecar is a ranking/prompt projection fact keyed
-by `work_unit_id` and `source_ref`. It is not stable candidate NDJSON, not a work-unit envelope wrapper,
-and not a WorkUnit producer. Missing/malformed/untrusted -> unknown with confidence 0.
-The only canonical path is `.refactor-loop/runs/transition-assessments/<safe-work-unit-id>.json`,
-where `<safe-work-unit-id>` matches `[A-Za-z0-9._-]+`; no explicit path, directory scan, writer,
-controller alias, host command, host lens, `bedc_ci.py` call, marker change, branch change, or
-work-unit token change is part of this sidecar. Transition bucket order is
-`positive-discovery > classifier-shift > formal-hardening > ledger-repair > record-growth > unknown`.
-`positive-discovery` requires both classifier-surface delta and `net_positive_signal=true`.
+wrappers.
 
 Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
 remains the stable installed skill entrypoint. `refactor` is a valid development/work-unit
@@ -3219,12 +3203,9 @@ Goal: parallel safety. Two clusters can be in the same batch **only if** all fou
 
 Greedy bin-packing:
 
-1. For checked-in callers that read the optional `transition_assessment` sidecar, sort by
-   transition bucket before `risk` and `leverage`; missing/malformed/untrusted sidecars are
-   `unknown, confidence=0`, preserving existing ordering among units with no sidecar.
-2. Sort candidate work units by `risk` (low first), then `leverage` (high first).
-3. For each cluster, assign to first batch where it's compatible with every existing member.
-4. Each batch has at most `max_parallel_clusters`.
+1. Sort candidate work units by `risk` (low first), then `leverage` (high first).
+2. For each cluster, assign to first batch where it's compatible with every existing member.
+3. Each batch has at most `max_parallel_clusters`.
 
 If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a new batch for it.
 

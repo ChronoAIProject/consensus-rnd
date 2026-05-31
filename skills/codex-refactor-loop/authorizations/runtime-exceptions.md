@@ -234,10 +234,8 @@ in `SKILL.md` and the tests.
 - source_round: `r3`
 - source_marker: `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`
 - skill_anchor: `#named-runtime-exception--anti-stop-restart-helperper-49`
-<!-- Refactor (issue-264): Old: mirror allowed skip on one fresh pidfile wrapper.
-New: mirror narrows skip to pid alive + fresh heartbeat + current fingerprint + zero duplicate canonical live wrapper for the same static allowlist command. -->
-- allowed: cron or launchd helper maintains singleton wrappers, actor-owned heartbeat leases, helper-private launch fingerprints at `.refactor-loop/locks/<daemon>.fingerprint.json`, and helper-private `DaemonProcessInventory` for the existing static daemon allowlist; pid alive plus fresh heartbeat plus current fingerprint plus zero duplicate canonical live wrapper for the same resolved static allowlist command is the only skip condition, missing, malformed, or mismatched fingerprint data fails closed to restart, and duplicate canonical wrappers fail closed to repair/reconcile before restart; runs 24h log retention.
-- forbidden: no host-defined daemon registry, generic process supervisor, GitHub/git lifecycle authority, codex spawn, commit, push, merge, label, archive, index, new daemon, issue lifecycle, PR lifecycle, tag, release, wrapper sidecar heartbeat writer, or generic lifecycle authority.
+- allowed: cron or launchd helper maintains singleton wrappers, actor-owned heartbeat leases, and helper-private launch fingerprints at `.refactor-loop/locks/<daemon>.fingerprint.json` for the existing daemon allowlist; pid alive plus fresh heartbeat plus current fingerprint is the only skip condition, and missing, malformed, or mismatched fingerprint data fails closed to restart; runs 24h log retention.
+- forbidden: no codex spawn, commit, push, merge, label, archive, index, new daemon, issue lifecycle, PR lifecycle, tag, release, wrapper sidecar heartbeat writer, or generic lifecycle authority.
 - verification: `test_restart_daemons.py`, `test_anti_stop_restart_helper_contract.py`, `test_log_retention.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
