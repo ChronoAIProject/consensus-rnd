@@ -1,10 +1,5 @@
 """Dev integration sync daemon.
 
-Refactor (issue160/p3-dev-sync-daemon):
-Old pattern: `dev_sync_daemon.py` owned the integration sync state machine as a
-top-level script with import-time host resolution.
-New principle: expose the same daemon behavior from an import-safe package
-module; legacy callers remain on the old script until the caller switch.
 """
 
 from __future__ import annotations
@@ -49,9 +44,6 @@ def load_dev_sync_config(env: dict[str, str] | None = None, cwd: Path | str | No
     source_env = dict(os.environ if env is None else env)
     ctx = LoopContext.load(env=source_env, cwd=cwd or os.getcwd())
     merged_env = {**source_env, **ctx.host_env}
-    # Refactor (iter316/issue-316):
-    #   Old pattern: dev-sync accepted private branch/worktree aliases beside host.env.
-    #   New principle: use canonical LoopContext host facts only; derive the dedicated worktree.
     integration = merged_env.get("INTEGRATION_BRANCH") or DEFAULT_INTEGRATION_BRANCH
     review_base = merged_env.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH
     worktree = ctx.repo_root / ".worktrees" / "dev-sync"
@@ -186,8 +178,6 @@ def dispatch_codex_resolve(
 ) -> None:
     """Spawn a codex to resolve the in-progress merge conflicts in worktree.
 
-    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
-    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
     """
     ctx = LoopContext.load(repo_root=main_repo)
     ts = int(time.time())
@@ -276,8 +266,6 @@ def working_tree_dirty(cwd: Path, command_runner=run) -> bool:
 
 def merge_in_progress(cwd: Path, command_runner=run) -> bool:
     """Detect an in-progress merge in normal checkouts and linked worktrees."""
-    # Refactor (issue-264): Old: stale MERGE_MSG was treated as live merge evidence.
-    # New: only MERGE_HEAD proves an in-progress merge; stale messages fall through.
     result = command_runner(["git", "-C", str(cwd), "rev-parse", "--git-path", "MERGE_HEAD"])
     return result.returncode == 0 and Path(result.stdout.strip()).exists()
 
@@ -295,22 +283,9 @@ class RollupDetection:
     adoption: RollupAdoption | None = None
 
 
-# Refactor (iter4/skill-dev-sync-state-machine): Old pattern: scattered active
-# controller-owned sync recipe + implicit daemon transition. New principle:
-# named IntegrationSyncDaemon state machine boundary.
-# Refactor (iter/issue-199):
-# Old pattern: daemon emitted request artifacts and a controller side-channel
-# marker. New principle: daemon writes IntegrationSyncOperation evidence and
-# executes the #53 integration-branch git allowlist itself.
-# Refactor (iter5/issue107-python-identifier-rename): Old pattern: version
-# suffix in daemon class/schema names. New principle: naked responsibility names
-# carry stable artifact intent; compatibility/version policy lives in
-# contracts/tests, not identifier suffixes.
 class IntegrationSyncDaemon:
     """Narrow detector and executor for integration-branch sync transitions.
 
-    Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
-    New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
     """
 
     def __init__(
@@ -521,11 +496,6 @@ class IntegrationSyncDaemon:
                 return True
         return False
 
-    # Refactor (iter5/issue-65-release-rollup-pending-event):
-    # Old pattern: no release-rollup detection when integration was ahead of
-    # the review base without an open PR.
-    # New principle: detect ahead + no open PR, then emit the existing
-    # DEV_SYNC_PENDING release-rollup line format for controller sweep.
     def detect_release_rollup_needed(self, cwd: Path) -> bool:
         if self.release_rollup_min_commits <= 0:
             return False
@@ -644,10 +614,6 @@ class IntegrationSyncDaemon:
             ),
         )
 
-    # Refactor (fix/issue282-devsync-adoption-ambiguity):
-    # Old pattern: adoption metadata ambiguity consumed the whole daemon tick.
-    # New principle: adoption ambiguity blocks only force-with-lease adoption;
-    # later reset, forward-sync, and release-rollup gates still run.
     def execute_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
         if not adoption.expected_remote_sha:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-expected-remote-sha")
@@ -729,11 +695,6 @@ class IntegrationSyncDaemon:
         return True
 
     def tick(self) -> None:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # multiple dev-sync daemons could touch the integration worktree and
-        # execute the #53 git allowlist concurrently. New principle: the #53
-        # allowlist remains narrow, and only the active-controller owner may
-        # enter it.
         if self.context is not None:
             decision = require_active_controller(self.context, "dev-sync")
             write_active_controller_status(self.context, decision)
@@ -789,10 +750,6 @@ class IntegrationSyncDaemon:
         if self.execute_clean_local_ahead(cwd):
             return
 
-        # Refactor (fix/issue282-devsync-adoption-ambiguity):
-        # Old pattern: ambiguous rollup detection returned before later sync gates.
-        # New principle: only a constructed adoption operation consumes the tick;
-        # ambiguity falls through to the existing fail-closed sync gates.
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
             if self.execute_merged_rollup_adoption(cwd, rollup.adoption):

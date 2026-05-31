@@ -13,9 +13,6 @@ from .context import LoopContext
 class DaemonHeartbeatLease:
     """Write and renew the daemon heartbeat from the actor process.
 
-    Refactor (iter316/issue-316):
-      Old pattern: heartbeat fell back to cwd when repo root was absent.
-      New principle: require explicit repo root, canonical REPO_ROOT/LoopContext, or explicit heartbeat file.
     """
 
     def __init__(

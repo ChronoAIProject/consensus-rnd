@@ -227,12 +227,15 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertEqual("defaulted", row["Category"])
         self.assertEqual("prompt templates", row["Owner"])
         self.assertEqual("prompt templates", row["Consumer"])
-        self.assertIn("`self-doc-comment`", row["Default/example"])
-        self.assertEqual("self-doc-comment", self.exports[key]["value"])
-        self.assertIn("missing/empty normalizes to `self-doc-comment`", row["Missing/empty behavior"])
-        self.assertIn("`none` disables refactor-history source comments", row["Missing/empty behavior"])
+        self.assertIn("`none`", row["Default/example"])
+        self.assertEqual("none", self.exports[key]["value"])
+        self.assertIn("missing/empty/default normalizes to `none`", row["Missing/empty behavior"])
+        self.assertIn("rationale belongs in external artifacts", row["Missing/empty behavior"])
+        self.assertIn("explicit `self-doc-comment` is downstream compatibility opt-in", row["Missing/empty behavior"])
+        self.assertIn("source English-only", row["Missing/empty behavior"])
         self.assertIn("invalid and fail-closed", row["Missing/empty behavior"])
         self.assertIn("test_refactor_comment_policy_prompt_contract.py", row["Test owner"])
+        self.assertIn("test_source_language_policy.py", row["Test owner"])
         self.assertIn("defaulted", self.exports[key]["section"])
 
         text = "\n".join(
@@ -243,7 +246,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             ]
         )
         self.assertIn("${HOST_REFACTOR_COMMENT_POLICY}", text)
-        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=\"self-doc-comment\"", read(HOST_ENV_EXAMPLE))
+        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=\"none\"", read(HOST_ENV_EXAMPLE))
         for alias in ("HOST_SOURCE_COMMENT_POLICY", "HOST_REFACTOR_SELF_DOC_POLICY"):
             with self.subTest(alias=alias):
                 self.assertNotIn(alias, text)

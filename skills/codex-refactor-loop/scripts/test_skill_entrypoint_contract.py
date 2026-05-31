@@ -335,17 +335,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
         script = read(PACKAGE_WAKEUP_PLAN)
         for needle in (
-            "Allowed: read `.refactor-loop` files",
-            "issue-190",
-            "git fetch origin --quiet",
-            "git worktree list --porcelain",
-            "git rev-parse --verify HEAD",
-            "git rev-parse --verify refs/remotes/origin/<head>",
-            "git rev-list --count refs/remotes/origin/<head>..HEAD",
-            "Forbidden: no restart/spawn, no git lifecycle or mutation",
-            "no commit, push, checkout/switch",
-            "no GitHub lifecycle mutation",
-            ".refactor-loop/runs/phase9-issue190-r3-judge.md",
+            "def unpushed_worker_output_actions",
+            '["git", "-C", str(repo_root), "fetch", "origin", "--quiet"]',
+            '["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]',
+            '["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"]',
+            '["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref]',
+            '["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"]',
             "no_lifecycle_authority",
             "count_in_flight_codex",
             "HARD_GATE:dispatch_required",
@@ -354,6 +349,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, script)
+        for forbidden in ("Refactor (", "Old pattern", "New principle", '"git", "push"', '"git", "commit"', '"git", "checkout"'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, script)
         self.assertNotIn("WorkerOutputProjection", script)
         self.assertNotIn("codex_refactor_loop.projections", script)
 

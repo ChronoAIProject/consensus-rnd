@@ -91,9 +91,6 @@ class PrChecksStatus:
 
 
 class PrChecksProjection:
-    # Refactor (issue-297): Old: controller CI watch used a naked PR checks CLI
-    # and mixed PR bucket policy into runbook recipes. New: PR-head checks are
-    # read through one narrow REST projection with no lifecycle authority.
     def __init__(
         self,
         *,

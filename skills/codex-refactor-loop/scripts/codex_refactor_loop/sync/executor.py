@@ -1,10 +1,5 @@
 """Daemon-owned executor for typed IntegrationSyncOperation artifacts.
 
-Refactor (iter/issue-199):
-  Old pattern: controller helper consumed request artifacts through a public
-  CLI and owned integration branch git mutation.
-  New principle: IntegrationSyncExecutor executes typed daemon operations
-  through the narrow #53 integration-branch git allowlist only.
 """
 
 from __future__ import annotations
@@ -96,9 +91,6 @@ class IntegrationSyncExecutor:
 
     def _expected_branches(self, env: dict[str, str] | None = None) -> tuple[str, str]:
         source_env = os.environ if env is None else env
-        # Refactor (iter316/issue-316):
-        #   Old pattern: sync executor accepted unregistered branch aliases.
-        #   New principle: only canonical branch names participate in operation validation.
         expected_integration = source_env.get("INTEGRATION_BRANCH") or DEFAULT_INTEGRATION_BRANCH
         expected_review_base = source_env.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH
         return expected_integration, expected_review_base

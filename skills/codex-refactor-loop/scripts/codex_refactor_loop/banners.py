@@ -18,16 +18,9 @@ AUTO_LOOP_SENTINEL = "⟦AI:AUTO-LOOP⟧"
 AUTHORIZATION_ARTIFACT = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53"
 OBSERVABILITY_COMMENT_WRITER = "observability-comment-writers"
 
-# Refactor (issue160/p3-banners): Old pattern: status banner rendering and
-# GitHub posting lived only in the executable script. New principle: package
-# code owns the reusable contract while legacy callers keep using post_banner.py
-# until the caller migration phase.
 ROLE_NEXT_STEPS = {
     "test-add": "1. test-add 完成 marker `TEST_ADD_DONE:...`  2. controller 自动 commit + push  3. codecov 重测",
     "fix": "1. fix r<N> 完成 marker `FIX_DONE:...`  2. controller commit + push  3. 派 reviewer r<N+1>",
-    # Refactor (iter3/skill-merge-policy): Old pattern: unanimous-approve merge
-    # gate + contradictory review-gate wording. New principle: fixed truth table
-    # reject=0 && approve>=1 -> MERGE; comments are advisory (#26 minimal option B consensus).
     "reviewer": "1. 三 reviewer 完成 verdict marker  2. controller 计算 consensus  3. reject=0 + approve>=1 -> merge; all-comment -> wait explicit approval; reject -> fix",
     "implement": "1. implement 完成 marker `IMPLEMENT_DONE:<cluster>:<status>`  2. controller commit + push  3. open PR + 派 reviewer r1",
     "solver": "1. 三 solver `SOLVER_DONE:...`  2. controller 派 meta-judge r<N>  3. consensus → implement / converge → fresh round",

@@ -577,20 +577,27 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
 
     def test_narrow_allowlist_contract_is_visible_in_module_source(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
-        self.assertIn("daemon writes IntegrationSyncOperation", src)
-        self.assertIn("executes the #53 integration-branch git allowlist itself", src)
+        self.assertIn("IntegrationSyncOperation", src)
+        self.assertIn("write_operation_artifact", src)
+        self.assertIn("def execute_sync_operation", src)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed:", src)
         self.assertIn('["git", "ls-remote", "--exit-code", "--heads", "origin", branch]', src)
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
         self.assertNotIn("DEV_SYNC_REQUEST:", src)
+        self.assertNotIn("Refactor (", src)
+        self.assertNotIn("Old pattern", src)
+        self.assertNotIn("New principle", src)
 
     def test_sync_source_regression_uses_durable_display_paths(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
         self.assertIn("ctx.durable_artifact_path(worktree)", src)
         self.assertIn("ctx.durable_artifact_path(prompt_file)", src)
         self.assertIn("ctx.durable_artifact_path(log_file)", src)
-        self.assertIn("spawn-codex --cd/--add-dir/--prompt/--log", src)
+        self.assertIn("--cd", src)
+        self.assertIn("--add-dir", src)
+        self.assertIn("--prompt", src)
+        self.assertIn("--log", src)
         for forbidden in (
             "`{worktree}`. Resolve conflicts",
             "`cd {worktree}`",

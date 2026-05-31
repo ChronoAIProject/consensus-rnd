@@ -26,8 +26,7 @@ You are **one of N independent reviewers**.
 - [ ] **No under-engineering**: ≥3 near-identical inline copies of a snippet should be extracted. Inline duplication that violates DRY → comment.
 - [ ] **Method size & cyclomatic complexity**: a single new/modified method ≤ 80 lines and ≤ ~15 branches is preferred. Existing host 项目的复杂度分析器 warnings carried unchanged ≠ regression; but adding new ones → comment.
 - [ ] **Comments add value**: new comments explain *why* not *what* (the code already says what). Filler comments / commented-out code → comment.
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-- [ ] **Refactor self-doc comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. empty/`self-doc-comment` normalizes to `self-doc-comment`: refactor self-doc comments must be present and clear, with Old/New blocks readable to a non-audit reader (no `see issue #X` placeholders, no truncated sentences). `none`: missing/illegible self-doc must not be a reject reason; still comment/reject for naming, dead code, complexity, scope creep, or code whose intent cannot be reviewed from names/structure/external artifacts. Any other value is invalid and fail-closed; do not guess.
+- [ ] **Refactor self-doc comment policy**: read `${HOST_REFACTOR_COMMENT_POLICY}`. missing/empty/default/`none` normalizes to `none`: missing/illegible self-doc must not be a reject reason, rationale belongs in external artifacts, and new Refactor/Old/New/iteration source comments are defects. Explicit `self-doc-comment` is downstream compatibility opt-in: English-only refactor self-doc comments must be present and clear, with Old/New blocks readable to a non-audit reader (no `see issue #X` placeholders, no truncated sentences). Still comment/reject for naming, dead code, complexity, scope creep, or code whose intent cannot be reviewed from names/structure/external artifacts. Any other value is invalid and fail-closed; do not guess.
 - [ ] **No unrelated drive-by changes**: diff stays focused on the cluster intent; one-line "fix typo over there" or "tidy this whitespace" sneaking into a behavior PR → comment.
 
 ## Out of scope
@@ -62,7 +61,7 @@ Verdict semantics:
 
 - **approve**: code is readable, focused, no over/under-engineering smell, and refactor self-doc handling complies with `${HOST_REFACTOR_COMMENT_POLICY}`.
 - **comment**: small naming/clarity nits; unrelated drive-by changes worth surfacing; host 项目的复杂度分析器 borderline.
-- **reject**: significant dead code, harmful single-implementer abstraction, scope creep into unrelated cleanup, or a major refactor that lacks/garbles self-doc only when `HOST_REFACTOR_COMMENT_POLICY` is empty/`self-doc-comment`. Under `HOST_REFACTOR_COMMENT_POLICY=none`, missing/illegible self-doc alone is not a reject reason.
+- **reject**: significant dead code, harmful single-implementer abstraction, scope creep into unrelated cleanup, or a major refactor that lacks/garbles self-doc only when `HOST_REFACTOR_COMMENT_POLICY=self-doc-comment`. Under missing/empty/default/`HOST_REFACTOR_COMMENT_POLICY=none`, missing/illegible self-doc alone is not a reject reason.
 - In-scope must-fix-before-merge findings must be `reject`.
 - Out-of-scope, non-flippable, or advisory findings must be `comment`.
 

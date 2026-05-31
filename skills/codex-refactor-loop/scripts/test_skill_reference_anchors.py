@@ -781,25 +781,22 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         for token in (
-            "Refactor (iter1/issue-167)",
-            "Old pattern: solver triplet handoff recorded only the base dispatch row",
-            "durable triplet provenance",
-            "visible same-round peer artifact reference failure",
-            "New principle: keep row-level router-private ledger provenance",
-            "narrow fail-closed peer artifact token check",
-            "do not add a",
-            "standalone evidence file",
-            "hash",
-            "lifecycle authority",
+            "_solver_triplet_ledger_fields",
+            "_peer_solver_reference_violation",
+            "_peer_solver_reference_tokens",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_scope",
+            "phase9-triplet-evidence-invalid",
+            "Dispatch ledger evidence:",
+            "phase9-router-fallback",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, router)
 
     def test_skill_documents_cli_runtime_authority_fact_source(self) -> None:
         required = (
-            "Refactor (iter1/issue-166)",
-            "Old pattern: CLI command authority was represented by coarse read_only metadata",
-            "New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source",
             "dev-sync's integration-worktree git surface",
             "## CLI runtime authority fact source(per #166)",
             "cli.py::COMMANDS[*].authority",
@@ -1029,8 +1026,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for required in (
             "ROLES = (\"minimal\", \"structural\", \"delete\")",
             "JUDGE_ROLE = \"judge\"",
+            "def _solver_roles",
             "return ROLES",
+            "def _judge_role",
             "return JUDGE_ROLE",
+            "class Phase9Router",
             "Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely",
         ):
             with self.subTest(required=required):
@@ -1050,7 +1050,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
         combined = "\n".join((self.skill, router, helper))
-        self.assertIn("Refactor (issue-100/router-filename-identity)", router)
+        self.assertIn("parse_phase9_log_identity", router)
+        self.assertIn("PHASE9_LOG_RE", router)
+        self.assertIn("SOLVER_LOG_RE", router)
+        self.assertIn("META_JUDGE_LOG_RE", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
         self.assertIn("consensus-rnd-cli", helper)
@@ -1068,8 +1071,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for token in (
             "_converge_target_round",
             "canonical payload is the judge log source round",
-            "source-round and legacy",
-            "non-adjacent payloads fall back",
+            "payload_round in {source_round, source_round + 1}",
+            "return source_round + 1",
+            "return None",
             "clean rS judge canonical payload is `round-S`",
             "legacy `round-(S+1)`",
             "non-adjacent payload mismatch falls back",
@@ -1094,7 +1098,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         combined = "\n".join((self.skill, meta_judge, router, marker_contract, profile_contract))
 
         for token in (
-            "Refactor (issue-304)",
             "meta-judge emits only consensus/converge",
             "router-owned stalled predicate",
             "_dispatch_stalled_reflector",

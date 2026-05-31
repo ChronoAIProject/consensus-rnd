@@ -13,11 +13,7 @@ TERMINAL_PHASES = frozenset({label_catalog.PHASE_MERGED, label_catalog.PHASE_CLO
 
 @dataclass(frozen=True)
 class ClosedPhaseLabelPlan:
-    """Refactor (issue238/closed-label-reconciler):
-      Old pattern: peek exposed closed-label remediation text as a side channel.
-      New principle: a read-only projection computes terminal phase-label plans;
-      only the named reconciler may apply them.
-    """
+    """Read-only terminal phase-label plan for closed managed items."""
 
     kind: str
     number: int

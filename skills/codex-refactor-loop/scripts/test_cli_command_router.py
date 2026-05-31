@@ -222,11 +222,15 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
         daemon_status = (SCRIPT_DIR / "codex_refactor_loop" / "daemon_status.py").read_text(encoding="utf-8")
         for token in (
-            "Refactor (issue-298)",
-            "daemon-status is read-only",
-            "restart-daemons remains",
-            "read-only projection",
-            "repair/reload stays exclusively",
+            '"daemon-status": CommandSpec(',
+            "daemon_status_main",
+            '("read-state", "read-process")',
+            "def collect(",
+            "DaemonStatusProjection",
+            "DaemonStatusReport",
+            "read_daemon_pid",
+            "read_heartbeat_age_seconds",
+            "duplicate_canonical_wrappers",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, cli + daemon_status)
@@ -365,13 +369,13 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_authority_refactor_self_doc_source_regression(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
         for token in (
-            "Refactor (iter201/issue-201)",
-            "public consensus-rnd-cli exposed",
-            "lifecycle commands",
-            "generic lifecycle authority surface",
-            "only public non-lifecycle CLI primitives",
-            "controller lifecycle actions stay",
-            "dev-sync's narrow integration-worktree carveout",
+            "COMMANDS: dict[str, CommandSpec]",
+            "authority: tuple[str, ...]",
+            '"dev-sync": CommandSpec(',
+            '"release-gate": CommandSpec(',
+            '"check-project-rules": CommandSpec(',
+            '("read-git", "write-artifact")',
+            '"phase9-router": CommandSpec(',
         ):
             with self.subTest(token=token):
                 self.assertIn(token, cli)

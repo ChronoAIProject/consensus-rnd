@@ -1,10 +1,5 @@
 """Integration sync operation schema for daemon-owned execution.
 
-Refactor (iter/issue-199):
-  Old pattern: controller-owned request artifacts carried lifecycle owner
-  fields and were applied by a public CLI.
-  New principle: daemon writes typed IntegrationSyncOperation artifacts with
-  #53 authority and no command envelope or controller lifecycle fields.
 """
 
 from __future__ import annotations

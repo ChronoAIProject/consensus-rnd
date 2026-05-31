@@ -82,9 +82,6 @@ WORKFLOW_PROJECTION_KEYS = (
 
 @dataclass(frozen=True)
 class HostWorkflowEvent:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     stage: str
     status: str = ""
@@ -93,18 +90,12 @@ class HostWorkflowEvent:
 
 @dataclass(frozen=True)
 class HostWorkflowRole:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     prompt_binding: str = ""
 
 
 @dataclass(frozen=True)
 class HostConsensusPolicy:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     solver_roles: tuple[str, ...]
     judge_role: str
@@ -115,9 +106,6 @@ class HostConsensusPolicy:
 
 @dataclass(frozen=True)
 class HostIssueIntakeMapping:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     work_unit_kind: str
     producer: str
@@ -127,9 +115,6 @@ class HostIssueIntakeMapping:
 
 @dataclass(frozen=True)
 class ValidatedWorkflowSpec:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     source_path: Path | None
     stages: tuple[WorkflowStage, ...]
     events: tuple[HostWorkflowEvent, ...]
@@ -195,10 +180,6 @@ class ValidatedWorkflowSpec:
 
 
 class HostWorkflowSpec:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-
     def __init__(self, data: Mapping[str, Any], *, source_path: Path, repo_root: Path) -> None:
         self.data = dict(data)
         self.source_path = source_path
@@ -209,10 +190,6 @@ class HostWorkflowSpec:
 
 
 class WorkflowInvariantValidator:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-
     ALLOWED_TOP_LEVEL = set(WORKFLOW_PROJECTION_KEYS)
 
     def __init__(self, repo_root: Path, source_path: Path | None = None) -> None:
@@ -448,9 +425,6 @@ class WorkflowInvariantValidator:
 
 
 class WorkflowSpecLoader:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     _cache: dict[tuple[Path, int, int], ValidatedWorkflowSpec] = {}
 
     @classmethod

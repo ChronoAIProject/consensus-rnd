@@ -9,9 +9,6 @@ from pathlib import Path
 from typing import Any
 
 
-# Refactor (issue-262): Old: transition ranking/prompt facts had no checked-in
-# reader, so callers would need ad hoc sidecar parsing. New: this module is the
-# only read-only transition_assessment reader and fails closed to unknown.
 SAFE_WORK_UNIT_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 ALLOWED_PRODUCERS = frozenset({"audit", "manual-issue"})
 TRANSITION_BUCKET_ORDER = {

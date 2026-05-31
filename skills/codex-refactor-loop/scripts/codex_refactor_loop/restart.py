@@ -21,11 +21,6 @@ from .retention import retain_logs
 from .update_check import maybe_run_update_check
 
 
-# Refactor (issue238/closed-label-reconciler): Old: Python kept a five-daemon
-# static allowlist without a closed-item label reconciler. New: the sixth
-# restart-managed daemon is the named #238 closed-only phase-label reconciler;
-# wrapper authority remains local pid, actor-owned heartbeat, and fingerprint
-# maintenance.
 CLI_ENTRYPOINT_NAME = "consensus-rnd-cli"
 
 DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -37,14 +32,6 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
 )
 
-# Refactor (iterissue-331/issue-331):
-#   Old pattern: release gate and wakeup_plan each kept local daemon-name
-#   literals, drifting from restart.py DAEMON_COMMANDS and duplicating the
-#   source of truth.
-#   New principle: restart.py::restart_managed_daemon_names() is the canonical
-#   daemon-name projection; release keeps DAEMON_NAMES only as a derived alias,
-#   wakeup deletes EXPECTED_DAEMONS, and health requires every restart-managed
-#   heartbeat to be fresh.
 def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
 
@@ -64,10 +51,6 @@ class RestartConfig:
     stop_grace_seconds: int = int(os.environ.get("RESTART_DAEMONS_STOP_GRACE_SECONDS", "5"))
 
 
-# Refactor (issue-298): Old: status guidance made controllers infer daemon
-# state from write-side restart or ad hoc process probes. New: helper-private
-# readers expose pid, heartbeat age, expected fingerprint, and static allowlist
-# resolution for read-only daemon-status without adding lifecycle verbs.
 @dataclass(frozen=True)
 class DaemonTarget:
     """refactor helper, no behavior change outside read-only status projection."""
@@ -80,9 +63,6 @@ class DaemonTarget:
     died_file: Path
 
 
-# Refactor (iter204/issue-204):
-#   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
-#   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
 @dataclass(frozen=True)
 class DaemonLaunchFingerprint:
     """refactor helper, no behavior change outside restart skip eligibility."""
@@ -162,8 +142,6 @@ class DaemonLaunchFingerprint:
         }
 
 
-# Refactor (issue-264): Old: one fresh pidfile wrapper could hide duplicate canonical wrappers.
-# New: helper-private process inventory reconciles static-allowlist duplicates before skip/start.
 @dataclass(frozen=True)
 class DaemonProcess:
     """refactor helper, no behavior change outside duplicate reconciliation."""
@@ -263,9 +241,6 @@ def heartbeat_is_fresh(target: DaemonTarget, config: RestartConfig, *, now: int 
     return age is not None and age < config.heartbeat_fresh_seconds
 
 
-# Refactor (iter204/issue-204):
-#   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
-#   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
 class RestartDaemons:
     def __init__(self, ctx: LoopContext, config: RestartConfig | None = None) -> None:
         self.ctx = ctx
@@ -276,10 +251,6 @@ class RestartDaemons:
 
     def run(self) -> int:
         self._prepare_dirs()
-        # Refactor (issue238/closed-label-reconciler): Old pattern: every
-        # device could restart all controller write daemons. New principle:
-        # only the active-controller owner starts or maintains those daemons;
-        # non-owners leave local noop status and do not kill/start wrappers.
         decision = require_active_controller(self.ctx, "restart-daemons")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
@@ -373,11 +344,6 @@ class RestartDaemons:
         self._log(f"log_retention: ttl_hours=24 deleted={deleted} kept={kept} target={target}{suffix}")
 
     def _run_update_check(self) -> None:
-        # Refactor (issue231-update-check):
-        #   Old pattern: restart-daemons maintained only daemon wrappers and had
-        #   no startup projection for installed skill version drift.
-        #   New principle: after the fixed daemon start/skip pass, run the opt-in
-        #   notify-only probe and log warnings without blocking daemon restart.
         try:
             result = maybe_run_update_check(self.ctx, startup=True)
         except Exception as exc:

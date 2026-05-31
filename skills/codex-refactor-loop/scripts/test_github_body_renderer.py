@@ -147,11 +147,11 @@ class GitHubBodySourceRegressionTests(unittest.TestCase):
         self.assertIn("read-only helper", src)
         self.assertIn("must not write files", src)
 
-    def test_issue191_refactor_documentation_pins_validator_contract(self) -> None:
+    def test_validator_contract_uses_self_contained_authority_literals(self) -> None:
         src = (SCRIPT_DIR / "codex_refactor_loop" / "github_body.py").read_text(encoding="utf-8")
-        self.assertIn("Refactor (iter191/issue-191):", src)
-        self.assertIn("single active controller lease (no per-work claims, no cross-device floor)", src)
-        self.assertIn("authority/consensus/plan bodies inline raw artifacts", src)
+        self.assertNotIn("Refactor (iter191/issue-191):", src)
+        self.assertNotIn("Old pattern", src)
+        self.assertNotIn("New principle", src)
         self.assertIn("INLINE_ARTIFACT_DETAILS_RE", src)
         self.assertIn("authority body must inline raw artifact text in inline artifact details", src)
 

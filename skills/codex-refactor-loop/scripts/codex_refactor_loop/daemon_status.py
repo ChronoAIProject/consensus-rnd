@@ -25,10 +25,6 @@ from .restart import (
 )
 
 
-# Refactor (issue-298): Old: controller daemon health was inferred by
-# restart-daemons side effects or local process probes. New: daemon-status is a
-# read-only projection over RestartDaemons facts and cached active-controller
-# status; repair/reload stays exclusively with restart-daemons.
 @dataclass(frozen=True)
 class DaemonStatusProjection:
     name: str
