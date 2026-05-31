@@ -322,7 +322,9 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 <!-- Refactor (iter1/issue-143): Old pattern: consensus-rnd-cli restart-daemons wrapper sidecar wrote heartbeat while daemon loop hangs.
 New principle: singleton wrapper + actor-owned heartbeat lease; stale means actor loop stopped renewing.
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
-`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)且 fingerprint current 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
+<!-- Refactor (issue-264): Old: restart skip trusted one fresh pidfile wrapper and missed duplicate canonical instances.
+New: skip additionally requires zero duplicate canonical live wrapper for the same static allowlist command; process inventory is helper-private daemon-maintained state, not controller probing. -->
+`skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
 Before starting or repairing any of the six write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
@@ -333,7 +335,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
-- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat + matching fingerprint skip / stale/missing/malformed heartbeat repair / dead pid repair / missing/malformed/mismatched fingerprint restart / CLI entrypoint and package tree fingerprint restart / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
@@ -1836,26 +1838,12 @@ PR_NUMBER=$(gh pr list --head "<trunk_branch>" --json number --jq '.[0].number')
 
 If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 
-### Arm the watch
+### Read the watch
 
-```bash
-# Poll every 60s; emit one event per failed check; exit when all checks settled.
-prev=""
-while true; do
-  state=$(gh pr checks "$PR_NUMBER" --json name,bucket,state)
-  cur=$(jq -r '.[] | "\(.name)\t\(.bucket)\t\(.state)"' <<<"$state" | sort)
-  comm -13 <(printf '%s\n' "$prev") <(printf '%s\n' "$cur") | awk -F'\t' '$2=="fail"{print $0}'
-  prev=$cur
-  if jq -e 'all(.bucket != "pending")' <<<"$state" >/dev/null; then
-    failed=$(jq -r '[.[] | select(.bucket=="fail") | .name] | length' <<<"$state")
-    echo "REMOTE_CI_DONE:failed=$failed"
-    break
-  fi
-  sleep 60
-done
-```
+<!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
+Do not run a controller-authored shell poller for remote CI. Every controller wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`. For each red PR, the controller then reads the failed check details with `gh pr checks "$PR_NUMBER" --json name,bucket,state,link`, selects `bucket: fail`, and uses the check `name` plus `link` for the focused remote-CI fix route.
 
-Arm as a Monitor with `persistent: true`. Each emitted line is a notification you wake on. Stop only on the `REMOTE_CI_DONE:` line.
+The persistent daemon-event Monitor bridge remains the wake source for pending controller events; remote CI triage is driven by `consensus-rnd-cli wakeup-plan` output, not by an executable fenced shell watch in SKILL.md.
 
 ### Triage on failure
 
@@ -1922,16 +1910,16 @@ Ambiguous adoption metadata, failed adoption operation construction, or adoption
 ### Consensus-rnd Phase design-consensus router daemon command body
 <!-- Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's daemon contract said no GitHub while the source-OPEN gate read GitHub issue state. New: document the narrow state-only read-gh authority in the durable runtime-exception mirror and keep lifecycle authority forbidden. -->
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229`.
-`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/spawn/ledger side-effect 前的 source-OPEN gate state-only GitHub read:`gh issue view <N> --json state`(optional `--repo <owner/repo>` from host GitHub context)。该 `read-gh` 只读取 issue `state`;非 OPEN 或 state 不可证明时 fail closed,不 spawn、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/spawn/ledger side-effect 前的 source-OPEN gate state-only GitHub read:`gh issue view <N> --json state`(optional `--repo <owner/repo>` from host GitHub context)。该 `read-gh` 只读取 issue `state`;非 OPEN 或 state 不可证明时 fail closed,不 spawn、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/round、三个 scoped solver paths 和 judge output path;missing template 或 scope 校验失败 fail closed,不 spawn、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'source .refactor-loop/host.env && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
 Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
-- `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → spawn same-round meta-judge.
+- `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → render full `prompts/meta-judge.md` with router-scoped inputs and spawn same-round meta-judge.
 - `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; both spawn r(S+1) minimal/structural/delete solvers; non-adjacent payload mismatch falls back.
 - `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 HostWorkflowSpec is not a phase9 direct-spawn authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
 Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 6-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
-Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; fallback events use prefix `phase9-router-fallback`. The state-only source-OPEN gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
+Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, judge_prompt_template_path, judge_prompt_scope, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; if full `prompts/meta-judge.md` rendering is unavailable or any solver/judge path falls outside same issue/round/role scope, the router fails closed before judge dispatch and appends an existing-format `phase9-router-fallback` event. Fallback events use prefix `phase9-router-fallback`. A solver-triplet-to-judge duplicate with `key` already in the ledger is silent; when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch, append one existing-format `phase9-router-fallback` event with key prefix `phase9-triplet-suppression:` and reason exactly one of `phase9-triplet-target-log-exists`, `phase9-triplet-equivalent-log-exists`, or `phase9-triplet-in-flight`. The state-only source-OPEN gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
 dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
@@ -2266,6 +2254,7 @@ envsubst < <skill-root>/prompts/meta-judge.md \
 ```
 
 This triplet dispatch is now the first Consensus-rnd Phase design-consensus daemon-first route: `consensus-rnd-cli phase9-router` may do it directly after clean-exit gating, placeholder exclusion, ledger de-dupe, and in-flight checks. Controller fallback sweep remains required.
+The daemon route renders the full `prompts/meta-judge.md` template with the same scoped solver triplet paths the controller would bind; missing template or cross-issue/cross-round scope evidence fails closed through `phase9-router-fallback`, not a stub prompt.
 
 Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强制)**:
 
@@ -2650,11 +2639,12 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 
 **判定脚本**(controller wakeup step 1.5):
 
+<!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
 ```bash
 source .refactor-loop/host.env                              # 取 REPO_ROOT / CODEX_FLOOR
 FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2
-# 只数本仓库 codex:含 consensus-rnd-cli spawn-codex 且含本仓库绝对路径 $REPO_ROOT(scope,防同机多 loop 过计)
-ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
+# 只数本仓库 codex:使用 canonical CLI 计数;diagnostic 明细可用 --list-codex
+ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)
 NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
@@ -3063,7 +3053,22 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 
 The work-unit contract describes the fields carried through audit artifacts, GitHub design issues,
 prompt artifacts, and implementation/review run artifacts. Do not add migrated queue containers,
-envelope wrappers, a normalizer helper, or a root state migration for this contract.
+normalizer helpers, root state migrations, producer abstractions, registry helpers, or envelope
+wrappers, except the optional read-only `transition_assessment` sidecar documented here.
+<!-- Refactor (issue-262): Old/New
+Old: transition ranking and prompt context had no narrow checked-in sidecar boundary.
+New: optional read-only transition_assessment is the only sidecar exception for ranking/prompt projection.
+-->
+
+The optional read-only `transition_assessment` sidecar is a ranking/prompt projection fact keyed
+by `work_unit_id` and `source_ref`. It is not stable candidate NDJSON, not a work-unit envelope wrapper,
+and not a WorkUnit producer. Missing/malformed/untrusted -> unknown with confidence 0.
+The only canonical path is `.refactor-loop/runs/transition-assessments/<safe-work-unit-id>.json`,
+where `<safe-work-unit-id>` matches `[A-Za-z0-9._-]+`; no explicit path, directory scan, writer,
+controller alias, host command, host lens, `bedc_ci.py` call, marker change, branch change, or
+work-unit token change is part of this sidecar. Transition bucket order is
+`positive-discovery > classifier-shift > formal-hardening > ledger-repair > record-growth > unknown`.
+`positive-discovery` requires both classifier-surface delta and `net_positive_signal=true`.
 
 Naming policy: this engine's public product identity is Consensus R&D, and `codex-refactor-loop`
 remains the stable installed skill entrypoint. `refactor` is a valid development/work-unit
@@ -3115,6 +3120,10 @@ The controller recognizes exactly these producer values:
 This is a documented normalization boundary, not a new producer framework. Do not add new
 producer abstractions, registry helpers, envelope wrappers, or migrated work-unit state containers
 for this contract.
+
+The sidecar `producer` field is assessment provenance only and does not extend the WorkUnit
+producer enum. The only allowed sidecar provenance values are `audit` and `manual-issue`;
+`host:<slug>` is not allowed in the first version.
 
 ### `audit` producer
 
@@ -3208,9 +3217,12 @@ Goal: parallel safety. Two clusters can be in the same batch **only if** all fou
 
 Greedy bin-packing:
 
-1. Sort candidate work units by `risk` (low first), then `leverage` (high first).
-2. For each cluster, assign to first batch where it's compatible with every existing member.
-3. Each batch has at most `max_parallel_clusters`.
+1. For checked-in callers that read the optional `transition_assessment` sidecar, sort by
+   transition bucket before `risk` and `leverage`; missing/malformed/untrusted sidecars are
+   `unknown, confidence=0`, preserving existing ordering among units with no sidecar.
+2. Sort candidate work units by `risk` (low first), then `leverage` (high first).
+3. For each cluster, assign to first batch where it's compatible with every existing member.
+4. Each batch has at most `max_parallel_clusters`.
 
 If a cluster cannot fit in any new batch ≤ `max_parallel_clusters`, start a new batch for it.
 

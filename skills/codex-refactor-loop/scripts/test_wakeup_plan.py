@@ -89,6 +89,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     existing)
                       printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
                       ;;
+                    transition_sort)
+                      printf '[{"number":60,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":61,"title":"positive issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":62,"title":"classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      ;;
                     many_active)
                       printf '['
                       for i in 1 2 3 4 5 6; do
@@ -412,8 +415,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
         self.assertEqual(plan["actions"][0]["item"], "PR #31")
+        self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+
+    # Refactor (issue-275): Old pattern: remote CI routing depended on inline shell poller marker text. New principle: behavior tests assert wakeup-plan emits structured ci-red actions without marker coupling.
+    def test_ci_red_check_projection_requests_triage_fields_without_remote_ci_done_marker(self) -> None:
+        plan = self.run_plan(fixture="ci_red")
+
+        self.assertEqual(plan["actions"][0]["kind"], "ci-red")
+        self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
+        self.assertNotIn("REMOTE_CI_DONE", json.dumps(plan))
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
@@ -443,6 +455,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
         self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
+
+    def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
+        path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "transition_type": transition_type,
+                    "confidence": confidence,
+                    "evidence_refs": [f".refactor-loop/runs/issue-{number}.md"],
+                    "classifier_surface_delta": ["classifier delta"] if transition_type in {"positive-discovery", "classifier-shift"} else [],
+                    "ledger_delta": [],
+                    "formal_delta": [],
+                    "record_growth_delta": [],
+                    "net_positive_signal": transition_type == "positive-discovery",
+                    "notes": "",
+                    "producer": "manual-issue",
+                    "source_ref": f"gh-issue-{number}",
+                    "work_unit_id": f"issue-{number}",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_existing_issue_transition_bucket_sorts_before_kind_and_number(self) -> None:
+        self.write_transition_assessment(61, "positive-discovery", 0.1)
+        self.write_transition_assessment(62, "classifier-shift", 0.2)
+        self.write_transition_assessment(63, "classifier-shift", 0.9)
+
+        plan = self.run_plan(fixture="transition_sort")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "existing-issue"]
+        self.assertEqual(
+            [action["item"] for action in actions],
+            ["issue #61", "issue #63", "issue #62", "issue #60"],
+        )
 
     def test_load_github_items_queries_canonical_and_legacy_managed_labels_once(self) -> None:
         plan = self.run_plan(fixture="managed_dual_read")

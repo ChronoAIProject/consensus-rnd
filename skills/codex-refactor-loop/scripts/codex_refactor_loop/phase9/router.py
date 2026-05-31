@@ -31,6 +31,7 @@ from typing import Callable, Iterable, Literal, cast
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
+from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
 
 
@@ -127,6 +128,70 @@ class Phase9SourceIssueDecision:
     allowed: bool
     state: str | None
     reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
+
+
+@dataclass(frozen=True)
+class MetaJudgePromptContext:
+    # Refactor (issue-262): Old: meta-judge prompt context had no validated
+    # transition projection. New: carry the same read-only sidecar projection
+    # used by solver headers without creating a second prompt injection path.
+    issue: str
+    round: int
+    solver_paths: dict[str, str]
+    output_path: str
+    transition_assessment: TransitionAssessment
+
+    @property
+    def work_unit_id(self) -> str:
+        return f"issue-{self.issue}"
+
+    @property
+    def convergence_round_plus_one(self) -> int:
+        return self.round + 1
+
+
+class MetaJudgePromptRenderer:
+    # Refactor (iter9/issue-260):
+    #   Old pattern: phase9-router meta-judge dispatch rendered a short no-rubric stub prompt.
+    #   New principle: render full prompts/meta-judge.md with same issue/round scoped solver paths and fail closed on template/scope errors.
+    PLACEHOLDERS = {
+        "ISSUE_NUMBER",
+        "WORK_UNIT_ID",
+        "CLUSTER_ID",
+        "CONVERGENCE_ROUND",
+        "CONVERGENCE_ROUND_PLUS_ONE",
+        "SOLVER_MINIMAL_PATH",
+        "SOLVER_STRUCTURAL_PATH",
+        "SOLVER_DELETE_PATH",
+        "META_JUDGE_OUTPUT_PATH",
+        "TRANSITION_TYPE",
+        "TRANSITION_CONFIDENCE",
+        "TRANSITION_EVIDENCE_REFS",
+    }
+
+    def __init__(self, template_path: Path) -> None:
+        self.template_path = template_path
+
+    def render(self, context: MetaJudgePromptContext) -> str:
+        template = self.template_path.read_text(encoding="utf-8")
+        values = {
+            "ISSUE_NUMBER": context.issue,
+            "WORK_UNIT_ID": context.work_unit_id,
+            "CLUSTER_ID": context.work_unit_id,
+            "CONVERGENCE_ROUND": str(context.round),
+            "CONVERGENCE_ROUND_PLUS_ONE": str(context.convergence_round_plus_one),
+            "SOLVER_MINIMAL_PATH": context.solver_paths["minimal"],
+            "SOLVER_STRUCTURAL_PATH": context.solver_paths["structural"],
+            "SOLVER_DELETE_PATH": context.solver_paths["delete"],
+            "META_JUDGE_OUTPUT_PATH": context.output_path,
+            "TRANSITION_TYPE": context.transition_assessment.transition_type,
+            "TRANSITION_CONFIDENCE": f"{context.transition_assessment.confidence:g}",
+            "TRANSITION_EVIDENCE_REFS": context.transition_assessment.evidence_refs_text,
+        }
+        rendered = template
+        for key in self.PLACEHOLDERS:
+            rendered = rendered.replace("${" + key + "}", values[key])
+        return rendered
 
 
 PHASE9_LOG_RE = re.compile(
@@ -368,6 +433,10 @@ class Phase9Router:
                 seen.add(key)
             if isinstance(key, str) and key.startswith("phase9-source-eligibility:"):
                 seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-meta-judge-prompt:"):
+                seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-triplet-suppression:"):
+                seen.add(key)
         return seen
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
@@ -395,6 +464,11 @@ class Phase9Router:
     # Refactor (iter229/issue-229):
     #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
     #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
+    # Refactor (iter284/issue-284):
+    #   Old pattern: target log exists / in-flight and ledgered triplet
+    #   duplicates were both silent, hiding unledgered solver-triplet suppression.
+    #   New principle: ledgered duplicates stay silent; unledgered suppression
+    #   appends one existing-format fallback event with a narrow private reason.
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
         judge_role = self._judge_role()
@@ -409,7 +483,11 @@ class Phase9Router:
                 continue
             key = self._key(issue, round_no, judge_role)
             log_path = self._log_path(issue, round_no, judge_role)
-            if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, judge_role):
+            if key in ledger:
+                continue
+            suppression_reason = self._solver_triplet_suppression_reason(issue, round_no, judge_role, log_path)
+            if suppression_reason is not None:
+                self._append_solver_triplet_suppression_event(issue, round_no, judge_role, log_path, suppression_reason)
                 continue
             if not self._require_open_source_issue(
                 issue,
@@ -423,7 +501,10 @@ class Phase9Router:
             if violation is not None:
                 self._append_invalid_triplet_event(issue, round_no, violation)
                 continue
-            prompt = self._write_prompt(issue, round_no, judge_role, self._meta_judge_prompt(issue, round_no, role_markers.values()))
+            prompt_body = self._meta_judge_prompt(issue, round_no, role_markers.values())
+            if prompt_body is None:
+                continue
+            prompt = self._write_prompt(issue, round_no, judge_role, prompt_body)
             if self._spawn(prompt, log_path):
                 self._append_ledger(
                     key,
@@ -596,8 +677,9 @@ class Phase9Router:
         return parts[2] if len(parts) >= 3 else marker
 
     def _in_flight(self, log_path: Path) -> bool:
-        if log_path.exists():
-            return True
+        return log_path.exists() or self._spawn_codex_in_flight(log_path)
+
+    def _spawn_codex_in_flight(self, log_path: Path) -> bool:
         try:
             ps = subprocess.run(["ps", "-eo", "command="], capture_output=True, text=True, check=False)
         except OSError:
@@ -607,6 +689,25 @@ class Phase9Router:
             if "consensus-rnd-cli" in line and "spawn-codex" in line and target in line and " -c " not in line:
                 return True
         return False
+
+    def _solver_triplet_suppression_reason(
+        self,
+        issue: str,
+        round_no: int,
+        actor: str,
+        log_path: Path,
+    ) -> Literal[
+        "phase9-triplet-target-log-exists",
+        "phase9-triplet-equivalent-log-exists",
+        "phase9-triplet-in-flight",
+    ] | None:
+        if log_path.exists():
+            return "phase9-triplet-target-log-exists"
+        if self._equivalent_actor_log_exists(issue, round_no, actor):
+            return "phase9-triplet-equivalent-log-exists"
+        if self._spawn_codex_in_flight(log_path):
+            return "phase9-triplet-in-flight"
+        return None
 
     def _equivalent_actor_log_exists(self, issue: str, round_no: int, actor: str) -> bool:
         paths = [self._log_path(issue, round_no, actor)]
@@ -750,6 +851,62 @@ class Phase9Router:
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-triplet-evidence-invalid {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
+    def _append_meta_judge_prompt_fallback_event(
+        self,
+        issue: str,
+        round_no: int,
+        reason: Literal["phase9-meta-judge-template-unavailable", "phase9-meta-judge-scope-invalid"],
+        **extra: str,
+    ) -> None:
+        event_key = f"phase9-meta-judge-prompt:{issue}-{round_no}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": reason,
+            "issue": issue,
+            "round": round_no,
+            "route": "solver_triplet_to_judge",
+            "marker": "SOLVER_DONE:triplet",
+            "dispatched_at": self._now(),
+            **extra,
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _append_solver_triplet_suppression_event(
+        self,
+        issue: str,
+        round_no: int,
+        target_actor: str,
+        log_path: Path,
+        reason: Literal[
+            "phase9-triplet-target-log-exists",
+            "phase9-triplet-equivalent-log-exists",
+            "phase9-triplet-in-flight",
+        ],
+    ) -> None:
+        event_key = f"phase9-triplet-suppression:{issue}-{round_no}-{target_actor}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": reason,
+            "issue": issue,
+            "round": round_no,
+            "route": "solver_triplet_to_judge",
+            "marker": "SOLVER_DONE:triplet",
+            "log_path": self._artifact_path(log_path),
+            "target_actor": target_actor,
+            "dispatched_at": self._now(),
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
         command = [
             str(self.spawn_codex),
@@ -782,15 +939,79 @@ class Phase9Router:
         prompt.write_text(body, encoding="utf-8")
         return prompt
 
-    def _meta_judge_prompt(self, issue: str, round_no: int, markers: Iterable[Marker]) -> str:
-        marker_lines = "\n".join(
-            f"- {m.role}: {self._artifact_path(m.log_path)}" for m in sorted(markers, key=lambda m: m.role or "")
+    def _meta_judge_prompt(self, issue: str, round_no: int, markers: Iterable[Marker]) -> str | None:
+        context = self._meta_judge_prompt_context(issue, round_no, markers)
+        if context is None:
+            return None
+        template_path = self.skill_root / "prompts" / "meta-judge.md"
+        try:
+            prompt = MetaJudgePromptRenderer(template_path).render(context)
+        except OSError:
+            self._append_meta_judge_prompt_fallback_event(
+                issue,
+                round_no,
+                "phase9-meta-judge-template-unavailable",
+                template_path=self._skill_artifact_path(template_path),
+            )
+            return None
+        bindings = "\n".join(
+            (
+                f"ISSUE_NUMBER={context.issue}",
+                f"WORK_UNIT_ID={context.work_unit_id}",
+                f"CLUSTER_ID={context.work_unit_id}",
+                f"CONVERGENCE_ROUND={context.round}",
+                f"CONVERGENCE_ROUND_PLUS_ONE={context.convergence_round_plus_one}",
+                f"SOLVER_MINIMAL_PATH={context.solver_paths['minimal']}",
+                f"SOLVER_STRUCTURAL_PATH={context.solver_paths['structural']}",
+                f"SOLVER_DELETE_PATH={context.solver_paths['delete']}",
+                f"META_JUDGE_OUTPUT_PATH={context.output_path}",
+                *projection_lines(context.transition_assessment),
+            )
         )
-        evidence_line = f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, self._judge_role())}"
         return (
-            f"# {format_stage('design-consensus')} meta-judge\n\nIssue: #{issue}\nRound: {round_no}\n\n"
-            f"Read the three completed solver logs and emit META_JUDGE_DONE.\n\n{marker_lines}\n\n"
-            f"{evidence_line}\n"
+            f"# {format_stage('design-consensus')} meta-judge\n\n"
+            f"## Router template bindings\n\n{bindings}\n\n"
+            f"## Validated transition projection\n\n{self._transition_projection_summary(context.transition_assessment)}\n\n"
+            f"## Full meta-judge template\n\n{prompt}"
+            + "\n\n## Router dispatch evidence\n\n"
+            + f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, self._judge_role())}\n"
+        )
+
+    def _meta_judge_prompt_context(
+        self,
+        issue: str,
+        round_no: int,
+        markers: Iterable[Marker],
+    ) -> MetaJudgePromptContext | None:
+        solver_paths: dict[str, str] = {}
+        for marker in markers:
+            if marker.role is None:
+                return self._fail_meta_judge_scope(issue, round_no, "missing solver role")
+            if marker.role not in self._solver_roles():
+                return self._fail_meta_judge_scope(issue, round_no, f"unexpected solver role {marker.role}")
+            identity = self._identity_from_path(marker.log_path)
+            if identity is None:
+                return self._fail_meta_judge_scope(issue, round_no, f"unowned solver path {marker.log_path.name}")
+            if identity.issue != issue or identity.round != round_no or identity.actor != marker.role:
+                return self._fail_meta_judge_scope(issue, round_no, f"solver path scope mismatch {marker.log_path.name}")
+            solver_paths[marker.role] = self._artifact_path(marker.log_path)
+        if set(solver_paths) != set(self._solver_roles()):
+            return self._fail_meta_judge_scope(issue, round_no, "missing solver path")
+        output_path = self._artifact_path(self.ctx.paths.runs / f"phase9-issue{issue}-r{round_no}-judge.md")
+        return MetaJudgePromptContext(
+            issue=issue,
+            round=round_no,
+            solver_paths=solver_paths,
+            output_path=output_path,
+            transition_assessment=self._transition_assessment(issue),
+        )
+
+    def _fail_meta_judge_scope(self, issue: str, round_no: int, detail: str) -> None:
+        self._append_meta_judge_prompt_fallback_event(
+            issue,
+            round_no,
+            "phase9-meta-judge-scope-invalid",
+            detail=detail,
         )
 
     def _solver_prompt(self, issue: str, round_no: int, role: str, marker: str) -> str:
@@ -809,6 +1030,7 @@ class Phase9Router:
     #   authority.
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
+        transition_lines = "\n".join(projection_lines(self._transition_assessment(issue)))
         return (
             f"Issue: #{issue}\n"
             f"Round: {round_no}\n"
@@ -818,10 +1040,28 @@ class Phase9Router:
             "WORK_UNIT_KIND=manual-work-unit\n"
             "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)\n"
             f"WORK_UNIT_SOURCE_REF=gh-issue-{issue}\n"
+            f"{transition_lines}\n"
             f"SOLVER_OUTPUT_PATH={output_path}\n"
             f"Read `gh issue view {issue}` for the issue body/comments. "
             "The issue body/comments are the scope spec when no local audit artifact is provided; "
             "do not fabricate audit artifacts."
+        )
+
+    def _transition_assessment(self, issue: str) -> TransitionAssessment:
+        return TransitionAssessmentReader.load_for_work_unit(
+            self.repo_root,
+            work_unit_id=f"issue-{issue}",
+            source_ref=f"gh-issue-{issue}",
+        )
+
+    def _transition_projection_summary(self, assessment: TransitionAssessment) -> str:
+        return "\n".join(
+            (
+                "Use only this router-validated transition projection; missing/malformed/untrusted sidecars are unknown.",
+                f"- transition_type: {assessment.transition_type}",
+                f"- confidence: {assessment.confidence:g}",
+                f"- evidence_refs: {assessment.evidence_refs_text}",
+            )
         )
 
     # Refactor (iter5/issue-85-stalled-reflector-template):
@@ -904,6 +1144,12 @@ class Phase9Router:
             "solver_input_prompts": [self._solver_prompt_record(issue, round_no, role) for role in sorted(self._solver_roles())],
             "judge_input_solver_logs": [self._artifact_path(marker.log_path) for marker in sorted_markers],
             "judge_prompt_path": self._artifact_path(judge_prompt),
+            "judge_prompt_template_path": "prompts/meta-judge.md",
+            "judge_prompt_scope": {
+                "issue": issue,
+                "round": round_no,
+                "solver_roles": sorted(self._solver_roles()),
+            },
             "independence_check": "pass",
         }
 
