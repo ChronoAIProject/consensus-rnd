@@ -38,6 +38,7 @@ ISSUE_LABELS_REMOVE = (
 )
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 
 
 class ControllerActions:
@@ -77,8 +78,15 @@ class ControllerActions:
     def apply_human_label_or_skip(self, pr_number: str, source_marker: str = "", reason: str = "") -> int:
         if not self._require_owner_or_return("controller-label", code=3):
             return 3
-        if not pr_number:
-            sys.stderr.write("apply_human_label_or_skip: missing pr_number\n")
+        pr_target = self._normalize_lifecycle_target_or_block(
+            pr_number,
+            kind="pr",
+            action="apply-human-label",
+            source="argument",
+        )
+        if pr_target is None:
+            if not pr_number:
+                sys.stderr.write("apply_human_label_or_skip: missing pr_number\n")
             return 2
         env_marker = os.environ.get("HUMAN_LABEL_SOURCE_MARKER", "")
         if not source_marker.startswith("META_RESOLVED:escalate-human:") and env_marker.startswith(
@@ -91,7 +99,7 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
-        result = self.gh(["pr", "edit", pr_number, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
+        result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
     def _current_branch(self) -> str:
@@ -196,36 +204,57 @@ class ControllerActions:
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
         if not self._require_owner_or_return("merge-pr", code=3):
             return 3
-        if not pr:
-            sys.stderr.write("merge_pr: missing pr number\n")
+        pr_target = self._normalize_lifecycle_target_or_block(pr, kind="pr", action="merge-pr", source="argument")
+        if pr_target is None:
             return 1
+        issue_target = ""
+        if linked_issue:
+            normalized = self._normalize_lifecycle_target_or_block(
+                linked_issue,
+                kind="issue",
+                action="merge-pr",
+                source="argument",
+            )
+            if normalized is None:
+                return 1
+            issue_target = normalized
         if not linked_issue:
-            body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout
+            body = self.gh(["pr", "view", pr_target, "--json", "body", "--jq", ".body"], check=False).stdout
             linked_issue = _single_linked_issue(body)
-        merge = self.gh(["pr", "merge", pr, "--admin", "--squash", "--delete-branch"], check=False)
+            if linked_issue:
+                normalized = self._normalize_lifecycle_target_or_block(
+                    linked_issue,
+                    kind="issue",
+                    action="merge-pr",
+                    source="pr-body",
+                )
+                if normalized is None:
+                    return 1
+                issue_target = normalized
+        merge = self.gh(["pr", "merge", pr_target, "--admin", "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
         elif merge.stderr:
             print(merge.stderr.splitlines()[-1])
         if merge.returncode != 0:
             return merge.returncode
-        self.record_recent_pr_merge(pr)
-        args = ["pr", "edit", pr]
+        self.record_recent_pr_merge(pr_target)
+        args = ["pr", "edit", pr_target]
         for label in PR_LABELS_REMOVE:
             args.extend(["--remove-label", label])
         args.extend(["--add-label", labels.PHASE_MERGED])
         self.gh(args, check=False)
-        if linked_issue:
-            comment = f"✅ Auto-merged via PR #{pr}.\n\n⟦AI:AUTO-LOOP⟧"
-            close = self.gh(["issue", "close", linked_issue, "--reason", "completed", "--comment", comment], check=False)
+        if issue_target:
+            comment = f"✅ Auto-merged via PR #{pr_target}.\n\n⟦AI:AUTO-LOOP⟧"
+            close = self.gh(["issue", "close", issue_target, "--reason", "completed", "--comment", comment], check=False)
             if close.stdout:
                 print(close.stdout.splitlines()[-1])
-            args = ["issue", "edit", linked_issue]
+            args = ["issue", "edit", issue_target]
             for label in ISSUE_LABELS_REMOVE:
                 args.extend(["--remove-label", label])
             args.extend(["--add-label", labels.PHASE_MERGED])
             self.gh(args, check=False)
-        head = self.gh(["pr", "view", pr, "--json", "headRefName", "--jq", ".headRefName"], check=False).stdout.strip()
+        head = self.gh(["pr", "view", pr_target, "--json", "headRefName", "--jq", ".headRefName"], check=False).stdout.strip()
         if head:
             wt = self._worktree_for_branch(head)
             if wt and wt != self.ctx.repo_root:
@@ -239,24 +268,38 @@ class ControllerActions:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
         linked_issue = _single_linked_issue(self._read_body_file(body_file))
+        issue_target = ""
+        if linked_issue:
+            issue_target = self._normalize_lifecycle_target_or_raise(
+                linked_issue,
+                kind="issue",
+                action="open-pr",
+                source="pr-body",
+            )
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if not match:
+            self._normalize_lifecycle_target_or_raise("", kind="pr", action="open-pr", source="github-pr-create-url")
             raise RuntimeError(f"open_pr_with_label: failed to extract PR num from: {output.strip()}")
-        pr_num = int(match.group(1))
+        pr_target = self._normalize_lifecycle_target_or_raise(
+            match.group(1),
+            kind="pr",
+            action="open-pr",
+            source="github-pr-create-url",
+        )
         self.gh(
             [
                 "pr",
                 "edit",
-                str(pr_num),
+                pr_target,
                 "--add-label",
                 ",".join((labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO)),
             ],
             check=False,
         )
-        if linked_issue:
-            args = ["issue", "edit", linked_issue]
+        if issue_target:
+            args = ["issue", "edit", issue_target]
             for label in ISSUE_LABELS_REMOVE:
                 args.extend(["--remove-label", label])
             args.extend(
@@ -266,7 +309,7 @@ class ControllerActions:
                 ]
             )
             self.gh(args, check=False)
-        return pr_num, match.group(0)
+        return int(pr_target), match.group(0)
 
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)
@@ -329,9 +372,15 @@ class ControllerActions:
         return self.open_pr_with_label(title, body_file, base=review_base_branch, head=rollup_head)
 
     def record_recent_pr_merge(self, pr: str) -> None:
+        pr_target = self._normalize_lifecycle_target_or_raise(
+            pr,
+            kind="pr",
+            action="record-recent-pr-merge",
+            source="argument",
+        )
         fact_json = ""
         for attempt in range(3):
-            result = self.gh(["pr", "view", pr, "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"], check=False)
+            result = self.gh(["pr", "view", pr_target, "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"], check=False)
             fact_json = result.stdout
             try:
                 facts = json.loads(fact_json)
@@ -346,7 +395,12 @@ class ControllerActions:
         merge_commit = facts.get("mergeCommit") if isinstance(facts, dict) else None
         sha = merge_commit.get("oid") if isinstance(merge_commit, dict) else None
         merged_at = facts.get("mergedAt") if isinstance(facts, dict) else None
-        pr_num = facts.get("number") or pr
+        pr_num = self._normalize_lifecycle_target_or_raise(
+            facts.get("number") or pr_target,
+            kind="pr",
+            action="record-recent-pr-merge",
+            source="github-facts",
+        )
         if not pr_num or not sha or not merged_at:
             raise RuntimeError(
                 "merge_pr: recent-pr-merges projection failed: missing mergedAt or mergeCommit.oid after retry; "
@@ -472,6 +526,29 @@ class ControllerActions:
         if not decision.allowed:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
 
+    def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
+        # Refactor (iter276/issue-276): Old pattern: controller lifecycle
+        # targets accepted empty or non-canonical GitHub ids before gh calls.
+        # New principle: require canonical positive decimal target ids and
+        # record invalid target blocks before lifecycle side effects.
+        try:
+            return _normalize_lifecycle_target(value, kind=kind, action=action, source=source)
+        except ValueError as exc:
+            self._append_invalid_github_target_event(kind=kind, action=action, source=source)
+            sys.stderr.write(str(exc) + "\n")
+            return None
+
+    def _normalize_lifecycle_target_or_raise(self, value: object, *, kind: str, action: str, source: str) -> str:
+        target = self._normalize_lifecycle_target_or_block(value, kind=kind, action=action, source=source)
+        if target is None:
+            raise RuntimeError(f"{action}: invalid {kind} target from {source}")
+        return target
+
+    def _append_invalid_github_target_event(self, *, kind: str, action: str, source: str) -> None:
+        self.ctx.paths.pending_events.parent.mkdir(parents=True, exist_ok=True)
+        with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
+            handle.write(f"CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}\n")
+
 
 def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
@@ -483,6 +560,14 @@ def _parse_time(value: object) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source: str) -> str:
+    """refactor helper, no behavior change except rejecting unsafe GitHub target ids."""
+    target = "" if value is None else str(value)
+    if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(target):
+        raise ValueError(f"{action}: invalid {kind} target from {source}: {target!r}")
+    return target
 
 
 def _single_linked_issue(body: str) -> str:

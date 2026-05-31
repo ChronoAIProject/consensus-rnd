@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import ast
 import shutil
 import subprocess
 import tempfile
@@ -51,6 +52,99 @@ class ControllerActionsTests(unittest.TestCase):
         data = json.loads((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").read_text(encoding="utf-8"))
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
+
+    def pending_events(self) -> str:
+        path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
+        return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    # Refactor (iter276/issue-276): Old pattern: controller lifecycle targets
+    # accepted empty or non-canonical GitHub ids before gh calls. New principle:
+    # fail closed on non-canonical GitHub ids and leave a pending-event audit.
+    def test_merge_pr_rejects_invalid_pr_targets_before_gh_or_git(self) -> None:
+        invalid_targets = ("", " ", "0", "-1", "abc", "01", "https://github.com/owner/repo/pull/77")
+        for target in invalid_targets:
+            with self.subTest(target=target):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                        self.assertEqual(1, self.actions.merge_pr(target))
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:merge-pr:pr:argument",
+                    self.pending_events(),
+                )
+
+    def test_apply_human_label_rejects_invalid_pr_targets_before_gh_or_git(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(2, self.actions.apply_human_label_or_skip("01", "META_RESOLVED:escalate-human:reason"))
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:apply-human-label:pr:argument",
+            self.pending_events(),
+        )
+
+    def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(1, self.actions.merge_pr("77", linked_issue="01"))
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:merge-pr:issue:argument",
+            self.pending_events(),
+        )
+
+    def test_open_pr_with_label_rejects_malformed_create_url_before_post_create_edit(self) -> None:
+        cases = (
+            ("missing-url", "created pull request 77\n"),
+            ("zero-pr", "https://github.com/owner/repo/pull/0\n"),
+            ("leading-zero-pr", "https://github.com/owner/repo/pull/077\n"),
+        )
+        for name, output in cases:
+            with self.subTest(name=name):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:2] == ["pr", "create"]:
+                        return mock.Mock(returncode=0, stdout=output, stderr="")
+                    raise AssertionError(f"unexpected post-create gh call: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with self.assertRaisesRegex(RuntimeError, "invalid pr target|failed to extract PR num"):
+                        self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+
+                self.assertEqual(1, sum(1 for call in gh_calls if call[:2] == ["pr", "create"]))
+                self.assertFalse(any(call[:2] == ["pr", "edit"] for call in gh_calls), gh_calls)
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:pr:github-pr-create-url",
+                    self.pending_events(),
+                )
+
+    def test_record_recent_pr_merge_rejects_invalid_argument_before_gh_or_projection(self) -> None:
+        with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+            with self.assertRaisesRegex(RuntimeError, "invalid pr target"):
+                self.actions.record_recent_pr_merge("01")
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:record-recent-pr-merge:pr:argument",
+            self.pending_events(),
+        )
+
+    def test_record_recent_pr_merge_rejects_invalid_github_fact_number_before_projection(self) -> None:
+        facts = {
+            "number": "01",
+            "mergedAt": "2026-05-29T00:00:00Z",
+            "mergeCommit": {"oid": "abc123"},
+            "baseRefName": "dev",
+            "headRefName": "feature",
+        }
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout=json.dumps(facts), stderr="")):
+            with self.assertRaisesRegex(RuntimeError, "invalid pr target"):
+                self.actions.record_recent_pr_merge("7")
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:record-recent-pr-merge:pr:github-facts",
+            self.pending_events(),
+        )
 
     # Refactor (impl/issue191-single-active-controller): Old pattern:
     # lifecycle helpers could mutate GitHub/git from any controller device. New
@@ -564,9 +658,55 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
 
     def test_merge_pr_uses_single_linked_issue_parser_for_body_linkage(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        self.assertIn('body = self.gh(["pr", "view", pr, "--json", "body", "--jq", ".body"], check=False).stdout', text)
+        self.assertIn('body = self.gh(["pr", "view", pr_target, "--json", "body", "--jq", ".body"], check=False).stdout', text)
         self.assertIn("linked_issue = _single_linked_issue(body)", text)
         self.assertIn("return str(numbers[0]) if len(numbers) == 1 else \"\"", text)
+
+    def test_lifecycle_gh_subject_slots_use_normalized_target_locals(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        allowed = {"pr_target", "issue_target"}
+        raw = {"pr", "pr_number", "linked_issue", "pr_num"}
+        offenders: list[str] = []
+
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if not (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "gh"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "self"
+            ):
+                continue
+            if not node.args or not isinstance(node.args[0], ast.List):
+                continue
+            items = node.args[0].elts
+            if len(items) < 3:
+                continue
+            first = items[0].value if isinstance(items[0], ast.Constant) else None
+            second = items[1].value if isinstance(items[1], ast.Constant) else None
+            if (first, second) not in {
+                ("pr", "view"),
+                ("pr", "edit"),
+                ("pr", "merge"),
+                ("issue", "close"),
+                ("issue", "edit"),
+            }:
+                continue
+            subject = items[2]
+            if isinstance(subject, ast.Name):
+                if subject.id not in allowed:
+                    offenders.append(f"line {node.lineno}: {first} {second} uses {subject.id}")
+            elif isinstance(subject, ast.Call) and isinstance(subject.func, ast.Name) and subject.func.id == "str":
+                if subject.args and isinstance(subject.args[0], ast.Name):
+                    offenders.append(f"line {node.lineno}: {first} {second} uses str({subject.args[0].id})")
+            else:
+                offenders.append(f"line {node.lineno}: {first} {second} uses non-local subject")
+
+        for name in raw:
+            self.assertFalse(any(f"uses {name}" in offender or f"str({name})" in offender for offender in offenders))
+        self.assertEqual([], offenders)
 
 
 if __name__ == "__main__":
