@@ -142,6 +142,21 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertRegex(START_RE.pattern, "sha256")
         self.assertIn("consensus-rnd:foundational-invariants:end", END_MARKER)
 
+    def test_fi002_mentions_skill_private_runtime_not_host_ssot(self) -> None:
+        expected = (
+            "- FI-002 Host 事实必须由 host 配置或 host 规则注入；通用 skill / engine "
+            "不硬编码具体项目、组织、路径、分支或人员事实；skill-private runtime "
+            "directories such as `.refactor-loop/` must not become host production "
+            "configuration or ledger SSOT."
+        )
+        self.assertIn(expected, CANONICAL_BODY)
+        self.assertIn(expected, self._managed_block(CANONICAL_BODY))
+
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+        self.assertIn(f"+{expected}", patch)
+
     def _managed_block(self, body: str) -> str:
         return (
             f"<!-- consensus-rnd:foundational-invariants:start version=1 sha256={sha256_text(body)} -->\n"

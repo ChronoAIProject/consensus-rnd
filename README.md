@@ -6,7 +6,7 @@
 
 这里的"研发"取最广义:**任何持续向仓库提交状态的活动都是研发** —— 写代码是研发,写文档是研发,做 marketing、整理资料、维护配置同样是研发。只要产物落进 git、需要被审查、需要质量保证,就适用同一套引擎。
 
-本库不绑定任何具体项目。host 通过 `host.env` 注入自己的事实(仓库根、集成分支、规则文档、构建/测试命令、GitHub slug 等),引擎本身不写死任一项目。
+本库不绑定任何具体项目。host 通过 `host.env` 注入自己的 loop runtime 事实(仓库根、集成分支、规则文档、构建/测试命令、GitHub slug 等),引擎本身不写死任一项目。`.refactor-loop/` 是 skill runtime state;host-owned config 可通过 `CONSENSUS_RND_HOST_ENV` 指向。
 
 ## 核心:共识构建引擎
 
@@ -75,7 +75,7 @@ Refactor (iter1/issue-141):
 
 `codex-refactor-loop` 的 host 安装顺序集中在
 [`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough)。
-按该 walkthrough 安装 skill、复制并填写 `.refactor-loop/host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;README 不复制命令矩阵。
+按该 walkthrough 安装 skill、复制并填写 host-owned `host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;README 不复制命令矩阵。
 
 ## 泛化路线(待迭代)
 

@@ -23,6 +23,10 @@ Artifact profile: marker-only-work-unit
 
 ## 强制流程（违反任一项 → 输出 `AUDIT_INCOMPLETE`，禁止 `AUDIT_DONE`）
 
+### Host production SSOT boundary(强制)
+
+Audit must not move host production facts, branch topology, machine paths, durable ledger authority, or host artifacts into `.refactor-loop/`. `.refactor-loop/` is the skill-private runtime/cache/log home. If host SSOT drift is found, the cluster `new_pattern` must point to host-owned config, host rules, or host-owned artifacts, not `.refactor-loop/host.env`.
+
 ### Step 1 — Coverage manifest（必出）
 
 为每条 PROJECT_RULES/AGENTS 强制条款分配一个 `rule_id`。对每个 `rule_id`：
