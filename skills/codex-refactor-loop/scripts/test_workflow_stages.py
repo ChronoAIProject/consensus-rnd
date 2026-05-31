@@ -60,6 +60,14 @@ class WorkflowStageRegistryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     assert_stage_slug(bad_slug)
 
+    def test_work_intake_stage_contract_names_fallback_issue_production(self) -> None:
+        contract = stage_by_slug("work-intake").contract
+
+        self.assertIn("Fallback issue production", contract)
+        self.assertIn("no actionable managed issue/PR", contract)
+        self.assertIn("audit is the built-in compatibility producer", contract)
+        self.assertNotIn("default compatibility producer", contract)
+
     def test_validated_host_stage_projection_is_additive_only(self) -> None:
         host_stage = WorkflowStage("host:discovery", "Discovery", "Host projection only.", "host-discovery", -1)
 

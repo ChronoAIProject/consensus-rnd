@@ -1,6 +1,6 @@
 ---
 name: codex-refactor-loop
-description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
+description: Use when the user wants an unattended Consensus R&D issue/PR resolution and work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as a fallback compatibility issue producer, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
 > Refactor (iter319/issue-319): Old pattern: 物理拆 REFERENCE.md 后跨平台加载/维护退化.
 > New principle: 单文件 SKILL.md 用 Controller Contract Index + Detailed reference anchors 分层,禁止重新拆 REFERENCE.md 作为默认修复.
@@ -9,7 +9,7 @@ description: Use when the user wants an unattended Consensus R&D work-unit loop 
 > New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 consensus-rnd-cli restart-daemons 不无限阻塞。
 > Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
 > New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
-# Codex Refactor Loop — Controller Contract
+# Consensus R&D Work-Unit Loop — Controller Contract
 This SKILL.md is the single controller contract and detailed reference by maintainer directive. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
 
 Use intra-file anchors when a phase needs the detailed body, such as [host runtime details](#host-runtime-details); do not force-load unrelated sections.
@@ -38,14 +38,14 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
-## Two entry modes
+<a id="two-entry-modes"></a>
+## Main path and fallback producer
 
-The loop has two supported entry modes:
+The default main path is open actionable catalog-managed GitHub issue/PR resolution. The controller dispatches the next-step actor for managed issues and PRs before starting any producer for new work.
 
-- `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Consensus-rnd Phase design-consensus.
-- `issue-driven / Path A`: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
+`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
 
-Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
+`audit` remains a stable compatibility producer value and fallback issue producer. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. Audit produces or updates issues that feed back into the main path; it is not a co-equal entry mode or a parallel R&D lane. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Concrete plans still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
 Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The built-in registry remains the default compatibility vocabulary; public built-in stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
 
@@ -431,7 +431,7 @@ The workflow stage index is the local routing map. It intentionally links to hea
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
 | Consensus-rnd Phase bootstrap | Session bootstrap. Must complete before normal routing. | [Consensus-rnd Phase bootstrap details](#bootstrap-details) |
-| Consensus-rnd Phase work-intake | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
+| Consensus-rnd Phase work-intake | Fallback issue production when no actionable managed issue/PR exists; audit is the built-in compatibility producer. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
 | Consensus-rnd Phase implementation | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](#phase-routing-details) |
 | Consensus-rnd Phase verification | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
 | Consensus-rnd Phase publish | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](#merge-and-push-details) |
@@ -575,7 +575,7 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- If `deficit>0`, there is no general exemption: dispatch existing/open actionable work first, then legal audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
+- If `deficit>0`, there is no general exemption: dispatch existing/open actionable managed issue/PR work first, then legal fallback issue production through audit only when no higher-priority route exists. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
@@ -889,21 +889,24 @@ The controller recognizes two producers:
 
 | Producer | Intake | Controller behavior |
 |---|---|---|
-| `audit` | Default compatibility audit/refactor intake. | Run audit prompt, project accepted clusters into work-unit items, batch by dependencies/risk. |
-| `manual-issue` | Explicit GitHub issue intake via labels/triage. | Normalize problem and verification hints into a design issue, then use Consensus-rnd Phase design-consensus. |
+| `audit` | Compatibility audit/refactor fallback issue producer. | Run audit prompt only when no actionable managed issue/PR or higher-priority route exists; project accepted clusters into managed issues or work-unit items, then feed the main path. |
+| `manual-issue` | Explicit managed GitHub issue intake for main-path resolution. | Normalize problem and verification hints into a design issue, then use Consensus-rnd Phase design-consensus. |
 
 Producer rules:
 
-1. Audit is the default when the user asks for the unattended loop without a narrower producer.
-2. Manual issues enter only through explicit maintainer label or triage monitor routing.
-3. `requires_design` audit clusters open GitHub issues and do not auto-implement until Consensus-rnd Phase design-consensus consensus.
-4. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
-5. Batching should prefer independent, low-risk work and preserve dependency ordering.
-6. Detailed producer fields and batching heuristics live in [work-unit contract](#work-unit-contract) and [batching heuristics](#batching-heuristics).
+1. Issue/PR resolution is the main-path state, not a producer that creates new work.
+2. Audit runs only as a compatibility fallback issue producer when no actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists.
+3. Manual issues enter only through explicit maintainer label or triage monitor routing.
+4. `requires_design` audit clusters open GitHub issues and do not auto-implement until Consensus-rnd Phase design-consensus consensus.
+5. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
+6. Batching should prefer independent, low-risk work and preserve dependency ordering.
+7. Detailed producer fields and batching heuristics live in [work-unit contract](#work-unit-contract) and [batching heuristics](#batching-heuristics).
 
 ## Phase Guardrails
 
 Consensus-rnd Phase work-intake guardrails:
+
+This stage covers fallback issue production through the audit compatibility producer. The main issue/PR resolution path does not start here; it starts from open actionable managed GitHub issues and PRs already visible to the controller.
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
 2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`; `N` must be nonempty and unique among currently active audit fallback runs.
@@ -1541,12 +1544,12 @@ You are the **Controller**. You never edit production code yourself. You orchest
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
 3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派主路径或 fallback producer**:先扫 open actionable managed issue/PR 并派 next-step actor;只有没有 open actionable work / queued dispatch / clean marker route / CI-no-gap route / maintainer-comment route / higher-priority wakeup route 时,才派 Consensus-rnd Phase work-intake audit fallback(`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只建本地目录 + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
+- ❌ 只建本地目录 + 直接派 audit fallback,不起 6 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -1587,11 +1590,13 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 ---
 
 <a id="phase-routing-details"></a>
-## Consensus-rnd Phase work-intake — Work-unit production (audit default)
+## Consensus-rnd Phase work-intake — Fallback issue production
 
-The default work-unit producer is `audit`. Producer normalization is documented in
+The default main path is open actionable managed issue/PR resolution; the controller must dispatch those
+next-step actors before starting any new-work producer. Producer normalization is documented in
 [work-unit contract](#work-unit-contract): accepts only `producer: audit` and `producer: manual-issue`.
-`audit` is the raw artifact producer for this phase; `manual-issue` enters through Consensus-rnd Phase design-intake
+`audit` is the fallback raw artifact issue producer for this phase and runs only when no actionable managed
+issue/PR or higher-priority route exists. `manual-issue` enters through Consensus-rnd Phase design-intake
 triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
@@ -3201,10 +3206,12 @@ producer enum. The only allowed sidecar provenance values are `audit` and `manua
 
 ### `audit` producer
 
-`audit` remains the default producer. It reads the raw artifact contract from
-`prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
-The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
-the work-unit contract before dispatching or opening a design issue:
+`audit` remains the stable compatibility producer value and fallback issue producer, not the default
+main path. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route,
+CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. It reads the raw
+artifact contract from `prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md`
+cluster sections. The controller leaves `prompts/audit.md` unchanged and projects each accepted audit
+cluster into the work-unit contract before dispatching or opening a design issue:
 
 - `work_unit_id: <cluster-id>`
 - `id: <cluster-id>`

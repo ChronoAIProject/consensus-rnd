@@ -162,21 +162,66 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
-    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+    def test_skill_documents_main_path_and_fallback_producer_near_top(self) -> None:
         top = "\n".join(self.skill.splitlines()[:200])
         for needle in (
-            "## Two entry modes",
-            "audit-driven",
+            "## Main path and fallback producer",
+            "open actionable catalog-managed GitHub issue/PR resolution",
             "issue-driven / Path A",
             "catalog-derived design issue label bundle",
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
             "Legacy issue-entry labels are migration aliases only",
-            "Audit is a seed producer, not the only entry",
+            "`audit` remains a stable compatibility producer value and fallback issue producer",
+            "no open actionable managed issue/PR",
+            "Audit produces or updates issues that feed back into the main path",
+            "not a co-equal entry mode",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, top)
+        self.assertIn('<a id="two-entry-modes"></a>', top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+        self.assertNotIn("audit-driven", top)
+
+    def test_detailed_reference_uses_issue_pr_main_path_and_audit_fallback(self) -> None:
+        producers = section_after_heading(self.skill, "Producers")
+        work_intake = section_after_heading(self.skill, "Consensus-rnd Phase work-intake — Fallback issue production")
+        bootstrap = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase bootstrap — Bootstrap (first wakeup only)",
+        )
+        detailed = "\n".join((producers, work_intake, bootstrap))
+
+        for needle in (
+            "The default main path is open actionable managed issue/PR resolution",
+            "`audit` is the fallback raw artifact issue producer",
+            "`audit` remains the stable compatibility producer value and fallback issue producer, not the default\nmain path",
+            "先扫 open actionable managed issue/PR 并派 next-step actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, detailed)
+        for forbidden in (
+            "`audit` remains the default producer",
+            "The default work-unit producer is `audit`",
+            "派默认 work-unit producer",
+            "默认 audit",
+            "默认 producer",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, detailed)
+
+    def test_project_rules_do_not_duplicate_skill_local_main_path_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for forbidden in (
+            "issue resolution 是主路径",
+            "audit 是 fallback producer",
+            "open actionable managed GitHub issue/PR",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, claude)
+        self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
+        self.assertIn("## Main path and fallback producer", self.skill)
 
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
         phase9 = section_after_heading(
