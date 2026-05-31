@@ -28,9 +28,6 @@ DEFAULT_INTERVAL_SECONDS = 600
 DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600
 DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1
 
-if False:
-    Refactor (iter373/issue-373)
-
 
 def log(msg: str) -> None:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
