@@ -40,7 +40,7 @@ from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.work_items import ManagedWorkProjection
+from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -741,25 +741,31 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
 
 def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
-    represented = ManagedWorkProjection(_projection_items(items)).represented_issue_numbers()
-    ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
+    raw_by_key = {(item.kind.lower(), item.number): item for item in items}
+    actionable = open_actionable_managed_items(_projection_items(items))
+    ordered = sorted(
+        actionable,
+        key=lambda item: (
+            label_catalog.MILESTONE_CURRENT not in label_catalog.normalize_label_set(item.labels).canonical,
+            0 if item.kind == "issue" else 1,
+            item.number,
+        ),
+    )
     for item in ordered:
-        if item.kind == "issue" and item.number in represented:
-            continue
-        phase = phase_from_labels(item.labels)
-        status = status_from_labels(item.labels)
-        if status in {"blocked", "merged", "ci-running", "pr-open"}:
-            continue
-        priority = 6 if item.milestone else 7
+        raw = raw_by_key.get((item.kind, item.number))
+        title = raw.title if raw is not None else item.title
+        milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
+        priority = 6 if milestone else 7
+        item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
         actions.append(
             {
                 "priority": priority,
                 "kind": "existing-issue",
-                "item": item.item,
-                "phase": phase,
+                "item": item_name,
+                "phase": phase_from_labels(item.labels),
                 "actor": actor_from_labels(item.labels, item.kind),
-                "milestone": item.milestone,
-                "title": item.title,
+                "milestone": milestone,
+                "title": title,
             }
         )
     return actions

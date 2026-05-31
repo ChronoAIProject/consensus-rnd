@@ -20,7 +20,7 @@ from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
 from ..update_check import parse_time
-from ..work_items import ManagedWorkProjection
+from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -98,7 +98,8 @@ def single_active_audit_boundary(
     #   Old pattern: floor deficits treated audit fallback as endlessly repeatable.
     #   New principle: one active same-iteration audit occupies the only ordinary
     #   fallback slot; callers expose blocked capacity without duplicate audit.
-    del gh_items
+    if has_open_actionable_managed_work(gh_items or []):
+        return None
     if not _queue_state_empty(repo_root, monitor, queue_state):
         return None
     lines: list[str] = []
