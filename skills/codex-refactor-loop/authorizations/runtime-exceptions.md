@@ -163,6 +163,21 @@ in `SKILL.md` and the tests.
 - verification: `test_release_publisher.py`, `test_release_publish_preflight.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_release_pipeline_contract.py`, `test_controller_actions.py`
 - no_new_runtime_authority: This entry names and mirrors the existing controller-owned ReleasePublisher path; it adds no public CLI, no workflow publication authority, and no production runtime behavior beyond the checked-in preflight plus publisher allowlist.
 
+<a id="controller-release-publisher-334"></a>
+## controller-release-publisher-334
+
+<!-- Refactor (iter334/issue-334): Old pattern: ReleasePublisher could create a release tag at a fresh manifest-bump SHA before exact-SHA checks were green. New principle: mirror the direct exact-SHA check gate after safe push and before release creation. -->
+- surface: `controller-owned release publisher`
+- source_issue: `#334`
+- source_round: `r5`
+- source_marker: `META_JUDGE_DONE:converge:round-4:decide`
+- skill_anchor: `#release-pipeline-integrationpost-61`
+- allowed: active-controller owner only; read release candidate/decision artifacts, run `ReleasePublishPreflight`, bump mapped manifests, commit/push the release manifest commit, read exact-SHA Checks API, create tag/release only after that exact fresh SHA is green, write `.refactor-loop/state/release-publish-result.json`.
+- forbidden: no worker diff commit, arbitrary branch push, issue/PR lifecycle, label mutation, workflow tag/release, public CLI release-publish, tag target without exact-SHA green checks, proof-ticket/resume system, release edit/delete/upload, merge/close, or generic lifecycle actor.
+- fact_source: release candidate/decision artifacts + mapped manifests + exact fresh SHA + Checks API projection.
+- verification: `test_release_publisher.py`, `test_release_pipeline_contract.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: mirror only, not a runtime API/loader/schema/proof ticket/authorization source beyond the existing controller-owned publisher boundary.
+
 <a id="closed-label-reconciler-238"></a>
 ## closed-label-reconciler-238
 
