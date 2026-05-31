@@ -38,8 +38,13 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 # Refactor (iterissue-331/issue-331):
-#   Old pattern: release gate 与 wakeup_plan 各自维护本地 daemon-name literal(5/EXPECTED_DAEMONS),与 restart.py DAEMON_COMMANDS 漂移,违反事实源唯一
-#   New principle: restart.py::restart_managed_daemon_names() 作唯一 canonical daemon-name projection;release 保留 DAEMON_NAMES 仅 derived alias;wakeup 删 EXPECTED_DAEMONS;health 收紧为每个 restart-managed heartbeat 都 fresh
+#   Old pattern: release gate and wakeup_plan each kept local daemon-name
+#   literals, drifting from restart.py DAEMON_COMMANDS and duplicating the
+#   source of truth.
+#   New principle: restart.py::restart_managed_daemon_names() is the canonical
+#   daemon-name projection; release keeps DAEMON_NAMES only as a derived alias,
+#   wakeup deletes EXPECTED_DAEMONS, and health requires every restart-managed
+#   heartbeat to be fresh.
 def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
 
