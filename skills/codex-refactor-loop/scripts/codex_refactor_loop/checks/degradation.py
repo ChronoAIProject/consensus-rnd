@@ -468,8 +468,10 @@ def discover_repo_root(start: Path) -> Path:
     current = start.resolve()
     if current.is_file():
         current = current.parent
+    if _looks_like_consensus_source_repo(current):
+        return current
     for candidate in (current, *current.parents):
-        if (candidate / SKILL_RELATIVE / "SKILL.md").exists():
+        if (candidate / ".git").exists():
             return candidate
     return current
 
