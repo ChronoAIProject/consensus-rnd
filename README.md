@@ -27,7 +27,7 @@ The engine is not "run the same prompt several times and vote." It is biased, in
 
 `codex-refactor-loop` is an experimental autonomous R&D system. Enable it only after the host repository explicitly opts in and the maintainers understand these risks:
 
-- **Autonomous writes**: when enabled, the loop can run unattended. It may let agent workers commit/push work, and the controller may open or close issues and PRs, merge PRs, create tags, and publish releases without per-action human confirmation.
+- **Autonomous writes**: when enabled, the loop can run unattended. Controller-owned paths may commit, push, open PRs, merge PRs, and publish releases after their respective gates and allowlists pass, without per-action human confirmation. Agent workers only produce implementation diffs in isolated worktrees; they do not commit or push.
 - **API and compute cost**: continuous Codex worker dispatch plus six GitHub-polling daemons can continuously consume API quota, model tokens, and local compute.
 - **Automatic releases**: with `RELEASE_AUTO_ENABLE=true`, the release gate may automatically bump manifests, commit, push, tag, and publish a GitHub release after required checks pass. Bad published tags are abandoned and superseded by the next version; they are not moved or rolled back.
 - **Host boundary**: skills have no authority to edit host configuration outside the surfaces exposed through `host.env`. The active-controller lease still creates a single writer that can mutate GitHub and already-pushed git surfaces within its narrow authorization.

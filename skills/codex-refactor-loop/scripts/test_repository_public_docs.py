@@ -110,6 +110,9 @@ class RepositoryPublicDocsTests(unittest.TestCase):
         self.assertIn("## ⚠️ 风险提示", readme_zh)
         for needle in (
             "Autonomous writes",
+            "Controller-owned paths may commit, push, open PRs, merge PRs, and publish releases",
+            "after their respective gates and allowlists pass",
+            "Agent workers only produce implementation diffs in isolated worktrees; they do not commit or push",
             "without per-action human confirmation",
             "API and compute cost",
             "six GitHub-polling daemons",
@@ -125,6 +128,9 @@ class RepositoryPublicDocsTests(unittest.TestCase):
                 self.assertIn(needle, readme)
         for needle in (
             "自治写操作",
+            "controller-owned 路径在相应 gate 与 allowlist 通过后",
+            "可执行 commit、push、open PR、merge PR、release publish",
+            "agent worker 只在隔离 worktree 产出实现 diff,不 commit/push",
             "没有逐动作人工确认",
             "API/算力成本",
             "6 个 daemon 轮询 GitHub",
@@ -138,6 +144,10 @@ class RepositoryPublicDocsTests(unittest.TestCase):
         ):
             with self.subTest(readme_zh_risk=needle):
                 self.assertIn(needle, readme_zh)
+        self.assertNotIn("agent workers commit/push", readme)
+        self.assertNotIn("let agent workers commit/push", readme)
+        self.assertNotIn("agent worker commit/push", readme_zh)
+        self.assertNotIn("让 agent worker commit/push", readme_zh)
 
     def test_readme_links_downstream_walkthrough_once(self) -> None:
         readme = read(README)

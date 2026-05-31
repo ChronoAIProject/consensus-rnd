@@ -27,7 +27,7 @@
 
 `codex-refactor-loop` 是实验性自治研发系统。下游仓库必须显式 opt in,且 maintainer 理解以下风险后再启用:
 
-- **自治写操作**:启用后 loop 可无人值守运行。它可能让 agent worker commit/push 工作,controller 可能开关 issue/PR、merge PR、打 tag、发 release,且没有逐动作人工确认。
+- **自治写操作**:启用后 loop 可无人值守运行。controller-owned 路径在相应 gate 与 allowlist 通过后,可执行 commit、push、open PR、merge PR、release publish,且没有逐动作人工确认。agent worker 只在隔离 worktree 产出实现 diff,不 commit/push。
 - **API/算力成本**:持续派发 Codex worker 加上 6 个 daemon 轮询 GitHub,会持续消耗 API quota、model token 和本机算力。
 - **自动发版**:`RELEASE_AUTO_ENABLE=true` 时,release gate 可在 required checks 全绿后自动 bump manifest、commit、push、tag 并发布 GitHub release。坏版即弃,用下一个版本取代;已发布 tag 不移动、不回滚。
 - **host 边界**:skill 无权修改 host 暴露面之外的配置,只在 `host.env` 暴露的 surface 工作。但 active-controller lease 会形成单写者,在窄授权内写 GitHub/已 push git 面。
