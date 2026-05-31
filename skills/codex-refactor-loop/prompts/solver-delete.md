@@ -26,6 +26,7 @@ You explicitly resist adding code. If after honest evaluation the feature must s
    - If it points to an existing local artifact or audit section, read that source and verify it.
    - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
+   - For issue-driven / Path A greenfield work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` with `WORK_UNIT_SOURCE_REF=gh-issue-<N>` means absence of existing local code to delete is neutral evidence: classify as genuinely needed/no current deletion dependency and abstain when deletion/collapse is not justified.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "删除优先" clause; "Deletion-first" principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
 4. If deletion requires changing PROJECT_RULES/AGENTS.md, L0/L1/L2 clauses, Tier boundaries, SPEC/conformance/trusted_base wording, or architecture vocabulary, treat that change as part of the deletion plan rather than a reason to escalate.
 5. Call sites of the violating code:
@@ -48,7 +49,7 @@ You explicitly resist adding code. If after honest evaluation the feature must s
    - **(b) Orphan feature** — has callers but capability is unused/disabled (feature flag off, old endpoint not in routes, etc.). → propose deletion + remove unused entry points.
    - **(c) Replaceable with existing** — there's already another code path doing the same job. → propose deletion + redirect.
    - **(d) Genuinely needed but over-built** — feature is real but uses 5 abstractions when 1 would do. → propose collapse-and-delete.
-   - **(e) Genuinely needed and right-sized, or "not now" / no current dependency** → ABSTAIN or `SOLVER_DONE:delete:false-positive:<reason>` with evidence. Lifecycle decisions stay with controller/maintainer.
+   - **(e) Genuinely needed and right-sized, Path A greenfield with no existing code to delete, or "not now" / no current dependency** → ABSTAIN or `SOLVER_DONE:delete:false-positive:<reason>` with evidence. Lifecycle decisions stay with controller/maintainer.
 3. **If the best deletion/collapse plan changes philosophy or Tier boundaries**, include exact file/clause, current invariant, proposed invariant/text, why deletion makes that change worth it, and why deep consensus should be reachable. Do NOT emit `escalate` or `abstain` merely because an existing philosophy/Tier boundary would change.
 4. **Escalate only for real exits**:
    - `ESCALATE_REASON:gpg-ratification:<short>` — consensus plan would require physical human GPG signing for Tier II files (`SPEC.md`, `conformance/`, `trusted_base.lock`) or physical Tier I supervisor reinstall/swap.

@@ -30,7 +30,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
-| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
+| Design consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
 <!-- Refactor (issue-304): Old: meta-judge owned a fresh stalled output. New: stalled is a router predicate continuation; legacy stalled markers are compatibility input only. -->
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
@@ -98,7 +98,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
-| `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | `contract-tests,manifest-version-sync,skill-degradation` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
+| `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | host-owned comma-separated exact check-run names, e.g. `ci,lint,typecheck` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
 | `$UPDATE_CHECK_ENABLE` | optional-noop | update-check probe | `false` | false or empty exits 0 with noop reason and writes disabled update-check state | update-check, restart-daemons | `test_update_check.py`, `test_restart_daemons.py` |
 | `$UPDATE_CHECK_INTERVAL_SECONDS` | defaulted | update-check probe | `21600` | default to `21600` seconds; fresh local update-check state is reused for manual probes | update-check, concurrency snapshot projection | `test_update_check.py`, `test_concurrency_monitor_snapshot.py` |
 | `$UPDATE_CHECK_TIMEOUT_SECONDS` | defaulted | update-check probe | `5` | default to `5` seconds for GitHub release/tag reads; failures write unknown state and never block restart | update-check | `test_update_check.py` |
@@ -196,6 +196,19 @@ Allowed host artifacts:
 - Optional repo-relative prompt/body binding files referenced by HostWorkflowSpec.
 
 Forbidden setup actions: no host `.github` edits, no label mutation, no issue/PR mutation, no branch-protection probing or edits, no git mutation, no branch creation, and no merge/close side effects. Future #357 interactive configuration may guide a maintainer through the same contract, but it must output these same host-owned artifacts rather than owning a new setup protocol.
+
+#### Guided GitHub consensus workflow setup
+
+When a host user asks for guided setup, do not add a renderer, CLI command, setup skill, installer, template directory, or root install document. Follow this walkthrough and write advisory artifacts by hand under `.refactor-loop/runs/github-workflow-setup/<timestamp>/`:
+
+- `host-env.patch.md`: derive a suggested host-owned `.config/consensus-rnd/host.env` patch from the Host env surface matrix and `host.env.example`; `.refactor-loop/host.env` remains only a legacy/runtime read fallback.
+- `labels-plan.json`: derive the label plan from `scripts/codex_refactor_loop/labels.py`; do not run `gh label create`, `gh label edit`, or `gh label delete`.
+- `scheduler.md`: point at the existing cron/launchd `consensus-rnd-cli restart-daemons` examples below; do not install a scheduler.
+- `statusline.json`: point at the existing read-only `consensus-rnd-cli statusline`; do not write Claude Code settings.
+- `host-workflow-spec.json`: optional data-only `HOST_WORKFLOW_SPEC` draft when the host needs workflow invariants; use the existing `workflow_spec.py` / `WorkflowInvariantValidator` contract, `host:` namespace entries, repo-relative paths, and no command, git, label, merge, or lifecycle fields.
+- `walkthrough.md`: summarize what the host still needs to review and apply.
+
+Do not produce `summary.json` or `host-workflow-spec.example.json`. These artifacts are advisory only: they must not modify host `.git`, `.github`, CI, policy, branch protection, GitHub labels, issues, PRs, commits, pushes, merges, closes, tags, releases, installers, settings, or any lifecycle surface.
 
 ### Keep existing daemons alive
 
@@ -319,7 +332,7 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 
 ## Skill degradation source-repo validation
 <!-- Refactor (iter259/issue-259): Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1). New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py. -->
-`skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; `consensus-rnd-cli release-gate` requires it beside `contract-tests` and `manifest-version-sync`. Static degradation checking against a non consensus-rnd source repo root must return rc=0 with `not-source-repo`, without emitting source-repo required-file findings, writing host artifacts, or creating runtime alerts/pending events; any source repo candidate remains fail-closed. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
+`skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; release required checks are not hardcoded by source-repo CI job names. `consensus-rnd-cli release-gate` consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` and checks whichever host-owned exact GitHub check-run names are listed there. Static degradation checking against a non consensus-rnd source repo root must return rc=0 with `not-source-repo`, without emitting source-repo required-file findings, writing host artifacts, or creating runtime alerts/pending events; any source repo candidate remains fail-closed. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
 
 ## Claude Code statusline(per #51 consensus)
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示、optional update notice)。
@@ -704,9 +717,9 @@ Consensus-rnd Phase review-gate keeps the consensus merge gate local enough for 
 
 Consensus-rnd Phase design-consensus is the sole authorization gate for concrete plans.
 
-1. Dispatch exactly three solver framings by default: minimal, structural, delete/defer.
+1. Dispatch exactly three solver framings by default: minimal, structural, delete.
 2. A meta-judge reads all three solver outputs.
-3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
+3. Concrete implementation authorization requires Step 3 truth-table consensus plus meta-judge `consensus`.
 4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
 5. Qualifying r3+ no-progress `converge` routes to reflector via router-owned stalled predicate, not directly to human; legacy `escalate:stalled` markers are compatibility input only.
 6. Maintainer replies reset the round when they materially change framing.
@@ -782,7 +795,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [prompts/review-fix.md](prompts/review-fix.md) — Consensus-rnd Phase review-gate fix worker.
 - [prompts/solver-minimal.md](prompts/solver-minimal.md) — Consensus-rnd Phase design-consensus minimal solver.
 - [prompts/solver-structural.md](prompts/solver-structural.md) — Consensus-rnd Phase design-consensus structural solver.
-- [prompts/solver-delete.md](prompts/solver-delete.md) — Consensus-rnd Phase design-consensus delete/defer solver.
+- [prompts/solver-delete.md](prompts/solver-delete.md) — Consensus-rnd Phase design-consensus delete/collapse/abstain solver.
 - [prompts/meta-judge.md](prompts/meta-judge.md) — Consensus-rnd Phase design-consensus meta-judge.
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
@@ -957,9 +970,9 @@ Consensus-rnd Phase review-gate guardrails:
 
 Consensus-rnd Phase design-consensus guardrails:
 
-1. Minimal, structural, and delete/defer solvers run for each design round.
+1. Minimal, structural, and delete solvers run for each design round.
 2. Meta-judge consumes all three outputs.
-3. Only 3/3 consensus plus meta-judge `consensus` authorizes implementation.
+3. Only Step 3 truth-table consensus plus meta-judge `consensus` authorizes implementation.
 4. `converge` means more solver work, not human escalation.
 5. `stalled` means reflector, not human escalation.
 6. Maintainer input can reframe the next round, but the controller does not synthesize a concrete plan alone.
@@ -1117,7 +1130,7 @@ dogfood 运行中固化的操作经验。host 注入的 loop runtime 配置集�
 <a id="skill-degradation-source-repo-validation-details"></a>
 ### Skill degradation source-repo validation details
 The skill-degradation checker is intentionally source-repo scoped: no standalone watchdog, no seventh daemon, no `DegradationCheck` protocol, no plugin registry, no new event envelope, no auto-clean, no auto-fix, no GitHub lifecycle mutation, and no codex dispatch path.
-Static checker: `python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-degradation --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`, mirrored by `release.yml`. The checker is read-only and returns nonzero on missing source-repo validation text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or downstream runtime watch markers.
+Static checker: `python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-degradation --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `consensus-rnd-cli release-gate:required_checks_recent_green` does not name source-repo CI jobs directly. It consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`, so each host configures the exact required GitHub check-run names in `host.env`; this source repo may list its own CI names in its host-owned `host.env`, but that example is not downstream runtime authority. The checker is read-only and returns nonzero on missing source-repo validation text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or downstream runtime watch markers.
 Downstream plugin-installed hosts have no skill-degradation runtime watch, no degradation alert log, no degradation pending event, no degradation peek lens, and no degradation host.env knobs. `consensus-rnd-cli concurrency` must not invoke `check-degradation` as a runtime watch against a host repo root.
 Forbidden: no source mutation, git operations, GitHub issue/PR/body/label lifecycle mutation, codex dispatch, standalone daemon creation, WorkUnit/schema/envelope changes, protocol/plugin registry, auto-clean root garbage, and auto-fix API.
 ### Worktree 位置约定(强制)
@@ -1973,7 +1986,7 @@ Ambiguous adoption metadata, failed adoption operation construction, or adoption
 ### Consensus-rnd Phase design-consensus router daemon command body
 <!-- Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's daemon contract said no GitHub while the source-OPEN gate read GitHub issue state. New: document the narrow state-only read-gh authority in the durable runtime-exception mirror and keep lifecycle authority forbidden. -->
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229`.
-`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/intent/ledger side-effect 前的 source-OPEN gate state-only GitHub read:`gh issue view <N> --json state`(optional `--repo <owner/repo>` from host GitHub context)。该 `read-gh` 只读取 issue `state`;非 OPEN 或 state 不可证明时 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/round、三个 scoped solver paths 和 judge output path;missing template 或 scope 校验失败 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+`consensus-rnd-cli phase9-router` 是单例 daemon,只读 clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/intent/ledger side-effect 前的 source-OPEN gate state-only GitHub read:`gh issue view <N> --json state`(optional `--repo <owner/repo>` from host GitHub context)。该 `read-gh` 只读取 issue `state`;非 OPEN 或 state 不可证明时 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/producer/source-ref/round、三个 scoped solver paths 和 judge output path;manual issue provenance uses `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>`. missing template 或 scope 校验失败 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
 Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn-intent authority):
@@ -2265,19 +2278,19 @@ A single reviewer codex would weigh all dimensions and might trade tests for arc
 Runs when a GitHub design issue / Consensus-rnd Phase design-consensus artifact needs a concrete implementation decision.
 Current audit-backed items expose `WORK_UNIT_ID=$CLUSTER_ID` so Consensus-rnd Phase design-consensus can frame the decision as
 work-unit design while preserving `cluster_id` as legacy routing metadata. Goal: 3 independent
-solver codexes propose framings from different biases; a 4th meta-judge codex arbitrates; **3/3
-unanimous + meta-judge consensus → auto-dispatch implement**. Deep consensus is the only sufficient
-authorization gate for every change, including Tier I, Tier II, `CLAUDE.md`, `SPEC.md`,
-conformance, and core abstractions. There is no post-consensus maintainer approval, physical GPG
-ratification, reinstall ratification, or philosophy escalation gate.
+solver codexes produce mandatory outputs from different biases; a 4th meta-judge codex arbitrates;
+**all implementation-bearing proposals agree + meta-judge consensus → auto-dispatch implement**.
+Deep consensus is the only sufficient authorization gate for every change, including Tier I,
+Tier II, `CLAUDE.md`, `SPEC.md`, conformance, and core abstractions. There is no post-consensus
+maintainer approval, physical GPG ratification, reinstall ratification, or philosophy escalation gate.
 
-Policy: **3/3 unanimous required** — anything less goes through convergence until consensus or true stall.
+Policy: all three solver outputs are mandatory, and all implementation-bearing proposals must agree. The only compatible-neutral mixed verdict is built-in Path A issue-driven greenfield: router-rendered `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` plus `WORK_UNIT_SOURCE_REF=gh-issue-<N>`, issue body/comments plus delete reverse-evidence proving greenfield/no current deletion target, two matching implementation-bearing proposals, and delete `abstain` that does not contradict the plan. This is not a generic 2/3 gate and has no host override; missing/unknown/audit-backed/non-greenfield provenance, implementation-bearing disagreement, delete `false-positive:nothing-to-delete`, or delete `escalate:no-plan` goes through convergence until consensus or true stall.
 
 ### Solver source contract
 
-Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_SOURCE_REF=gh-issue-<N>` means `gh issue view <N>` issue body/comments are the scope source. If an issue body or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated.
+Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>` mean `gh issue view <N>` issue body/comments are the scope source. If an issue body or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated. For Path A greenfield identity, absence of existing local code to delete is neutral evidence for the delete solver and is compatible with `SOLVER_DONE:delete:abstain:<reason>` when deletion/collapse is not justified.
 
-Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues.
+Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues. The router renders the same producer/source-ref provenance into meta-judge prompts so the judge can recognize Path A greenfield framing instead of treating delete-solver abstain as a failed deletion proof.
 
 ### Default solver roles
 
@@ -2285,7 +2298,7 @@ Audit-backed sources require verification of the audit `evidence:` file:line. Is
 |---|---|---|
 | **minimal** | smallest viable change; documented rule exception OK if scope is genuinely narrow | `prompts/solver-minimal.md` |
 | **structural** | CLAUDE-philosophy-aligned; new abstraction allowed if justified; never proposes rule exception | `prompts/solver-structural.md` |
-| **delete** | question necessity; propose delete / defer / collapse-and-redirect; abstain if feature genuinely needed | `prompts/solver-delete.md` |
+| **delete** | question necessity; propose delete / collapse-and-redirect; abstain if feature genuinely needed or Path A greenfield has no current deletion target | `prompts/solver-delete.md` |
 
 A 4th **meta-judge** codex arbitrates (`prompts/meta-judge.md`).
 
@@ -2482,7 +2495,7 @@ fi
 1. controller records the directive in the Consensus-rnd Phase design-consensus run artifact and GitHub issue thread.
 2. 立刻派一轮 fresh 3 solver(把指令 verbatim 作为 narrowing constraint)
 3. solver 们各自把指令具体化成 impl 计划(可能 minimal 给一套、structural 给另一套、delete 给第三套)
-4. meta-judge 仲裁 → 3/3 unanimous → 才能进 implement
+4. meta-judge 仲裁 → Step 3 truth-table consensus → 才能进 implement
 5. 不允许跳过 3 solver round 直接 implement(哪怕 maintainer 觉得方向很明显)
 
 理由:maintainer 直觉常常对,但 concrete 落地的细节(新 actor 边界 / schema 字段 / 命名 / 迁移路径)需要 3 个独立角度验证,避免单 codex 把 "明显方向" 误读成 "明显方案"。consensus 这步就是 catch 误读用的。
@@ -2497,11 +2510,11 @@ When the auto-discover Monitor fires `design-issue-event:<N>` and the new commen
 2. **Treat the new comment as fresh constraint material** — prepend its verbatim text to a NEW round's solver prompt header under "Maintainer comment (must incorporate)".
 3. **Dispatch FRESH 3 solver codex** (not "continue convergence"; truly fresh, with all prior rounds as context but no inherited stance).
 4. **No round counter penalty** — maintainer input is the loop's continuation signal, not a stop signal. The round counter increments but does NOT trip the escalation cap.
-5. **Only 3/3 unanimous + meta-judge consensus** moves the cluster to implement. Maintainer can override at any time by adding `crnd:triage:resume-requested` label with their explicit framing in a comment.
+5. **Only all implementation-bearing proposals agree + meta-judge consensus** moves the cluster to implement, with the single Path A greenfield delete-abstain compatible-neutral exception defined in the design-consensus contract. Maintainer can override at any time by adding `crnd:triage:resume-requested` label with their explicit framing in a comment.
 
 This means: even if a previous round escalated with `crnd:lifecycle:stuck`, a new maintainer comment re-opens Consensus-rnd Phase design-consensus. The `crnd:lifecycle:stuck` label is removed automatically on reset; the canonical design-solving phase is re-applied.
 
-### Consensus action (3/3 unanimous + meta-judge consensus)
+### Consensus action (all implementation-bearing proposals agree + meta-judge consensus)
 
 1. Read the winning solver's "Concrete plan" section from the meta-judge output.
 2. Materialize `prompts/implement-<cluster-id>.md` prepending:
@@ -2522,7 +2535,7 @@ This means: even if a previous round escalated with `crnd:lifecycle:stuck`, a ne
 |---|---|
 | Issue | #${ISSUE_NUMBER} ${TITLE} |
 | Cluster | ${CLUSTER_ID} |
-| Round | r${ROUND}(共识达成,3/3 unanimous) |
+| Round | r${ROUND}(共识达成,Step 3 truth-table consensus) |
 | 选定 framing | **${FRAMING}**(minimal / structural / delete 中的一个) |
 | Solver 投票 | minimal: <verdict>:<summary> · structural: <verdict>:<summary> · delete: <verdict>:<summary> |
 | Meta-judge 仲裁 | ${JUDGE_VERBATIM_REASON} |
@@ -2546,7 +2559,7 @@ This means: even if a previous round escalated with `crnd:lifecycle:stuck`, a ne
 
 ### Consensus scope (no hardcoded human escalation)
 
-These are first-class consensus scope, not escalation triggers. Meta-judge MUST require solvers to include exact file/clause changes when any item appears; once 3/3 consensus is reached, implement proceeds without human ratification:
+These are first-class consensus scope, not escalation triggers. Meta-judge MUST require solvers to include exact file/clause changes when any item appears; once Step 3 truth-table consensus is reached, implement proceeds without human ratification:
 
 1. **Top-level CLAUDE.md clause change** — solver proposes editing CLAUDE.md "## 顶级架构约束" / "## 架构哲学" / Phase rules
 2. **Tier I/II change** — solver proposes changing supervisor, SPEC, conformance, trusted base lock, GPG policy text, or swap/reinstall policy text
@@ -2565,7 +2578,7 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 
 | Consensus-rnd Phase design-consensus event | Issue comment content |
 |---|---|
-| Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
+| Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. all implementation-bearing proposals must agree; only built-in Path A greenfield delete-abstain can be compatible-neutral; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
 | **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge>\``. Body = verbatim judge output. |
@@ -2590,9 +2603,9 @@ solver/judge artifacts. Do not mirror it into a root local state queue.
 
 ### Anti-spiral safeguards (no hard round cap — different safeguards instead)
 
-Policy:the loop continues until 3/3 unanimous consensus, true stall reaches reflector, maintainer provides new evidence, or maintainer closes the issue.
+Policy:the loop continues until Step 3 truth-table consensus, true stall reaches reflector, maintainer provides new evidence, or maintainer closes the issue.
 
-- **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until 3/3 unanimous OR true stall reaches reflector OR maintainer adds new constraints OR maintainer closes issue.
+- **No `MAX_CONVERGENCE_ROUNDS` cap**. The loop iterates until Step 3 truth-table consensus OR true stall reaches reflector OR maintainer adds new constraints OR maintainer closes issue.
 - **Stall detection**: if 3 consecutive rounds with NO maintainer input AND NO change in any solver's verdict text → **trigger meta-layer reflector** (not human escalate;)。Reflector 同样回 4 framing question + 输出 `META_RESOLVED:<kind>` marker;路由:
   - `retry-fix` → 派 r+1 solver,加 "reflector 提示: 你们三 round 没收敛,本轮必须 propose 新 framing 不重复之前"
   - `re-design` → reset Consensus-rnd Phase design-consensus round counter,prompt 重写带 reflector 总结的新 framing 角度

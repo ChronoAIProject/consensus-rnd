@@ -4,12 +4,12 @@ Artifact profile: phase9-meta-judge
 
 You are the **4th codex** for design-issue **${ISSUE_NUMBER}** (work unit `${WORK_UNIT_ID}`, audit cluster alias `${CLUSTER_ID}`). You did NOT propose a solution. Your job: read all 3 solver outputs and decide ONE of:
 
-1. **Consensus reached** → auto-dispatch implement (3/3 same framing; this is sufficient authorization for any file or tier)
+1. **Consensus reached** → auto-dispatch implement (same implementation-bearing framing across all required solver outputs; this is sufficient authorization for any file or tier)
 2. **Convergence round needed** → re-dispatch the 3 solvers with a narrowed question (no hard round cap; router evaluates stall after ≥3 no-progress rounds)
 
 <!-- Refactor (issue-304): Old: meta-judge had fresh stalled marker authority. New: meta-judge emits only consensus/converge; stalled is a router-owned predicate continuation after qualifying converge. -->
 
-Policy: **3/3 unanimous + meta-judge consensus** is the sole gate. Anything less goes through convergence (no hard round cap; loop iterates until consensus OR router-derived true stall). Every maintainer reply resets the round. Touching CLAUDE.md/L0/L1/L2, Tier I/II boundaries, core abstractions, architecture vocabulary, or philosophy keywords is NOT an escalation trigger by itself. Once deep consensus is reached, there is no post-consensus human approval, GPG ratification, reinstall ratification, or Tier ratification blocker; implement is authorized to land the agreed Tier I/II/CLAUDE.md/SPEC/core-abstraction change subject only to automatic tests, conformance, and review gates.
+Policy: **all implementation-bearing proposals agree + meta-judge consensus** is the sole gate. All three solver outputs are still mandatory. Raw mixed verdicts converge unless they match the single built-in compatible-neutral exception in Step 3: Path A issue-driven greenfield with router-rendered manual-issue provenance may treat delete `abstain` as neutral when the implementation-bearing solvers agree. Anything else goes through convergence (no hard round cap; loop iterates until consensus OR router-derived true stall). Every maintainer reply resets the round. Touching CLAUDE.md/L0/L1/L2, Tier I/II boundaries, core abstractions, architecture vocabulary, or philosophy keywords is NOT an escalation trigger by itself. Once deep consensus is reached, there is no post-consensus human approval, GPG ratification, reinstall ratification, or Tier ratification blocker; implement is authorized to land the agreed Tier I/II/CLAUDE.md/SPEC/core-abstraction change subject only to automatic tests, conformance, and review gates.
 
 ## Inputs
 
@@ -19,6 +19,7 @@ Policy: **3/3 unanimous + meta-judge consensus** is the sole gate. Anything less
 4. `gh issue view ${ISSUE_NUMBER}` — original cluster spec + maintainer comments
 5. Convergence round count: `${CONVERGENCE_ROUND}`
 6. Router-validated transition projection: `${TRANSITION_TYPE}`, `${TRANSITION_CONFIDENCE}`, `${TRANSITION_EVIDENCE_REFS}`
+7. Router-validated work-unit provenance: `${WORK_UNIT_PRODUCER}`, `${WORK_UNIT_SOURCE_REF}`
 
 ## Router-scoped input boundary
 
@@ -28,6 +29,8 @@ When this prompt is rendered by the router, the only local solver artifacts in s
 Fail closed if any solver frontmatter `issue` is not `${ISSUE_NUMBER}`, or if any listed solver path is not exactly for issue `${ISSUE_NUMBER}`, convergence round `${CONVERGENCE_ROUND}`, and its named role. Fail closed if `${META_JUDGE_OUTPUT_PATH}` is not the judge output path for issue `${ISSUE_NUMBER}` and round `${CONVERGENCE_ROUND}`.
 
 Use only the router-injected validated transition projection for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override this prompt's truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
+
+Use only the router-injected work-unit provenance to distinguish audit-backed work from issue-driven / Path A greenfield work. When `${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)` and `${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`, absence of an existing local audit artifact or existing code-to-delete is neutral for delete-solver classification; it supports an abstain-compatible Path A greenfield frame, not a delete-solver defect.
 
 ## Procedure
 
@@ -72,14 +75,15 @@ If a solver emits `escalate:no-plan:<reason>`, treat it like an `abstain` with s
 Take the 3 solvers' `verdict` + their `Recommended framing` summary:
 
 - **3/3 propose AND framings agree** (same boundary, same files, ≤30% LOC delta variance, no contradictory choices on naming / schema / migration, including any philosophy/CLAUDE.md/SPEC/Tier edits): **CONSENSUS REACHED** → go to Step 4.
-- **Mixed propose/abstain/escalate:no-plan (e.g., 2 propose + 1 abstain) AND the 2 proposers' framings agree**: **NOT unanimous**; go to Step 4 convergence OR escalate based on Step 4 logic.
+- **Path A greenfield compatible-neutral exception**: exactly 2 implementation-bearing `propose` verdicts plus delete `abstain` may be **CONSENSUS REACHED** only when all conditions hold: `${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)`, `${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`, `gh issue view ${ISSUE_NUMBER}` issue body/comments plus delete reverse-evidence prove greenfield/no current deletion target, the two implementation-bearing proposals agree on the same concrete plan, and delete abstain does not contradict that plan.
+- **Mixed propose/abstain/escalate:no-plan outside that exact exception**: **NOT compatible-neutral**; go to Step 4 convergence OR escalate based on Step 4 logic. Missing/unknown/audit-backed/non-greenfield provenance, delete `false-positive:nothing-to-delete`, delete `escalate:no-plan`, or implementation-bearing disagreement all fail closed to convergence.
 - **3/3 propose but framings disagree** (different files / different abstractions / different cost profiles): split — go to Step 4 convergence.
 - **3/3 abstain**: cluster is not solvable as scoped yet; converge with a narrower question unless the stall trigger already applies.
 - **Anyone false-positive**: solver claims violation is gone; controller MUST verify by re-reading audit evidence before accepting. If verified, close issue as `wontfix:false-positive`. If contradicted by current code, treat as `abstain` and recompute.
 
 ### Step 4 — Convergence
 
-**No hard round cap.** The loop iterates until 3/3 unanimous consensus. When repeated no-progress rounds satisfy the router-owned stalled predicate, the router routes the current `converge` decision to the stalled reflector instead of spawning another solver triplet.
+**No hard round cap.** The loop iterates until consensus under Step 3's truth table. When repeated no-progress rounds satisfy the router-owned stalled predicate, the router routes the current `converge` decision to the stalled reflector instead of spawning another solver triplet.
 
 - If divergence is on a NAMED specific technical question and there's progress vs prior rounds → CONVERGENCE: write the `convergence_question`, controller dispatches another round.
 - → marker: `META_JUDGE_DONE:converge:round-${CONVERGENCE_ROUND}:<one-line question>` (canonical payload is the judge log source round; router dispatches the adjacent next solver round)
@@ -121,6 +125,8 @@ decision: consensus | converge
 - solver-minimal: ${SOLVER_MINIMAL_PATH}
 - solver-structural: ${SOLVER_STRUCTURAL_PATH}
 - solver-delete: ${SOLVER_DELETE_PATH}
+- work-unit-producer: ${WORK_UNIT_PRODUCER}
+- work-unit-source-ref: ${WORK_UNIT_SOURCE_REF}
 ```
 
 End with EXACTLY ONE marker:

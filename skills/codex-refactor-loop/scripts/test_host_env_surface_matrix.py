@@ -149,7 +149,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
     def test_defaults_and_missing_behaviors_match(self) -> None:
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
-            "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": ("contract-tests,manifest-version-sync,skill-degradation", "missing_host_required_release_checks"),
+            "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": ("ci,lint,typecheck", "missing_host_required_release_checks"),
             "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
             "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
             "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
@@ -209,7 +209,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 elif key == "HOST_GITHUB_RELEASE_REQUIRED_CHECKS":
                     self.assertEqual("defaulted", row["Category"])
                     self.assertIn("exact GitHub check-run names", row["Missing/empty behavior"])
-                    self.assertEqual("contract-tests,manifest-version-sync,skill-degradation", self.exports[key]["value"])
+                    self.assertIn("host-owned comma-separated exact check-run names", row["Default/example"])
+                    self.assertEqual("ci,lint,typecheck", self.exports[key]["value"])
                 else:
                     self.assertEqual("", self.exports[key]["value"])
                     self.assertEqual("prompt-empty-infer", row["Category"])
