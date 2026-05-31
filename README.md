@@ -42,6 +42,8 @@ The engine is not "run the same prompt several times and vote." It is biased, in
 /plugin install consensus-rnd@consensus-rnd
 ```
 
+For local repository development, you may manually create `.claude/skills -> ../skills`; it is ignored and is not a published Claude entrypoint.
+
 ### Codex / Cursor
 
 Point the platform plugin mechanism at this repository. `.codex-plugin/plugin.json` and `.cursor-plugin/plugin.json` expose skills through `"skills": "./skills/"`.
