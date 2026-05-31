@@ -217,11 +217,14 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(event["marker"], "SOMETHING_DONE:surprise:payload")
         self.assertEqual(self.ledger_entries(), [])
 
-    def test_package_router_stalled_dispatches_reflector_when_predicate_holds(self) -> None:
+    def test_package_router_converge_dispatches_stalled_reflector_when_predicate_holds(self) -> None:
+        # Refactor (issue-304): Old: package smoke used a fresh stalled judge
+        # marker. New: r3 converge plus unchanged solver history renders the
+        # stalled reflector template and suppresses r4 solver dispatch.
         for round_no in (1, 2, 3):
             for role in ("minimal", "structural", "delete"):
                 self.write_log(f"phase9-issue160-r{round_no}-{role}.log", f"SOLVER_DONE:{role}:same:summary")
-        self.write_log("phase9-issue160-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.write_log("phase9-issue160-r3-judge.log", "META_JUDGE_DONE:converge:round-3:no-change")
 
         self.router.tick()
 
@@ -230,6 +233,11 @@ class Phase9RouterPackageTests(unittest.TestCase):
         ]
         self.assertEqual(len(reflector_commands), 1)
         self.assertIn("160-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+        self.assertNotIn("160-4-minimal", [entry["key"] for entry in self.ledger_entries()])
+        prompt = (self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue160-r3-reflector.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("# Role: Meta-reflector - stalled route resolver", prompt)
 
     def test_router_ignores_host_policy_roles_and_dispatch_for_active_spawn_allowlist(self) -> None:
         ctx = self.write_host_policy()

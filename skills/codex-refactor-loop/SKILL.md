@@ -30,7 +30,8 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
-| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
+| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
+<!-- Refactor (issue-304): Old: meta-judge owned a fresh stalled output. New: stalled is a router predicate continuation; legacy stalled markers are compatibility input only. -->
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
@@ -58,6 +59,7 @@ Owner map:
 | Owner | Operational names owned | Policy |
 |---|---|---|
 | `scripts/codex_refactor_loop/phase9/router.py` | `phase9-issue<N>-r<R>-<role>`, `solver-issue<N>-r<R>-<role>`, `meta-judge-issue<N>-r<R>`, and design-consensus artifact references | Canonical writer/parser for design-consensus filename identity and artifact references; legacy input is local to the router. |
+| `scripts/codex_refactor_loop/review_fix_dispatch.py` | `fix-pr<N>-round-<R>` review-fix dispatch filename identity | Canonical writer of review-fix prompt, log, and report artifact filename identity. |
 | `scripts/codex_refactor_loop/monitors/progress.py` | progress-comment target extraction for `review-pr<N>-<role>-r<R>`, `fix-pr<N>-<round>`, and `phase9-issue<N>-r<R>-<role>` | Read-only extraction owner only; malformed near-misses return empty and prompt fallback is allowed only when a prompt file exists. |
 | `scripts/codex_refactor_loop/monitors/concurrency.py` | mutable/read-only dispatch `task_id` prefix classification | Classification owner only; main-readonly prefixes must match exact owner-local forms before `$REPO_ROOT` `cd` is allowed. |
 | `scripts/codex_refactor_loop/controller_actions.py` and `scripts/codex_refactor_loop/git.py` | `refactor/iter<I>-<cluster>` branch/worktree generation | Validate iteration digits and cluster `[A-Za-z0-9._-]+` locally; this is duplicated owner-local safety until one implementation is removed or delegated. |
@@ -149,6 +151,7 @@ Refactor (iter1/issue-141):
 -->
 
 This walkthrough is the only downstream install runbook for `codex-refactor-loop`. It documents existing checked-in surfaces only: plugin or copy install, host fact injection through `.refactor-loop/host.env`, user-level cron or launchd calling `consensus-rnd-cli restart-daemons`, Claude Code `statusLine` pointing at the read-only `consensus-rnd-cli statusline`, and uninstall/rollback.
+<!-- Refactor (issue-298): Old: downstream daemon status guidance reused restart-daemons or heartbeat/process checks for reads. New: daemon-status --json is the read-only status surface; restart-daemons remains the only repair/reload command. -->
 
 The skill must not modify a host repository's `.git` config, CI config, or policy files. It must not add installer scripts, host runtime installers, statusline installers, or a root `INSTALL.md`. Host facts come only from `.refactor-loop/host.env`; do not add a second host variable list in this skill.
 
@@ -198,6 +201,8 @@ launchd `ProgramArguments` example:
 ```
 
 The helper remains the existing cron/launchd-only anti-stop surface. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
+
+For operator inspection, read daemon state with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`. If the projection reports stale/dead owner daemons, run the existing scheduler command above or `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` to repair/reload; do not use a separate start/stop/restart/reload verb.
 
 ### Add the Claude Code status line
 
@@ -324,8 +329,10 @@ New principle: singleton wrapper + actor-owned heartbeat lease; stale means acto
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
 <!-- Refactor (issue-264): Old: restart skip trusted one fresh pidfile wrapper and missed duplicate canonical instances.
 New: skip additionally requires zero duplicate canonical live wrapper for the same static allowlist command; process inventory is helper-private daemon-maintained state, not controller probing. -->
+<!-- Refactor (issue-298): Old: status reads and repair were both described through restart-daemons. New: daemon-status --json reads the same helper-private pid/heartbeat/fingerprint/inventory facts without lifecycle authority; restart-daemons is still the only write-side repair/reload path. -->
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
 Before starting or repairing any of the six write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
+`consensus-rnd-cli daemon-status --json` is the paired read-only daemon-status projection. It reports `running`, `stale`, `dead`, or `not-owner` from the existing static allowlist, helper-private launch fingerprint, pid/heartbeat readers, cached active-controller status, and `DaemonProcessInventory`; it has no public start/stop/restart/reload lifecycle verb. Repair/reload remains restart-daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
@@ -336,6 +343,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
 - **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Read-only status projection**: `consensus-rnd-cli daemon-status --json` mirrors the same static allowlist and helper-private pid/heartbeat/fingerprint/inventory facts plus cached active-controller status. It is read-only status only, has no public start/stop/restart/reload lifecycle verb, and repair/reload remains restart-daemons.
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat + matching fingerprint skip / stale/missing/malformed heartbeat repair / dead pid repair / missing/malformed/mismatched fingerprint restart / CLI entrypoint and package tree fingerprint restart / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
@@ -356,11 +364,11 @@ These are local controller contract rules learned from dogfood incidents:
 2. Audit prompt rendering fails closed when `ITERATION` is empty; do not write `audit-iter-.md`, `audit-iter--candidates.ndjson`, or similarly empty-identity artifacts.
 3. Any new role prompt under `skills/codex-refactor-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
 4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; only missing or invalid review artifacts fall back to clean log-tail `REVIEW_DONE` markers.
-5. Daemon recovery goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
+5. To read daemon state, run `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`; daemon repair/reload goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and router-derived stalled continuation; legacy stalled judge markers are read-only compatibility input under the same gates; controller fallback sweep remains authoritative for every other marker.
 
 <!-- Refactor (issue-277): Old: 并发 floor 把 audit fallback 当成无限可重复派发,会和 #205 单 active audit 规则冲突。New: floor 无通用豁免,`AUDIT_DONE:none:0` 仍不豁免;但同一 iteration ordinary audit fallback 只有一个 active slot,slot 占用且无其他合法 work 时输出 WAIT + blocked_deficit,不重复 audit。 -->
 
@@ -371,7 +379,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 1. Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and follow its prioritized `actions` / `recommendation` output.
 2. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` as the status lens.
 3. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon status with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`;任 owner daemon `stale` / `dead` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` repair/reload;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 5. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 6. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
 7. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
@@ -442,8 +450,8 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
 | `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; both dispatch r(S+1) solvers, while any non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
-| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; before dispatching r(S+1), the router-owned stalled predicate may route qualifying r3+ no-progress converge to the stalled reflector and suppress next solvers; non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| legacy `META_JUDGE_DONE:escalate:stalled` | Read-only compatibility input only: dispatch meta-reflector only when the same judge-role/source-OPEN/stalled-predicate gates hold; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
@@ -513,7 +521,7 @@ Controller duties:
 - Spawn codex workers.
 - Own git topology: commit, merge, push, PR create/merge/close.
 - Maintain wake source and concurrency floor.
-- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Consensus-rnd Phase design-consensus allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge`, valid `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
+- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Consensus-rnd Phase design-consensus allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge` including router-derived stalled continuation, and legacy read-only `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
 
 Controller non-duties:
 
@@ -669,7 +677,7 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
 4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
-5. `escalate:stalled` routes to reflector, not directly to human.
+5. Qualifying r3+ no-progress `converge` routes to reflector via router-owned stalled predicate, not directly to human; legacy `escalate:stalled` markers are compatibility input only.
 6. Maintainer replies reset the round when they materially change framing.
 7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
 8. Full consensus card template and solver rules are in [design-consensus details](#design-consensus-details).
@@ -1095,7 +1103,7 @@ Integration sync uses integration sync operation artifacts; the daemon writes `.
   Old pattern: Controller runbook still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(consensus-rnd-cli restart-daemons / consensus-rnd-cli peek / consensus-rnd-cli concurrency);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
 -->
-**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json`;任 heartbeat missing/malformed/stale `>90s` 时调用 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 让 helper 内部维护 singleton + restart。`consensus-rnd-cli phase9-router` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
+**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json`;任 owner daemon `stale` / `dead` 时调用 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 让 helper 内部维护 singleton + restart/reload。`consensus-rnd-cli phase9-router` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
 
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
@@ -1289,8 +1297,8 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 |---|---|
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
-| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver; legacy r(S+1) payload remains compatible |
-| META_JUDGE_DONE:escalate:stalled | reflector(per Consensus-rnd Phase design-consensus 路由表) |
+| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver unless router-owned stalled predicate dispatches round-S reflector; legacy r(S+1) payload remains compatible |
+| legacy META_JUDGE_DONE:escalate:stalled | reflector only as read-only compatibility and only if the stalled predicate holds |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Consensus-rnd Phase review-gate reviewer × 3 |
 | REVIEW_DONE × 3 + any reject | fix codex r+1 |
@@ -1313,15 +1321,15 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
-| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
-| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
-| `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
+| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);若 router-owned stalled predicate 成立则改派 round-S reflector;非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
+| legacy `escalate:stalled` | read-only compatibility: predicate/source gates 成立才派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
+| `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge;stalled 只能由 router predicate 派生 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
 | 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
 
 **正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `crnd:human:maintainer-decision` + ASCII A/B/C reason banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
 
-结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、`stalled`、`philosophy` 三类 judge marker。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver,`stalled` 先派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
+结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、router-derived `stalled`、`philosophy` 三类路由。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver或由 router predicate 改派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
 
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
@@ -1487,7 +1495,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
-3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
@@ -1931,29 +1939,29 @@ Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemo
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → render full `prompts/meta-judge.md` with router-scoped inputs and spawn same-round meta-judge.
-- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; both spawn r(S+1) minimal/structural/delete solvers; non-adjacent payload mismatch falls back.
-- `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; before spawning r(S+1) minimal/structural/delete solvers, run the router-owned stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds); if it holds, spawn round-S reflector with the full `prompts/meta-reflector-stalled.md` template and suppress next solvers; non-adjacent payload mismatch falls back.
+- legacy `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate + judge-role/source-OPEN gates → read-only compatibility replay that spawns reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 HostWorkflowSpec is not a phase9 direct-spawn authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
 Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 6-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
 Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, judge_prompt_template_path, judge_prompt_scope, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; if full `prompts/meta-judge.md` rendering is unavailable or any solver/judge path falls outside same issue/round/role scope, the router fails closed before judge dispatch and appends an existing-format `phase9-router-fallback` event. Fallback events use prefix `phase9-router-fallback`. A solver-triplet-to-judge duplicate with `key` already in the ledger is silent; when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch, append one existing-format `phase9-router-fallback` event with key prefix `phase9-triplet-suppression:` and reason exactly one of `phase9-triplet-target-log-exists`, `phase9-triplet-equivalent-log-exists`, or `phase9-triplet-in-flight`. The state-only source-OPEN gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
-dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
+dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/router-derived stalled continuation and legacy stalled compatibility may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
-python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons
+python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json
 python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only >/dev/null
 python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
-若 heartbeat stale/missing/malformed → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper 重启。
+若 daemon-status 报 owner daemon `stale` / `dead` → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper repair/reload。
 若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
 - ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
-- ❌ controller 用 process probe 判断 daemon 单例;单例与 pid/kill 细节只属于 `consensus-rnd-cli restart-daemons` / daemon 自身 helper 实现。
+- ❌ controller 用 process probe 判断 daemon 单例;controller 只读 `consensus-rnd-cli daemon-status --json`,单例与 pid/kill 细节只属于 `consensus-rnd-cli restart-daemons` / daemon 自身 helper 实现。
 
 ### Manual recovery
 
@@ -2278,13 +2286,13 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 | Decision | Category | Controller 动作 |
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action";implement 可改 Tier I/II/CLAUDE.md/SPEC/核心抽象) |
-| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver(把 convergence question prepend prompt); non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
-| `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人; `consensus-rnd-cli phase9-router` may direct-dispatch only when the stalled predicate holds |
-| `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge` / `escalate:stalled`;**禁止**直接 label 人 |
+| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver unless router-owned stalled predicate first派 round-S reflector; non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
+| legacy `escalate:stalled:<...>` | compatibility only | read-only replay path: predicate/source gates 成立才派 reflector codex(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人 |
+| `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge`;**禁止**直接 label 人 |
 
-结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。原因是路由只写了"escalate → label",没有明确 `stalled` 子类必须 reflector 优先。上表 `escalate:stalled` 行强制 reflector。
+结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。现在 fresh judge 不再授权 stalled 输出;router predicate 从 clean converge 历史派生 stalled,legacy stalled marker 只读兼容且仍必须 reflector 优先。
 
-**stalled 判据铁律**:`stalled` 只能在 `CONVERGENCE_ROUND >= 3` 且 solver verdict 文本连续无变化时成立。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 judge 异常处理:重派 judge(同输入,提示 stalled 最小轮次约束),而不是派 reflector 或 label 人。
+**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 solver verdict 文本连续无变化时从 clean `converge` 派生。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
 
 **反面(❌ 严禁)**:
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
@@ -2510,7 +2518,7 @@ These are first-class consensus scope, not escalation triggers. Meta-judge MUST 
 7. **Performance constraint unverifiable** — solver claims latency/memory bound but only prod can verify
 8. **Issue body's `human_brief.why_needs_design`** contains: `rule-boundary` / `architecture-change` / `philosophy` / `CLAUDE.md` / `canon-vocabulary`
 
-If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, route `escalate:stalled` to reflector. Do not create `escalate:gpg-ratification` or `escalate:philosophy`.
+If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, the router-owned stalled predicate may route that `converge` to reflector. Do not create fresh `escalate:stalled`, `escalate:gpg-ratification`, or `escalate:philosophy`.
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
@@ -2521,10 +2529,10 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 | Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge>\``. Body = verbatim judge output. |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "`crnd:triage:resume-requested` label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
-| Meta-judge → escalate:stalled | Same as above + label `crnd:lifecycle:stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
+| Router-derived stalled converge | Same as above + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
 | Legacy escalation category emitted | Post meta-judge output + summary "legacy escalation category normalized back into consensus loop"; re-dispatch judge or reflector; do not label human directly |
 
 **Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The raw reasoning, evidence, and concrete plans are the audit record; a summary loses too much fidelity. The 3+ comments per round are intentional.

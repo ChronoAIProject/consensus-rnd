@@ -29,6 +29,7 @@ OPERATIONS = [
     "progress-reporter",
     "release-gate",
     "statusline",
+    "daemon-status",
     "restart-daemons",
     "spawn-codex",
     "wakeup-plan",
