@@ -9,7 +9,7 @@
     {
       "name": "consensus-rnd",
       "description": "通用共识式研发 skills 库：偏置独立的多角度共识构建引擎",
-      "version": "1.0.0-beta.4",
+      "version": "1.0.0-beta.5",
       "source": "./",
       "author": {
         "name": "auric",
