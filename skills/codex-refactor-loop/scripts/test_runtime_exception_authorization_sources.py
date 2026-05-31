@@ -34,6 +34,16 @@ TARGET_ANCHORS = {
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
 }
 
+MAINTAINER_DIRECTIVE_ANCHORS = {
+    "maintainer-directive-concurrency-auto-topup",
+    "maintainer-directive-progress-reporter-orphan-delete",
+    "maintainer-directive-existing-issue-priority-over-audit",
+    "maintainer-directive-stale-issue-3h-revival",
+    "maintainer-directive-floor-no-exemption",
+    "maintainer-directive-milestone-priority",
+    "maintainer-directive-wakeup-plan-script",
+}
+
 REQUIRED_FIELDS = (
     "surface",
     "source_issue",
@@ -42,6 +52,19 @@ REQUIRED_FIELDS = (
     "skill_anchor",
     "allowed",
     "forbidden",
+    "verification",
+    "no_new_runtime_authority",
+)
+
+MAINTAINER_DIRECTIVE_REQUIRED_FIELDS = (
+    "source_kind",
+    "surface",
+    "source_date",
+    "source_evidence",
+    "local_original_pointer",
+    "affected_contracts",
+    "allowed_directive",
+    "forbidden_boundary",
     "verification",
     "no_new_runtime_authority",
 )
@@ -135,6 +158,52 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 for field in REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
+
+    def test_maintainer_directive_entries_have_required_fields(self) -> None:
+        self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
+        for anchor in MAINTAINER_DIRECTIVE_ANCHORS:
+            entry = mirror_entry(self.mirror, anchor)
+            with self.subTest(anchor=anchor):
+                self.assertIn(f'<a id="{anchor}"></a>', self.mirror)
+                self.assertIn(f"{MIRROR_RELATIVE}#{anchor}", self.skill)
+                self.assertIn("source_kind: maintainer_directive", entry)
+                self.assertIn("no_new_runtime_authority", entry)
+                for field in MAINTAINER_DIRECTIVE_REQUIRED_FIELDS:
+                    self.assertRegex(entry, rf"(?m)^- {field}:")
+
+    def test_maintainer_directive_mirror_is_single_checked_in_authorization_surface(self) -> None:
+        forbidden_mirror = "skills/codex-refactor-loop/authorizations/maintainer-directives.md"
+        self.assertFalse((REPO_ROOT / forbidden_mirror).exists())
+        for path in (
+            SKILL_MD,
+            MIRROR,
+            SKILL_ROOT / "prompts" / "meta-reflector-stalled.md",
+            SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py",
+            SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py",
+        ):
+            with self.subTest(path=path):
+                text = read(path)
+                self.assertNotIn(forbidden_mirror, text)
+                self.assertNotRegex(text, r"Authorization(?: source)?: `\.refactor-loop/runs/maintainer-directives/")
+                self.assertNotIn("skip-label: maintainer-directive", text)
+
+    def test_local_maintainer_directives_are_not_durable_authorization(self) -> None:
+        for path in (
+            SKILL_MD,
+            SKILL_ROOT / "prompts" / "meta-reflector-stalled.md",
+            SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py",
+            SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py",
+        ):
+            text = read(path)
+            with self.subTest(path=path):
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-29-floor-no-exemption.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-28-existing-issue-priority-over-audit.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-28-stale-issue-3h-revival.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-26-concurrency-auto-topup.md", text)
+                self.assertNotIn(".refactor-loop/runs/maintainer-directives/2026-05-27-progress-reporter-orphan-delete.md", text)
+        self.assertIn("Local `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` files are raw evidence awaiting mirror", read(SKILL_ROOT / "prompts" / "meta-reflector-stalled.md"))
 
     def test_release_commits_producer_mirror_preserves_narrow_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "release-commits-producer-232")

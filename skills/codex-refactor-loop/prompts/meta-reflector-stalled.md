@@ -22,14 +22,14 @@ Refactor (iter210/reflector-third-escape-route):
 
 Before emitting `META_RESOLVED:escalate-human:<reason>` or `META_RESOLVED:re-design:<reason>`, perform this self-check:
 
-1. Has the maintainer already authorized this topic in the current session?
-2. Is the same authorization encoded under `.refactor-loop/runs/maintainer-directives/`?
+1. Has the maintainer already authorized this topic in the current session with self-contained GitHub maintainer evidence?
+2. Is the same authorization mirrored under `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-*`?
 3. Is the apparent blocker only an architect/quality reviewer asking for a Consensus-rnd Phase design-consensus artifact, or a reviewer conflict with maintainer prior session directive?
 4. Does the Consensus-rnd Phase design-consensus evidence show no actionable framing after 3+ unchanged solver rounds? Evidence means the solver text/verdict direction is identical across 3+ convergence rounds, there is no maintainer input, and no distinct solvable framing remains. If yes, you must emit `META_RESOLVED:drop:no-actionable-framing-after-N-rounds`, where `N` is the observed convergence round.
 
 If answer 4 is yes, do not emit `META_RESOLVED:escalate-human` or `META_RESOLVED:re-design`.
 
-If any of answers 1-3 is yes, do not emit `META_RESOLVED:escalate-human`. Emit `META_RESOLVED:re-design:<reason>` only when the reason cites the concrete maintainer directive/current authorization artifact or a distinct actionable framing. The controller must then encode or reuse a `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` artifact when the route depends on maintainer authorization, and restart the appropriate Consensus-rnd Phase design-consensus path. The `crnd:human:maintainer-decision` label is only for true maintainer physical intervention, never an architect/quality reject workaround.
+If any of answers 1-3 is yes, do not emit `META_RESOLVED:escalate-human`. Emit `META_RESOLVED:re-design:<reason>` only when the reason cites the checked-in maintainer-directive mirror anchor, self-contained GitHub maintainer evidence, or a distinct actionable framing. Local `.refactor-loop/runs/maintainer-directives/<date>-<topic>.md` files are raw evidence awaiting mirror, not route authority. The controller must then restart the appropriate Consensus-rnd Phase design-consensus path. The `crnd:human:maintainer-decision` label is only for true maintainer physical intervention, never an architect/quality reject workaround.
 
 `META_RESOLVED:drop:<reason>` is valid for false-positive/wontfix cases and for phase9-no-framing cases where Consensus-rnd Phase design-consensus stayed unchanged across multi-round solver evidence and continued polling would be waste. Do not use `drop` to bypass architect/quality rejects that have an actionable Consensus-rnd Phase design-consensus or maintainer-directive route.
 
