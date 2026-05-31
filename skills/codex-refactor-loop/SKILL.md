@@ -36,7 +36,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
-| Language | Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
+| Language | Source files are English-only; external user-facing artifacts are 中文 by default. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
 ## Two entry modes
 
@@ -737,14 +737,19 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 5. No sleep/delay-based test pacing; use deterministic awaiters.
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
 7. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
-8. Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
+8. Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and GitHub issue/PR/commit/design artifacts remain 中文 by default. No mandatory parallel English section.
 10. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](#hard-rules-details).
 
 ## 工作语言规则(源码内英文,源码外中文)
 
-Policy: Source files are English-only; external user-facing artifacts are 中文 by default. No mandatory parallel English section.
+<!--
+Refactor (iter343/issue-343):
+  Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
+  New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
+-->
+Policy: Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out. No mandatory parallel English section.
 Operational details live in [language policy details](#language-policy-details); historical bilingual notes live in [historical bilingual notes](#historical-bilingual-notes).
 
 ## Files
@@ -3041,13 +3046,13 @@ Bash(
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
 7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
-8. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
+8. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
 
 ## 工作语言规则(源码内英文,源码外中文)
 
 Policy: **源文件内部 English-only;源文件之外的 user-facing artifact 默认 中文**。
 
-中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts)仍是英文(只要 grep / 调试用)。
+中文适用对象:GitHub issue body、PR description、PR comments、design issue auto-loop 评论、scorecard docs (`docs/audit-scorecard/`)、escalation 文案、cross-post 通知、controller / codex 写出的 git commit message、`docs/*.md`、TODO 标记。`README.md` + `README.zh-CN.md` 是唯一英文 canonical 公开文档 carve-out:`README.md` 英文 canonical,`README.zh-CN.md` 中文 companion,双向交叉链接且大段顺序对齐即可,不要求逐句对等。Internal artifact(`.refactor-loop/runs/*.md` and named daemon state artifacts)仍是英文(只要 grep / 调试用)。
 
 英文适用对象:所有源文件(`.rs` / `.lua` / `.sh` / `.py` / `.ts`)内部自然语言与代码元素,包括注释、docstring、`log.{info,warn,error}` 字符串、error / panic 文本、代码 identifier、代码内构造的 commit-body 模板字符串。fkst 是 substrate,无 end-user UI;人读 `git log` / `journalctl` / source,英文 log 与注释强制英文同理,保持 LLM 语料一致、跨工程 reuse、无 encoding / 字体问题。
 
@@ -3062,6 +3067,7 @@ Policy: **源文件内部 English-only;源文件之外的 user-facing artifact �
 | GitHub PR title / body / 评论 | **中文** |
 | Git commit message | **中文**(包括 controller 写的 fix/merge/squash 等) |
 | Push notification | **中文** |
+| Public identity README pair | `README.md` is **English canonical**; `README.zh-CN.md` is the **中文 companion**. This is the only English-canonical public-doc carve-out. |
 | Skill 文档 / $REPO_ROOT 的架构/词汇文档(若有) /audit 报告 | 维持现状(中英混排已存在) |
 | **代码内 `// Refactor (iterN/cluster-XXX):` 注释** | **英文**(production code 跨团队读) |
 | **代码内 doc comment / xmldoc / 其他注释** | **英文** |

@@ -2,7 +2,7 @@
 
 本文件给**在本仓库内工作的 agent**(增改 skill、维护清单、发版)看;不是给 host 项目运行时用的。host 运行时事实由 `host.env` 注入,见各 skill 的 SKILL.md。
 
-仓库定位与共识引擎设计哲学见 [`README.md`](./README.md);本文件是 agent 工作宪法,与 README 不重复。术语定义与项目当前状态归各 skill 的 SKILL.md / REFERENCE.md,不在本文件维护。
+仓库定位与共识引擎设计哲学见英文 canonical [`README.md`](./README.md);中文 companion 见 [`README.zh-CN.md`](./README.zh-CN.md)。本文件是 agent 工作宪法,与 README pair 不重复。术语定义与项目当前状态归各 skill 的 SKILL.md / REFERENCE.md,不在本文件维护。
 
 ## 仓库性质
 
@@ -18,6 +18,7 @@
 ├── gemini-extension.json + GEMINI.md   # Gemini:扩展清单 + 上下文入口
 ├── package.json           # npm 风格元数据 / 版本锚点
 ├── AGENTS.md → CLAUDE.md  # 跨 agent 约定(符号链接)
+├── README.md + README.zh-CN.md  # 英文 canonical 公开身份文档 + 中文 companion
 ├── LICENSE                # MIT
 ├── skills/<name>/         # 各 skill(SKILL.md 必备)
 └── .version-bump.json     # 版本号同步映射
@@ -47,7 +48,7 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 
 ## 共识引擎哲学(本仓库唯一产品身份)
 
-权威表述见 [`README.md`](./README.md)「核心」段;此处只述跨 skill 不动点:
+权威表述见英文 canonical [`README.md`](./README.md)「Core」段;[`README.zh-CN.md`](./README.zh-CN.md) 是中文 companion。此处只述跨 skill 不动点:
 
 - **偏置独立多角度**:同一决策点的多 solver / 多 reviewer **互相看不到对方输出**,各自带先验立场独立得出结论;禁止串行"先看 A 再写 B"或单源冒充多源。
 - **meta-judge 收敛**:分歧只收敛到固定数量的出口语义(达成 / 接近 / 真停滞);真停滞才升级到 meta-layer 调和,不直接升级到人。
@@ -84,6 +85,12 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 - **artifact 路径相对 `$REPO_ROOT`**:不硬编码 host 路径,不引入具体 host 事实。
 - **controller worktree 统一位置**:放在 `<repo-root>/.worktrees/<name>/`(gitignored),**不**创建 sibling `<repo>-wt-*` 目录。
 - **最小权限动作**:没有明确授权时,agent 不修改 host 配置、不发布 release、不关闭外部状态面、不执行不可逆生命周期动作。
+<!--
+Refactor (iter343/issue-343):
+  Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
+  New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
+-->
+- **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
 
 ## 版本同步(强制)
 
@@ -101,8 +108,8 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 
 ## 工程约定(精简)
 
-- **文档分层**:`README.md` 是仓库定位与共识引擎设计哲学权威源;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 是可选重型参考层;未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层。三者职责不重叠:README 写产品身份,CLAUDE.md 写仓库宪法,skill 自己维护行为合同/参考。
-- **根目录 `.md` 收口**:仅保留 `CLAUDE.md`、`README.md`、`AGENTS.md`(符号链接,内容同 `CLAUDE.md`)、`LICENSE`、`GEMINI.md`、`CHANGELOG.md`(若有)。
+- **文档分层**:`README.md` 是英文 canonical 仓库定位与共识引擎设计哲学权威源;`README.zh-CN.md` 是中文 companion,用于公开中文阅读入口,大段顺序对齐即可;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 是可选重型参考层;未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层。职责不重叠:README pair 写产品身份,CLAUDE.md 写仓库宪法,skill 自己维护行为合同/参考。
+- **根目录 `.md` 收口**:仅保留 `CLAUDE.md`、`README.md`、`README.zh-CN.md`、`AGENTS.md`(符号链接,内容同 `CLAUDE.md`)、`LICENSE`、`GEMINI.md`、`CHANGELOG.md`(若有)。
 - **不保留历史副本**:废弃文件直接删除,不留 `.bak/.old/.deprecated`;历史由 git 保留。
 - **Git**:分支名描述意图;提交信息祈使句聚焦单一目的;PR 写明动机、影响范围、验证命令与结果。
 - **CI / 守卫**:任何 controller-runtime 例外(narrow allowlist daemon、observability、decision-artifact 等)必须配套机械验证手段(behavior test + source-regression test)。
