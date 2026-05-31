@@ -68,9 +68,9 @@ def labels_after_plan(labels: Sequence[str], plan: ClosedPhaseLabelPlan) -> tupl
     return tuple(sorted(live))
 
 
-def has_exactly_one_phase_and_human(labels: Sequence[str]) -> bool:
-    ok, _errors = label_catalog.validate_exactly_one_phase_human(labels)
-    return ok
+def has_exactly_one_terminal_phase(labels: Sequence[str], terminal_phase: str) -> bool:
+    projection = label_catalog.normalize_label_set(labels)
+    return projection.labels_for_group("phase") == (terminal_phase,)
 
 
 def _terminal_phase(

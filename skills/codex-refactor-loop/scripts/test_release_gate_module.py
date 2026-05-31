@@ -387,6 +387,13 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertTrue(signal["passed"])
             self.assertTrue(all(signal["heartbeats"][name] for name in restart.restart_managed_daemon_names()))
 
+    def test_skill_fresh_heartbeats_contract_matches_gate(self) -> None:
+        skill = (REPO_ROOT / "skills/codex-refactor-loop/SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("every restart-managed daemon", skill)
+        self.assertIn("within 90 seconds", skill)
+        self.assertNotIn("At least five", skill)
+        self.assertNotIn("at least five fresh daemon heartbeats", skill)
+
     def test_daemon_name_source_contract_uses_restart_projection(self) -> None:
         restart_source = (SCRIPT_PATH.parent / "codex_refactor_loop/restart.py").read_text(encoding="utf-8")
         release_source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")

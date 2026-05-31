@@ -7,7 +7,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Mapping, Sequence
+from typing import Callable, Mapping, Sequence
 
 from . import labels as label_catalog
 from .active_controller import require_active_controller, write_active_controller_status
@@ -20,13 +20,14 @@ DEFAULT_INTERVAL_SECONDS = 1800
 
 
 class ClosedLabelReconciler:
-    """Restart-managed closed-only phase label reconciler."""
+    """Restart-managed closed-only phase label reconciler.
+    """
 
     def __init__(self, ctx: LoopContext, *, dry_run: bool = False) -> None:
         self.ctx = ctx
         self.dry_run = dry_run
 
-    def run_once(self) -> int:
+    def run_once(self, beat: Callable[[], None] | None = None) -> int:
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
@@ -36,20 +37,28 @@ class ClosedLabelReconciler:
             print("closed-label-reconciler noop: GH_REPO_SLUG unset")
             return 0
         plans = self.collect_plans()
+        if beat is not None:
+            beat()
         changed = 0
         for plan in plans:
-            if not plan.needs_edit:
-                continue
-            changed += 1
-            if self.dry_run:
-                print(_format_plan(plan, dry_run=True))
-                continue
-            live_plan = self.apply_plan(plan)
-            if live_plan is None:
-                print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
-                continue
-            self.verify_plan(live_plan)
-            print(_format_plan(live_plan, dry_run=False))
+            try:
+                if not plan.needs_edit:
+                    continue
+                changed += 1
+                if self.dry_run:
+                    print(_format_plan(plan, dry_run=True))
+                    continue
+                live_plan = self.apply_plan(plan)
+                if live_plan is None:
+                    print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
+                    continue
+                self.verify_plan(live_plan)
+                print(_format_plan(live_plan, dry_run=False))
+            except Exception as exc:
+                print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} {exc}")
+            finally:
+                if beat is not None:
+                    beat()
         if changed == 0:
             print("closed-label-reconciler noop: no closed managed phase-label drift")
         return 0
@@ -86,9 +95,10 @@ class ClosedLabelReconciler:
     def verify_plan(self, plan: ClosedPhaseLabelPlan) -> None:
         item = self._view_item(plan.kind, plan.number)
         live_labels = _label_names(item)
-        ok, errors = label_catalog.validate_exactly_one_phase_human(live_labels)
-        if not ok or plan.terminal_phase not in label_catalog.normalize_label_set(live_labels).canonical:
-            detail = "; ".join(errors) if errors else "terminal phase missing"
+        projection = label_catalog.normalize_label_set(live_labels)
+        phases = projection.labels_for_group("phase")
+        if phases != (plan.terminal_phase,):
+            detail = f"expected terminal phase {plan.terminal_phase}, got {','.join(phases) or '-'}"
             raise RuntimeError(f"post-edit label invariant failed for {plan.kind} #{plan.number}: {detail}")
 
     def _live_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
@@ -199,7 +209,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            reconciler.run_once()
+            reconciler.run_once(beat=lease.beat)
             lease.sleep_with_lease(interval)
     return reconciler.run_once()
 
