@@ -22,10 +22,10 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
 from codex_refactor_loop import restart
-from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons, daemon_targets
+from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons, daemon_targets, restart_managed_daemon_names
 
 
-DAEMON_NAMES = tuple(name for name, _command in DAEMON_COMMANDS)
+DAEMON_NAMES = restart_managed_daemon_names()
 FAKE_DAEMON = """import os, signal, sys, time
 from pathlib import Path
 repo = Path(os.environ["REPO_ROOT"])
@@ -160,6 +160,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             self.assertIn("--daemon", command)
         self.assertIn(("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")), DAEMON_COMMANDS)
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
+
+    def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
+        self.assertEqual(tuple(name for name, _command in DAEMON_COMMANDS), restart_managed_daemon_names())
+        self.assertEqual(6, len(restart_managed_daemon_names()))
+        self.assertIn("closed_label_reconciler", restart_managed_daemon_names())
+        patched = (
+            ("first", ("python3", "first")),
+            ("second", ("python3", "second")),
+        )
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", patched):
+            self.assertEqual(("first", "second"), restart.restart_managed_daemon_names())
 
     def test_help_exits_without_starting_daemons(self) -> None:
         with mock.patch.object(restart.RestartDaemons, "run") as run:
@@ -506,10 +517,13 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "pid_alive(pid)",
             "actor-owned heartbeat",
             "FORBIDDEN_LIFECYCLE_AUTHORITY",
+            "def restart_managed_daemon_names(",
+            "return tuple(name for name, _command in DAEMON_COMMANDS)",
         ):
             self.assertIn(needle, source)
         for forbidden in ("gh issue", "gh pr", "git fetch", "git push", "git merge"):
             self.assertNotIn(forbidden, source)
+        self.assertNotIn("RESTART_MANAGED_DAEMON_NAMES", source)
 
 
 if __name__ == "__main__":

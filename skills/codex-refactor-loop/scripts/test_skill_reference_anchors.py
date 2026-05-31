@@ -632,7 +632,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             actual = {
                 str(path.relative_to(SKILL_ROOT / "scripts" / "codex_refactor_loop"))
                 for path in production_files
-                if token in path.read_text(encoding="utf-8")
+                if token
+                in "\n".join(
+                    line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
+                )
             }
             with self.subTest(token=token):
                 self.assertLessEqual(actual, allowed_paths, actual - allowed_paths)

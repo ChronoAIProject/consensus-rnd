@@ -20,6 +20,7 @@ NOW = datetime(2026, 5, 29, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
+from codex_refactor_loop import restart
 from codex_refactor_loop.release import gate
 
 
@@ -30,6 +31,10 @@ def write_json(path: Path, data: object) -> None:
 
 def read_json(path: Path) -> object:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def executable_source(source: str) -> str:
+    return "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
 
 
 def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
@@ -181,7 +186,8 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertIn(label_catalog.HUMAN_MAINTAINER_DECISION, labels)
             heartbeat_signal = stability.signals["fresh_heartbeats"]
             self.assertEqual(heartbeat_signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 5)
+            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 6)
+            self.assertTrue(heartbeat_signal["heartbeats"]["closed_label_reconciler"])
 
     def test_release_gate_blocks_on_legacy_blocked_and_human_labels(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -272,7 +278,8 @@ class ReleaseGateModuleTests(unittest.TestCase):
 
             self.assertFalse(signal["passed"])
             self.assertEqual(signal["source"], "heartbeats/*.ts")
-            self.assertEqual(signal["heartbeats"], {})
+            self.assertTrue(all(value is False for value in signal["heartbeats"].values()))
+            self.assertEqual(set(signal["heartbeats"]), set(gate.DAEMON_NAMES))
 
     def test_source_has_no_release_lifecycle_or_daemon_event_authority(self) -> None:
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
@@ -306,13 +313,49 @@ class ReleaseGateModuleTests(unittest.TestCase):
     def test_required_check_names_and_daemon_heartbeat_allowlist_are_stable(self) -> None:
         self.assertEqual(gate.REQUIRED_CHECKS, ("contract-tests", "manifest-version-sync", "skill-degradation"))
         self.assertEqual(gate.HEARTBEAT_FRESH_SECONDS, 90)
-        self.assertEqual(gate.DAEMON_NAMES, (
-            "concurrency_monitor",
-            "codex-progress-reporter",
-            "comment-monitor",
-            "dev_sync_daemon",
-            "phase9_router_daemon",
-        ))
+        self.assertEqual(gate.DAEMON_NAMES, restart.restart_managed_daemon_names())
+        self.assertEqual(6, len(gate.DAEMON_NAMES))
+        self.assertIn("closed_label_reconciler", gate.DAEMON_NAMES)
+
+    def test_fresh_heartbeats_requires_each_restart_managed_daemon(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            heartbeat_dir = repo / ".refactor-loop/heartbeats"
+            heartbeat_dir.mkdir(parents=True, exist_ok=True)
+            fresh = int(NOW.timestamp())
+            for name in gate.DAEMON_NAMES:
+                if name != "closed_label_reconciler":
+                    (heartbeat_dir / f"{name}.ts").write_text(f"{fresh}\n", encoding="utf-8")
+            (heartbeat_dir / "extra-observer.ts").write_text(f"{fresh}\n", encoding="utf-8")
+            release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+
+            signal = release_gate.fresh_heartbeats()
+
+            self.assertFalse(signal["passed"])
+            self.assertFalse(signal["heartbeats"]["closed_label_reconciler"])
+            self.assertTrue(signal["heartbeats"]["extra-observer"])
+
+            (heartbeat_dir / "closed_label_reconciler.ts").write_text(f"{fresh}\n", encoding="utf-8")
+            signal = release_gate.fresh_heartbeats()
+
+            self.assertTrue(signal["passed"])
+            self.assertTrue(all(signal["heartbeats"][name] for name in restart.restart_managed_daemon_names()))
+
+    def test_daemon_name_source_contract_uses_restart_projection(self) -> None:
+        restart_source = (SCRIPT_PATH.parent / "codex_refactor_loop/restart.py").read_text(encoding="utf-8")
+        release_source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
+        wakeup_source = (SCRIPT_PATH.parent / "codex_refactor_loop/wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn("def restart_managed_daemon_names(", restart_source)
+        self.assertIn("return tuple(name for name, _command in DAEMON_COMMANDS)", restart_source)
+        self.assertNotIn("RESTART_MANAGED_DAEMON_NAMES", restart_source)
+        release_executable = executable_source(release_source)
+        wakeup_executable = executable_source(wakeup_source)
+        self.assertIn("DAEMON_NAMES = restart_managed_daemon_names()", release_executable)
+        self.assertIn("required_names = restart_managed_daemon_names()", release_executable)
+        self.assertNotIn('DAEMON_NAMES = (\n    "concurrency_monitor"', release_executable)
+        self.assertIn("restart_managed_daemon_names()", wakeup_source)
+        self.assertNotIn("EXPECTED_DAEMONS", wakeup_executable)
 
     def test_blocked_release_does_not_write_artifacts(self) -> None:
         with copy_repo_fixture() as tmp:

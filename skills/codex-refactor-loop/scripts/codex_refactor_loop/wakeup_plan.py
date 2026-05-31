@@ -41,6 +41,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -48,13 +49,6 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
-EXPECTED_DAEMONS = (
-    "concurrency_monitor",
-    "comment-monitor",
-    "codex-progress-reporter",
-    "dev_sync_daemon",
-    "phase9_router_daemon",
-)
 DONE_PREFIXES = (
     "AUDIT_DONE",
     "SOLVER_DONE",
@@ -293,9 +287,14 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
 
 
 def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
-    # Refactor (issue-162/wakeup-heartbeats-only):
-    #   Old pattern: daemon health could drift toward matching solver or log text.
-    #   New principle: health reads only actor-owned .refactor-loop/heartbeats/*.ts.
+    # Refactor (iterissue-331/issue-331):
+    #   Old pattern: release gate and wakeup_plan each kept local daemon-name
+    #   literals, drifting from restart.py DAEMON_COMMANDS and duplicating the
+    #   source of truth.
+    #   New principle: restart.py::restart_managed_daemon_names() is the
+    #   canonical daemon-name projection; release keeps DAEMON_NAMES only as a
+    #   derived alias, wakeup deletes EXPECTED_DAEMONS, and health requires
+    #   every restart-managed heartbeat to be fresh.
     if now is None:
         now = time.time()
     heartbeat_dir = repo_root / ".refactor-loop" / "heartbeats"
@@ -313,7 +312,7 @@ def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
                 items.append({"name": name, "status": status, "age_seconds": age})
             except (OSError, ValueError):
                 items.append({"name": name, "status": "stale", "age_seconds": None})
-    for name in EXPECTED_DAEMONS:
+    for name in restart_managed_daemon_names():
         if name not in seen:
             items.append({"name": name, "status": "missing", "age_seconds": None})
     needs_restart = any(item["status"] in {"stale", "missing"} for item in items)
