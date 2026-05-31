@@ -359,6 +359,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
+    def test_issue276_lifecycle_target_normalization_contract_is_documented(self) -> None:
+        section = section_between(
+            self.skill,
+            r"^### Controller-internal lifecycle primitives.+$",
+            r"^### ",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "<!-- Refactor (issue-276): Old pattern:",
+            "`apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge`",
+            "`_normalize_lifecycle_target`",
+            "canonical positive decimals",
+            "before any `gh` or `git` side effect",
+            "empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed",
+            "`CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>`",
+            "`open_pr_with_label(...)` URL extraction followed by the same normalization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_runtime_surface_boundary_keeps_peek_human_and_wakeup_plan_machine(self) -> None:
         self.assertIn("`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader", self.skill)
         self.assertIn("`consensus-rnd-cli peek` is a status lens, not routing authority", self.skill)

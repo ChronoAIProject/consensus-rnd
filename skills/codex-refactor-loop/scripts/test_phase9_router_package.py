@@ -318,8 +318,19 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "solver_input_prompts",
             "judge_input_solver_logs",
             "judge_prompt_path",
+            "judge_prompt_template_path",
+            "judge_prompt_scope",
             "independence_check",
+            "prompts/meta-judge.md",
+            "MetaJudgePromptContext",
+            "MetaJudgePromptRenderer",
+            "phase9-meta-judge-template-unavailable",
+            "phase9-meta-judge-scope-invalid",
             "phase9-triplet-evidence-invalid",
+            "phase9-triplet-suppression:",
+            "phase9-triplet-target-log-exists",
+            "phase9-triplet-equivalent-log-exists",
+            "phase9-triplet-in-flight",
             "Refactor (iter1/issue-167)",
             "Old pattern: solver triplet handoff recorded only the base dispatch row",
             "New principle: keep row-level router-private ledger provenance",
@@ -360,6 +371,23 @@ class Phase9RouterPackageTests(unittest.TestCase):
                     src,
                     f"codex_refactor_loop.phase9.router must not introduce forbidden boundary token: {forbidden}",
                 )
+
+    def test_package_router_source_uses_meta_judge_template_not_stub_prompt(self) -> None:
+        src = PACKAGE_ROUTER.read_text(encoding="utf-8")
+        skill = (REPO_ROOT / "skills" / "codex-refactor-loop" / "SKILL.md").read_text(encoding="utf-8")
+        combined = "\n".join((src, skill))
+        for required in (
+            "prompts/meta-judge.md",
+            "MetaJudgePromptRenderer",
+            "full `prompts/meta-judge.md`",
+            "Router template bindings",
+            "missing template",
+            "phase9-meta-judge-template-unavailable",
+            "phase9-meta-judge-scope-invalid",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, combined)
+        self.assertNotIn("Read the three completed solver logs and emit META_JUDGE_DONE", src)
 
     def test_package_main_once_dispatches_via_absolute_repo_root(self) -> None:
         for role in ("minimal", "structural", "delete"):

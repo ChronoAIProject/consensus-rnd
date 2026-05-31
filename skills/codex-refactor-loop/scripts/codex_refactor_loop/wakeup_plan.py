@@ -41,6 +41,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
@@ -735,10 +736,13 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     return actions
 
 
-def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
+def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     represented = ManagedWorkProjection(_projection_items(items)).represented_issue_numbers()
-    ordered = sorted(items, key=lambda item: (not item.milestone, 0 if item.kind == "issue" else 1, item.number))
+    # Refactor (issue-262): Old: existing issue ranking only used milestone,
+    # kind, and number. New: a checked-in caller may use the validated
+    # transition_assessment sidecar bucket before the existing tie-breakers.
+    ordered = sorted(items, key=lambda item: _existing_issue_sort_key(item, repo_root))
     for item in ordered:
         if item.kind == "issue" and item.number in represented:
             continue
@@ -759,6 +763,20 @@ def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
             }
         )
     return actions
+
+
+def _existing_issue_sort_key(item: GhItem, repo_root: Path | None) -> tuple[bool, int, float, int, int]:
+    if repo_root is None:
+        transition_key = (0, -0.0)
+    else:
+        transition_key = transition_rank_key(
+            TransitionAssessmentReader.load_for_work_unit(
+                repo_root,
+                work_unit_id=f"issue-{item.number}",
+                source_ref=f"gh-issue-{item.number}",
+            )
+        )
+    return (not item.milestone, transition_key[0], transition_key[1], 0 if item.kind == "issue" else 1, item.number)
 
 
 def phase_from_labels(labels: tuple[str, ...]) -> str:
@@ -851,7 +869,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         )
     else:
         actions.extend(host_actions)
-    actions.extend(existing_issue_actions(gh_items))
+    actions.extend(existing_issue_actions(gh_items, repo_root))
     actions.sort(key=lambda action: action["priority"])
 
     recommendation: str | None = None
