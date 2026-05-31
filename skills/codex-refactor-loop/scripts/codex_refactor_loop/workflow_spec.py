@@ -175,9 +175,6 @@ class ValidatedWorkflowSpec:
             ],
         }
 
-    def as_dict(self) -> dict[str, Any]:
-        return self.projection()
-
 
 class HostWorkflowSpec:
     def __init__(self, data: Mapping[str, Any], *, source_path: Path, repo_root: Path) -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import tokenize
 import unittest
@@ -21,6 +22,8 @@ HAN_END = "\u9fff"
 LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
 ERROR_TYPES = {"Exception", "RuntimeError", "ValueError", "KeyError", "TypeError", "SystemExit"}
 COMMIT_TEMPLATE_NAMES = {"commit_body", "commit_message", "body_lines"}
+REFACTOR_POLICY_NONE = "none"
+REFACTOR_POLICY_SELF_DOC = "self-doc-comment"
 
 
 @dataclass(frozen=True)
@@ -159,7 +162,16 @@ def is_selected_string(node: ast.Constant, parent_map: dict[ast.AST, ast.AST]) -
     return False
 
 
-def comment_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
+def normalize_refactor_comment_policy(raw: str | None = None) -> str:
+    value = (raw if raw is not None else os.environ.get("HOST_REFACTOR_COMMENT_POLICY", "")).strip()
+    if not value or value == "default":
+        return REFACTOR_POLICY_NONE
+    if value in {REFACTOR_POLICY_NONE, REFACTOR_POLICY_SELF_DOC}:
+        return value
+    raise ValueError(f"invalid HOST_REFACTOR_COMMENT_POLICY: {value}")
+
+
+def comment_findings(path: Path, repo_root: Path = REPO_ROOT, *, forbid_refactor_history: bool = True) -> list[Finding]:
     findings: list[Finding] = []
     with tokenize.open(path) as fh:
         tokens = tokenize.generate_tokens(fh.readline)
@@ -169,12 +181,12 @@ def comment_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
             text = token.string
             if has_han(text):
                 findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "han-comment", text.strip()))
-            if has_refactor_history(text):
+            if forbid_refactor_history and has_refactor_history(text):
                 findings.append(Finding(relative(path, repo_root), "comment", token.start[0], "refactor-history-comment", text.strip()))
     return findings
 
 
-def string_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
+def string_findings(path: Path, repo_root: Path = REPO_ROOT, *, forbid_refactor_history: bool = True) -> list[Finding]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source)
     parent_map = build_parent_map(tree)
@@ -189,16 +201,18 @@ def string_findings(path: Path, repo_root: Path = REPO_ROOT) -> list[Finding]:
             if is_selected_string(node, parent_map) and reason != "han-docstring":
                 reason = "han-selected-string"
             findings.append(Finding(relative(path, repo_root), owner, node.lineno, reason, text[:160]))
-        if has_refactor_history(text):
+        if forbid_refactor_history and has_refactor_history(text):
             findings.append(Finding(relative(path, repo_root), owner, node.lineno, "refactor-history-string", text[:160]))
     return findings
 
 
-def scan_python_source_language(repo_root: Path = REPO_ROOT) -> list[Finding]:
+def scan_python_source_language(repo_root: Path = REPO_ROOT, *, refactor_comment_policy: str | None = None) -> list[Finding]:
+    policy = normalize_refactor_comment_policy(refactor_comment_policy)
+    forbid_refactor_history = policy == REFACTOR_POLICY_NONE
     findings: list[Finding] = []
     for path in source_files(repo_root):
-        findings.extend(comment_findings(path, repo_root))
-        findings.extend(string_findings(path, repo_root))
+        findings.extend(comment_findings(path, repo_root, forbid_refactor_history=forbid_refactor_history))
+        findings.extend(string_findings(path, repo_root, forbid_refactor_history=forbid_refactor_history))
     return [finding for finding in findings if not is_allowlisted(finding)]
 
 
@@ -248,6 +262,36 @@ class SourceLanguagePolicyTests(unittest.TestCase):
         self.assertIn((expected_path, 2, "refactor-history-comment"), scan_reasons)
         self.assertIn((expected_path, 3, "refactor-history-comment"), scan_reasons)
         self.assertIn((expected_path, 5, "han-selected-string"), scan_reasons)
+
+    def test_self_doc_policy_allows_english_refactor_history_comments_only(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            source_path = repo_root / ".github" / "scripts" / "allowed_self_doc.py"
+            source_path.parent.mkdir(parents=True)
+            source_path.write_text(
+                "# Refactor (iter1/example):\n"
+                "#   Old pattern: Previous behavior was hard to review.\n"
+                "#   New principle: Keep local rationale readable when explicitly enabled.\n"
+                "def run() -> None:\n"
+                "    return None\n",
+                encoding="utf-8",
+            )
+
+            self.assertEqual([], scan_python_source_language(repo_root, refactor_comment_policy=REFACTOR_POLICY_SELF_DOC))
+            none_findings = scan_python_source_language(repo_root, refactor_comment_policy=REFACTOR_POLICY_NONE)
+
+        self.assertEqual(
+            {(1, "refactor-history-comment"), (2, "refactor-history-comment"), (3, "refactor-history-comment")},
+            {(finding.line, finding.reason) for finding in none_findings},
+        )
+
+    def test_invalid_refactor_comment_policy_fails_closed(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            repo_root = Path(temp_dir)
+            (repo_root / ".github" / "scripts").mkdir(parents=True)
+
+            with self.assertRaises(ValueError):
+                scan_python_source_language(repo_root, refactor_comment_policy="maybe")
 
     def test_allowlist_entries_match_current_literals(self) -> None:
         raw_findings: list[Finding] = []
