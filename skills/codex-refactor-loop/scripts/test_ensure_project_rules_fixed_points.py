@@ -295,6 +295,8 @@ class ReleaseSemverLadderSourceTests(unittest.TestCase):
 
         self.assertIn("next_release_version", gate_source)
         self.assertIn("validate_release_version_coordinate", preflight_source)
+        self.assertIn("compare_semver(version, from_version)", preflight_source)
+        self.assertNotIn("compare_semver(version, to_version)", preflight_source)
         self.assertNotIn("bump_semver(from_version, bump_type)", gate_source)
         self.assertIn("same-stage `N+1`", skill)
         self.assertIn("`bump_type` is commit-impact metadata, not promotion authority", skill)
