@@ -81,9 +81,12 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.skill = read(SKILL_MD)
         self.readme = read(README_MD)
 
-    def test_reference_file_was_merged_into_skill(self) -> None:
+    def test_reference_file_was_merged_into_skill_as_documented_architecture(self) -> None:
         self.assertFalse(REFERENCE_MD.exists())
         self.assertIn("## Detailed reference", self.skill)
+        self.assertIn("single controller contract and detailed reference by maintainer directive", self.skill)
+        self.assertIn("use intra-file anchor links", self.skill)
+        self.assertIn("Controller Contract Index", self.skill)
         self.assertEqual(1, self.skill.count('id="downstream-install-walkthrough"'))
         self.assertIn("## Downstream install walkthrough", self.skill)
 
@@ -98,6 +101,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
     def test_skill_contains_required_detailed_sections(self) -> None:
         required_anchors = (
+            "detailed-reference",
             "controller-contract-details",
             "host-runtime-details",
             "status-and-escalation-templates",
@@ -125,10 +129,34 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(stage.detail_anchor, available)
 
     def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
-        skill_lines = len(self.skill.splitlines())
-
-        self.assertGreaterEqual(skill_lines, 3000)
+        available = reference_anchors(self.skill)
+        for anchor in (
+            "detailed-reference",
+            "controller-contract-details",
+            "host-runtime-details",
+            "daemon-command-bodies",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, available)
+                self.assertIn(f"(#{anchor})", self.skill)
+        self.assertIn("single controller contract and detailed reference by maintainer directive", self.skill)
+        self.assertIn("物理拆 REFERENCE.md 后跨平台加载/维护退化", self.skill)
         self.assertIn("Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks", self.skill)
+
+    def test_project_rules_document_optional_reference_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for needle in (
+            "重型参考默认可下沉到 `REFERENCE.md`",
+            "跨平台 agent 加载或维护实证显示物理拆分退化",
+            "允许单文件 SKILL.md 同时承载 controller 合同与详细参考",
+            "用 intra-file anchor 分层并由 source-regression 锁住" + "事实源" + "唯一性",
+            "重型参考默认拆 `REFERENCE.md`",
+            "可留在 SKILL.md 的详细参考区并用 intra-file anchor 暴露",
+            "`skills/<name>/REFERENCE.md` 是可选重型参考层",
+            "未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
 
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
@@ -262,6 +290,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "statusline-snapshot.json",
             "test_statusline.py",
             "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#update-check-231",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_skill_documents_controller_release_publisher_exact_sha_gate(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — release-publication(per #322)")
+
+        for needle in (
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#controller-release-publisher-334",
+            "release-pipeline-integrationpost-61",
+            "ReleaseRequiredChecksProjection",
+            "gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp",
+            "only then `gh release create v<to_version> --target <fresh release commit sha>",
+            "Missing `GH_REPO_SLUG`",
+            "pending/red/missing/stale exact-SHA required checks",
+            "invalid Checks API JSON",
+            "Checks API failure",
+            "fail closed before release creation",
+            "before `.refactor-loop/state/release-publish-result.json` is written",
+            "no tag target without exact-SHA green checks",
+            "no proof-ticket/resume system",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -604,7 +653,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             actual = {
                 str(path.relative_to(SKILL_ROOT / "scripts" / "codex_refactor_loop"))
                 for path in production_files
-                if token in path.read_text(encoding="utf-8")
+                if token
+                in "\n".join(
+                    line for line in path.read_text(encoding="utf-8").splitlines() if not line.lstrip().startswith("#")
+                )
             }
             with self.subTest(token=token):
                 self.assertLessEqual(actual, allowed_paths, actual - allowed_paths)

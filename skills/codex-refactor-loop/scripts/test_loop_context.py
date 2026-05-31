@@ -16,7 +16,7 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.context import LoopContext, LoopContextError
+from codex_refactor_loop.context import HostEnvLocator, LoopContext, LoopContextError
 
 
 class LoopContextTests(unittest.TestCase):
@@ -31,6 +31,12 @@ class LoopContextTests(unittest.TestCase):
 
     def write_host_env(self, text: str) -> None:
         (self.repo / ".refactor-loop" / "host.env").write_text(text, encoding="utf-8")
+
+    def write_host_owned_env(self, text: str, relative: str = ".config/consensus-rnd/host.env") -> Path:
+        path = self.repo / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return path
 
     def test_loads_host_env_and_stable_paths(self) -> None:
         self.write_host_env(
@@ -54,6 +60,94 @@ class LoopContextTests(unittest.TestCase):
         self.assertEqual(repo / ".refactor-loop" / ".controller-pending-events.log", ctx.paths.pending_events)
         self.assertEqual(repo / ".refactor-loop" / "state" / "statusline-snapshot.json", ctx.paths.statusline_snapshot)
         self.assertEqual(repo / ".refactor-loop" / "state" / "recent-pr-merges.json", ctx.paths.recent_pr_merges)
+
+    def test_explicit_consensus_rnd_host_env_takes_precedence_over_refactor_loop(self) -> None:
+        self.write_host_env(
+            "\n".join(
+                (
+                    f'export REPO_ROOT="{self.repo}"',
+                    'export GH_REPO_SLUG="legacy/repo"',
+                )
+            )
+        )
+        explicit = self.write_host_owned_env(
+            "\n".join(
+                (
+                    f'export REPO_ROOT="{self.repo}"',
+                    'export GH_REPO_SLUG="owner/repo"',
+                    'export BUILD_CMD="make build"',
+                )
+            )
+        )
+
+        ctx = LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+
+        self.assertEqual("owner/repo", ctx.gh_repo_slug)
+        self.assertEqual("make build", ctx.host_env["BUILD_CMD"])
+        self.assertEqual(explicit.resolve(), HostEnvLocator.resolve(self.repo, {"CONSENSUS_RND_HOST_ENV": str(explicit)}, self.repo).path)
+
+    def test_consensus_rnd_host_env_accepts_repo_contained_absolute_path(self) -> None:
+        explicit = self.write_host_owned_env(
+            "\n".join(
+                (
+                    f'export REPO_ROOT="{self.repo}"',
+                    'export GH_REPO_SLUG="owner/repo"',
+                )
+            )
+        )
+
+        ctx = LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": str(explicit)})
+
+        self.assertEqual(self.repo.resolve(), ctx.repo_root)
+        self.assertEqual("owner/repo", ctx.gh_repo_slug)
+
+    def test_consensus_rnd_host_env_rejects_repo_outside_and_parent_segments(self) -> None:
+        outside = self.tmp_root / "outside.env"
+        outside.write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")
+
+        cases = (str(outside), "../outside.env", "", ".config/../host.env")
+        for raw in cases:
+            with self.subTest(raw=raw):
+                with self.assertRaises(LoopContextError):
+                    LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": raw})
+
+    def test_legacy_refactor_loop_host_env_still_loads(self) -> None:
+        self.write_host_env(
+            "\n".join(
+                (
+                    f'export REPO_ROOT="{self.repo}"',
+                    'export GH_REPO_SLUG="legacy/repo"',
+                )
+            )
+        )
+
+        ctx = LoopContext.load(cwd=self.repo, env={})
+
+        self.assertEqual("legacy/repo", ctx.gh_repo_slug)
+
+    def test_explicit_consensus_rnd_host_env_rejects_repo_contained_missing_file(self) -> None:
+        missing = ".config/consensus-rnd/missing.env"
+
+        with self.assertRaisesRegex(LoopContextError, "not a readable file"):
+            LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": missing})
+
+    def test_load_ignores_root_host_env_migration_file(self) -> None:
+        (self.repo / "host.env").write_text(
+            f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="root/ignored"\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
+            LoopContext.load(cwd=self.repo, env={})
+
+        ctx = LoopContext.load(repo_root=self.repo, cwd=self.repo, env={})
+        self.assertEqual({}, ctx.host_env)
+        self.assertIsNone(ctx.gh_repo_slug)
+
+    def test_context_source_regression_reads_only_refactor_loop_host_env(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "context.py").read_text(encoding="utf-8")
+        self.assertIn('Path(".refactor-loop") / "host.env"', source)
+        self.assertNotIn('repo_root / "host.env"', source)
 
     def test_invalid_repo_root_override_fails_closed(self) -> None:
         other = self.tmp_root / "other"
@@ -82,7 +176,7 @@ class LoopContextTests(unittest.TestCase):
                 LoopContext.load(env=env, read_only=False, cwd=self.repo)
 
     def test_missing_repo_root_fails_without_fallback(self) -> None:
-        with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
+        with self.assertRaisesRegex(LoopContextError, "host-owned consensus-rnd host.env"):
             LoopContext.load(env={}, cwd=self.repo)
 
     def test_durable_artifact_path_writes_posix_repo_relative_text(self) -> None:

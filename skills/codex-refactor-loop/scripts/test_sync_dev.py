@@ -22,6 +22,7 @@ from codex_refactor_loop.sync.dev import (
     RollupAdoption,
     codex_resolve_in_flight,
     dispatch_codex_resolve,
+    load_dev_sync_config,
     merge_in_progress,
 )
 
@@ -528,6 +529,27 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertTrue(Path(argv[argv.index("--cd") + 1]).is_absolute())
         self.assertTrue(Path(argv[argv.index("--prompt") + 1]).is_absolute())
 
+    def test_load_dev_sync_config_ignores_legacy_aliases_and_derives_worktree(self) -> None:
+        (self.repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            "export INTEGRATION_BRANCH=canonical-integration\nexport REVIEW_BASE_BRANCH=canonical-review\n",
+            encoding="utf-8",
+        )
+
+        config = load_dev_sync_config(
+            env={
+                "REPO_ROOT": str(self.repo),
+                "INTEGRATION": "legacy-integration",
+                "REVIEW_BASE": "legacy-review",
+                "WORKTREE": str(self.repo / "legacy-wt"),
+            },
+            cwd=self.repo,
+        )
+
+        self.assertEqual("canonical-integration", config.integration)
+        self.assertEqual("canonical-review", config.review_base)
+        self.assertEqual((self.repo / ".worktrees" / "dev-sync").resolve(), config.worktree.resolve())
+
 
 class SyncDevSourceRegressionTests(unittest.TestCase):
     def test_module_is_import_safe_without_repo_root(self) -> None:
@@ -546,6 +568,12 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         for token in ("git commit", "gh pr create", "gh pr merge", "gh issue close", "git tag", "release publish"):
             with self.subTest(token=token):
                 self.assertNotIn(token, src)
+
+    def test_dev_sync_source_does_not_read_legacy_branch_or_worktree_aliases(self) -> None:
+        src = SYNC_DEV.read_text(encoding="utf-8")
+        for forbidden in ('get("INTEGRATION")', 'get("REVIEW_BASE")', 'get("WORKTREE"'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, src)
 
     def test_narrow_allowlist_contract_is_visible_in_module_source(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")

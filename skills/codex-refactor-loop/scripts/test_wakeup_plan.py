@@ -20,7 +20,9 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
+from codex_refactor_loop.wakeup_plan import resolve_repo_root  # noqa: E402
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -271,13 +273,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         heartbeats = self.repo / ".refactor-loop" / "heartbeats"
         heartbeats.mkdir(parents=True, exist_ok=True)
         now = str(int(time.time()))
-        for name in (
-            "concurrency_monitor",
-            "comment-monitor",
-            "codex-progress-reporter",
-            "dev_sync_daemon",
-            "phase9_router_daemon",
-        ):
+        for name in restart_managed_daemon_names():
             (heartbeats / f"{name}.ts").write_text(now, encoding="utf-8")
 
     def run_plan(self, *, fixture: str = "empty", ps_count: int = 5, active_audit: bool = False) -> dict:
@@ -389,6 +385,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, wakeup_source)
+
+    def test_resolve_repo_root_uses_loop_context_without_private_cwd_default(self) -> None:
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            with self.assertRaisesRegex(Exception, "REPO_ROOT is unset"):
+                resolve_repo_root(None)
+            self.assertEqual(self.repo.resolve(), resolve_repo_root(str(self.repo)))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_wakeup_plan_source_has_no_private_host_env_parser(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertNotIn("def read_host_env", wakeup_source)
+        self.assertNotIn("Path.cwd().resolve()", wakeup_source)
+        self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
 
     def test_unpushed_worker_output_routes_before_completed_marker_ci_and_existing_issue(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
@@ -635,6 +648,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         health = plan["daemon_health"]
         self.assertTrue(all(item["name"] != "solver-output" for item in health["items"]))
         self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "missing" for item in health["items"]))
+        self.assertTrue(any(item["name"] == "closed_label_reconciler" and item["status"] == "missing" for item in health["items"]))
 
     def test_daemon_health_reports_stale_and_missing_with_restart_hint(self) -> None:
         heartbeats = self.repo / ".refactor-loop" / "heartbeats"
@@ -649,6 +663,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(health["recommendation"], "consensus-rnd-cli restart-daemons")
         self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "stale" for item in health["items"]))
         self.assertTrue(any(item["status"] == "missing" for item in health["items"]))
+
+    def test_daemon_health_reports_closed_label_reconciler_missing(self) -> None:
+        (self.repo / ".refactor-loop" / "heartbeats" / "closed_label_reconciler.ts").unlink()
+
+        plan = self.run_plan()
+
+        health = plan["daemon_health"]
+        self.assertFalse(health["ok"])
+        self.assertTrue(
+            any(
+                item["name"] == "closed_label_reconciler" and item["status"] == "missing"
+                for item in health["items"]
+            )
+        )
 
     def test_deficit_calculates_from_floor_when_actual_below_target(self) -> None:
         plan, stdout = self.run_plan_with_stdout(ps_count=2)

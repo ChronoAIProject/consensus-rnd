@@ -41,6 +41,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -48,13 +49,6 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
-EXPECTED_DAEMONS = (
-    "concurrency_monitor",
-    "comment-monitor",
-    "codex-progress-reporter",
-    "dev_sync_daemon",
-    "phase9_router_daemon",
-)
 DONE_PREFIXES = (
     "AUDIT_DONE",
     "SOLVER_DONE",
@@ -117,24 +111,6 @@ def run_json(cmd: list[str], *, cwd: Path) -> Any:
         return None
 
 
-def read_host_env(repo_root: Path) -> dict[str, str]:
-    env_path = repo_root / ".refactor-loop" / "host.env"
-    values: dict[str, str] = {}
-    if not env_path.exists():
-        return values
-    try:
-        lines = env_path.read_text(encoding="utf-8").splitlines()
-    except OSError:
-        return values
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        values[key.strip()] = value.strip().strip("\"'")
-    return values
-
-
 def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]], str | None]:
     # Refactor (iter219/issue-219):
     #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
@@ -171,12 +147,11 @@ def configured_floor() -> int:
 
 
 def resolve_repo_root(arg_root: str | None) -> Path:
-    if arg_root:
-        return Path(arg_root).resolve()
-    env_root = os.environ.get("REPO_ROOT")
-    if env_root:
-        return Path(env_root).resolve()
-    return Path.cwd().resolve()
+    # Refactor (iter316/issue-316):
+    #   Old pattern: wakeup_plan guessed repo root from cwd and parsed host.env itself.
+    #   New principle: LoopContext owns repo-root/host.env loading; no private cwd default or parser.
+    ctx = LoopContext.load(repo_root=arg_root, env=os.environ, cwd=Path.cwd(), read_only=True)
+    return ctx.repo_root
 
 
 def import_concurrency_monitor(repo_root: Path) -> Any | None:
@@ -312,9 +287,14 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
 
 
 def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
-    # Refactor (issue-162/wakeup-heartbeats-only):
-    #   Old pattern: daemon health could drift toward matching solver or log text.
-    #   New principle: health reads only actor-owned .refactor-loop/heartbeats/*.ts.
+    # Refactor (iterissue-331/issue-331):
+    #   Old pattern: release gate and wakeup_plan each kept local daemon-name
+    #   literals, drifting from restart.py DAEMON_COMMANDS and duplicating the
+    #   source of truth.
+    #   New principle: restart.py::restart_managed_daemon_names() is the
+    #   canonical daemon-name projection; release keeps DAEMON_NAMES only as a
+    #   derived alias, wakeup deletes EXPECTED_DAEMONS, and health requires
+    #   every restart-managed heartbeat to be fresh.
     if now is None:
         now = time.time()
     heartbeat_dir = repo_root / ".refactor-loop" / "heartbeats"
@@ -332,7 +312,7 @@ def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
                 items.append({"name": name, "status": status, "age_seconds": age})
             except (OSError, ValueError):
                 items.append({"name": name, "status": "stale", "age_seconds": None})
-    for name in EXPECTED_DAEMONS:
+    for name in restart_managed_daemon_names():
         if name not in seen:
             items.append({"name": name, "status": "missing", "age_seconds": None})
     needs_restart = any(item["status"] in {"stale", "missing"} for item in items)
@@ -883,10 +863,8 @@ def latest_controller_validated_audit_none(repo_root: Path) -> bool:
 
 
 def build_plan(repo_root: Path) -> dict[str, Any]:
-    host_values = read_host_env(repo_root)
-    for key, value in host_values.items():
-        os.environ.setdefault(key, value)
-    os.environ["REPO_ROOT"] = str(repo_root)
+    ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+    os.environ.update(ctx.env_for_subprocess())
 
     health = daemon_health(repo_root)
     gh_items = load_github_items(repo_root)

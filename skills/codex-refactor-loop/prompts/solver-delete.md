@@ -41,6 +41,7 @@ You explicitly resist adding code. If after honest evaluation the feature must s
 
 ## Procedure
 
+0. **Host production SSOT boundary**: design plans must not make `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state. If the issue or audit asks for that direction, rewrite the plan to host-owned config/rules/artifacts or mark false-positive/abstain.
 1. **Trace the value chain backwards** from the current work-unit source: cited files, cited symbols, problem statement, issue body/comments, local artifact, audit evidence, or repo rules. Who calls the code? who calls them? What user-facing or system-facing capability vanishes if this whole code path is deleted? If no local audit artifact exists, do not fail into invented audit content.
 2. **Classify**:
    - **(a) Dead code** — no caller, no test, no test that asserts it works. → propose deletion.
@@ -137,9 +138,6 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
 - 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
 - Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
 
 
 ---

@@ -19,6 +19,7 @@ NOW = datetime(2026, 5, 26, 12, 0, tzinfo=timezone.utc)
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop import labels as label_catalog
+from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.release.gate import AutoReleaseGate, CommitInfo, classify_bump
 from codex_refactor_loop.release.versions import next_release_version
 
@@ -76,7 +77,9 @@ def write_opt_in(
     integration: str = "integration-branch",
     repo_slug: str = "owner/repo",
 ) -> None:
-    (repo / "host.env").write_text(
+    env_path = repo / ".refactor-loop" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
         "\n".join(
             [
                 f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
@@ -88,6 +91,30 @@ def write_opt_in(
         ),
         encoding="utf-8",
     )
+
+
+def write_explicit_opt_in(
+    repo: Path,
+    enabled: bool = True,
+    review_base: str = "review-base",
+    integration: str = "integration-branch",
+    repo_slug: str = "owner/repo",
+) -> Path:
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        "\n".join(
+            [
+                f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
+                f"export GH_REPO_SLUG={repo_slug}",
+                f"export REVIEW_BASE_BRANCH={review_base}",
+                f"export INTEGRATION_BRANCH={integration}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return env_path
 
 
 def write_gh_stub(
@@ -158,13 +185,7 @@ def write_live_state(repo: Path) -> None:
     state = repo / ".refactor-loop/state"
     heartbeat_dir = repo / ".refactor-loop/heartbeats"
     heartbeat_dir.mkdir(parents=True, exist_ok=True)
-    for name in (
-        "concurrency_monitor",
-        "codex-progress-reporter",
-        "comment-monitor",
-        "dev_sync_daemon",
-        "phase9_router_daemon",
-    ):
+    for name in restart_managed_daemon_names():
         (heartbeat_dir / f"{name}.ts").write_text(f"{now}\n", encoding="utf-8")
     write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
     write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
@@ -408,7 +429,9 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 with copy_repo_fixture() as tmp:
                     repo = Path(tmp) / "repo"
-                    (repo / "host.env").write_text(host_env, encoding="utf-8")
+                    env_path = repo / ".refactor-loop" / "host.env"
+                    env_path.parent.mkdir(parents=True, exist_ok=True)
+                    env_path.write_text(host_env, encoding="utf-8")
                     write_live_state(repo)
                     bin_dir = repo / "bin"
                     bin_dir.mkdir()
@@ -556,13 +579,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             stale = int((NOW - timedelta(seconds=91)).timestamp())
-            write_heartbeat_files(repo, {name: stale for name in (
-                "concurrency_monitor",
-                "codex-progress-reporter",
-                "comment-monitor",
-                "dev_sync_daemon",
-                "phase9_router_daemon",
-            )})
+            write_heartbeat_files(repo, {name: stale for name in restart_managed_daemon_names()})
             state = repo / ".refactor-loop/state"
             write_json(state / "phase8-review-state.json", {"max_consecutive_reject_rounds": 0})
             write_json(state / "meta-resolutions.json", {"unresolved_escalate_human": []})
@@ -577,60 +594,43 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             fresh = int(NOW.timestamp())
-            write_heartbeat_files(repo, {name: fresh for name in (
-                "concurrency_monitor",
-                "codex-progress-reporter",
-                "comment-monitor",
-                "dev_sync_daemon",
-                "phase9_router_daemon",
-                "extra-observer",
-            )})
+            write_heartbeat_files(repo, {**{name: fresh for name in restart_managed_daemon_names()}, "extra-observer": fresh})
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
 
             signal = gate.fresh_heartbeats()
 
             self.assertTrue(signal["passed"])
             self.assertEqual(signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 6)
+            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 7)
             self.assertTrue(signal["heartbeats"]["concurrency_monitor"])
+            self.assertTrue(signal["heartbeats"]["closed_label_reconciler"])
 
-    def test_fail_closed_when_fewer_than_five_real_heartbeats_are_fresh(self) -> None:
+    def test_fail_closed_when_any_restart_managed_heartbeat_is_missing(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             fresh = int(NOW.timestamp())
-            stale = int((NOW - timedelta(seconds=91)).timestamp())
-            write_heartbeat_files(repo, {
-                "concurrency_monitor": fresh,
-                "codex-progress-reporter": fresh,
-                "comment-monitor": fresh,
-                "dev_sync_daemon": fresh,
-                "phase9_router_daemon": stale,
-            })
+            write_heartbeat_files(repo, {name: fresh for name in restart_managed_daemon_names() if name != "closed_label_reconciler"})
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
 
             signal = gate.fresh_heartbeats()
 
             self.assertFalse(signal["passed"])
             self.assertIn("heartbeat_stale", signal["reason"])
-            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 4)
+            self.assertFalse(signal["heartbeats"]["closed_label_reconciler"])
 
     def test_fail_closed_when_real_heartbeat_file_is_malformed(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             fresh = int(NOW.timestamp())
-            write_heartbeat_files(repo, {
-                "concurrency_monitor": fresh,
-                "codex-progress-reporter": fresh,
-                "comment-monitor": fresh,
-                "dev_sync_daemon": fresh,
-                "phase9_router_daemon": "not-an-epoch",
-            })
+            values: dict[str, int | str] = {name: fresh for name in restart_managed_daemon_names()}
+            values["closed_label_reconciler"] = "not-an-epoch"
+            write_heartbeat_files(repo, values)
             gate = AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
 
             signal = gate.fresh_heartbeats()
 
             self.assertFalse(signal["passed"])
-            self.assertFalse(signal["heartbeats"]["phase9_router_daemon"])
+            self.assertFalse(signal["heartbeats"]["closed_label_reconciler"])
 
     def test_fail_closed_when_phase8_reject_churn_reaches_limit(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -840,6 +840,32 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertTrue((repo / ".refactor-loop/state/release-decision.json").exists())
             self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_explicit_host_env_opt_in_writes_decision_without_legacy_file(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_explicit_opt_in(repo)
+            self.assertFalse((repo / ".refactor-loop/host.env").exists())
+            write_green_signals(repo)
+            env = {
+                **os.environ,
+                "REPO_ROOT": str(repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            }
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("RELEASE_AUTO_ENABLE is not true", result.stdout)
+            self.assertTrue((repo / ".refactor-loop/state/release-decision.json").exists())
+            self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
 
     def test_fail_closed_when_no_commits_since_last_release(self) -> None:
         cases = ("absent", "empty")

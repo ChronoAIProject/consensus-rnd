@@ -20,6 +20,7 @@ Your bias: **smallest viable change** that resolves the audit's flagged violatio
 
 ## Procedure
 
+0. **Host production SSOT boundary**: design plans must not make `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state. If the issue or audit asks for that direction, rewrite the plan to host-owned config/rules/artifacts or mark false-positive/abstain.
 1. **Verify the violation is real** against the current work-unit source. For audit-backed sources, verify the cited audit `evidence:` file:line. For issue-driven sources, verify the cited files, symbols, problem statement, or repo rule from the issue body/comments. If the source evidence is stale, missing, or already fixed → emit `SOLVER_DONE:minimal:false-positive:<reason>` or `SOLVER_DONE:minimal:escalate:no-plan:<reason>` as appropriate. Do not invent audit evidence.
 2. **Locate the minimum-change boundary**. For each piece of evidence:
    - What is the smallest code edit that removes the specific violation?
@@ -119,9 +120,6 @@ Refactor (iter6/issue-118):
 - 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
 - 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
 - Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
 
 
 ---

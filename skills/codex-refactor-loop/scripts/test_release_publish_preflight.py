@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -73,6 +74,16 @@ def write_host_opt_in(repo: Path, enabled: bool = True) -> None:
         f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
         encoding="utf-8",
     )
+
+
+def write_explicit_host_opt_in(repo: Path, enabled: bool = True) -> Path:
+    path = repo / ".config/consensus-rnd/host.env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def green_required_signals() -> dict[str, object]:
@@ -150,6 +161,9 @@ class ReleasePublishPreflightTests(unittest.TestCase):
     # Refactor (iter1/issue-225):
     #   Old pattern: release publish preflight 的 fail-closed 负向分支缺测试(#217 误合遗留)
     #   New principle: 为 ReleasePublishPreflight 每个 fail-closed reason 补负向行为测试
+    # Refactor (iter1/issue-322):
+    #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
+    #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
 
     def assert_preflight_denies_with_reason(self, repo: Path, expected_reason: str) -> None:
         # refactor helper, no behavior change
@@ -198,6 +212,45 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertTrue(result.allowed, result.reasons)
             self.assertEqual(result.version, "1.9.10")
             self.assertEqual(result.target_ref, "abc123")
+
+    def test_explicit_host_env_opt_in_allows_preflight_without_legacy_file(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_explicit_host_opt_in(repo)
+            self.assertFalse((repo / ".refactor-loop/host.env").exists())
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10", target_ref="abc123")
+            old_env = {"CONSENSUS_RND_HOST_ENV": os.environ.get("CONSENSUS_RND_HOST_ENV")}
+            try:
+                os.environ["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
+
+                result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        os.environ.pop(key, None)
+                    else:
+                        os.environ[key] = value
+
+            self.assertTrue(result.allowed, result.reasons)
+            self.assertNotIn("host_opt_in_not_true", result.reasons)
+
+    def test_release_publication_322_required_preflight_evidence_is_present(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10", target_ref="abc123")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertTrue(result.allowed, result.reasons)
+            self.assertEqual(result.candidate["publish_preflight"], "controller-release-publish-preflight")
+            self.assertEqual(result.candidate["lifecycle_owner"], "controller")
+            self.assertEqual(result.candidate["host_opt_in"], "RELEASE_AUTO_ENABLE=true")
+            self.assertEqual(result.candidate["decision_digest"], canonical_digest(result.decision))
+            self.assertEqual(result.candidate["target_ref"], "abc123")
+            self.assertEqual(result.candidate["from_version"], "1.9.9")
+            self.assertEqual(result.version, "1.9.10")
+            self.assertTrue(result.candidate["required_signals"]["required_checks_recent_green"]["passed"])
 
     def test_publish_preflight_allows_same_stage_prerelease_candidate(self) -> None:
         with copy_repo_fixture() as tmp:

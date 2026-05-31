@@ -12,6 +12,13 @@ Artifact profile: marker-only-work-unit
 4. `docs/audit-scorecard/` 历史审计仅作起点参考，**不**作为唯一线索源。
 5. 当前 git 分支：`git branch --show-current`。
 
+<!--
+Refactor (iter319/issue-319): Old pattern: CLAUDE.md 把『重型参考必须物理拆 REFERENCE.md』当宪法,audit 据此反复把单文件 SKILL.md 判 R02/R03 违规
+New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的 canonical reference surface;衡量标准从『必须物理拆文件』改为『事实源唯一+owner surface 清楚+anchor 可验证』
+-->
+
+PROJECT_RULES 的 `SKILL.md`/`REFERENCE.md` 条款不得被机械解释成 `REFERENCE.md` 必须存在。只有存在事实源重复、跨文件职责重叠、anchor 不可达、host facts 写死、或脚本/prompt 细节未下沉到其 owner surface 时才报 R02/R03。单文件 `SKILL.md` + intra-file anchors 本身不是 violation。
+
 <!-- Refactor (iter205/issue-205):
   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。
@@ -22,6 +29,10 @@ Artifact profile: marker-only-work-unit
 模板渲染后若 `ITERATION` 为空、只含空白、或仍是未替换占位符,立即输出 `AUDIT_INCOMPLETE:missing-iteration` 并停止。禁止写入 `$REPO_ROOT/.refactor-loop/runs/audit-iter-.md`、`$REPO_ROOT/.refactor-loop/runs/audit-iter--candidates.ndjson`、空 iteration log,或任何复用空 identity 的 artifact。audit fallback 同一时刻只能有一个 active `audit-iter-${ITERATION}`;不要并行复用同一 iteration 输出名。
 
 ## 强制流程（违反任一项 → 输出 `AUDIT_INCOMPLETE`，禁止 `AUDIT_DONE`）
+
+### Host production SSOT boundary(强制)
+
+Audit must not move host production facts, branch topology, machine paths, durable ledger authority, or host artifacts into `.refactor-loop/`. `.refactor-loop/` is the skill-private runtime/cache/log home. If host SSOT drift is found, the cluster `new_pattern` must point to host-owned config, host rules, or host-owned artifacts, not `.refactor-loop/host.env`.
 
 ### Step 1 — Coverage manifest（必出）
 

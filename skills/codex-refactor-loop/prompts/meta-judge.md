@@ -31,6 +31,10 @@ Use only the router-injected validated transition projection for transition asse
 
 ## Procedure
 
+### Step 0 — Host production SSOT boundary
+
+Reject or converge any solver plan that makes `.refactor-loop/host.env` the host production SSOT for branch topology, machine paths, durable ledger authority, or host artifacts. `.refactor-loop/` is skill-private runtime/cache/log state; accepted plans must use host-owned config, host rules, or host-owned artifacts for production facts.
+
 ### Step 1 — Read each solver's marker
 
 For each solver, classify their verdict from the marker line:
@@ -158,9 +162,6 @@ Refactor (iter6/issue-118):
 - 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
 - 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
 - Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
 
 
 ---

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract tests for the codex-refactor-loop single-file skill."""
+"""Source contract tests for the codex-refactor-loop single-file contract/reference skill."""
 
 from __future__ import annotations
 
@@ -114,7 +114,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         self.assertTrue(phase0)
         obligations = (
-            "source .refactor-loop/host.env",
+            'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"',
             "fail closed",
             "ProjectRulesFixedPointProbe",
             "consensus-rnd-cli check-project-rules",
@@ -355,8 +355,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertNotIn("first wakeup only", phase0)
         self.assertNotIn("or ScheduleWakeup returned scheduled", phase0)
 
-    def test_detailed_reference_material_is_in_single_skill_file(self) -> None:
+    def test_single_file_reference_architecture_is_documented(self) -> None:
         detailed_anchors = (
+            "controller-contract-details",
+            "host-runtime-details",
+            "daemon-command-bodies",
             "work-unit-contract",
             "batching-heuristics",
             "recovery-playbook",
@@ -365,6 +368,10 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "specialized-state-artifacts",
         )
         self.assertIn("## Detailed reference", self.skill)
+        self.assertIn("single controller contract and detailed reference by maintainer directive", self.skill)
+        self.assertIn("use intra-file anchor links", self.skill)
+        self.assertIn("Controller Contract Index", self.skill)
+        self.assertIn("物理拆 REFERENCE.md 后跨平台加载/维护退化", self.skill)
         for anchor in detailed_anchors:
             with self.subTest(anchor=anchor):
                 self.assertIn(f"(#{anchor})", self.skill)
@@ -404,8 +411,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
         #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks single-file anchors.
         self.assertNotIn("@REFERENCE.md", self.skill)
+        self.assertNotIn("REFERENCE.md#", self.skill)
         self.assertNotRegex(self.skill, r"\]\(/Users/[^)]+REFERENCE\.md")
         self.assertNotRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+        self.assertIn("## Detailed reference", self.skill)
+        self.assertIn("use intra-file anchor links", self.skill)
         self.assertEqual(2, self.skill.count("(#downstream-install-walkthrough)"))
         self.assertRegex(self.skill, r"\(#[^)]+\)")
 
@@ -587,9 +597,44 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "| Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |",
             host_config,
         )
-        self.assertIn("host.env` is the only runtime fact injection point", host_config)
+        self.assertIn("`host.env` is the only loop runtime fact injection point", host_config)
         self.assertNotIn("| Variable | Meaning | Default / example |", host_config)
         self.assertNotIn("| Variable | Prompt meaning | Empty behavior |", host_config)
+
+    def test_refactor_loop_is_skill_private_not_host_production_ssot(self) -> None:
+        host_config = section_between(
+            self.skill,
+            r"^## Host .+$",
+            r"^## Skill Root Contract$",
+        )
+        for needle in (
+            "$CONSENSUS_RND_HOST_ENV",
+            "locates the host-owned `host.env` loop runtime injection file",
+            "not host production configuration schema",
+            "legacy `.refactor-loop/host.env`",
+            "`.refactor-loop/` is the skill-private runtime home",
+            "Host production facts, branch topology, durable ledger authority, and host-owned config SSOT must live in host-owned config/rules/artifacts, not in `.refactor-loop/`.",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, host_config)
+
+    def test_audit_and_solver_prompts_forbid_host_production_facts_in_refactor_loop(self) -> None:
+        prompt_names = (
+            "audit.md",
+            "solver-minimal.md",
+            "solver-structural.md",
+            "solver-delete.md",
+            "meta-judge.md",
+            "implement.md",
+            "reviewer-architect.md",
+        )
+        for name in prompt_names:
+            text = read(SKILL_ROOT / "prompts" / name)
+            with self.subTest(prompt=name):
+                self.assertIn(".refactor-loop/`", text)
+                self.assertRegex(text, r"skill-private runtime(?:/cache/log)?")
+                self.assertIn("host-owned config", text)
+                self.assertIn("durable ledger authority", text)
 
     def test_issue205_dogfood_anti_rules_are_local_contract(self) -> None:
         # Refactor (iter205/issue-205):
@@ -663,6 +708,16 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
+
+    def test_audit_prompt_does_not_treat_single_file_skill_reference_as_r02_r03(self) -> None:
+        audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
+        for needle in (
+            "不得被机械解释成 `REFERENCE.md` 必须存在",
+            "anchor 不可达",
+            "单文件 `SKILL.md` + intra-file anchors 本身不是 violation",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, audit_prompt)
 
     def test_audit_work_intake_iteration_placeholder_matches_audit_prompt(self) -> None:
         # Refactor (issue-307): keep work-intake rendering contract aligned with

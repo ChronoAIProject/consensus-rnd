@@ -33,6 +33,7 @@ ALLOWED_CATEGORIES = {
     "prompt-empty-infer",
     "compatibility",
 }
+LOCATOR_ONLY_VARIABLES = {"CONSENSUS_RND_HOST_ENV"}
 TEMPLATE_CATEGORY_HEADERS = {
     "required",
     "defaulted",
@@ -135,7 +136,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 self.assertNotRegex(row["Test owner"], r":\d+")
 
     def test_host_env_example_exports_match_skill_matrix(self) -> None:
-        self.assertEqual(set(self.exports), set(self.rows))
+        self.assertEqual(set(self.exports), set(self.rows) - LOCATOR_ONLY_VARIABLES)
         self.assertNotIn("GH_REPO", self.exports)
         self.assertEqual("required", self.rows["GH_REPO_SLUG"]["Category"])
         self.assertIn("preferred slug", self.rows["GH_REPO_SLUG"]["Missing/empty behavior"])
@@ -164,6 +165,15 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 if default:
                     self.assertIn(f"`{default}`", self.rows[key]["Default/example"])
                 self.assertIn(behavior, self.rows[key]["Missing/empty behavior"])
+
+        locator = self.rows["CONSENSUS_RND_HOST_ENV"]
+        self.assertEqual("compatibility", locator["Category"])
+        self.assertEqual("HostEnvLocator", locator["Owner"])
+        self.assertEqual("LoopContext locator", locator["Consumer"])
+        self.assertIn("optional locator only", locator["Missing/empty behavior"])
+        self.assertIn("not host production config schema", locator["Missing/empty behavior"])
+        self.assertIn("test_loop_context.py", locator["Test owner"])
+        self.assertNotIn("CONSENSUS_RND_HOST_ENV", self.exports)
 
         self.assertEqual("optional-noop", self.rows["ACTIVE_CONTROLLER_DEVICE_ID"]["Category"])
         self.assertEqual("optional-noop", self.rows["UPDATE_CHECK_ENABLE"]["Category"])
@@ -276,6 +286,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "RELEASE_AUTO_ENABLE": "test_auto_release_gate.py",
             "MAINTAINER_WHITELIST": "test_comment_monitor.py",
             "CODEX_FLOOR": "test_concurrency_monitor.py",
+            "CONSENSUS_RND_HOST_ENV": "test_loop_context.py",
         }
         for key, test_file in anchors.items():
             with self.subTest(key=key):
@@ -301,6 +312,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertNotIn("DEGRADATION_WATCH_TIMEOUT_SECONDS", concurrency_monitor)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600", sync_dev)
         self.assertIn("DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1", sync_dev)
+        self.assertNotIn('get("INTEGRATION")', sync_dev)
+        self.assertNotIn('get("REVIEW_BASE")', sync_dev)
+        self.assertNotIn('get("WORKTREE"', sync_dev)
         self.assertIn('env.get("ACTIVE_CONTROLLER_DEVICE_ID", "")', active_controller)
         self.assertIn("lease_ref=DEFAULT_ACTIVE_CONTROLLER_REF", active_controller)
         self.assertNotIn('env.get("ACTIVE_CONTROLLER_REF"', active_controller)

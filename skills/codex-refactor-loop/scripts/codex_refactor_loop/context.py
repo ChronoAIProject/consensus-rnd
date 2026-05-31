@@ -19,6 +19,13 @@ _ASSIGNMENT_RE = re.compile(r"^(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=(.*)$")
 
 
 @dataclass(frozen=True)
+class HostEnvLocation:
+    """Resolved location of the loop runtime injection file."""
+
+    path: Path
+
+
+@dataclass(frozen=True)
 class LoopPaths:
     """Stable host artifact paths used by the loop."""
 
@@ -46,6 +53,10 @@ class LoopContext:
 
     Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
     New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+
+    Refactor (iter316/issue-316):
+      Old pattern: host runtime facts were parsed in wakeup_plan/release-gate/sync/controller_actions/heartbeat and read legacy aliases plus root host.env.
+      New principle: LoopContext/context.py is the single shared host.env parser; read only CONSENSUS_RND_HOST_ENV or legacy .refactor-loop/host.env; no root host.env or unlisted aliases.
     """
 
     repo_root: Path
@@ -77,7 +88,7 @@ class LoopContext:
             allow_git_root_fallback=allow_git_root_fallback,
             cwd=cwd,
         )
-        host_env = _load_host_env(repo)
+        host_env = _load_host_env(repo, source_env, cwd)
         merged = {**source_env, **host_env}
         if repo_source == "host.env":
             merged["REPO_ROOT"] = str(repo)
@@ -138,7 +149,7 @@ def _resolve_repo_root(
     env_root = env.get("REPO_ROOT")
     if env_root:
         return _existing_dir(env_root, "REPO_ROOT"), "env"
-    host_env_repo = _host_env_repo_root_from_cwd(cwd)
+    host_env_repo = _host_env_repo_root_from_cwd(env, cwd)
     if host_env_repo is not None:
         return host_env_repo, "host.env"
     fallback_allowed = env.get("ALLOW_GIT_ROOT_FALLBACK") == "1" if allow_git_root_fallback is None else allow_git_root_fallback
@@ -148,15 +159,60 @@ def _resolve_repo_root(
         root = _git_root(cwd)
         if root:
             return root, "git"
-    raise LoopContextError("REPO_ROOT is unset; source .refactor-loop/host.env or set ALLOW_GIT_ROOT_FALLBACK=1 for read-only use")
+    raise LoopContextError(
+        "REPO_ROOT is unset; source a host-owned consensus-rnd host.env or set "
+        "CONSENSUS_RND_HOST_ENV, or set ALLOW_GIT_ROOT_FALLBACK=1 for read-only use"
+    )
 
 
-def _host_env_repo_root_from_cwd(cwd: str | Path | None) -> Path | None:
-    base = Path(cwd or os.getcwd())
-    host_env = base / ".refactor-loop" / "host.env"
-    if not host_env.exists():
+class HostEnvLocator:
+    """Locate only the consensus-rnd loop runtime injection file."""
+
+    EXPLICIT_ENV = "CONSENSUS_RND_HOST_ENV"
+    LEGACY_PATHS = (Path(".refactor-loop") / "host.env",)
+
+    @classmethod
+    def resolve(cls, repo_root: Path, env: Mapping[str, str], cwd: Path | None = None) -> HostEnvLocation | None:
+        root = repo_root.resolve()
+        raw_explicit = env.get(cls.EXPLICIT_ENV)
+        if raw_explicit is not None:
+            # Refactor (iter1/issue-310):
+            #   Old pattern: host.env lookup made .refactor-loop/host.env look like the host production fact home.
+            #   New principle: CONSENSUS_RND_HOST_ENV is only a locator for a host-owned loop runtime injection file; .refactor-loop/host.env stays a compatibility read.
+            return HostEnvLocation(
+                path=cls._resolve_explicit(root, raw_explicit),
+            )
+
+        for relative in cls.LEGACY_PATHS:
+            path = (root / relative).resolve()
+            if path.is_file():
+                return HostEnvLocation(path=path)
         return None
-    values = parse_host_env(host_env)
+
+    @classmethod
+    def _resolve_explicit(cls, repo_root: Path, raw_value: str) -> Path:
+        raw = raw_value.strip()
+        if not raw:
+            raise LoopContextError(f"{cls.EXPLICIT_ENV} must not be empty")
+        candidate = Path(raw).expanduser()
+        if any(part == ".." for part in candidate.parts):
+            raise LoopContextError(f"{cls.EXPLICIT_ENV} must not contain '..': {raw_value}")
+        path = (candidate if candidate.is_absolute() else repo_root / candidate).resolve()
+        try:
+            path.relative_to(repo_root)
+        except ValueError as exc:
+            raise LoopContextError(f"{cls.EXPLICIT_ENV} must point inside REPO_ROOT: {raw_value}") from exc
+        if not path.is_file():
+            raise LoopContextError(f"{cls.EXPLICIT_ENV} is not a readable file: {raw_value}")
+        return path
+
+
+def _host_env_repo_root_from_cwd(env: Mapping[str, str], cwd: str | Path | None) -> Path | None:
+    base = Path(cwd or os.getcwd())
+    location = HostEnvLocator.resolve(base.resolve(), env, base)
+    if location is None:
+        return None
+    values = parse_host_env(location.path)
     raw_root = values.get("REPO_ROOT")
     if raw_root:
         return _existing_dir(raw_root, "host.env REPO_ROOT")
@@ -186,10 +242,10 @@ def _git_root(cwd: str | Path | None) -> Path | None:
     return _existing_dir(raw, "git root")
 
 
-def _load_host_env(repo_root: Path) -> dict[str, str]:
-    for path in (repo_root / ".refactor-loop" / "host.env", repo_root / "host.env"):
-        if path.exists():
-            return parse_host_env(path)
+def _load_host_env(repo_root: Path, env: Mapping[str, str], cwd: str | Path | None) -> dict[str, str]:
+    location = HostEnvLocator.resolve(repo_root, env, Path(cwd) if cwd is not None else None)
+    if location is not None:
+        return parse_host_env(location.path)
     return {}
 
 
@@ -234,6 +290,9 @@ def _github_repo_slug(env: Mapping[str, str]) -> str | None:
 
 
 def _paths(repo_root: Path) -> LoopPaths:
+    # Refactor (iter1/issue-310):
+    #   Old pattern: .refactor-loop paths could be read as host production configuration or ledger authority.
+    #   New principle: .refactor-loop is only the skill-private runtime home while callers keep the historical Path contract.
     refactor_loop = repo_root / ".refactor-loop"
     state = refactor_loop / "state"
     return LoopPaths(

@@ -20,6 +20,7 @@ BUMP_PATH = REPO_ROOT / ".github/scripts/bump_version.py"
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/release.yml"
 REQUIRED_CHECKS_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
 PUBLISH_PREFLIGHT_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publish_preflight.py"
+PUBLISHER_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publisher.py"
 
 
 def read(path: Path) -> str:
@@ -47,6 +48,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.workflow = read(WORKFLOW_PATH)
         self.required_checks = read(REQUIRED_CHECKS_PATH)
         self.publish_preflight = read(PUBLISH_PREFLIGHT_PATH)
+        self.publisher = read(PUBLISHER_PATH)
 
     def test_nested_manifest_resolution_and_semver_bumping(self) -> None:
         data = {"plugins": [{"version": "1.2.3"}]}
@@ -238,6 +240,25 @@ class ReleasePipelineContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.publish_preflight)
+
+    def test_release_publisher_source_gates_fresh_tag_target_before_release_create(self) -> None:
+        for needle in (
+            "ReleaseRequiredChecksProjection",
+            "def _ensure_fresh_release_commit_checks_green",
+            "GH_REPO_SLUG is required for fresh release commit check gate",
+            "projection.check_ref(repo_slug, release_target_ref",
+            "since=release_push_started_at",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.publisher)
+
+        push_index = self.publisher.index("self._safe_push()")
+        gate_index = self.publisher.index("self._ensure_fresh_release_commit_checks_green(release_target_ref")
+        release_index = self.publisher.index('["gh", "release", "create"')
+        result_write_index = self.publisher.index("write_json(self.result_path, payload)")
+        self.assertLess(push_index, gate_index)
+        self.assertLess(gate_index, release_index)
+        self.assertLess(release_index, result_write_index)
 
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
         mapping = json.loads(read(repo / ".version-bump.json"))

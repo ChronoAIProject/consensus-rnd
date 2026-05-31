@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -240,10 +241,13 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 json.dumps({"active_controller": "owner"}) + "\n",
                 encoding="utf-8",
             )
+            child_env = os.environ.copy()
+            child_env.pop("REPO_ROOT", None)
 
             result = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "--json"],
                 cwd=repo,
+                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -263,6 +267,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             unknown = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],
                 cwd=repo,
+                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -285,6 +290,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         )
 
     def test_public_lifecycle_cli_commands_are_removed(self) -> None:
+        # Refactor (iter1/issue-322):
+        #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
+        #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
         for command in {
             "apply-human-label",
             "apply-sync",

@@ -5,12 +5,14 @@ from __future__ import annotations
 import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 from typing import Callable, Sequence
 
 from ..state import write_json
-from .gate import isoformat
+from .gate import isoformat, load_host_env
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
+from .required_checks import ReleaseRequiredChecksProjection
 from .versions import parse_semver_full
 
 
@@ -37,6 +39,10 @@ class ReleasePublishResult:
 
 class ReleasePublisher:
     """Publish a preflight-approved release from the controller boundary only.
+
+    Refactor (iter334/issue-334):
+      Old pattern: fresh manifest-bump commits could be released before exact-SHA checks were green.
+      New principle: after safe push, gate the same fresh SHA with ReleaseRequiredChecksProjection before release creation.
 
     Refactor (iter217/issue-217):
       Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
@@ -88,7 +94,9 @@ class ReleasePublisher:
         # New principle: the release tag target is the freshly committed manifest
         # bump SHA, so tag version and mapped manifest versions are coupled.
         release_target_ref = self._current_head_sha()
+        release_push_started_at = self.now()
         self._safe_push()
+        self._ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)
         release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
         if parse_semver_full(version).prerelease:
             release_command.append("--prerelease")
@@ -154,6 +162,26 @@ class ReleasePublisher:
             raise RuntimeError(f"safe push refused: local release commit is behind origin/HEAD by {behind_count}")
         push = self._run(["git", "push", "origin", "HEAD"])
         self._ensure_success(push, "git push")
+
+    def _ensure_fresh_release_commit_checks_green(self, release_target_ref: str, *, since: datetime) -> None:
+        repo_slug = self._repo_slug()
+        projection = ReleaseRequiredChecksProjection(
+            runner=self._run_check_command,
+            now=self.now,
+        )
+        status = projection.check_ref(repo_slug, release_target_ref, since=since, wait_seconds=0)
+        if not status.passed:
+            raise RuntimeError(f"fresh release commit required checks are not green: {status.reason or 'unknown'}")
+
+    def _run_check_command(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        return self._run(cmd)
+
+    def _repo_slug(self) -> str:
+        host_env = load_host_env(self.repo_root)
+        repo_slug = (host_env.get("GH_REPO_SLUG") or os.environ.get("GH_REPO_SLUG") or "").strip()
+        if not repo_slug:
+            raise RuntimeError("GH_REPO_SLUG is required for fresh release commit check gate")
+        return repo_slug
 
     def _ensure_success(self, result: subprocess.CompletedProcess[str], label: str) -> None:
         if result.returncode != 0:
