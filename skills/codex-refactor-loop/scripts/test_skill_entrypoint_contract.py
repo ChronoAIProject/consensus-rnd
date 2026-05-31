@@ -611,6 +611,34 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
 
+    def test_audit_work_intake_iteration_placeholder_matches_audit_prompt(self) -> None:
+        # Refactor (issue-307): keep work-intake rendering contract aligned with
+        # prompts/audit.md while preserving runtime shell placeholders.
+        section = section_between(
+            self.skill,
+            r"^## Consensus-rnd Phase work-intake .+$",
+            r"^## ",
+        )
+        self.assertTrue(section)
+        self.assertNotIn("{{iteration}}", section)
+        for needle in (
+            "Replace the literal `${ITERATION}` placeholders with N using a targeted replacement",
+            "leave runtime placeholders such as `$REPO_ROOT`, `${PROJECT_RULES:-CLAUDE.md}`, and `$SOURCE_GLOBS` intact",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+        audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
+        rendered = audit_prompt.replace("${ITERATION}", "307")
+        self.assertIn("audit-iter-307", rendered)
+        for runtime_placeholder in (
+            "$REPO_ROOT",
+            "${PROJECT_RULES:-CLAUDE.md}",
+            "$SOURCE_GLOBS",
+        ):
+            with self.subTest(runtime_placeholder=runtime_placeholder):
+                self.assertIn(runtime_placeholder, rendered)
+
 
 if __name__ == "__main__":
     unittest.main()
