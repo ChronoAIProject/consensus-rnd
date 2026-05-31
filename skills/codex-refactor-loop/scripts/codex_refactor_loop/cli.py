@@ -12,6 +12,7 @@ from . import banners, github_body, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
+from .daemon_status import main as daemon_status_main
 from .labels import main as labels_main
 from .monitors.comment import main as comment_monitor_main
 from .monitors.concurrency import main as concurrency_main
@@ -65,6 +66,15 @@ COMMANDS: dict[str, CommandSpec] = {
         restart_main,
         "run the Python daemon restart helper",
         ("spawn-daemon", "write-state", "delete-log"),
+    ),
+    # Refactor (issue-298): Old: public CLI had restart-daemons as the only
+    # daemon health surface, nudging controllers toward write-side repair for
+    # status reads. New: daemon-status is read-only and restart-daemons remains
+    # the sole repair/reload command.
+    "daemon-status": CommandSpec(
+        daemon_status_main,
+        "read restart-helper-managed daemon status",
+        ("read-state", "read-process"),
     ),
     "statusline": CommandSpec(statusline.main, "read the Python statusline snapshot", ("read-state", "read-git")),
     "comment-monitor": CommandSpec(

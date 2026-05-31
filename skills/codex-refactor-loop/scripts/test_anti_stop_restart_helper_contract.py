@@ -46,6 +46,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
 
     def test_scheduler_docs_use_single_cli_entrypoint(self) -> None:
         self.assertIn("consensus-rnd-cli restart-daemons", self.skill)
+        self.assertIn("consensus-rnd-cli daemon-status --json", self.skill)
         self.assertIn("source .refactor-loop/host.env", self.skill)
         self.assertIn("cron/launchd-only", self.skill)
 
@@ -54,7 +55,11 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "def _singleton_check_fresh(",
             "def _heartbeat_is_fresh(",
             "DaemonLaunchFingerprint",
+            "DaemonTarget",
             "DaemonProcessInventory",
+            "daemon_targets",
+            "read_daemon_pid",
+            "read_heartbeat_age_seconds",
             ".fingerprint.json",
             "package_tree_sha256",
             "entrypoint_sha256",
@@ -92,7 +97,10 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
         section = self.skill[section_start:section_end]
 
         for needle in (
+            "consensus-rnd-cli daemon-status --json",
             "consensus-rnd-cli restart-daemons",
+            "read daemon state",
+            "repair/reload",
             "must not hand-kill daemon processes",
             "probe process lists as liveness authority",
             "bypass the restart helper",
@@ -107,6 +115,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             ".refactor-loop/locks/<daemon>.fingerprint.json",
             "pid alive plus fresh heartbeat plus current fingerprint plus zero duplicate canonical live wrapper",
             "same resolved static allowlist command",
+            "read-only daemon-status projection",
+            "repair/reload remains restart-daemons",
             "no host-defined daemon registry",
             "generic process supervisor",
             "GitHub/git lifecycle authority",

@@ -52,6 +52,22 @@ class RestartConfig:
     stop_grace_seconds: int = int(os.environ.get("RESTART_DAEMONS_STOP_GRACE_SECONDS", "5"))
 
 
+# Refactor (issue-298): Old: status guidance made controllers infer daemon
+# state from write-side restart or ad hoc process probes. New: helper-private
+# readers expose pid, heartbeat age, expected fingerprint, and static allowlist
+# resolution for read-only daemon-status without adding lifecycle verbs.
+@dataclass(frozen=True)
+class DaemonTarget:
+    """refactor helper, no behavior change outside read-only status projection."""
+
+    name: str
+    command: tuple[str, ...]
+    pid_file: Path
+    heartbeat_file: Path
+    fingerprint_file: Path
+    died_file: Path
+
+
 # Refactor (iter204/issue-204):
 #   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
 #   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
@@ -181,6 +197,60 @@ class DaemonProcessInventory:
         return tuple(sorted(set(pids)))
 
 
+def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) -> DaemonTarget:
+    command = tuple(
+        part.replace("{skill_root}", str(ctx.skill_root)).replace("{repo_root}", str(ctx.repo_root))
+        for part in command_template
+    )
+    return DaemonTarget(
+        name=name,
+        command=command,
+        pid_file=ctx.paths.refactor_loop / "locks" / f"{name}.pid",
+        heartbeat_file=ctx.paths.heartbeats / f"{name}.ts",
+        fingerprint_file=ctx.paths.refactor_loop / "locks" / f"{name}.fingerprint.json",
+        died_file=ctx.paths.logs / f"{name}.died",
+    )
+
+
+def daemon_targets(ctx: LoopContext, target: str = "all") -> tuple[DaemonTarget, ...]:
+    names = {daemon_name for daemon_name, _command_template in DAEMON_COMMANDS}
+    if target != "all" and target not in names:
+        raise ValueError(f"unknown daemon target: {target}")
+    return tuple(
+        daemon_target(ctx, daemon_name, command_template)
+        for daemon_name, command_template in DAEMON_COMMANDS
+        if target == "all" or daemon_name == target
+    )
+
+
+def read_daemon_pid(target: DaemonTarget) -> int | None:
+    return _read_pid(target.pid_file)
+
+
+def read_heartbeat_age_seconds(target: DaemonTarget, *, now: int | None = None) -> int | None:
+    try:
+        raw = target.heartbeat_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw.isdigit():
+        return None
+    age = (int(time.time()) if now is None else now) - int(raw)
+    return age if age >= 0 else None
+
+
+def read_stored_launch_fingerprint(target: DaemonTarget) -> DaemonLaunchFingerprint | None:
+    return DaemonLaunchFingerprint.read(target.fingerprint_file)
+
+
+def expected_launch_fingerprint(ctx: LoopContext, target: DaemonTarget) -> DaemonLaunchFingerprint:
+    return DaemonLaunchFingerprint.current(ctx, target.name, target.command)
+
+
+def heartbeat_is_fresh(target: DaemonTarget, config: RestartConfig, *, now: int | None = None) -> bool:
+    age = read_heartbeat_age_seconds(target, now=now)
+    return age is not None and age < config.heartbeat_fresh_seconds
+
+
 # Refactor (iter204/issue-204):
 #   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
 #   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
@@ -214,15 +284,13 @@ class RestartDaemons:
         return 0
 
     def start_daemon(self, name: str, command_template: Sequence[str]) -> None:
-        pid_file = self.ctx.paths.refactor_loop / "locks" / f"{name}.pid"
-        fingerprint_file = self._fingerprint_path(name)
-        hb_file = self.ctx.paths.heartbeats / f"{name}.ts"
+        target = daemon_target(self.ctx, name, command_template)
+        pid_file = target.pid_file
+        fingerprint_file = target.fingerprint_file
+        hb_file = target.heartbeat_file
         log_file = self.ctx.paths.logs / f"{name}.log"
-        died_file = self.ctx.paths.logs / f"{name}.died"
-        command = [
-            part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
-            for part in command_template
-        ]
+        died_file = target.died_file
+        command = list(target.command)
         current_fingerprint = self._current_fingerprint(name, command)
         inventory = DaemonProcessInventory.collect()
         duplicates_remain = self._reconcile_duplicate_canonical_wrappers(
@@ -390,15 +458,8 @@ class RestartDaemons:
         return min(live)
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
-        hb = self.ctx.paths.heartbeats / f"{name}.ts"
-        try:
-            raw = hb.read_text(encoding="utf-8").strip()
-            if not raw.isdigit():
-                return False
-            age = int(time.time()) - int(raw)
-        except OSError:
-            return False
-        return age >= 0 and age < self.config.heartbeat_fresh_seconds
+        target = daemon_target(self.ctx, name, ())
+        return heartbeat_is_fresh(target, self.config)
 
     def _stop_existing_daemon(self, name: str) -> None:
         pid_file = self.ctx.paths.refactor_loop / "locks" / f"{name}.pid"
