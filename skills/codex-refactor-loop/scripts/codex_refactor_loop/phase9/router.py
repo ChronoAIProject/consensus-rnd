@@ -31,6 +31,7 @@ from typing import Callable, Iterable, Literal, cast
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
+from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
 
 
@@ -131,11 +132,14 @@ class Phase9SourceIssueDecision:
 
 @dataclass(frozen=True)
 class MetaJudgePromptContext:
-    # refactor helper, no behavior change outside meta-judge prompt rendering.
+    # Refactor (issue-262): Old: meta-judge prompt context had no validated
+    # transition projection. New: carry the same read-only sidecar projection
+    # used by solver headers without creating a second prompt injection path.
     issue: str
     round: int
     solver_paths: dict[str, str]
     output_path: str
+    transition_assessment: TransitionAssessment
 
     @property
     def work_unit_id(self) -> str:
@@ -160,6 +164,9 @@ class MetaJudgePromptRenderer:
         "SOLVER_STRUCTURAL_PATH",
         "SOLVER_DELETE_PATH",
         "META_JUDGE_OUTPUT_PATH",
+        "TRANSITION_TYPE",
+        "TRANSITION_CONFIDENCE",
+        "TRANSITION_EVIDENCE_REFS",
     }
 
     def __init__(self, template_path: Path) -> None:
@@ -177,6 +184,9 @@ class MetaJudgePromptRenderer:
             "SOLVER_STRUCTURAL_PATH": context.solver_paths["structural"],
             "SOLVER_DELETE_PATH": context.solver_paths["delete"],
             "META_JUDGE_OUTPUT_PATH": context.output_path,
+            "TRANSITION_TYPE": context.transition_assessment.transition_type,
+            "TRANSITION_CONFIDENCE": f"{context.transition_assessment.confidence:g}",
+            "TRANSITION_EVIDENCE_REFS": context.transition_assessment.evidence_refs_text,
         }
         rendered = template
         for key in self.PLACEHOLDERS:
@@ -955,11 +965,13 @@ class Phase9Router:
                 f"SOLVER_STRUCTURAL_PATH={context.solver_paths['structural']}",
                 f"SOLVER_DELETE_PATH={context.solver_paths['delete']}",
                 f"META_JUDGE_OUTPUT_PATH={context.output_path}",
+                *projection_lines(context.transition_assessment),
             )
         )
         return (
             f"# {format_stage('design-consensus')} meta-judge\n\n"
             f"## Router template bindings\n\n{bindings}\n\n"
+            f"## Validated transition projection\n\n{self._transition_projection_summary(context.transition_assessment)}\n\n"
             f"## Full meta-judge template\n\n{prompt}"
             + "\n\n## Router dispatch evidence\n\n"
             + f"Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key={self._key(issue, round_no, self._judge_role())}\n"
@@ -986,7 +998,13 @@ class Phase9Router:
         if set(solver_paths) != set(self._solver_roles()):
             return self._fail_meta_judge_scope(issue, round_no, "missing solver path")
         output_path = self._artifact_path(self.ctx.paths.runs / f"phase9-issue{issue}-r{round_no}-judge.md")
-        return MetaJudgePromptContext(issue=issue, round=round_no, solver_paths=solver_paths, output_path=output_path)
+        return MetaJudgePromptContext(
+            issue=issue,
+            round=round_no,
+            solver_paths=solver_paths,
+            output_path=output_path,
+            transition_assessment=self._transition_assessment(issue),
+        )
 
     def _fail_meta_judge_scope(self, issue: str, round_no: int, detail: str) -> None:
         self._append_meta_judge_prompt_fallback_event(
@@ -1012,6 +1030,7 @@ class Phase9Router:
     #   authority.
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
+        transition_lines = "\n".join(projection_lines(self._transition_assessment(issue)))
         return (
             f"Issue: #{issue}\n"
             f"Round: {round_no}\n"
@@ -1021,10 +1040,28 @@ class Phase9Router:
             "WORK_UNIT_KIND=manual-work-unit\n"
             "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)\n"
             f"WORK_UNIT_SOURCE_REF=gh-issue-{issue}\n"
+            f"{transition_lines}\n"
             f"SOLVER_OUTPUT_PATH={output_path}\n"
             f"Read `gh issue view {issue}` for the issue body/comments. "
             "The issue body/comments are the scope spec when no local audit artifact is provided; "
             "do not fabricate audit artifacts."
+        )
+
+    def _transition_assessment(self, issue: str) -> TransitionAssessment:
+        return TransitionAssessmentReader.load_for_work_unit(
+            self.repo_root,
+            work_unit_id=f"issue-{issue}",
+            source_ref=f"gh-issue-{issue}",
+        )
+
+    def _transition_projection_summary(self, assessment: TransitionAssessment) -> str:
+        return "\n".join(
+            (
+                "Use only this router-validated transition projection; missing/malformed/untrusted sidecars are unknown.",
+                f"- transition_type: {assessment.transition_type}",
+                f"- confidence: {assessment.confidence:g}",
+                f"- evidence_refs: {assessment.evidence_refs_text}",
+            )
         )
 
     # Refactor (iter5/issue-85-stalled-reflector-template):

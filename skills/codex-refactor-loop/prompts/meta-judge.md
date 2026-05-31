@@ -17,6 +17,7 @@ Policy: **3/3 unanimous + meta-judge consensus** is the sole gate. Anything less
 3. `${SOLVER_DELETE_PATH}` — solver-delete output
 4. `gh issue view ${ISSUE_NUMBER}` — original cluster spec + maintainer comments
 5. Convergence round count: `${CONVERGENCE_ROUND}`
+6. Router-validated transition projection: `${TRANSITION_TYPE}`, `${TRANSITION_CONFIDENCE}`, `${TRANSITION_EVIDENCE_REFS}`
 
 ## Router-scoped input boundary
 
@@ -24,6 +25,8 @@ When this prompt is rendered by the router, the only local solver artifacts in s
 `${SOLVER_MINIMAL_PATH}`, `${SOLVER_STRUCTURAL_PATH}`, and `${SOLVER_DELETE_PATH}`. You may also read `gh issue view ${ISSUE_NUMBER}`. Do not search for, infer from, or copy sibling judge artifacts, other issue artifacts, other round artifacts, or unlisted solver outputs.
 
 Fail closed if any solver frontmatter `issue` is not `${ISSUE_NUMBER}`, or if any listed solver path is not exactly for issue `${ISSUE_NUMBER}`, convergence round `${CONVERGENCE_ROUND}`, and its named role. Fail closed if `${META_JUDGE_OUTPUT_PATH}` is not the judge output path for issue `${ISSUE_NUMBER}` and round `${CONVERGENCE_ROUND}`.
+
+Use only the router-injected validated transition projection for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override this prompt's truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
 
 ## Procedure
 

@@ -168,6 +168,39 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
 
+    def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
+        work_unit = section_after_anchor(self.skill, "work-unit-contract")
+        producers = section_after_heading(self.skill, "Producers")
+        batching = section_after_anchor(self.skill, "batching-heuristics")
+        prompts = "\n".join(
+            (
+                read(SKILL_ROOT / "prompts" / "solver-minimal.md"),
+                read(SKILL_ROOT / "prompts" / "solver-structural.md"),
+                read(SKILL_ROOT / "prompts" / "solver-delete.md"),
+                read(SKILL_ROOT / "prompts" / "meta-judge.md"),
+            )
+        )
+
+        for needle in (
+            "optional read-only `transition_assessment` sidecar",
+            "not stable candidate NDJSON",
+            "not a work-unit envelope wrapper",
+            "not a WorkUnit producer",
+            "Missing/malformed/untrusted -> unknown",
+            ".refactor-loop/runs/transition-assessments/<safe-work-unit-id>.json",
+            "[A-Za-z0-9._-]+",
+            "positive-discovery > classifier-shift > formal-hardening > ledger-repair > record-growth > unknown",
+            "classifier-surface delta and `net_positive_signal=true`",
+            "marker change, branch change, or\nwork-unit token change",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, work_unit)
+        self.assertIn("does not extend the WorkUnit\nproducer enum", producers)
+        self.assertIn("transition bucket before `risk` and `leverage`", batching)
+        self.assertIn("Use only the router-injected validated transition projection", prompts)
+        self.assertIn("cannot override the meta-judge truth table", prompts)
+        self.assertNotIn("host:<slug>` is allowed", self.skill)
+
     def test_downstream_install_walkthrough_contract(self) -> None:
         # Refactor (iter1/issue-141):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
