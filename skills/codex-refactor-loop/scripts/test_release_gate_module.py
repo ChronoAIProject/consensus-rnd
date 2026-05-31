@@ -233,10 +233,29 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertNotIn("REVIEW_BASE_BRANCH", loaded)
             self.assertEqual(loaded["INTEGRATION_BRANCH"], "integration")
 
+    def test_host_env_locator_prefers_explicit_host_owned_file_without_legacy_file(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            explicit = repo / ".config/consensus-rnd/host.env"
+            explicit.parent.mkdir(parents=True, exist_ok=True)
+            explicit.write_text(
+                "export RELEASE_AUTO_ENABLE=true\nexport REVIEW_BASE_BRANCH=explicit-review\n",
+                encoding="utf-8",
+            )
+            self.assertFalse((repo / ".refactor-loop/host.env").exists())
+
+            loaded = gate.load_host_env(repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+
+            self.assertEqual(loaded["RELEASE_AUTO_ENABLE"], "true")
+            self.assertEqual(loaded["REVIEW_BASE_BRANCH"], "explicit-review")
+
     def test_release_gate_source_uses_shared_host_env_parser(self) -> None:
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
-        self.assertIn("from ..context import parse_host_env", source)
-        self.assertIn('repo_root / ".refactor-loop" / "host.env"', source)
+        publish_preflight_source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/publish_preflight.py").read_text(encoding="utf-8")
+        self.assertIn("from ..context import HostEnvLocator, parse_host_env", source)
+        self.assertIn("HostEnvLocator.resolve", source)
+        self.assertNotIn('repo_root / ".refactor-loop" / "host.env"', source)
+        self.assertNotIn('repo_root / ".refactor-loop" / "host.env"', publish_preflight_source)
         self.assertNotIn('repo_root / "host.env"', source)
         self.assertNotIn("def parse_host_env_value", source)
 

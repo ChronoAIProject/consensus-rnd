@@ -92,6 +92,30 @@ def write_opt_in(
     )
 
 
+def write_explicit_opt_in(
+    repo: Path,
+    enabled: bool = True,
+    review_base: str = "review-base",
+    integration: str = "integration-branch",
+    repo_slug: str = "owner/repo",
+) -> Path:
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        "\n".join(
+            [
+                f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
+                f"export GH_REPO_SLUG={repo_slug}",
+                f"export REVIEW_BASE_BRANCH={review_base}",
+                f"export INTEGRATION_BRANCH={integration}",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return env_path
+
+
 def write_gh_stub(
     bin_dir: Path,
     *,
@@ -844,6 +868,32 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertTrue((repo / ".refactor-loop/state/release-decision.json").exists())
             self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
+
+    def test_explicit_host_env_opt_in_writes_decision_without_legacy_file(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_explicit_opt_in(repo)
+            self.assertFalse((repo / ".refactor-loop/host.env").exists())
+            write_green_signals(repo)
+            env = {
+                **os.environ,
+                "REPO_ROOT": str(repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            }
+
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
+                cwd=repo,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn("RELEASE_AUTO_ENABLE is not true", result.stdout)
+            self.assertTrue((repo / ".refactor-loop/state/release-decision.json").exists())
+            self.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
 
     def test_fail_closed_when_no_commits_since_last_release(self) -> None:
         cases = ("absent", "empty")

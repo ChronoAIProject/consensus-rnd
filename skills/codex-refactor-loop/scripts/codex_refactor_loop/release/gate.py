@@ -11,10 +11,10 @@ import sys
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from .. import labels as label_catalog
-from ..context import parse_host_env
+from ..context import HostEnvLocator, parse_host_env
 from ..state import read_json, write_json
 from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
@@ -36,7 +36,7 @@ from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_versi
 #
 # Refactor (iter316/issue-316):
 #   Old pattern: release-gate parsed root and nested host.env with a private parser.
-#   New principle: use context.py shared host.env parser and read only .refactor-loop/host.env.
+#   New principle: use context.py shared host.env parser and locator contract.
 
 SIGNAL_NAMES = (
     "required_checks_recent_green",
@@ -98,9 +98,12 @@ def isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def load_host_env(repo_root: Path) -> dict[str, str]:
-    path = repo_root / ".refactor-loop" / "host.env"
-    return parse_host_env(path) if path.exists() else {}
+def load_host_env(repo_root: Path, env: Mapping[str, str] | None = None) -> dict[str, str]:
+    # Refactor (iter1/fix-release-hostenv):
+    #   Old pattern: release authority read only legacy .refactor-loop/host.env, bypassing CONSENSUS_RND_HOST_ENV.
+    #   New principle: release authority uses HostEnvLocator, matching LoopContext's explicit-first host.env contract.
+    location = HostEnvLocator.resolve(repo_root, os.environ if env is None else env, repo_root)
+    return parse_host_env(location.path) if location is not None else {}
 
 
 def inject_host_env(repo_root: Path) -> dict[str, str]:
