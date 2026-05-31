@@ -1363,6 +1363,11 @@ documented as public consensus-rnd-cli/controller-actions shell commands.
 New principle: lifecycle operations are controller-internal ControllerActions
 methods/direct package calls, never worker-visible public CLI verbs. -->
 
+<!-- Refactor (issue-276): Old pattern: controller lifecycle PR/issue targets
+could be empty, inferred, or non-canonical GitHub identifiers before gh/git
+side effects. New principle: lifecycle targets are normalized through a private
+canonical positive-decimal boundary before any lifecycle side effect. -->
+
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + shell 变量传值 bug。统一用 controller-internal `ControllerActions` primitives, not public CLI commands:
 
 ```python
@@ -1379,6 +1384,7 @@ actions.apply_human_label_or_skip(pr_number, source_marker, reason)
 - merge PR 必须用 internal `merge_pr(pr)` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
 - worktree 创建必须用 internal `safe_worktree(iteration, cluster, base)` — 处理 "already exists" race
 - PR 号捕获必须用 internal `open_pr_with_label(...)` returned tuple — **禁止** shell `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
+- Lifecycle PR/issue targets entering `apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge` must pass `_normalize_lifecycle_target` and become canonical positive decimals before any `gh` or `git` side effect; empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed and write `CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>` to the controller pending-event log. PR creation target capture stays limited to `open_pr_with_label(...)` URL extraction followed by the same normalization.
 - `safe_push`, `safe_sync_main`, triage apply, and human-label apply are internal primitives/direct package calls only; `consensus-rnd-cli merge-pr/open-pr/open-release-rollup-pr/apply-human-label/safe-push/safe-sync-main/apply-sync/apply-triage` must fail closed as unknown public commands.
 
 **Label 生命周期(强制状态机)**:
