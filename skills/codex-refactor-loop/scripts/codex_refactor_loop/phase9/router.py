@@ -146,6 +146,14 @@ class MetaJudgePromptContext:
         return f"issue-{self.issue}"
 
     @property
+    def work_unit_producer(self) -> str:
+        return "manual-issue (prompt-only provenance)"
+
+    @property
+    def work_unit_source_ref(self) -> str:
+        return f"gh-issue-{self.issue}"
+
+    @property
     def convergence_round_plus_one(self) -> int:
         return self.round + 1
 
@@ -158,6 +166,8 @@ class MetaJudgePromptRenderer:
         "ISSUE_NUMBER",
         "WORK_UNIT_ID",
         "CLUSTER_ID",
+        "WORK_UNIT_PRODUCER",
+        "WORK_UNIT_SOURCE_REF",
         "CONVERGENCE_ROUND",
         "CONVERGENCE_ROUND_PLUS_ONE",
         "SOLVER_MINIMAL_PATH",
@@ -178,6 +188,8 @@ class MetaJudgePromptRenderer:
             "ISSUE_NUMBER": context.issue,
             "WORK_UNIT_ID": context.work_unit_id,
             "CLUSTER_ID": context.work_unit_id,
+            "WORK_UNIT_PRODUCER": context.work_unit_producer,
+            "WORK_UNIT_SOURCE_REF": context.work_unit_source_ref,
             "CONVERGENCE_ROUND": str(context.round),
             "CONVERGENCE_ROUND_PLUS_ONE": str(context.convergence_round_plus_one),
             "SOLVER_MINIMAL_PATH": context.solver_paths["minimal"],
@@ -986,6 +998,8 @@ class Phase9Router:
                 f"ISSUE_NUMBER={context.issue}",
                 f"WORK_UNIT_ID={context.work_unit_id}",
                 f"CLUSTER_ID={context.work_unit_id}",
+                f"WORK_UNIT_PRODUCER={context.work_unit_producer}",
+                f"WORK_UNIT_SOURCE_REF={context.work_unit_source_ref}",
                 f"CONVERGENCE_ROUND={context.round}",
                 f"CONVERGENCE_ROUND_PLUS_ONE={context.convergence_round_plus_one}",
                 f"SOLVER_MINIMAL_PATH={context.solver_paths['minimal']}",
