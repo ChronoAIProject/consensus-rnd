@@ -76,8 +76,8 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 5. **输出**：
    - 把回复内容写到 `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-reply-$(date +%s).md`
-   - 末尾打印 `DESIGN_REPLY_READY:${ISSUE_NUMBER}:<short_one_line_summary>`
-   - controller 会读这个文件并 `gh issue comment ${ISSUE_NUMBER} --body-file <file>`
+   - 写完 archive 后直接按 `prompts/_github-post-rules.md` post GitHub 回复
+   - 成功打印 `POSTED:design-reply:${ISSUE_NUMBER}:<URL>:<headline>`；失败打印 `POST_FAILED:design-reply:${ISSUE_NUMBER}:<reason>`
 
 ## 红线
 
@@ -95,10 +95,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 - body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
 - 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
 - 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
-
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
+- Post 后打印 `POSTED:design-reply:${ISSUE_NUMBER}:<URL>:<headline>` 或 `POST_FAILED:design-reply:${ISSUE_NUMBER}:<reason>`
 
 
 ---

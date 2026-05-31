@@ -43,7 +43,12 @@ FORBIDDEN_DIRECT_LIFECYCLE_SNIPPETS = (
     "gh issue edit --add-label",
     "gh issue edit --remove-label",
     "gh pr edit --add-label",
+    "gh pr edit --remove-label",
     "gh pr create",
+    "gh pr merge",
+    "gh pr close",
+    "gh issue create",
+    "gh issue close",
     "git commit",
     "git push",
     "git checkout",
@@ -56,6 +61,28 @@ AFFIRMATIVE_DIRECT_POST_SNIPPETS = (
     "You DO post to GitHub directly",
     "自己调 `gh` post",
     "Post 后打印 `POSTED:",
+)
+
+LOCAL_COMMAND_ROSTER_SNIPPETS = (
+    "可调:",
+    "不可调:",
+    "你能调的 gh 命令",
+    "你不能调的(controller 边界)",
+)
+
+DIRECT_POST_COMMAND_ROSTER_SNIPPETS = (
+    "gh issue/pr comment",
+    "gh pr edit --body-file",
+    "gh api .../reactions",
+    "mktemp",
+    "git commit/push/checkout",
+    "git merge/reset/rebase",
+    "gh pr create/merge/close",
+    "gh issue create/close",
+    "gh issue edit --add-label",
+    "gh issue edit --remove-label",
+    "gh pr edit --add-label",
+    "gh pr edit --remove-label",
 )
 
 
@@ -74,6 +101,10 @@ def marker_only_prompt_paths() -> list[Path]:
     return [path for path in prompt_paths() if not re.search(r"(?m)^## GitHub post", path.read_text(encoding="utf-8"))]
 
 
+def direct_post_prompt_paths() -> list[Path]:
+    return [path for path in prompt_paths() if re.search(r"(?m)^## GitHub post", path.read_text(encoding="utf-8"))]
+
+
 def prompts_with_marker_only_ban() -> list[Path]:
     paths = []
     for path in marker_only_prompt_paths():
@@ -90,10 +121,20 @@ def ban_section(body: str) -> str:
     return body
 
 
+def github_post_section(body: str) -> str:
+    match = re.search(r"(?ms)^## GitHub post.*?(?=^## |\Z)", body)
+    if not match:
+        return ""
+    return match.group(0)
+
+
 class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
     # Refactor (iter6/issue-118):
     #   Old pattern: SKILL.md/REFERENCE.md 维护 posting-mode prompt filename roster,会漂移
     #   New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+    # Refactor (iter1/issue-323):
+    #   Old pattern: posting-capable prompt 各自复制本地 GitHub 命令 allow/deny roster,弱于 marker-only ban 且与 shared _github-post-rules.md 漂移;design-issue-reply.md posting-path 自相矛盾
+    #   New principle: command roster 唯一 owner=prompts/_github-post-rules.md(补完整);7 个 direct-post prompt 删本地 可调/不可调 roster 只留 shared 引用;design-issue-reply.md 选 worker direct-post 唯一成功路径(POSTED/POST_FAILED,删 DESIGN_REPLY_READY relay);source-regression 从 prompt body 派生 posting mode;SKILL.md 不改、不新增 runtime wrapper/registry
     def test_marker_only_prompts_with_ban_block_have_complete_lifecycle_ban(self) -> None:
         paths = prompts_with_marker_only_ban()
         self.assertGreater(len(paths), 0)
@@ -162,6 +203,68 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
         }
         self.assertTrue(prompt_roles)
         self.assertFalse(prompt_roles & set(COMMANDS))
+
+    def test_direct_post_prompts_reference_shared_contract_without_local_roster(self) -> None:
+        paths = direct_post_prompt_paths()
+        self.assertGreater(len(paths), 0)
+        for path in paths:
+            body = path.read_text(encoding="utf-8")
+            section = github_post_section(body)
+            with self.subTest(prompt=path.name):
+                self.assertIn("prompts/_github-post-rules.md", section)
+                for snippet in LOCAL_COMMAND_ROSTER_SNIPPETS:
+                    self.assertNotIn(snippet, section)
+
+    def test_direct_post_prompts_do_not_copy_command_tokens(self) -> None:
+        paths = direct_post_prompt_paths()
+        self.assertGreater(len(paths), 0)
+        for path in paths:
+            section = github_post_section(path.read_text(encoding="utf-8"))
+            with self.subTest(prompt=path.name):
+                for snippet in DIRECT_POST_COMMAND_ROSTER_SNIPPETS:
+                    self.assertNotIn(snippet, section)
+
+    def test_shared_github_post_rules_own_complete_command_roster(self) -> None:
+        body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
+        allowed = re.search(r"(?ms)^## 你能调的 gh 命令.*?(?=^## |\Z)", body)
+        forbidden = re.search(r"(?ms)^## 你不能调的\(controller 边界\).*?(?=^## |\Z)", body)
+        self.assertIsNotNone(allowed)
+        self.assertIsNotNone(forbidden)
+
+        for needle in (
+            "gh issue view",
+            "gh issue comment",
+            "gh pr view",
+            "gh pr comment",
+            "gh pr edit --body-file",
+            "gh api ...",
+            "mktemp",
+        ):
+            with self.subTest(section="allowed", needle=needle):
+                self.assertIn(needle, allowed.group(0))
+        for needle in (
+            "git merge",
+            "git reset",
+            "git rebase",
+            "gh pr close",
+            "gh issue edit --add-label",
+            "gh issue edit --remove-label",
+            "gh pr edit --add-label",
+            "gh pr edit --remove-label",
+        ):
+            with self.subTest(section="forbidden", needle=needle):
+                self.assertIn(needle, forbidden.group(0))
+
+    def test_design_issue_reply_has_single_worker_post_success_path(self) -> None:
+        body = (PROMPTS_DIR / "design-issue-reply.md").read_text(encoding="utf-8")
+        section = github_post_section(body)
+        self.assertIn("## GitHub post", body)
+        self.assertIn("prompts/_github-post-rules.md", section)
+        self.assertNotIn("controller 会读这个文件", body)
+        self.assertNotIn("DESIGN_REPLY_READY", body)
+        self.assertIn("POSTED:design-reply", body)
+        self.assertIn("POST_FAILED:design-reply", body)
+        self.assertIn("DESIGN_REPLY_SKIPPED", body)
 
 
 if __name__ == "__main__":
