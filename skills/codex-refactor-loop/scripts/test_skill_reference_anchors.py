@@ -488,6 +488,28 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
+    def test_path_a_greenfield_delete_abstain_truth_table_is_authoritative(self) -> None:
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge))
+        for needle in (
+            "all implementation-bearing proposals agree + meta-judge consensus",
+            "all three solver outputs are mandatory",
+            "Path A greenfield compatible-neutral exception",
+            "exactly 2 implementation-bearing `propose` verdicts plus delete `abstain`",
+            "${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)`",
+            "${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "issue body/comments plus delete reverse-evidence prove greenfield/no current deletion target",
+            "delete abstain does not contradict that plan",
+            "This is not a generic 2/3 gate and has no host override",
+            "Missing/unknown/audit-backed/non-greenfield provenance",
+            "delete `false-positive:nothing-to-delete`",
+            "delete `escalate:no-plan`",
+            "implementation-bearing disagreement",
+            "fail closed to convergence",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
         # multi-device controller writes were described as local daemon facts.
