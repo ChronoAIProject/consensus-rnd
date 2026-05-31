@@ -275,6 +275,66 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_guided_github_consensus_workflow_setup_is_artifact_only(self) -> None:
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
+        self.assertIn("This walkthrough is the only downstream install runbook", walkthrough)
+        self.assertIn("### Guided GitHub consensus workflow setup", walkthrough)
+        for needle in (
+            ".refactor-loop/runs/github-workflow-setup/<timestamp>/",
+            "host-env.patch.md",
+            "labels-plan.json",
+            "scheduler.md",
+            "statusline.json",
+            "host-workflow-spec.json",
+            "walkthrough.md",
+            "Host env surface matrix",
+            "host.env.example",
+            "scripts/codex_refactor_loop/labels.py",
+            "consensus-rnd-cli restart-daemons",
+            "consensus-rnd-cli statusline",
+            "workflow_spec.py",
+            "WorkflowInvariantValidator",
+            "`host:` namespace",
+            "repo-relative paths",
+            "advisory only",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, walkthrough)
+
+        for forbidden in (
+            "summary.json",
+            "host-workflow-spec.example.json",
+            "renderer",
+            "CLI command",
+            "setup skill",
+            "installer",
+            "template directory",
+            "root install document",
+            "host `.git`",
+            "`.github`",
+            "CI",
+            "policy",
+            "branch protection",
+            "GitHub labels",
+            "issues",
+            "PRs",
+            "commits",
+            "pushes",
+            "merges",
+            "closes",
+            "tags",
+            "releases",
+            "settings",
+            "lifecycle surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, walkthrough)
+
+        self.assertNotIn("GuidedWorkflowSetupBundle", self.skill)
+        self.assertFalse((REPO_ROOT / "skills" / "github-workflow-setup").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "setup.py").exists())
+        self.assertEqual(0, len(list((SKILL_ROOT / "scripts" / "codex_refactor_loop").glob("*setup*"))))
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (
@@ -457,12 +517,58 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "`${SOLVER_STRUCTURAL_PATH}`",
             "`${SOLVER_DELETE_PATH}`",
             "gh issue view ${ISSUE_NUMBER}",
+            "`${WORK_UNIT_PRODUCER}`",
+            "`${WORK_UNIT_SOURCE_REF}`",
             "Do not search for, infer from, or copy sibling judge artifacts",
             "solver frontmatter `issue` is not `${ISSUE_NUMBER}`",
             "`${META_JUDGE_OUTPUT_PATH}` is not the judge output path",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "abstain-compatible Path A greenfield frame",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
+
+    def test_path_a_greenfield_delete_abstain_provenance_is_documented(self) -> None:
+        solver_delete = (SKILL_ROOT / "prompts" / "solver-delete.md").read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, solver_delete, meta_judge, router))
+        for needle in (
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-<N>",
+            "`${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "Path A greenfield",
+            "absence of existing local code to delete is neutral evidence",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "compatible with `SOLVER_DONE:delete:abstain:<reason>`",
+            "classify as genuinely needed/no current deletion dependency and abstain",
+            '"WORK_UNIT_PRODUCER"',
+            '"WORK_UNIT_SOURCE_REF"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_path_a_greenfield_delete_abstain_truth_table_is_authoritative(self) -> None:
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge))
+        for needle in (
+            "all implementation-bearing proposals agree + meta-judge consensus",
+            "all three solver outputs are mandatory",
+            "Path A greenfield compatible-neutral exception",
+            "exactly 2 implementation-bearing `propose` verdicts plus delete `abstain`",
+            "${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)`",
+            "${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "issue body/comments plus delete reverse-evidence prove greenfield/no current deletion target",
+            "delete abstain does not contradict that plan",
+            "This is not a generic 2/3 gate and has no host override",
+            "Missing/unknown/audit-backed/non-greenfield provenance",
+            "delete `false-positive:nothing-to-delete`",
+            "delete `escalate:no-plan`",
+            "implementation-bearing disagreement",
+            "fail closed to convergence",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
