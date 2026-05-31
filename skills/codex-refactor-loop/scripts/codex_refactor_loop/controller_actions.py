@@ -39,6 +39,7 @@ ISSUE_LABELS_REMOVE = (
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
+BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}]*)")
 
 
 class ControllerActions:
@@ -220,13 +221,15 @@ class ControllerActions:
             issue_target = normalized
         if not linked_issue:
             body = self.gh(["pr", "view", pr_target, "--json", "body", "--jq", ".body"], check=False).stdout
-            linked_issue = _single_linked_issue(body)
+            linked_issue = self._single_body_linked_issue_or_block(body, action="close")
+            if linked_issue is None:
+                return 1
             if linked_issue:
                 normalized = self._normalize_lifecycle_target_or_block(
                     linked_issue,
                     kind="issue",
-                    action="merge-pr",
-                    source="pr-body",
+                    action="close",
+                    source="body-link",
                 )
                 if normalized is None:
                     return 1
@@ -267,14 +270,14 @@ class ControllerActions:
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
-        linked_issue = _single_linked_issue(self._read_body_file(body_file))
+        linked_issue = self._single_body_linked_issue_or_raise(self._read_body_file(body_file), action="open-pr")
         issue_target = ""
         if linked_issue:
             issue_target = self._normalize_lifecycle_target_or_raise(
                 linked_issue,
                 kind="issue",
                 action="open-pr",
-                source="pr-body",
+                source="body-link",
             )
         created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
@@ -549,6 +552,29 @@ class ControllerActions:
         with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
             handle.write(f"CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}\n")
 
+    def _single_body_linked_issue_or_block(self, body: str, *, action: str) -> str | None:
+        # Refactor (issue-276): Old pattern: body-derived `Closes #...`
+        # targets used the read-only projection parser, so malformed body links
+        # looked identical to no link and skipped lifecycle target validation.
+        # New principle: body-link lifecycle targets fail closed before any
+        # gh side effect; absent or ambiguous valid links still mean no issue
+        # lifecycle mutation.
+        for target in _body_closing_issue_targets(body):
+            if self._normalize_lifecycle_target_or_block(
+                target,
+                kind="issue",
+                action=action,
+                source="body-link",
+            ) is None:
+                return None
+        return _single_linked_issue(body)
+
+    def _single_body_linked_issue_or_raise(self, body: str, *, action: str) -> str:
+        target = self._single_body_linked_issue_or_block(body, action=action)
+        if target is None:
+            raise RuntimeError(f"{action}: invalid issue target from body-link")
+        return target
+
 
 def _parse_time(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
@@ -578,6 +604,10 @@ def _single_linked_issue(body: str) -> str:
     #   mutate a parent issue when there is exactly one durable PR-body link.
     numbers = extract_closing_issue_numbers(body)
     return str(numbers[0]) if len(numbers) == 1 else ""
+
+
+def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
+    return tuple(match.group(1) for match in BODY_CLOSING_ISSUE_TARGET_RE.finditer(body or ""))
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:

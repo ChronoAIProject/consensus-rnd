@@ -91,6 +91,29 @@ class ControllerActionsTests(unittest.TestCase):
             self.pending_events(),
         )
 
+    def test_merge_pr_rejects_invalid_body_linked_issue_before_merge_or_label_edit(self) -> None:
+        cases = ("Closes #abc\n", "Closes #\n", "Closes #0\n", "Closes #01\n")
+        for body in cases:
+            with self.subTest(body=body.strip()):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                        return mock.Mock(returncode=0, stdout=body, stderr="")
+                    raise AssertionError(f"unexpected gh side effect after invalid body link: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                        self.assertEqual(1, self.actions.merge_pr("77"))
+
+                self.assertEqual([["pr", "view", "77", "--json", "body", "--jq", ".body"]], gh_calls)
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:close:issue:body-link",
+                    self.pending_events(),
+                )
+
     def test_merge_pr_accepts_valid_explicit_linked_issue_target(self) -> None:
         gh_calls: list[list[str]] = []
 
@@ -498,6 +521,23 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(77, pr_num)
         self.assertFalse(any(call[:2] == ["issue", "edit"] for call in gh_calls), gh_calls)
 
+    def test_open_pr_with_label_rejects_invalid_body_linked_issue_before_create(self) -> None:
+        cases = ("Closes #abc\n", "Closes #\n", "Closes #0\n", "Closes #01\n")
+        for body_link in cases:
+            with self.subTest(body=body_link.strip()):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                self.pr_body.write_text(
+                    f"## 🤖 PR ready\n\nSelf-contained body.\n\n{body_link}\n⟦AI:AUTO-LOOP⟧\n",
+                    encoding="utf-8",
+                )
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "invalid issue target from body-link"):
+                        self.actions.open_pr_with_label("title", str(self.pr_body), head="refactor/branch")
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:open-pr:issue:body-link",
+                    self.pending_events(),
+                )
+
     def test_merge_pr_closes_single_linked_issue_from_body(self) -> None:
         gh_calls: list[list[str]] = []
 
@@ -694,8 +734,14 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_merge_pr_uses_single_linked_issue_parser_for_body_linkage(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         self.assertIn('body = self.gh(["pr", "view", pr_target, "--json", "body", "--jq", ".body"], check=False).stdout', text)
-        self.assertIn("linked_issue = _single_linked_issue(body)", text)
+        self.assertIn('linked_issue = self._single_body_linked_issue_or_block(body, action="close")', text)
         self.assertIn("return str(numbers[0]) if len(numbers) == 1 else \"\"", text)
+
+    def test_body_linked_issue_parser_validates_malformed_closing_refs(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn("BODY_CLOSING_ISSUE_TARGET_RE", text)
+        self.assertIn("source=\"body-link\"", text)
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}", text)
 
     def test_lifecycle_gh_subject_slots_use_normalized_target_locals(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
