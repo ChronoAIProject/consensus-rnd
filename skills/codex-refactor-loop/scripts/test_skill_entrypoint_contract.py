@@ -367,12 +367,63 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
+    def test_issue276_lifecycle_target_normalization_contract_is_documented(self) -> None:
+        section = section_between(
+            self.skill,
+            r"^### Controller-internal lifecycle primitives.+$",
+            r"^### ",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "<!-- Refactor (issue-276): Old pattern:",
+            "`apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge`",
+            "`_normalize_lifecycle_target`",
+            "canonical positive decimals",
+            "before any `gh` or `git` side effect",
+            "empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed",
+            "`CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>`",
+            "`open_pr_with_label(...)` URL extraction followed by the same normalization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_runtime_surface_boundary_keeps_peek_human_and_wakeup_plan_machine(self) -> None:
         self.assertIn("`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader", self.skill)
         self.assertIn("`consensus-rnd-cli peek` is a status lens, not routing authority", self.skill)
         self.assertIn("structured output", self.skill)
         self.assertNotIn("peek --json", self.skill)
         self.assertNotIn("`--json`", read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py"))
+
+    def test_executable_shell_blocks_do_not_embed_raw_positional_parameters(self) -> None:
+        fenced_bash_blocks = re.findall(r"```(?:bash|sh|shell)\n(.*?)```", self.skill, flags=re.DOTALL)
+        self.assertTrue(fenced_bash_blocks)
+        for index, block in enumerate(fenced_bash_blocks):
+            with self.subTest(block=index):
+                self.assertNotRegex(block, r"(?<!\\)\$[0-9]")
+
+    # Refactor (issue-275): Old pattern: SKILL.md executable probes could carry raw positional shell parameters and clobber skill loading. New principle: source-regression locks the removal and the canonical CLI replacement wording.
+    def test_issue275_shell_clobber_patterns_are_removed_from_skill(self) -> None:
+        forbidden = (
+            "comm -13",
+            "awk -F'\\t' '$2==\"fail\"",
+            "ps -eo command= | awk",
+            "index($0,r)",
+            "REMOTE_CI_DONE",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, self.skill)
+
+        required = (
+            "kind: \"ci-red\"",
+            'gh pr checks "$PR_NUMBER" --json name,bucket,state,link',
+            "concurrency --count-only",
+            "--list-codex",
+            "ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
 
     def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
         forbidden = (

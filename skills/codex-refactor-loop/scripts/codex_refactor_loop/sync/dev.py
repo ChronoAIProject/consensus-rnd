@@ -272,11 +272,10 @@ def working_tree_dirty(cwd: Path, command_runner=run) -> bool:
 
 def merge_in_progress(cwd: Path, command_runner=run) -> bool:
     """Detect an in-progress merge in normal checkouts and linked worktrees."""
-    for name in ("MERGE_HEAD", "MERGE_MSG"):
-        result = command_runner(["git", "-C", str(cwd), "rev-parse", "--git-path", name])
-        if result.returncode == 0 and Path(result.stdout.strip()).exists():
-            return True
-    return False
+    # Refactor (issue-264): Old: stale MERGE_MSG was treated as live merge evidence.
+    # New: only MERGE_HEAD proves an in-progress merge; stale messages fall through.
+    result = command_runner(["git", "-C", str(cwd), "rev-parse", "--git-path", "MERGE_HEAD"])
+    return result.returncode == 0 and Path(result.stdout.strip()).exists()
 
 
 @dataclass(frozen=True)

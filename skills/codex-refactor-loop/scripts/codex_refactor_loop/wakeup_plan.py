@@ -40,6 +40,7 @@ from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
@@ -739,18 +740,14 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     return actions
 
 
-def existing_issue_actions(items: list[GhItem]) -> list[dict[str, Any]]:
+def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
     actionable = open_actionable_managed_items(_projection_items(items))
-    ordered = sorted(
-        actionable,
-        key=lambda item: (
-            label_catalog.MILESTONE_CURRENT not in label_catalog.normalize_label_set(item.labels).canonical,
-            0 if item.kind == "issue" else 1,
-            item.number,
-        ),
-    )
+    # Refactor (issue-262): Old: existing issue ranking only used milestone,
+    # kind, and number. New: a checked-in caller may use the validated
+    # transition_assessment sidecar bucket before the existing tie-breakers.
+    ordered = sorted(actionable, key=lambda item: _existing_issue_sort_key(item, repo_root))
     for item in ordered:
         raw = raw_by_key.get((item.kind, item.number))
         title = raw.title if raw is not None else item.title
@@ -804,6 +801,21 @@ def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], acti
             "boundary_task_id": None,
         }
     )
+
+
+def _existing_issue_sort_key(item: Any, repo_root: Path | None) -> tuple[bool, int, float, int, int]:
+    if repo_root is None:
+        transition_key = (0, -0.0)
+    else:
+        transition_key = transition_rank_key(
+            TransitionAssessmentReader.load_for_work_unit(
+                repo_root,
+                work_unit_id=f"issue-{item.number}",
+                source_ref=f"gh-issue-{item.number}",
+            )
+        )
+    milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
+    return (not milestone, transition_key[0], transition_key[1], 0 if item.kind == "issue" else 1, item.number)
 
 
 def phase_from_labels(labels: tuple[str, ...]) -> str:
@@ -896,7 +908,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         )
     else:
         actions.extend(host_actions)
-    actions.extend(existing_issue_actions(gh_items))
+    actions.extend(existing_issue_actions(gh_items, repo_root))
     actions.sort(key=lambda action: action["priority"])
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 

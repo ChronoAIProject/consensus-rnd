@@ -337,6 +337,32 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
 
+    def test_anti_stop_restart_helper_mirror_preserves_duplicate_canonical_boundary(self) -> None:
+        # Refactor (issue-264): Old: #49 mirror did not lock duplicate canonical skip narrowing.
+        # New: source-regression requires helper-private inventory, static allowlist, and no lifecycle authority.
+        entry = mirror_entry(self.mirror, "anti-stop-restart-helper-49")
+
+        for required in (
+            "DaemonProcessInventory",
+            "existing static daemon allowlist",
+            "zero duplicate canonical live wrapper",
+            "same resolved static allowlist command",
+            "duplicate canonical wrappers fail closed",
+            "test_restart_daemons.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no host-defined daemon registry",
+            "generic process supervisor",
+            "GitHub/git lifecycle authority",
+            "generic lifecycle authority",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
         targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")
         checked_paths = (
