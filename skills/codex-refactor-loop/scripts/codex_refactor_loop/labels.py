@@ -157,6 +157,7 @@ LABEL_SPECS: tuple[LabelSpec, ...] = (
     _spec("triage", "pending", "External issue is pending manual intake triage.", "fbca04", aliases=("auto-loop-triage",)),
     _spec("triage", "resume-requested", "Maintainer requested resumed implementation.", "1d76db", aliases=("auto-loop-resume",)),
     _spec("milestone", "current", "Milestone-priority item.", "f9d0c4", aliases=("🎯 milestone",)),
+    _spec("milestone", "release-target", "Release countdown target issue/PR.", "f9d0c4"),
 )
 
 CLEANUP_ONLY_ALIASES = frozenset({"🆘 human:卡死", "🆘 human:卡死-需-rework"})
@@ -187,6 +188,7 @@ NO_FRAMING = canonical_name("lifecycle", "no-framing")
 TRIAGE_PENDING = canonical_name("triage", "pending")
 TRIAGE_RESUME_REQUESTED = canonical_name("triage", "resume-requested")
 MILESTONE_CURRENT = canonical_name("milestone", "current")
+MILESTONE_RELEASE_TARGET = canonical_name("milestone", "release-target")
 HUMAN_AUTO = canonical_name("human", "auto")
 HUMAN_MAINTAINER_DECISION = canonical_name("human", "maintainer-decision")
 PHASE_DESIGN_SOLVING = canonical_name("phase", "design-solving")
