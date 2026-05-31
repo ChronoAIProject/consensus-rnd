@@ -573,6 +573,39 @@ class ControllerActionsTests(unittest.TestCase):
         issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
         self.assertEqual(labels.PHASE_MERGED, issue_edit[issue_edit.index("--add-label") + 1])
 
+    def test_merge_pr_accepts_body_link_with_escaped_newline_boundary(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="Ready.\n\nCloses #239\\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue239",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
+
     def test_merge_pr_does_not_guess_issue_when_body_closes_multiple_issues(self) -> None:
         gh_calls: list[list[str]] = []
 

@@ -39,7 +39,8 @@ ISSUE_LABELS_REMOVE = (
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
-BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}]*)")
+# Refactor (issue-276): validate body-linked lifecycle targets without swallowing escaped line boundaries.
+BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 
 
 class ControllerActions:
