@@ -28,7 +28,11 @@
 通用于本仓库内所有 skill 设计与变更:
 
 - **单一主干,插件扩展**:每个 skill 一条权威主链路;新能力以子模块/脚本挂载,禁止平行第二系统。
-- **内核最小化**:SKILL.md 只承载稳定不变量与触发条件;可机械化、可参考化的部分下沉到 `scripts/` / `prompts/` / `REFERENCE.md`。
+<!--
+Refactor (iter319/issue-319): Old pattern: CLAUDE.md 把『重型参考必须物理拆 REFERENCE.md』当宪法,audit 据此反复把单文件 SKILL.md 判 R02/R03 违规
+New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的 canonical reference surface;衡量标准从『必须物理拆文件』改为『事实源唯一+owner surface 清楚+anchor 可验证』
+-->
+- **内核最小化**:SKILL.md 必须承载触发条件、稳定不变量、controller 合同与该 skill 的行为事实源索引;可机械化部分下沉到 `scripts/`, prompt 模板下沉到 `prompts/`。重型参考默认可下沉到 `REFERENCE.md`,但若跨平台 agent 加载或维护实证显示物理拆分退化,允许单文件 SKILL.md 同时承载 controller 合同与详细参考,用 intra-file anchor 分层并由 source-regression 锁住事实源唯一性。
 - **边界清晰,职责分层**:本文件承载**跨 skill 边界**与**仓库级宪法约束**;单个 skill 的工作流细则、术语定义、当前状态归该 skill 自维护,不复制回本文件。
 - **事实源唯一**:同一约束禁止在多处平行声明。版本号 → `.version-bump.json`;host 运行时事实 → `host.env`;skill 行为 → 该 skill 的 SKILL.md 与 `scripts/test_*.py`。
 - **抽象优先,行为契约**:skill 间通过 `host.env` + 文件 artifact + GitHub API 等稳定边界协作,不耦合彼此内部脚本;命名跟随职责,不泄露 runtime / 内部实现细节。
@@ -65,7 +69,7 @@
 
 - 每个 skill 一个目录:`skills/<kebab-name>/SKILL.md`。
 - frontmatter 仅需 `name` + `description`(全文 ≤1024 字符)。`description` 以 "Use when..." 描述**触发条件**,不要复述工作流。
-- 重型参考拆 `REFERENCE.md`;脚本放 `scripts/`;prompt 模板放 `prompts/`。
+- 重型参考默认拆 `REFERENCE.md`;若该 skill 记录了单文件更稳定的维护事实,可留在 SKILL.md 的详细参考区并用 intra-file anchor 暴露;脚本放 `scripts/`;prompt 模板放 `prompts/`。
 - 写 / 改 skill **必须**遵循 `superpowers:writing-skills` 的 TDD 纪律:先用子 agent 跑 baseline(看它在没有 skill 时怎么失败),再写 / 改 skill。
 - 行为变更必须配套 **behavior test**(断言行为本身)+ **source-regression test**(对 SKILL.md 段落标题、narrow allowlist 字面、授权来源 path 等做字面断言),防止"改文档没改实现"或反之。
 - 新增后台脚本或 runtime surface 必须显式说明:**允许做什么 / 不允许做什么 / 事实源在哪里 / 如何验证**;缺任一项视为未完成。
@@ -97,7 +101,7 @@
 
 ## 工程约定(精简)
 
-- **文档分层**:`README.md` 是仓库定位与共识引擎设计哲学权威源;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 放重型参考。三者职责不重叠,改动只更新对应一处。
+- **文档分层**:`README.md` 是仓库定位与共识引擎设计哲学权威源;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 是可选重型参考层;未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层。三者职责不重叠:README 写产品身份,CLAUDE.md 写仓库宪法,skill 自己维护行为合同/参考。
 - **根目录 `.md` 收口**:仅保留 `CLAUDE.md`、`README.md`、`AGENTS.md`(符号链接,内容同 `CLAUDE.md`)、`LICENSE`、`GEMINI.md`、`CHANGELOG.md`(若有)。
 - **不保留历史副本**:废弃文件直接删除,不留 `.bak/.old/.deprecated`;历史由 git 保留。
 - **Git**:分支名描述意图;提交信息祈使句聚焦单一目的;PR 写明动机、影响范围、验证命令与结果。
