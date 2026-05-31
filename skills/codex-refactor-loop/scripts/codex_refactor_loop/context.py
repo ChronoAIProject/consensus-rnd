@@ -23,7 +23,6 @@ class HostEnvLocation:
     """Resolved location of the loop runtime injection file."""
 
     path: Path
-    source: str
 
 
 @dataclass(frozen=True)
@@ -173,17 +172,17 @@ class HostEnvLocator:
         root = repo_root.resolve()
         raw_explicit = env.get(cls.EXPLICIT_ENV)
         if raw_explicit is not None:
-            # Refactor (issue-310): explicit locator is an opt-in to a host-owned
-            # runtime injection file, not a host production config registry.
+            # Refactor (iter1/issue-310):
+            #   Old pattern: host.env lookup made .refactor-loop/host.env look like the host production fact home.
+            #   New principle: CONSENSUS_RND_HOST_ENV is only a locator for a host-owned loop runtime injection file; legacy paths stay compatibility reads.
             return HostEnvLocation(
                 path=cls._resolve_explicit(root, raw_explicit),
-                source=cls.EXPLICIT_ENV,
             )
 
         for relative in cls.LEGACY_PATHS:
             path = (root / relative).resolve()
             if path.is_file():
-                return HostEnvLocation(path=path, source=relative.as_posix())
+                return HostEnvLocation(path=path)
         return None
 
     @classmethod
@@ -287,8 +286,9 @@ def _github_repo_slug(env: Mapping[str, str]) -> str | None:
 
 
 def _paths(repo_root: Path) -> LoopPaths:
-    # Refactor (issue-310): this path is the skill-private runtime home, but
-    # callers keep the historical pathlib.Path contract.
+    # Refactor (iter1/issue-310):
+    #   Old pattern: .refactor-loop paths could be read as host production configuration or ledger authority.
+    #   New principle: .refactor-loop is only the skill-private runtime home while callers keep the historical Path contract.
     refactor_loop = repo_root / ".refactor-loop"
     state = refactor_loop / "state"
     return LoopPaths(
