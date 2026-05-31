@@ -304,6 +304,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             json_text = json_text.split("\nHARD_GATE:", 1)[0]
         return json.loads(json_text), result.stdout
 
+    def write_dispatch(self, priority: str, task_id: str) -> Path:
+        priority_dir = self.repo / ".refactor-loop" / "dispatch-queue" / priority
+        priority_dir.mkdir(parents=True, exist_ok=True)
+        dispatch = priority_dir / f"{task_id}.dispatch.json"
+        dispatch.write_text(
+            json.dumps(
+                {
+                    "task_id": task_id,
+                    "cd": str(self.repo / ".worktrees" / task_id),
+                    "prompt": str(self.repo / ".refactor-loop" / "prompts" / f"{task_id}.md"),
+                    "log": str(self.logs / f"{task_id}.log"),
+                    "stall": 5400,
+                    "queued_at": "2026-05-26T07:25:00Z",
+                    "reason": f"{task_id} needed",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return dispatch
+
     def write_completed_log(self, name: str, marker: str) -> None:
         (self.logs / name).write_text(
             f"prompt echo {marker}:<placeholder>\n"
@@ -636,6 +656,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
         self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+
+    def test_queued_work_bypasses_single_audit_wait(self) -> None:
+        self.write_dispatch("p1", "fix-pr294-round-3")
+
+        plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
+
+        self.assertEqual(plan["concurrency"]["actual"], 1)
+        self.assertEqual(plan["concurrency"]["deficit"], 4)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
+        self.assertEqual(plan["hard_gate"]["reason"], None)
+        self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
+        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+
+    def test_expected_active_work_bypasses_single_audit_wait(self) -> None:
+        plan, stdout = self.run_plan_with_stdout(fixture="many_active", ps_count=0, active_audit=True)
+
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 6)
+        self.assertEqual(plan["concurrency"]["actual"], 1)
+        self.assertEqual(plan["concurrency"]["deficit"], 5)
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertEqual(plan["hard_gate"]["reason"], None)
+        self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
     def test_all_wakeup_actions_emit_registered_phase_slugs(self) -> None:
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").unlink()
