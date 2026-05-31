@@ -308,10 +308,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "solver_input_prompts",
             "judge_input_solver_logs",
             "judge_prompt_path",
+            "judge_prompt_template_path",
+            "judge_prompt_scope",
             "independence_check",
             "phase9-triplet-evidence-invalid",
             "Router recovery/idempotency reads only `key`",
             "meta-judge decisions read solver logs, not ledger evidence",
+            "render full `prompts/meta-judge.md`",
+            "missing template",
+            "phase9-meta-judge-template-unavailable",
+            "phase9-meta-judge-scope-invalid",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.skill)
@@ -323,6 +329,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("phase9-source-state-unavailable", self.skill)
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+
+    def test_meta_judge_prompt_documents_router_scoped_input_boundary(self) -> None:
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        for needle in (
+            "## Router-scoped input boundary",
+            "`${SOLVER_MINIMAL_PATH}`",
+            "`${SOLVER_STRUCTURAL_PATH}`",
+            "`${SOLVER_DELETE_PATH}`",
+            "gh issue view ${ISSUE_NUMBER}",
+            "Do not search for, infer from, or copy sibling judge artifacts",
+            "solver frontmatter `issue` is not `${ISSUE_NUMBER}`",
+            "`${META_JUDGE_OUTPUT_PATH}` is not the judge output path",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, meta_judge)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:

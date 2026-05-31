@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.phase9.router import (
+    Marker,
     Phase9Router,
     Phase9SourceIssueDecision,
     main,
@@ -306,6 +307,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "solver_input_prompts",
             "judge_input_solver_logs",
             "judge_prompt_path",
+            "judge_prompt_template_path",
+            "judge_prompt_scope",
             "independence_check",
         ):
             with self.subTest(key=key):
@@ -330,6 +333,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual([record["role"] for record in entry["clean_exit_solver_logs"]], ["delete", "minimal", "structural"])
         self.assertEqual([record["dialect"] for record in entry["clean_exit_solver_logs"]], ["phase9", "phase9", "phase9"])
         self.assertEqual([record["status"] for record in entry["solver_input_prompts"]], ["present", "present", "present"])
+        self.assertEqual(entry["judge_prompt_template_path"], "prompts/meta-judge.md")
+        self.assertEqual(entry["judge_prompt_scope"], {"issue": "167", "round": 6, "solver_roles": ["delete", "minimal", "structural"]})
         self.assertNotIn("independence_checks", entry)
 
     def test_phase9_router_triplet_ledger_records_missing_solver_prompts_without_blocking(self) -> None:
@@ -396,14 +401,85 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ".refactor-loop/logs/phase9-issue169-r8-minimal.log",
             ".refactor-loop/logs/phase9-issue169-r8-structural.log",
             "Dispatch ledger evidence: .refactor-loop/phase9-router-ledger.jsonl key=169-8-judge",
+            "# Role: Meta-judge",
+            "Artifact profile: phase9-meta-judge",
+            "WORK_UNIT_ID=issue-169",
+            "cluster: issue-169",
+            "convergence_round: 8",
+            "Round number this fires: 9",
+            "Write `.refactor-loop/runs/phase9-issue169-r8-judge.md`",
+            "gh issue view 169",
+            "Router-scoped input boundary",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, prompt)
-        self.assertIn("Consensus-rnd Phase design-consensus meta-judge", prompt)
+        self.assertNotIn("Read the three completed solver logs and emit META_JUDGE_DONE", prompt)
         self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
         self.assertNotIn("phase9-evidence", prompt)
         self.assertNotIn("Dispatch ledger:", prompt)
         self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_judge_prompt_scopes_solver_paths_and_ignores_stale_other_issue_artifacts(self) -> None:
+        stale = self.repo / ".refactor-loop" / "runs" / "phase9-issue170-r8-judge.md"
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        stale.write_text("stale other issue judge artifact\n", encoding="utf-8")
+        self.solver_triplet(issue=169, round_no=8)
+
+        self.router.tick()
+
+        prompt = (self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue169-r8-judge.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("`.refactor-loop/logs/phase9-issue169-r8-minimal.log`", prompt)
+        self.assertIn("`.refactor-loop/logs/phase9-issue169-r8-structural.log`", prompt)
+        self.assertIn("`.refactor-loop/logs/phase9-issue169-r8-delete.log`", prompt)
+        self.assertIn("Do not search for, infer from, or copy sibling judge artifacts", prompt)
+        self.assertNotIn("phase9-issue170-r8-judge", prompt)
+        self.assertNotIn("stale other issue", prompt)
+
+    def test_phase9_router_missing_meta_judge_template_fails_closed_without_prompt_or_ledger(self) -> None:
+        self.solver_triplet(issue=260, round_no=1)
+        original_read_text = Path.read_text
+
+        def read_text_or_fail_template(path: Path, *args: object, **kwargs: object) -> str:
+            if path.name == "meta-judge.md":
+                raise OSError("template unavailable")
+            return original_read_text(path, *args, **kwargs)
+
+        with mock.patch("codex_refactor_loop.phase9.router.Path.read_text", autospec=True, side_effect=read_text_or_fail_template):
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue260-r1-judge.md").exists())
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["key"], "phase9-meta-judge-prompt:260-1")
+        self.assertEqual(events[0]["reason"], "phase9-meta-judge-template-unavailable")
+        self.assertEqual(events[0]["template_path"], "prompts/meta-judge.md")
+
+    def test_phase9_router_wrong_issue_solver_identity_fails_closed_without_prompt_or_ledger(self) -> None:
+        markers = [
+            self.write_log("phase9-issue260-r1-minimal.log", "SOLVER_DONE:minimal:same:summary"),
+            self.write_log("phase9-issue260-r1-structural.log", "SOLVER_DONE:structural:same:summary"),
+            self.write_log("phase9-issue260-r1-delete.log", "SOLVER_DONE:delete:same:summary"),
+        ]
+        wrong_issue_marker = markers[0].with_name("phase9-issue261-r1-minimal.log")
+
+        self.assertIsNone(self.router._meta_judge_prompt("260", 1, [
+            Marker("SOLVER_DONE:minimal:same:summary", wrong_issue_marker, "261", 1, "minimal"),
+            Marker("SOLVER_DONE:structural:same:summary", markers[1], "260", 1, "structural"),
+            Marker("SOLVER_DONE:delete:same:summary", markers[2], "260", 1, "delete"),
+        ]))
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue260-r1-judge.md").exists())
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["key"], "phase9-meta-judge-prompt:260-1")
+        self.assertEqual(events[0]["reason"], "phase9-meta-judge-scope-invalid")
+        self.assertIn("scope mismatch", events[0]["detail"])
 
     def test_phase9_router_durable_artifacts_store_relative_paths_but_spawn_argv_absolute(self) -> None:
         self.solver_triplet(issue=202, round_no=1)
