@@ -130,6 +130,18 @@ class Phase9SourceIssueDecision:
     reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
 
 
+class HarnessSpawnIntent(dict[str, object]):
+    # Refactor (iterissue-330/issue-330): refactor helper, no behavior change in default daemon dispatch.
+    #   Old pattern: daemon nohup spawn bypassed the harness-visible contract; command could mean argv/shell.
+    #   New principle: HARNESS_SPAWN_INTENT.command is closed enum Literal['spawn-codex']; argv is built by controller/harness.
+    def __init__(self, intent: dict[str, object], display_argv: list[str]) -> None:
+        super().__init__(intent)
+        self.display_argv = display_argv
+
+    def __iter__(self):
+        return iter(self.display_argv)
+
+
 @dataclass(frozen=True)
 class MetaJudgePromptContext:
     # Refactor (issue-262): Old: meta-judge prompt context had no validated
@@ -245,7 +257,7 @@ class Phase9Router:
         *,
         ctx: LoopContext | None = None,
         dry_run: bool = False,
-        command_runner: Callable[[list[str]], None] | None = None,
+        command_runner: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if ctx is None:
             if repo_root is None:
@@ -263,7 +275,7 @@ class Phase9Router:
         # .refactor-loop/.controller-pending-events.log.
         self.pending_events_path = ctx.paths.pending_events
         self.lock_path = self.loop_dir / "phase9-router.lock"
-        self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
+        self.spawn_codex = ctx.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
         # memory-only dedup was lost on daemon restart, re-emitting historical
@@ -754,6 +766,7 @@ class Phase9Router:
             "marker": marker,
             "log_path": self._artifact_path(log_path),
             "dispatched_at": self._now(),
+            "dispatch_state": "harness-intent",
         }
         if extra:
             entry.update(extra)
@@ -924,30 +937,55 @@ class Phase9Router:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
-        command = [
+        # Refactor (iterissue-330/issue-330):
+        #   Old pattern: daemon nohup spawn bypassed the harness-visible contract; command could mean argv/shell.
+        #   New principle: HARNESS_SPAWN_INTENT.command is closed enum Literal['spawn-codex']; argv is built by controller/harness.
+        if self.dry_run:
+            return False
+        intent = {
+            "intent_id": self._intent_id_for_log(log_path),
+            "source": "phase9-router",
+            "route": "design-consensus-direct",
+            "task_id": log_path.stem,
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": self._artifact_path(prompt),
+            "log": self._artifact_path(log_path),
+            "stall": 3600,
+            "reason": "phase9-router direct route",
+            "queued_at": self._now(),
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        self.command_runner(HarnessSpawnIntent(intent, self._display_argv_for_intent(intent)))
+        return True
+
+    def _default_runner(self, intent: dict[str, object]) -> None:
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _display_argv_for_intent(self, intent: dict[str, object]) -> list[str]:
+        return [
             str(self.spawn_codex),
             "spawn-codex",
             "--cd",
-            str(self.repo_root),
+            str(self.ctx.artifact_execution_path(str(intent["cd"]))),
             "--prompt",
-            str(prompt),
+            str(self.ctx.artifact_execution_path(str(intent["prompt"]))),
             "--log",
-            str(log_path),
+            str(self.ctx.artifact_execution_path(str(intent["log"]))),
             "--stall",
-            "3600",
+            str(intent["stall"]),
         ]
-        if self.dry_run:
-            return False
-        self.command_runner(command)
-        return True
 
-    def _default_runner(self, command: list[str]) -> None:
-        subprocess.Popen(
-            ["nohup", *command],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    def _intent_id_for_log(self, log_path: Path) -> str:
+        identity = self._identity_from_path(log_path)
+        if identity is None:
+            return f"phase9-router:{log_path.stem}"
+        return f"phase9-router:{identity.issue}:{identity.round}:{identity.actor}"
 
     def _write_prompt(self, issue: str, round_no: int, actor: str, body: str) -> Path:
         prompt = self.prompts_dir / f"phase9-issue{issue}-r{round_no}-{actor}.md"
@@ -1226,7 +1264,7 @@ class Phase9Router:
     def _solver_roles(self) -> tuple[str, ...]:
         # Refactor (iter219/issue-219):
         #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-        #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely and keeps the built-in allowlist.
+    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely and keeps the built-in allowlist.
         return ROLES
 
     def _judge_role(self) -> str:
@@ -1249,7 +1287,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], None] | None = None) -> int:
+def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, object]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = Path(args.repo_root) if args.repo_root else LoopContext.load(cwd=os.getcwd()).repo_root
     if not repo_root.is_absolute():

@@ -149,6 +149,9 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
             self.assertTrue(all(" -c " not in line for line in lines))
 
     def test_tick_p0_no_gap_fires_topup_and_writes_exact_event_tokens(self) -> None:
+        # Refactor (iterissue-330/issue-330):
+        #   Old pattern: daemon nohup spawn bypassed the harness-visible contract; command could mean argv/shell.
+        #   New principle: HARNESS_SPAWN_INTENT.command is closed enum Literal['spawn-codex']; argv is built by controller/harness.
         self.write_dispatch("fix-pr160-round-1-a")
         self.write_dispatch("fix-pr160-round-1-b")
         calls: list[list[str]] = []
@@ -167,13 +170,16 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 ):
                     self.monitor.tick()
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [])
         alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
         self.assertIn("P0 no-gap-violation: 0 codex with 1 active task(s)", alert)
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("concurrency-alert P0 no-gap-violation: 0 codex with 1 active task(s)", events)
-        self.assertIn("DISPATCH_FIRED:fix-pr160-round-1-a:p0:fix-pr160-round-1-a needed", events)
-        self.assertIn("DISPATCH_FIRED:fix-pr160-round-1-b:p0:fix-pr160-round-1-b needed", events)
+        self.assertIn("HARNESS_SPAWN_INTENT", events)
+        self.assertIn('"command": "spawn-codex"', events)
+        self.assertIn("DISPATCH_INTENT:fix-pr160-round-1-a:p0:fix-pr160-round-1-a needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr160-round-1-b:p0:fix-pr160-round-1-b needed", events)
+        self.assertNotIn("DISPATCH_FIRED", events)
 
     def test_mutable_dispatch_to_repo_root_is_rejected_with_narrow_allowlist_event(self) -> None:
         self.write_dispatch("fix-pr160-round-2", cd=self.repo)
