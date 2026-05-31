@@ -78,6 +78,17 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
 
         return _fake_popen
 
+    def harness_spawn_intents(self) -> list[dict]:
+        events = self.refactor_loop / ".controller-pending-events.log"
+        if not events.exists():
+            return []
+        intents = []
+        for line in events.read_text(encoding="utf-8").splitlines():
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            intents.append(json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1]))
+        return intents
+
     def assert_dispatch_rejected(self, task_id: str, reason: str, calls: list[list[str]]) -> None:
         self.assertEqual(calls, [])
         self.assertFalse((self.refactor_loop / "dispatch-queue" / "p0" / f"{task_id}.dispatch.json").exists())
@@ -99,7 +110,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.top_up_from_dispatch_queue(actual=0, floor=2)
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.harness_spawn_intents()), 2)
         self.assertEqual(list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json")), [])
         archived = sorted((self.refactor_loop / "dispatch-dispatched").glob("*.json"))
         self.assertEqual([p.name for p in archived], ["audit-iter-5.json", "fix-pr44-round-3.json"])
@@ -107,7 +119,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
     # Refactor (impl/issue191-single-active-controller): Old pattern: any
     # device-local concurrency monitor could dispatch and archive queue entries.
     # New principle: non-owner monitors preserve queue files and write no
-    # DISPATCH_FIRED side effect.
+    # DISPATCH_INTENT side effect.
     def test_non_owner_does_not_dispatch_archive_or_write_dispatch_fired(self) -> None:
         dispatch = self.write_dispatch("p1", "fix-pr44-round-3")
         calls: list[list[str]] = []
@@ -224,9 +236,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("fix-pr44-round-3", "p0", "fix-pr44-round-3 needed"))
-        self.assertEqual(len(calls), 1)
-        cd_index = calls[0].index("--cd")
-        self.assertEqual(calls[0][cd_index + 1], str(worktree))
+        self.assertEqual(calls, [])
+        intents = self.harness_spawn_intents()
+        self.assertEqual(len(intents), 1)
+        self.assertEqual(intents[0]["command"], "spawn-codex")
+        self.assertEqual(intents[0]["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(intents[0]["cd"], ".worktrees/fix-pr44-round-3")
+        self.assertNotIn("argv", intents[0])
+        self.assertNotIn("shell", intents[0])
         self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-3.json").exists())
         self.assertFalse((self.refactor_loop / "dispatch-rejected").exists())
 
@@ -252,7 +269,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                     fired = self.monitor.dispatch_one_from_queue()
 
                 self.assertEqual(fired, (task_id, "p0", f"{task_id} needed"))
-                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls, [])
+                self.assertEqual(self.harness_spawn_intents()[-1]["intent_id"], f"dispatch:{task_id}")
                 self.assertTrue((self.refactor_loop / "dispatch-dispatched" / f"{task_id}.json").exists())
 
     def test_rejects_main_readonly_prefix_near_misses_at_repo_root(self) -> None:
@@ -286,12 +304,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("fix-pr44-round-4", "p0", "fix-pr44-round-4 needed"))
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.harness_spawn_intents()), 1)
         self.assertTrue((self.refactor_loop / "dispatch-rejected" / "fix-pr44-round-3.json").exists())
         self.assertTrue((self.refactor_loop / "dispatch-dispatched" / "fix-pr44-round-4.json").exists())
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("DISPATCH_REJECTED:fix-pr44-round-3:p0:main-worktree-cd:repo-root-cd", events)
-        self.assertIn("DISPATCH_FIRED:fix-pr44-round-4:p0:fix-pr44-round-4 needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr44-round-4:p0:fix-pr44-round-4 needed", events)
 
     def test_monitor_respects_priority_order(self) -> None:
         self.write_dispatch("p2", "p2-task")
@@ -302,8 +321,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.dispatch_one_from_queue()
 
-        self.assertEqual(len(calls), 1)
-        self.assertTrue(any(arg.endswith("p0-task.md") for arg in calls[0]))
+        self.assertEqual(calls, [])
+        self.assertEqual(self.harness_spawn_intents()[0]["prompt"], ".refactor-loop/prompts/p0-task.md")
         self.assertFalse((self.refactor_loop / "dispatch-queue" / "p0" / "p0-task.dispatch.json").exists())
         self.assertTrue((self.refactor_loop / "dispatch-queue" / "p1" / "p1-task.dispatch.json").exists())
 
@@ -423,10 +442,10 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                     with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
                         self.monitor.tick()
 
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [])
         self.assertFalse((self.refactor_loop / "dispatch-queue" / "p1" / "fix-pr294-round-3.dispatch.json").exists())
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("DISPATCH_FIRED:fix-pr294-round-3:p1:fix-pr294-round-3 needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr294-round-3:p1:fix-pr294-round-3 needed", events)
         self.assertNotIn("WAIT:single-active-audit", events)
         self.assertNotIn("HARD_GATE:dispatch_required=", events)
 
@@ -442,9 +461,11 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         payload = json.loads(archive.read_text(encoding="utf-8"))
         self.assertEqual(payload["task_id"], "fix-pr44-round-3")
         self.assertEqual(payload["priority"], "p0")
+        self.assertEqual(payload["dispatch_state"], "harness-intent")
+        self.assertEqual(payload["intent_id"], "dispatch:fix-pr44-round-3")
         self.assertRegex(payload["dispatch_at"], r"^20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("DISPATCH_FIRED:fix-pr44-round-3:p0:PR #44 r3 fix needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr44-round-3:p0:PR #44 r3 fix needed", events)
 
     def test_tick_p0_no_gap_with_queued_dispatch_fires_topup(self) -> None:
         self.reload_monitor()
@@ -462,14 +483,15 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 ):
                     self.monitor.tick()
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.harness_spawn_intents()), 2)
         alert = (self.refactor_loop / ".concurrency-alert.log").read_text(encoding="utf-8")
         self.assertIn("P0 no-gap-violation", alert)
         state = json.loads((self.refactor_loop / ".concurrency-monitor-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["zero_streak"], 1)
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-a:p0:fix-pr57-round-1-a needed", events)
-        self.assertIn("DISPATCH_FIRED:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr57-round-1-a:p0:fix-pr57-round-1-a needed", events)
+        self.assertIn("DISPATCH_INTENT:fix-pr57-round-1-b:p0:fix-pr57-round-1-b needed", events)
 
     # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old: tick()
     # only proved the owner/default-local queue top-up path. New: non-owner
@@ -528,7 +550,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
                     self.monitor.tick()
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.harness_spawn_intents()), 2)
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 1)
 
@@ -615,7 +638,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=active_items):
                     self.monitor.tick()
 
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls, [])
+        self.assertEqual(len(self.harness_spawn_intents()), 2)
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 2)
 
@@ -630,9 +654,8 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
             self.monitor.dispatch_one_from_queue()
 
-        self.assertEqual(len(calls), 1)
-        stall_index = calls[0].index("--stall")
-        self.assertEqual(calls[0][stall_index + 1], "5400")
+        self.assertEqual(calls, [])
+        self.assertEqual(self.harness_spawn_intents()[0]["stall"], 5400)
 
     def test_configured_floor_invalid_falls_back(self) -> None:
         os.environ["CODEX_FLOOR"] = "abc"
@@ -671,11 +694,27 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             fired = self.monitor.dispatch_one_from_queue()
 
         self.assertEqual(fired, ("filename-task", "p2", "filename-task needed"))
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls, [])
         archive = self.refactor_loop / "dispatch-dispatched" / "filename-task.json"
         self.assertTrue(archive.exists())
         payload = json.loads(archive.read_text(encoding="utf-8"))
         self.assertEqual(payload["task_id"], "filename-task")
+
+    def test_dispatch_intent_append_failure_preserves_queue_file(self) -> None:
+        dispatch = self.write_dispatch("p1", "retry-task")
+
+        with mock.patch.object(self.monitor, "write_pending_event", side_effect=OSError("disk full")):
+            with self.assertRaises(OSError):
+                self.monitor.dispatch_one_from_queue()
+
+        self.assertTrue(dispatch.exists())
+        self.assertFalse((self.refactor_loop / "dispatch-dispatched").exists())
+
+    def test_concurrency_monitor_source_has_no_direct_nohup_spawn_codex(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
+        self.assertIn('"command": "spawn-codex"', source)
+        self.assertNotIn('"nohup"', source)
+        self.assertNotIn("start_new_session", source)
 
     # Refactor (iter4/skill-count-cli-canonical): Old pattern: controller ran
     # ps | grep manually and consensus-rnd-cli spawn-codex reimplemented count_in_flight_codex,
