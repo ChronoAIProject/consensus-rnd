@@ -34,7 +34,7 @@ class LabelContractSourceTests(unittest.TestCase):
         text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         active_contracts = {
-            "entry mode": self._section(text, "## Two entry modes", "## Host 配置"),
+            "entry mode": self._section(text, "## Main path and fallback producer", "## Host 配置"),
             "bootstrap": self._section(text, "## Label bootstrap loops", "## Codex invocation details"),
             "pr open": self._section(text, "### Consensus-rnd Phase publish stacked", "### Consensus-rnd Phase publish stack-depth cap"),
             "existing priority": self._section(text, "### Existing-issue priority route table", "### Stale-issue revival"),

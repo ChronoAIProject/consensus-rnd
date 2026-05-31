@@ -671,11 +671,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(actions[-1]["milestone"])
 
     def test_existing_issue_routes_before_audit_fallback(self) -> None:
-        plan = self.run_plan(fixture="existing")
+        plan, stdout = self.run_plan_with_stdout(fixture="existing")
 
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
         self.assertEqual(plan["actions"][0]["item"], "issue #10")
-        self.assertNotEqual(plan.get("recommendation"), "RECOMMEND:audit")
+        self.assertIsNone(plan.get("recommendation"))
+        self.assertNotIn("RECOMMEND:audit", stdout)
+
+    def test_audit_fallback_only_when_no_actionable_issue_or_pr_exists(self) -> None:
+        plan, stdout = self.run_plan_with_stdout(fixture="empty")
+
+        self.assertEqual(plan["actions"], [])
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertIn("RECOMMEND:audit", stdout)
 
     def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
         path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"

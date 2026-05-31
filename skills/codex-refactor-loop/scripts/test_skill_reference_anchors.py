@@ -162,21 +162,39 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
-    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+    def test_skill_documents_main_path_and_fallback_producer_near_top(self) -> None:
         top = "\n".join(self.skill.splitlines()[:200])
         for needle in (
-            "## Two entry modes",
-            "audit-driven",
+            "## Main path and fallback producer",
+            "open actionable catalog-managed GitHub issue/PR resolution",
             "issue-driven / Path A",
             "catalog-derived design issue label bundle",
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
             "Legacy issue-entry labels are migration aliases only",
-            "Audit is a seed producer, not the only entry",
+            "`audit` remains a stable compatibility producer value and fallback issue producer",
+            "no open actionable managed issue/PR",
+            "Audit produces or updates issues that feed back into the main path",
+            "not a co-equal entry mode",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, top)
+        self.assertIn('<a id="two-entry-modes"></a>', top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+        self.assertNotIn("audit-driven", top)
+
+    def test_project_rules_do_not_duplicate_skill_local_main_path_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for forbidden in (
+            "issue resolution 是主路径",
+            "audit 是 fallback producer",
+            "open actionable managed GitHub issue/PR",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, claude)
+        self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
+        self.assertIn("## Main path and fallback producer", self.skill)
 
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
         phase9 = section_after_heading(

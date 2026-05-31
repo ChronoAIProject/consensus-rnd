@@ -415,7 +415,7 @@ def concurrency_plan(
             "dispatch_required": deficit if hard_gate_active else 0,
             "line": hard_gate_line,
             "semantics": (
-                "controller must dispatch this many actionable tasks or audit fallback before ending the wakeup"
+                "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
                 if hard_gate_active
                 else None
             ),
@@ -920,7 +920,7 @@ def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], acti
             "dispatch_required": deficit if deficit > 0 else 0,
             "line": f"HARD_GATE:dispatch_required={deficit}" if deficit > 0 else None,
             "semantics": (
-                "controller must dispatch this many actionable tasks or audit fallback before ending the wakeup"
+                "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
                 if deficit > 0
                 else None
             ),
