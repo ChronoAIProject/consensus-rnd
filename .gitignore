@@ -16,5 +16,6 @@ node_modules/
 /.worktrees/
 
 # Claude Code 本地设置(.claude/skills 软链需 track,故只忽略本地设置)
+.claude/settings.json
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
