@@ -1542,7 +1542,7 @@ The default work-unit producer is `audit`. Producer normalization is documented 
 triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
-2. Replace `{{iteration}}` placeholder.
+2. Replace the literal `${ITERATION}` placeholders with N using a targeted replacement; leave runtime placeholders such as `$REPO_ROOT`, `${PROJECT_RULES:-CLAUDE.md}`, and `$SOURCE_GLOBS` intact for the audit codex runtime.
 3. Dispatch:
 
    ```bash
