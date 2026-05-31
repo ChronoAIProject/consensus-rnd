@@ -916,3 +916,5 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Refactor (issue-277): single_active_audit_boundary 全分支测试覆盖见上(empty/open-actionable/queued/no-audit/expected>0)。
