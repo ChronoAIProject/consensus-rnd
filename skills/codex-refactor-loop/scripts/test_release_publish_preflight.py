@@ -417,6 +417,18 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertFalse(result.allowed)
             self.assertIn("manifest_version_mismatch", result.reasons)
 
+    def test_preflight_still_rejects_target_version_manifests(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
+            set_mapped_version(repo, "1.9.10")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("manifest_version_mismatch", result.reasons)
+
     def test_manifest_version_compare_ignores_build_metadata(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"

@@ -37,7 +37,9 @@ jobs:
           python-version: "3.12"
 
       - name: Run contract tests
-        run: python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'
+        run: |
+          python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'
+          python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'
 
   manifest-version-sync:
     name: manifest-version-sync

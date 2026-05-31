@@ -315,6 +315,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
 
+    def test_release_publication_anchor_names_already_bumped_reentry(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — release-publication(per #322)")
+        for needle in (
+            "already-bumped reentry",
+            "only preflight mismatch is mapped manifests already equal `to_version`",
+            "git show -s --format=%s HEAD",
+            "HEAD subject is exactly `Release v<to_version>`",
+            "skip only `python3 .github/scripts/bump_version.py --version <to_version>`, `git add .version-bump.json <mapped manifests>`, and `git commit -m \"Release v<to_version>\"`",
+            "exact release/reentry commit sha",
+            "pending/red/missing/API-fail fail closed",
+            "no proof-ticket/resume system",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     def test_skill_documents_issue_300_draft_then_ready_merge_contract(self) -> None:
         for needle in (
             "Refactor (issue-300)",
