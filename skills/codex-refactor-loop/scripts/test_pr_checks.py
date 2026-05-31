@@ -152,3 +152,5 @@ class PrChecksSourceRegressionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Refactor (issue-297): pr-checks REST projection + open_design_issue wrapper; controller 裸 gh/git recipe 已收口。
