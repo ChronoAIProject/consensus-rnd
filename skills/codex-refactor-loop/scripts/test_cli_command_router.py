@@ -247,7 +247,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "--json"],
                 cwd=repo,
-                env=child_env,
+                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
                 capture_output=True,
                 text=True,
                 check=False,
@@ -267,7 +267,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             unknown = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],
                 cwd=repo,
-                env=child_env,
+                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
                 capture_output=True,
                 text=True,
                 check=False,

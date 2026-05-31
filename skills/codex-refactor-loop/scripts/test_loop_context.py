@@ -55,6 +55,24 @@ class LoopContextTests(unittest.TestCase):
         self.assertEqual(repo / ".refactor-loop" / "state" / "statusline-snapshot.json", ctx.paths.statusline_snapshot)
         self.assertEqual(repo / ".refactor-loop" / "state" / "recent-pr-merges.json", ctx.paths.recent_pr_merges)
 
+    def test_load_ignores_root_host_env_migration_file(self) -> None:
+        (self.repo / "host.env").write_text(
+            f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="root/ignored"\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
+            LoopContext.load(cwd=self.repo, env={})
+
+        ctx = LoopContext.load(repo_root=self.repo, cwd=self.repo, env={})
+        self.assertEqual({}, ctx.host_env)
+        self.assertIsNone(ctx.gh_repo_slug)
+
+    def test_context_source_regression_reads_only_refactor_loop_host_env(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "context.py").read_text(encoding="utf-8")
+        self.assertIn('repo_root / ".refactor-loop" / "host.env"', source)
+        self.assertNotIn('repo_root / "host.env"', source)
+
     def test_invalid_repo_root_override_fails_closed(self) -> None:
         other = self.tmp_root / "other"
         other.mkdir()
