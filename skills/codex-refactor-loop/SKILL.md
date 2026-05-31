@@ -1371,6 +1371,11 @@ could be empty, inferred, or non-canonical GitHub identifiers before gh/git
 side effects. New principle: lifecycle targets are normalized through a private
 canonical positive-decimal boundary before any lifecycle side effect. -->
 
+<!-- Refactor (issue-300): Old pattern: controller-opened PRs could be mergeable
+before the review-gate consensus decision. New principle: open PRs as draft by
+default and mark ready only inside post-decision merge_pr after MERGE or
+MERGE_WITH_COMMENTS has already been decided. -->
+
 7 个曾发生的 bug 都来自 controller boilerplate 重复 + shell 变量传值 bug。统一用 controller-internal `ControllerActions` primitives, not public CLI commands:
 
 ```python
@@ -1384,7 +1389,8 @@ actions.apply_human_label_or_skip(pr_number, source_marker, reason)
 
 **强制**:
 - 派 codex 前必须 validate rendered prompt output — 防 codex blocked on unresolved placeholder
-- merge PR 必须用 internal `merge_pr(pr)` — auto-close + label cleanup,不留尾巴。`merge_pr` is a post-decision lifecycle primitive: call it only after the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`; it never computes Consensus-rnd Phase review-gate reviewer policy.
+- Controller-opened PRs must use internal `open_pr_with_label(...)`; it creates open PRs as draft by default (`gh pr create --draft`) before labels are applied.
+- merge PR 必须用 internal `merge_pr(pr)` — post-decision ready+merge + auto-close + label cleanup,不留尾巴。`merge_pr` first checks draft state and, only when the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`, marks the PR ready before `gh pr merge`; it never computes Consensus-rnd Phase review-gate reviewer policy.
 - worktree 创建必须用 internal `safe_worktree(iteration, cluster, base)` — 处理 "already exists" race
 - PR 号捕获必须用 internal `open_pr_with_label(...)` returned tuple — **禁止** shell `pr_num=$(...grep -oE...)` 这种 subshell 变量传值模式
 - Lifecycle PR/issue targets entering `apply_human_label_or_skip`, `merge_pr`, `open_pr_with_label`, or `record_recent_pr_merge` must pass `_normalize_lifecycle_target` and become canonical positive decimals before any `gh` or `git` side effect; empty, blank, zero, negative, non-digit, leading-zero, URL, branch, and current-PR inference inputs fail closed and write `CONTROLLER_ACTION_BLOCKED:invalid-github-target:<action>:<kind>:<source>` to the controller pending-event log. PR creation target capture stays limited to `open_pr_with_label(...)` URL extraction followed by the same normalization.
@@ -2046,11 +2052,11 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 
 | Preconditions | Latest complete required round | Controller action |
 |---|---|
-| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>`. |
-| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>`. |
-| Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not merge, do not dispatch fix. |
-| Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
-| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; never merge. |
+| CI green, PR mergeable, reviewed head SHA current, every required role has exactly one valid marker after `EXIT=0` | `reject=0`, `approve=R`, `comment=0` | `MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` | `MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge. |
+| Same preconditions | `reject=0`, `approve=0`, `comment=R` | `WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge, do not dispatch fix. |
+| Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; do not ready, do not merge; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
+| Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
 
 ### Fix-retry loop (AI iterates until consensus)
 

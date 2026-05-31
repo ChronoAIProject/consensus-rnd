@@ -203,6 +203,19 @@ class ControllerActions:
         sys.stderr.write("\n".join(result.stderr.splitlines()[-2:]) + "\n")
         return wt_path, branch
 
+    def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:
+        # Refactor (issue-300): PRs are opened as draft by default; merge_pr is
+        # the controller-owned post-decision boundary that marks them ready only
+        # after MERGE or MERGE_WITH_COMMENTS has already been decided.
+        draft = self.gh(["pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"], check=False)
+        if draft.returncode != 0:
+            return draft.returncode
+        if draft.stdout.strip() == "true":
+            ready = self.gh(["pr", "ready", pr_target], check=False)
+            if ready.returncode != 0:
+                return ready.returncode
+        return 0
+
     def merge_pr(self, pr: str, linked_issue: str = "") -> int:
         if not self._require_owner_or_return("merge-pr", code=3):
             return 3
@@ -235,6 +248,9 @@ class ControllerActions:
                 if normalized is None:
                     return 1
                 issue_target = normalized
+        ready = self._ensure_pr_ready_for_merge(pr_target)
+        if ready != 0:
+            return ready
         merge = self.gh(["pr", "merge", pr_target, "--admin", "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
@@ -280,7 +296,7 @@ class ControllerActions:
                 action="open-pr",
                 source="body-link",
             )
-        created = self.gh(["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
+        created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
         if not match:
