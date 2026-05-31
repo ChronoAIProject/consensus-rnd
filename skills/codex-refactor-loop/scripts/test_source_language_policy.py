@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ast
+import re
 import tokenize
 import unittest
 from dataclasses import dataclass
@@ -13,12 +14,8 @@ from tempfile import TemporaryDirectory
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
-SKILL_ROOT = SCRIPT_PATH.parents[1]
-PYTHON_SOURCE_ROOTS = (
-    REPO_ROOT / ".github" / "scripts",
-    SKILL_ROOT / "scripts" / "codex_refactor_loop",
-)
 REF_HISTORY_TOKENS = ("Refactor (", "Old pattern", "New principle")
+REF_HISTORY_ITER_CLUSTER_RE = re.compile(r"\biter(?:\d+|N)/cluster[A-Za-z0-9_-]*\b")
 HAN_START = "\u4e00"
 HAN_END = "\u9fff"
 LOG_METHODS = {"debug", "info", "warning", "warn", "error", "exception", "critical"}
@@ -66,7 +63,7 @@ def has_han(text: str) -> bool:
 
 
 def has_refactor_history(text: str) -> bool:
-    return any(token in text for token in REF_HISTORY_TOKENS)
+    return any(token in text for token in REF_HISTORY_TOKENS) or REF_HISTORY_ITER_CLUSTER_RE.search(text) is not None
 
 
 def source_files(repo_root: Path = REPO_ROOT) -> list[Path]:
@@ -226,6 +223,7 @@ class SourceLanguagePolicyTests(unittest.TestCase):
             source_path.write_text(
                 '"""Chinese text in source: 中文 docstring"""\n'
                 "# Refactor (iter1/example): Old pattern: 中文 comment history\n"
+                "# iter3/cluster-016 rationale\n"
                 "def run() -> None:\n"
                 '    raise ValueError("Chinese text in source: 中文 error")\n',
                 encoding="utf-8",
@@ -242,12 +240,14 @@ class SourceLanguagePolicyTests(unittest.TestCase):
 
         self.assertIn((expected_path, 2, "han-comment"), comment_reasons)
         self.assertIn((expected_path, 2, "refactor-history-comment"), comment_reasons)
+        self.assertIn((expected_path, 3, "refactor-history-comment"), comment_reasons)
         self.assertIn((expected_path, "module-string", "han-docstring"), string_reasons)
         self.assertIn((expected_path, "run", "han-selected-string"), string_reasons)
         self.assertIn((expected_path, 1, "han-docstring"), scan_reasons)
         self.assertIn((expected_path, 2, "han-comment"), scan_reasons)
         self.assertIn((expected_path, 2, "refactor-history-comment"), scan_reasons)
-        self.assertIn((expected_path, 4, "han-selected-string"), scan_reasons)
+        self.assertIn((expected_path, 3, "refactor-history-comment"), scan_reasons)
+        self.assertIn((expected_path, 5, "han-selected-string"), scan_reasons)
 
     def test_allowlist_entries_match_current_literals(self) -> None:
         raw_findings: list[Finding] = []
