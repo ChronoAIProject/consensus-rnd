@@ -2301,7 +2301,15 @@ Policy: all three solver outputs are mandatory, and all implementation-bearing p
 
 ### Solver source contract
 
+<!--
+Refactor (iter364/issue364):
+  Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+  New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
+-->
+
 Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>` mean `gh issue view <N>` issue body/comments are the scope source. If an issue body or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated. For Path A greenfield identity, absence of existing local code to delete is neutral evidence for the delete solver and is compatible with `SOLVER_DONE:delete:abstain:<reason>` when deletion/collapse is not justified.
+
+For Path A issue body/comments that cite files absent from the current checkout, solvers must not directly emit a generic `no-plan`. The issue body/comments may carry a read-only source locator: `git show <ref>:<path>` for a named ref/path, a raw URL, `gh api` for a GitHub object, or a host-provided path from `.refactor-loop/host.env`. Use the locator only to read the cited source; do not fetch, checkout, switch, merge, rebase, reset, create a source worktree, or add a source directory. If the locator is missing or invalid and the current checkout cannot verify the cited source, classify the no-plan reason precisely as `source-location-missing-or-invalid`.
 
 Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues. The router renders the same producer/source-ref provenance into meta-judge prompts so the judge can recognize Path A greenfield framing instead of treating delete-solver abstain as a failed deletion proof.
 
