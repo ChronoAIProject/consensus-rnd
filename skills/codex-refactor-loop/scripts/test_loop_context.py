@@ -125,29 +125,29 @@ class LoopContextTests(unittest.TestCase):
 
         self.assertEqual("legacy/repo", ctx.gh_repo_slug)
 
-    def test_legacy_root_host_env_still_loads(self) -> None:
-        root_host_env = self.repo / "host.env"
-        root_host_env.write_text(
-            "\n".join(
-                (
-                    f'export REPO_ROOT="{self.repo}"',
-                    'export GH_REPO_SLUG="root/repo"',
-                    'export BUILD_CMD="make root-build"',
-                )
-            ),
-            encoding="utf-8",
-        )
-
-        ctx = LoopContext.load(cwd=self.repo, env={})
-
-        self.assertEqual("root/repo", ctx.gh_repo_slug)
-        self.assertEqual("make root-build", ctx.host_env["BUILD_CMD"])
-
     def test_explicit_consensus_rnd_host_env_rejects_repo_contained_missing_file(self) -> None:
         missing = ".config/consensus-rnd/missing.env"
 
         with self.assertRaisesRegex(LoopContextError, "not a readable file"):
             LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": missing})
+
+    def test_load_ignores_root_host_env_migration_file(self) -> None:
+        (self.repo / "host.env").write_text(
+            f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="root/ignored"\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(LoopContextError, "REPO_ROOT is unset"):
+            LoopContext.load(cwd=self.repo, env={})
+
+        ctx = LoopContext.load(repo_root=self.repo, cwd=self.repo, env={})
+        self.assertEqual({}, ctx.host_env)
+        self.assertIsNone(ctx.gh_repo_slug)
+
+    def test_context_source_regression_reads_only_refactor_loop_host_env(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "context.py").read_text(encoding="utf-8")
+        self.assertIn('Path(".refactor-loop") / "host.env"', source)
+        self.assertNotIn('repo_root / "host.env"', source)
 
     def test_invalid_repo_root_override_fails_closed(self) -> None:
         other = self.tmp_root / "other"

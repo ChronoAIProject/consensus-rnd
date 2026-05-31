@@ -53,6 +53,10 @@ class LoopContext:
 
     Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
     New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+
+    Refactor (iter316/issue-316):
+      Old pattern: host runtime facts were parsed in wakeup_plan/release-gate/sync/controller_actions/heartbeat and read legacy aliases plus root host.env.
+      New principle: LoopContext/context.py is the single shared host.env parser; read only CONSENSUS_RND_HOST_ENV or legacy .refactor-loop/host.env; no root host.env or unlisted aliases.
     """
 
     repo_root: Path
@@ -165,7 +169,7 @@ class HostEnvLocator:
     """Locate only the consensus-rnd loop runtime injection file."""
 
     EXPLICIT_ENV = "CONSENSUS_RND_HOST_ENV"
-    LEGACY_PATHS = (Path(".refactor-loop") / "host.env", Path("host.env"))
+    LEGACY_PATHS = (Path(".refactor-loop") / "host.env",)
 
     @classmethod
     def resolve(cls, repo_root: Path, env: Mapping[str, str], cwd: Path | None = None) -> HostEnvLocation | None:
@@ -174,7 +178,7 @@ class HostEnvLocator:
         if raw_explicit is not None:
             # Refactor (iter1/issue-310):
             #   Old pattern: host.env lookup made .refactor-loop/host.env look like the host production fact home.
-            #   New principle: CONSENSUS_RND_HOST_ENV is only a locator for a host-owned loop runtime injection file; legacy paths stay compatibility reads.
+            #   New principle: CONSENSUS_RND_HOST_ENV is only a locator for a host-owned loop runtime injection file; .refactor-loop/host.env stays a compatibility read.
             return HostEnvLocation(
                 path=cls._resolve_explicit(root, raw_explicit),
             )
