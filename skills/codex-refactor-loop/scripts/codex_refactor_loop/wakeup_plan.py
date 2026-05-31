@@ -42,7 +42,7 @@ from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
-from codex_refactor_loop.work_items import ManagedWorkProjection
+from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -262,12 +262,13 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
 
 
 def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhItem] | None = None) -> dict[str, Any]:
-    # Refactor (floor-no-exemption):
-    #   Old pattern: AUDIT_DONE:none:0 converted a positive deficit into
-    #   a low-floor stop and suppressed the hard gate.
-    #   New principle: deficit>0 has no exemption; audit is the fallback work
-    #   when no open existing action is available.
-    monitor = build_concurrency_monitor(repo_root, import_concurrency_monitor(repo_root))
+    # Refactor (issue-277):
+    #   Old pattern: AUDIT_DONE:none:0 converted a positive deficit into an
+    #   exemption, then floor-no-exemption made audit repeatable without a slot.
+    #   New principle: positive deficits stay visible; duplicate same-iteration
+    #   audit is not legal dispatch when that audit is already active.
+    concurrency_module = import_concurrency_monitor(repo_root)
+    monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
     expected, breakdown = expected_from_open_items(gh_items or [])
     if expected == 0:
@@ -277,6 +278,15 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
     deficit = max(0, target - actual)
     hard_gate_active = deficit > 0
     hard_gate_line = f"HARD_GATE:dispatch_required={deficit}" if hard_gate_active else None
+    boundary = None
+    if deficit > 0 and expected == 0 and concurrency_module is not None:
+        try:
+            boundary = concurrency_module.single_active_audit_boundary(repo_root, monitor, gh_items or [], None)
+        except Exception:
+            boundary = None
+    if boundary is not None:
+        hard_gate_active = False
+        hard_gate_line = None
     return {
         "actual": actual,
         "expected_from_active_tasks": expected,
@@ -294,7 +304,9 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
                 if hard_gate_active
                 else None
             ),
-            "reason": None,
+            "reason": "single_active_audit_in_flight" if boundary is not None else None,
+            "blocked_deficit": deficit if boundary is not None else 0,
+            "boundary_task_id": boundary.task_id if boundary is not None else None,
         },
     }
 
@@ -738,34 +750,68 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
 
 def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
-    represented = ManagedWorkProjection(_projection_items(items)).represented_issue_numbers()
+    raw_by_key = {(item.kind.lower(), item.number): item for item in items}
+    actionable = open_actionable_managed_items(_projection_items(items))
     # Refactor (issue-262): Old: existing issue ranking only used milestone,
     # kind, and number. New: a checked-in caller may use the validated
     # transition_assessment sidecar bucket before the existing tie-breakers.
-    ordered = sorted(items, key=lambda item: _existing_issue_sort_key(item, repo_root))
+    ordered = sorted(actionable, key=lambda item: _existing_issue_sort_key(item, repo_root))
     for item in ordered:
-        if item.kind == "issue" and item.number in represented:
-            continue
-        phase = phase_from_labels(item.labels)
-        status = status_from_labels(item.labels)
-        if status in {"blocked", "merged", "ci-running", "pr-open"}:
-            continue
-        priority = 6 if item.milestone else 7
+        raw = raw_by_key.get((item.kind, item.number))
+        title = raw.title if raw is not None else item.title
+        milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
+        priority = 6 if milestone else 7
+        item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
         actions.append(
             {
                 "priority": priority,
                 "kind": "existing-issue",
-                "item": item.item,
-                "phase": phase,
+                "item": item_name,
+                "phase": phase_from_labels(item.labels),
                 "actor": actor_from_labels(item.labels, item.kind),
-                "milestone": item.milestone,
-                "title": item.title,
+                "milestone": milestone,
+                "title": title,
             }
         )
     return actions
 
 
-def _existing_issue_sort_key(item: GhItem, repo_root: Path | None) -> tuple[bool, int, float, int, int]:
+def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
+    dispatchable = {
+        "maintainer-comment",
+        "completed-marker",
+        "ci-red",
+        "no-gap-violation",
+        "existing-issue",
+    }
+    return any(action.get("kind") in dispatchable for action in actions)
+
+
+def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:
+    hard_gate = concurrency.get("hard_gate", {})
+    if hard_gate.get("reason") != "single_active_audit_in_flight":
+        return
+    if not has_dispatchable_action(actions):
+        return
+    deficit = int(concurrency.get("deficit", 0))
+    hard_gate.update(
+        {
+            "active": deficit > 0,
+            "dispatch_required": deficit if deficit > 0 else 0,
+            "line": f"HARD_GATE:dispatch_required={deficit}" if deficit > 0 else None,
+            "semantics": (
+                "controller must dispatch this many actionable tasks or audit fallback before ending the wakeup"
+                if deficit > 0
+                else None
+            ),
+            "reason": None,
+            "blocked_deficit": 0,
+            "boundary_task_id": None,
+        }
+    )
+
+
+def _existing_issue_sort_key(item: Any, repo_root: Path | None) -> tuple[bool, int, float, int, int]:
     if repo_root is None:
         transition_key = (0, -0.0)
     else:
@@ -776,7 +822,8 @@ def _existing_issue_sort_key(item: GhItem, repo_root: Path | None) -> tuple[bool
                 source_ref=f"gh-issue-{item.number}",
             )
         )
-    return (not item.milestone, transition_key[0], transition_key[1], 0 if item.kind == "issue" else 1, item.number)
+    milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
+    return (not milestone, transition_key[0], transition_key[1], 0 if item.kind == "issue" else 1, item.number)
 
 
 def phase_from_labels(labels: tuple[str, ...]) -> str:
@@ -871,10 +918,14 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(existing_issue_actions(gh_items, repo_root))
     actions.sort(key=lambda action: action["priority"])
+    restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 
     recommendation: str | None = None
     if not actions:
-        recommendation = "RECOMMEND:audit"
+        if concurrency["hard_gate"].get("reason") == "single_active_audit_in_flight":
+            recommendation = "WAIT:single-active-audit"
+        else:
+            recommendation = "RECOMMEND:audit"
 
     return {
         "schema": "wakeup-plan",

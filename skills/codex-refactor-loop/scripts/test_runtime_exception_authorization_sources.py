@@ -171,6 +171,37 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 for field in MAINTAINER_DIRECTIVE_REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
 
+    def test_floor_no_exemption_mirror_preserves_single_active_audit_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "maintainer-directive-floor-no-exemption")
+
+        for required in (
+            "legal dispatchable real work",
+            "ordinary audit fallback",
+            "no same-iteration audit is active",
+            "same-iteration audit is already active",
+            "dispatch_required=0",
+            "reason=single_active_audit_in_flight",
+            "blocked_deficit=N",
+            "AUDIT_DONE:none:0` still does not exempt",
+            "no general low-floor exemption",
+            "no duplicate same-iteration audit",
+            "no fabricated work",
+            "no AuditLaneIdentity",
+            "no `AUDIT_LANE_ID`",
+            "no `audit-iter-N-laneK`",
+            "no lane/shard protocol in this issue",
+            "no issue/PR lifecycle",
+            "label lifecycle",
+            "commit",
+            "push",
+            "merge",
+            "tag",
+            "release",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+
     def test_maintainer_directive_mirror_is_single_checked_in_authorization_surface(self) -> None:
         forbidden_mirror = "skills/codex-refactor-loop/authorizations/maintainer-directives.md"
         self.assertFalse((REPO_ROOT / forbidden_mirror).exists())

@@ -327,6 +327,109 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
 
+    def test_tick_queue_empty_active_audit_writes_wait_event(self) -> None:
+        active_audit = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
+            f"--prompt {self.refactor_loop}/prompts/audit-iter-8.md "
+            f"--log {self.refactor_loop}/logs/audit-iter-8.log"
+        )
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            "WAIT:single-active-audit:dispatch_required=0:actual=1 expected=0 queue=0 blocked_deficit=1",
+            events,
+        )
+        self.assertNotIn("HARD_GATE:dispatch_required=1", events)
+
+    def test_tick_queue_empty_no_active_audit_still_writes_positive_hard_gate(self) -> None:
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
+        self.assertNotIn("WAIT:single-active-audit", events)
+
+    def test_tick_actionable_work_bypasses_single_active_audit_wait(self) -> None:
+        active_audit = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
+            f"--prompt {self.refactor_loop}/prompts/audit-iter-8.md "
+            f"--log {self.refactor_loop}/logs/audit-iter-8.log"
+        )
+        items = [
+            {
+                "number": 277,
+                "kind": "issue",
+                "phase": "crnd:phase:fixing",
+                "human": "crnd:human:auto",
+                "labels": ["crnd:lifecycle:managed", "crnd:phase:fixing", "crnd:human:auto"],
+                "state": "open",
+            }
+        ]
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=1 queue=0", events)
+        self.assertNotIn("WAIT:single-active-audit", events)
+
+    def test_tick_zero_expected_actionable_work_bypasses_single_active_audit_wait(self) -> None:
+        active_audit = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
+            f"--prompt {self.refactor_loop}/prompts/audit-iter-8.md "
+            f"--log {self.refactor_loop}/logs/audit-iter-8.log"
+        )
+        items = [
+            {
+                "number": 277,
+                "kind": "issue",
+                "phase": "crnd:phase:consensus-reached",
+                "human": "crnd:human:auto",
+                "labels": ["crnd:lifecycle:managed", "crnd:phase:consensus-reached", "crnd:human:auto"],
+                "state": "open",
+            }
+        ]
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
+        self.assertNotIn("WAIT:single-active-audit", events)
+
+    def test_tick_queued_work_bypasses_single_active_audit_wait_and_consumes_queue(self) -> None:
+        active_audit = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
+            f"--prompt {self.refactor_loop}/prompts/audit-iter-8.md "
+            f"--log {self.refactor_loop}/logs/audit-iter-8.log"
+        )
+        self.write_dispatch("p1", "fix-pr294-round-3")
+        calls: list[list[str]] = []
+        counts = [1, 2]
+
+        with mock.patch.object(self.module.subprocess, "Popen", side_effect=self.fake_popen(calls)):
+            with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+                with mock.patch.object(self.monitor, "count_in_flight_codex", side_effect=lambda: counts.pop(0)):
+                    with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
+                        self.monitor.tick()
+
+        self.assertEqual(len(calls), 1)
+        self.assertFalse((self.refactor_loop / "dispatch-queue" / "p1" / "fix-pr294-round-3.dispatch.json").exists())
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("DISPATCH_FIRED:fix-pr294-round-3:p1:fix-pr294-round-3 needed", events)
+        self.assertNotIn("WAIT:single-active-audit", events)
+        self.assertNotIn("HARD_GATE:dispatch_required=", events)
+
     def test_monitor_archives_dispatched_json_with_timestamp(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", reason="PR #44 r3 fix needed")
         calls: list[list[str]] = []
@@ -813,3 +916,5 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+# Refactor (issue-277): single_active_audit_boundary 全分支测试覆盖见上(empty/open-actionable/queued/no-audit/expected>0)。

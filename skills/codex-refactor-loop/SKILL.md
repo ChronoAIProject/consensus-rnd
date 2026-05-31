@@ -362,7 +362,9 @@ These are local controller contract rules learned from dogfood incidents:
 
 Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
 
-`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script` and `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得带 `deficit>0` 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`.
+<!-- Refactor (issue-277): Old: 并发 floor 把 audit fallback 当成无限可重复派发,会和 #205 单 active audit 规则冲突。New: floor 无通用豁免,`AUDIT_DONE:none:0` 仍不豁免;但同一 iteration ordinary audit fallback 只有一个 active slot,slot 占用且无其他合法 work 时输出 WAIT + blocked_deficit,不重复 audit。 -->
+
+`consensus-rnd-cli wakeup-plan` is the prioritized-next-action reader and `codex_refactor_loop wakeup-plan` is the package CLI subcommand; the script remains a compatibility entrypoint. Contract: every wakeup must mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` or `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and execute from its structured output; controller 仍是执行者和 lifecycle owner。契约:每次唤醒机械调用 `consensus-rnd-cli wakeup-plan`,据其输出执行。Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script` and `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption`. `consensus-rnd-cli wakeup-plan` 直接算并发并产出 deficit hard-gate; controller 不得用通用 low-floor exemption 结束唤醒. `AUDIT_DONE:none:0` no longer exempts the floor: if no existing actionable work is open and no same-iteration audit is active, the plan still emits `RECOMMEND:audit` plus `HARD_GATE:dispatch_required=N`; if the single active audit slot is already occupied, it emits `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; no duplicate same-iteration audit.
 
 `consensus-rnd-cli peek` is a status lens, not routing authority; it remains useful for human-readable ambient state after the plan. `consensus-rnd-cli wakeup-plan` outputs prioritized routing recommendations from local evidence plus GitHub labels; `consensus-rnd-cli peek` displays status and does not decide next action.
 
@@ -385,9 +387,9 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - **Allowed**: read `.refactor-loop` files, scan `.refactor-loop/heartbeats/*.ts`, read clean-exit log tails, run read-only GitHub list/check/view commands, and print JSON recommendations.
 - **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
-- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or audit fallback before ending the wakeup. There is no `AUDIT_DONE:none:0` exemption.
+- **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or legal audit fallback before ending the wakeup. There is no general low-floor exemption, and `AUDIT_DONE:none:0` still does not exempt the floor. The only single active audit boundary is when no actionable open work and no queue candidate exists, expected is 0, and the same-iteration `audit-iter-N` is already active; then the plan emits `WAIT:single-active-audit`, `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N` instead of duplicating the same audit; no duplicate same-iteration audit.
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `crnd:milestone:current` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
-- If no actionable open work exists, it emits `RECOMMEND:audit`; audit is always available as the floor fallback.
+- If no actionable open work exists, it emits `RECOMMEND:audit`; ordinary audit is the floor fallback only when no same-iteration audit is already active.
 
 ## Workflow Stage Index
 
@@ -525,7 +527,7 @@ Controller non-duties:
 
 The floor is local because it prevents loop stalls.
 
-<!-- Refactor (iter4/skill-floor-fill-not-optional): Old pattern: "If below floor and no higher-priority actionable marker exists, dispatch audit" left "actionable marker" undefined,导致 controller 拿 in-flight codex 当 actionable marker rationalize defer top-up。New principle: actionable marker 必须 EXIT=0 / maintainer comment / CI red / no-gap;in-flight codex (没 EXIT=0) 不算;floor 不足时 audit fallback is mandatory, and AUDIT_DONE:none:0 no longer exempts a positive deficit.(2026-05-29 maintainer-directive floor-no-exemption overrides issue-86 immunity) -->
+<!-- Refactor (issue-277): Old: "floor 不足时 audit fallback is mandatory" 未区分合法 audit 与重复 same-iteration audit,和 #205 单 active audit anti-rule 冲突。New: no general low-floor exemption;`AUDIT_DONE:none:0` still does not exempt;ordinary audit fallback 同一时刻一个 same-iteration active slot;slot 占用且无其他 legal work 时 expose blocked_deficit as WAIT,不 duplicate audit。 -->
 
 - `$CODEX_FLOOR` defaults to 5 and has a hard minimum of 2.
 - Use `FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))`.
@@ -540,9 +542,10 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- If `deficit>0`, there is no exemption: dispatch existing/open actionable work first, then audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
-- `AUDIT_DONE:none:0` no longer exempts the concurrency floor; when no real queued/actionable open work exists, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
-- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch, not low-floor exemption.
+- If `deficit>0`, there is no general exemption: dispatch existing/open actionable work first, then legal audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
+- `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
+- Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
+- "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
 - **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
 - **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
 
@@ -2608,7 +2611,9 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 
 **floor 取值**:`CODEX_FLOOR` 由 host.env 注入(未设则默认 **5**)。**无论 host 设多少,硬下限 = 2** —— controller 必须**确保始终有 ≥2 个本仓库 codex 并行**(防单线程死等);`CODEX_FLOOR < 2` 一律按 2 处理。小型 host(纯文档 / skills 仓,可派的独立工作少)宜设 `CODEX_FLOOR=2`,大型代码仓可设 5+。**floor 计数只算本仓库 codex**(按 `$REPO_ROOT` 绝对路径 scope,见上「并发 floor … 过计」节;❌ 不要用相对子串,同机多 loop 会过计致本仓库永远补不上)。
 
-**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` no longer exempts a positive deficit。
+<!-- Refactor (issue-277): Old: Concurrency floor details used absolute audit fallback wording, allowing duplicate same-iteration audit as fake dispatch authority. New: keep no general exemption and `AUDIT_DONE:none:0` still not exempt, but represent occupied single audit slot as WAIT with blocked_deficit when no other legal work exists. -->
+
+**规则**:**活跃(本仓库)codex < `$CODEX_FLOOR` 时主动派额外真实工作填满 floor**,不等当前 phase 完成。floor 是保底,不是 burst 目标;单次派发按真实工作量伸缩,默认补到 `$CODEX_FLOOR`,不要为了"并行更猛"一次性齐发十几个。controller 每次 wakeup 的 step 1.5 仍必须在任何 `ScheduleWakeup` 之前执行;同时 `consensus-rnd-cli concurrency` 现在会消费 [dispatch queue protocol](#dispatch-queue-protocol) 中的 queued work 自动补 floor,避免 controller 卡住时只 alert 不派。若没有 open actionable work, audit 仍是可用兜底;`AUDIT_DONE:none:0` still does not exempt a positive deficit; ordinary audit fallback has one same-iteration active slot, so an occupied slot with no other legal work is `WAIT:single-active-audit` plus `blocked_deficit`, not duplicate audit。
 
 | 活跃本仓库 codex 数 | 动作 |
 |---|---|
@@ -2620,14 +2625,14 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
 2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
 3. **Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
-4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` does not exempt a positive deficit.
-5. **Visible hard gate** — when no real open work exists, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; do not stop with a low-floor exemption.
+4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` still does not exempt a positive deficit, and there is no duplicate same-iteration audit.
+5. **Visible hard gate / blocked boundary** — when no real open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; when the same-iteration audit slot is occupied, emit `WAIT:single-active-audit`, `dispatch_required=0`, and `blocked_deficit=N`; do not stop with a low-floor exemption.
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 必须先填到 `$CODEX_FLOOR`(至少 2)才允许 ScheduleWakeup
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
-- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f ".refactor-loop/logs/audit-iter-${N}.log" ]`
-- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 必须继续 hard-gate dispatch;无 open actionable work 时派 audit
+- ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ expose `WAIT:single-active-audit` + `blocked_deficit`,不要 duplicate same-iteration audit
+- ❌ latest controller-validated audit 已是 `AUDIT_DONE:none:0` 就不补 floor → 仍不豁免;无 active audit 且无 open actionable work 时继续 hard-gate dispatch audit
 - ❌ 一次性派 `>= 15` 个 codex 凑吞吐。大 burst 会压 API,更容易触发 transient stream-disconnect,并让 prompt 回显误判与追踪问题一起放大。
 
 ### Transient stream-disconnect 处理(强制)
@@ -2657,16 +2662,16 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 # 按优先级派 NEEDED 个 codex:
 # queue -> actionable marker / maintainer comment / CI red / no-gap / Consensus-rnd Phase design-intake/9 route
-# -> audit fallback, including after AUDIT_DONE:none:0
-# -> HARD_GATE:dispatch_required=N until deficit is gone
+# -> audit fallback, including after AUDIT_DONE:none:0 when no same-iteration audit is active
+# -> HARD_GATE:dispatch_required=N or WAIT:single-active-audit blocked_deficit=N until deficit is gone or no legal dispatch remains
 ```
 
 **反面禁止**:
 - ❌ 看到 1 codex 跑就 ScheduleWakeup 等(消极等待)→ 应主动派真实 work 提升并发
-- ❌ 多个 audit 同时跑(`ls audit-iter-*.log | head -3` 全 in-flight)→ 资源浪费,重复 evidence
+- ❌ 多个 same-iteration audit 同时跑(`audit-iter-N` active 还派同 N)→ 资源浪费,重复 evidence;必须 expose `blocked_deficit`
 - ❌ "iter N 还没完"作为不派 pre-fixed-point audit 的理由 → audit 与 cluster impl 完全独立,无依赖
-- ❌ 重复派同 iter audit(已有 log 还派)→ 检查 `[ ! -f "$NEXT_LOG" ]`
-- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → 继续 `HARD_GATE:dispatch_required=N`;无 open actionable work 时派 audit
+- ❌ 重复派同 iter audit(已有 active `audit-iter-N` 还派)→ no duplicate same-iteration audit
+- ❌ 在 latest controller-validated `AUDIT_DONE:none:0` 后把 floor deficit 当成已豁免 → no general exemption;无 active audit 且无 open actionable work 时继续 `HARD_GATE:dispatch_required=N`
 
 结构性教训:曾出现 fix 期间并发只剩 1 个 codex,说明单靠 merge-driven iteration boundary 不足以维持无限循环吞吐。concurrency-driven trigger 是并行优化的必要规则:并发过低时应主动开启真实 work;maintainer directive `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-floor-no-exemption` removes the former audit-none floor exemption.
 
