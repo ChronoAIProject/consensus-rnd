@@ -400,6 +400,25 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
+    def test_manifest_mismatch_without_target_version_manifests_fails_closed(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.3")
+            runner = FakeRunner()
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo, version="2.0.0-beta.4")),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertFalse(result.published)
+            self.assertEqual(result.reasons, ("manifest_version_mismatch",))
+            self.assertEqual(runner.commands, [])
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
     def test_target_version_manifests_without_release_head_subject_fail_closed(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
