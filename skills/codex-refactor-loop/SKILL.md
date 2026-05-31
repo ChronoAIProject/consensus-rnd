@@ -30,7 +30,8 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
-| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge may return only consensus, converge, or stalled-style escalation path. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
+| 3/3 consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
+<!-- Refactor (issue-304): Old: meta-judge owned a fresh stalled output. New: stalled is a router predicate continuation; legacy stalled markers are compatibility input only. -->
 | Floor | Keep `$CODEX_FLOOR` host-scoped codexes, default 5, hard lower bound 2. | Count only this loop's `consensus-rnd-cli spawn-codex` processes containing absolute `$REPO_ROOT`; top up before ScheduleWakeup. | [concurrency floor details](#concurrency-floor-details) | `consensus-rnd-cli concurrency`, `consensus-rnd-cli peek` |
 | Labels | Every issue/PR has exactly one phase label and one human label. | Sync labels and banner together; `crnd:human:maintainer-decision` only after allowed meta-layer routes. | [label bootstrap loops](#label-bootstrap-loops) | controller-internal `ControllerActions`, GitHub labels |
 | Spawn | Mainline codex spawn uses harness background tasks, not detached nohup. | Use one background task per codex; if detached already happened, preserve work and rely on log sweep plus wake source. | [codex invocation details](#codex-invocation-details) | `consensus-rnd-cli spawn-codex` |
@@ -360,7 +361,7 @@ These are local controller contract rules learned from dogfood incidents:
 
 ## Wakeup Skeleton
 
-Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and valid stalled continuation; controller fallback sweep remains authoritative for every other marker.
+Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event wakeup follows this skeleton. Each controller session must arm or confirm the mounted persistent Monitor bridge before pending-event sweep, marker parsing, concurrency-floor handling, or dispatch/spawn. Daemon pending-event wakeups are valid only through that Monitor or equivalent harness bridge; daemon alone is not a wake source. The Consensus-rnd Phase design-consensus router daemon may replace controller dispatch for SOLVER_DONE triplets, converge, and router-derived stalled continuation; legacy stalled judge markers are read-only compatibility input under the same gates; controller fallback sweep remains authoritative for every other marker.
 
 <!-- Refactor (issue-277): Old: 并发 floor 把 audit fallback 当成无限可重复派发,会和 #205 单 active audit 规则冲突。New: floor 无通用豁免,`AUDIT_DONE:none:0` 仍不豁免;但同一 iteration ordinary audit fallback 只有一个 active slot,slot 占用且无其他合法 work 时输出 WAIT + blocked_deficit,不重复 audit。 -->
 
@@ -442,8 +443,8 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | `AUDIT_DONE` | Create design issues for `requires_design` units; dispatch direct implement work where allowed. |
 | `SOLVER_DONE` from minimal, structural, and delete for same issue/round | Spawn same issue/round meta-judge; this triplet route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_JUDGE_DONE:consensus:<framing>` | Post consensus card, move labels, dispatch implement codex. |
-| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; both dispatch r(S+1) solvers, while any non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
-| `META_JUDGE_DONE:escalate:stalled` | Dispatch meta-reflector only when the stalled predicate holds; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| `META_JUDGE_DONE:converge:round-N` | Canonical clean rS judge payload is source round `round-S`; legacy adjacent `round-(S+1)` is accepted temporarily; before dispatching r(S+1), the router-owned stalled predicate may route qualifying r3+ no-progress converge to the stalled reflector and suppress next solvers; non-adjacent payload mismatch falls back; no hard round cap; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
+| legacy `META_JUDGE_DONE:escalate:stalled` | Read-only compatibility input only: dispatch meta-reflector only when the same judge-role/source-OPEN/stalled-predicate gates hold; no-framing evidence must be evaluated through the stalled reflector template and preferentially dropped; do not label human directly; this route may be executed directly by `consensus-rnd-cli phase9-router`. |
 | `META_RESOLVED:retry-fix` | Dispatch fix with reflector constraints and bounded retry window. |
 | `META_RESOLVED:re-design` | Close/withdraw current path and restart Consensus-rnd Phase design-consensus only for concrete new framing or a cited current maintainer directive/current authorization artifact. |
 | `META_RESOLVED:re-cluster` | Close current PR/issue path and queue re-split. |
@@ -513,7 +514,7 @@ Controller duties:
 - Spawn codex workers.
 - Own git topology: commit, merge, push, PR create/merge/close.
 - Maintain wake source and concurrency floor.
-- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Consensus-rnd Phase design-consensus allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge`, valid `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
+- Named exception: `consensus-rnd-cli phase9-router` owns only the narrow Consensus-rnd Phase design-consensus allowlist (`SOLVER_DONE` triplet, `META_JUDGE_DONE:converge` including router-derived stalled continuation, and legacy read-only `META_JUDGE_DONE:escalate:stalled`) and appends fallback pending events for everything else.
 
 Controller non-duties:
 
@@ -669,7 +670,7 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 2. A meta-judge reads all three solver outputs.
 3. Concrete implementation authorization requires 3/3 solver convergence plus meta-judge `consensus`.
 4. `converge:round-N` uses canonical source-round payload from the judge log; source round S and legacy adjacent S+1 both route to r(S+1), while non-adjacent mismatch falls back; no hard round cap.
-5. `escalate:stalled` routes to reflector, not directly to human.
+5. Qualifying r3+ no-progress `converge` routes to reflector via router-owned stalled predicate, not directly to human; legacy `escalate:stalled` markers are compatibility input only.
 6. Maintainer replies reset the round when they materially change framing.
 7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
 8. Full consensus card template and solver rules are in [design-consensus details](#design-consensus-details).
@@ -1289,8 +1290,8 @@ Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 code
 |---|---|
 | SOLVER_DONE × 3(同 issue 同 round)| 同 issue 同 round meta-judge |
 | META_JUDGE_DONE:consensus | implement codex |
-| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver; legacy r(S+1) payload remains compatible |
-| META_JUDGE_DONE:escalate:stalled | reflector(per Consensus-rnd Phase design-consensus 路由表) |
+| META_JUDGE_DONE:converge:rS | r(S+1) 三 solver unless router-owned stalled predicate dispatches round-S reflector; legacy r(S+1) payload remains compatible |
+| legacy META_JUDGE_DONE:escalate:stalled | reflector only as read-only compatibility and only if the stalled predicate holds |
 | META_RESOLVED:re-design | fresh round 三 solver with new framing |
 | IMPLEMENT_DONE:ok | controller commit/push/open PR + Consensus-rnd Phase review-gate reviewer × 3 |
 | REVIEW_DONE × 3 + any reject | fix codex r+1 |
@@ -1313,15 +1314,15 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 | Judge marker | Controller 动作 | 不允许 |
 |---|---|---|
-| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
-| `escalate:stalled` | 派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
-| `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge / stalled 三出口 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
+| `converge:round-N` | clean rS judge 的 canonical payload 是 round-S; legacy round-(S+1) 也派 r(S+1);若 router-owned stalled predicate 成立则改派 round-S reflector;非相邻 payload mismatch fallback | ❌ "round 多了"自升 escalate |
+| legacy `escalate:stalled` | read-only compatibility: predicate/source gates 成立才派 reflector codex | ❌ 直接 label `crnd:human:maintainer-decision` |
+| `escalate:philosophy:<reason>` / `escalate:gpg-ratification:<reason>` / `escalate:<其他>` | 视为 legacy judge 输出:重派 judge 或派 reflector,要求回到 consensus / converge;stalled 只能由 router predicate 派生 | ❌ 因 CLAUDE.md / Tier I/II / GPG / reinstall 直接 label 人 |
 | `consensus` | 派 implement | — |
 | 无 judge marker / judge crash | 重派 judge | ❌ 自判 escalate |
 
 **正确"label 人"的唯一路径**:`reflector` 输出 `META_RESOLVED:escalate-human:<reason>` → controller 才允许 label `crnd:human:maintainer-decision` + ASCII A/B/C reason banner。该路径只表示**共识机制本身无法收敛**,不是因为触及 Tier I/II、CLAUDE.md、核心抽象、GPG 或 reinstall。
 
-结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、`stalled`、`philosophy` 三类 judge marker。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver,`stalled` 先派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
+结构性教训:controller 曾把多数 issue 误升为人工等待,根因是没有严格区分 `converge`、router-derived `stalled`、`philosophy` 三类路由。只有 reflector 输出 `META_RESOLVED:escalate-human:<reason>` 后才允许 label 人;`converge` 继续派 solver或由 router predicate 改派 reflector,可由 reflector 处理的 philosophy 分歧不得直接升人。
 
 ### Spawn / merge / banner 后必须 peek(强制 — 防 maintainer 漏读)
 
@@ -1931,13 +1932,13 @@ Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemo
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn authority):
 - `SOLVER_DONE:<minimal|structural|delete>:*` x3, same issue/round, clean `^EXIT=0`, non-placeholder, not ledgered, not in-flight → render full `prompts/meta-judge.md` with router-scoped inputs and spawn same-round meta-judge.
-- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; both spawn r(S+1) minimal/structural/delete solvers; non-adjacent payload mismatch falls back.
-- `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds) → spawn reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
+- `META_JUDGE_DONE:converge:round-<N>:*`, clean exit, not ledgered/in-flight → clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` is temporarily accepted; before spawning r(S+1) minimal/structural/delete solvers, run the router-owned stalled predicate(`round >= 3` and solver verdict text unchanged across 3 rounds); if it holds, spawn round-S reflector with the full `prompts/meta-reflector-stalled.md` template and suppress next solvers; non-adjacent payload mismatch falls back.
+- legacy `META_JUDGE_DONE:escalate:stalled:*`, clean exit + stalled predicate + judge-role/source-OPEN gates → read-only compatibility replay that spawns reflector with the full `prompts/meta-reflector-stalled.md` template plus the 3 recent rounds x 3 solver log path evidence; template read failure must fail closed in the spawned prompt, not fall back to a generic route.
 HostWorkflowSpec is not a phase9 direct-spawn authority: host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces and must not alter this allowlist or block the built-in router routes.
 Input filename dialect allowlist:`phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log`,`solver-issue<N>-r<R>-<minimal|structural|delete>.log`,`meta-judge-issue<N>-r<R>.log`。issue/round 来自 filename identity,public marker payload remains role-local(`SOLVER_DONE:<role>:...`); must not introduce public marker aliases, migrated work-unit schema, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority. daemon-owned output logs remain `phase9-issue...`;legacy input logs 只作为读取兼容面。daemon startup / first wakeup 文本必须与 `consensus-rnd-cli restart-daemons` 的 6-daemon restart-helper-managed 面一致,包含 Consensus-rnd Phase design-consensus router; persistent daemon-event Monitor bridge 单独由 controller arm。
 Fallback/ledger/recovery: lifecycle/unknown markers append `.refactor-loop/.controller-pending-events.log`; no spawn beyond the allowlisted worker dispatches, no direct resolution, no git, no GitHub lifecycle mutation, no label, no lifecycle authority(no close/merge/release). Append-only `.refactor-loop/phase9-router-ledger.jsonl` records base dispatch fields `{key, marker, log_path, dispatched_at}`; successful solver-triplet-to-judge rows may add row-level router-private provenance fields `{route, issue, round, target_actor, clean_exit_solver_logs, solver_input_prompts, judge_input_solver_logs, judge_prompt_path, judge_prompt_template_path, judge_prompt_scope, independence_check}`. Router recovery/idempotency reads only `key`, and meta-judge decisions read solver logs, not ledger evidence. If router-visible solver prompts explicitly reference same-round peer solver logs/prompts/run artifacts, the router fails closed before judge dispatch and appends an existing-format pending event with reason `phase9-triplet-evidence-invalid`; if full `prompts/meta-judge.md` rendering is unavailable or any solver/judge path falls outside same issue/round/role scope, the router fails closed before judge dispatch and appends an existing-format `phase9-router-fallback` event. Fallback events use prefix `phase9-router-fallback`. A solver-triplet-to-judge duplicate with `key` already in the ledger is silent; when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch, append one existing-format `phase9-router-fallback` event with key prefix `phase9-triplet-suppression:` and reason exactly one of `phase9-triplet-target-log-exists`, `phase9-triplet-equivalent-log-exists`, or `phase9-triplet-in-flight`. The state-only source-OPEN gate must not use gh issue close, gh issue edit, gh label, gh pr merge, gh release, or any label/close/merge/release lifecycle flag. In-flight target logs or live `consensus-rnd-cli spawn-codex --log <target>` suppress re-dispatch, `.refactor-loop/phase9-router.lock` enforces singleton, and duplicate ledger rows never delete logs. Staged expansion requires route-ledger evidence and must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator, migrated work-unit schema, public marker aliases, or lifecycle authority.
 ### Daemon vs controller 分工
-dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/valid-stalled continuation may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
+dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converge/router-derived stalled continuation and legacy stalled compatibility may use **consensus-rnd-cli phase9-router** narrow allowlist with controller fallback sweep retained; design/consensus/implement/review/fix/liveness/escalation stay with controller wakeups.
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
@@ -2278,13 +2279,13 @@ Meta-judge emits `META_JUDGE_DONE:<decision>:<...>`,**controller 路由表(强�
 | Decision | Category | Controller 动作 |
 |---|---|---|
 | `consensus:<framing>:<summary>` | — | auto-applies(派 implement,见 "Consensus action";implement 可改 Tier I/II/CLAUDE.md/SPEC/核心抽象) |
-| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver(把 convergence question prepend prompt); non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
-| `escalate:stalled:<...>` | `CONVERGENCE_ROUND >= 3` 且 3+ round 无 maintainer input 且 solver verdict 文本连续无变化 | **必须先派 reflector codex**(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人; `consensus-rnd-cli phase9-router` may direct-dispatch only when the stalled predicate holds |
-| `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge` / `escalate:stalled`;**禁止**直接 label 人 |
+| `converge:round-N:<question>` | — | clean rS judge canonical payload is `round-S`; legacy `round-(S+1)` also派 r(S+1) 三 solver unless router-owned stalled predicate first派 round-S reflector; non-adjacent payload mismatch falls back; `consensus-rnd-cli phase9-router` may direct-dispatch this route |
+| legacy `escalate:stalled:<...>` | compatibility only | read-only replay path: predicate/source gates 成立才派 reflector codex(走完整 stalled reflector template + 9 个 solver log path evidence);no-framing evidence 优先 drop,`re-design` 仅用于 concrete new framing/directive artifact;**禁止**直接 label 人 |
+| `escalate:<其他 category>` | legacy / judge 异常 | 重派 judge 或派 reflector,要求归一到 `consensus` / `converge`;**禁止**直接 label 人 |
 
-结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。原因是路由只写了"escalate → label",没有明确 `stalled` 子类必须 reflector 优先。上表 `escalate:stalled` 行强制 reflector。
+结构性教训:曾出现多个 `escalate:stalled` 被直接 label 人,**没派 reflector**。现在 fresh judge 不再授权 stalled 输出;router predicate 从 clean converge 历史派生 stalled,legacy stalled marker 只读兼容且仍必须 reflector 优先。
 
-**stalled 判据铁律**:`stalled` 只能在 `CONVERGENCE_ROUND >= 3` 且 solver verdict 文本连续无变化时成立。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 judge 异常处理:重派 judge(同输入,提示 stalled 最小轮次约束),而不是派 reflector 或 label 人。
+**stalled 判据铁律**:`stalled` 只能由 router 在 `CONVERGENCE_ROUND >= 3` 且 solver verdict 文本连续无变化时从 clean `converge` 派生。round 1 / round 2 不可能 stalled;此时 solver 分歧应判 `converge` 并继续派下一轮,不能接受 meta-judge 在 r1/r2 输出的 `escalate:stalled` 作为事实。若 r1/r2 judge 输出 `escalate:stalled`,controller 必须按 legacy judge 异常处理:重派 judge(同输入,提示 fresh stalled 禁止),而不是派 reflector 或 label 人。
 
 **反面(❌ 严禁)**:
 - ❌ r1 三 solver 分歧,meta-judge 输出 `escalate:stalled`,controller 直接派 reflector。
@@ -2510,7 +2511,7 @@ These are first-class consensus scope, not escalation triggers. Meta-judge MUST 
 7. **Performance constraint unverifiable** — solver claims latency/memory bound but only prod can verify
 8. **Issue body's `human_brief.why_needs_design`** contains: `rule-boundary` / `architecture-change` / `philosophy` / `CLAUDE.md` / `canon-vocabulary`
 
-If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, route `escalate:stalled` to reflector. Do not create `escalate:gpg-ratification` or `escalate:philosophy`.
+If the above makes the current framing underspecified, route `converge` with the missing exact text or evidence question. If solvers repeat unchanged text for ≥3 rounds, the router-owned stalled predicate may route that `converge` to reflector. Do not create fresh `escalate:stalled`, `escalate:gpg-ratification`, or `escalate:philosophy`.
 
 ### GitHub traceability (mandatory per SKILL.md "GitHub traceability" — same standard as Consensus-rnd Phase review-gate)
 
@@ -2521,10 +2522,10 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 | Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. 3/3 unanimous required to auto-implement; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
 | **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge\|escalate>\``. Body = verbatim judge output. |
+| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge>\``. Body = verbatim judge output. |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "`crnd:triage:resume-requested` label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
-| Meta-judge → escalate:stalled | Same as above + label `crnd:lifecycle:stuck` + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
+| Router-derived stalled converge | Same as above + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
 | Legacy escalation category emitted | Post meta-judge output + summary "legacy escalation category normalized back into consensus loop"; re-dispatch judge or reflector; do not label human directly |
 
 **Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The raw reasoning, evidence, and concrete plans are the audit record; a summary loses too much fidelity. The 3+ comments per round are intentional.

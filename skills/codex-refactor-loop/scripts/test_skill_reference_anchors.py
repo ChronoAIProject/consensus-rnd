@@ -692,7 +692,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "SOLVER_DONE:<minimal|structural|delete>:*",
-            "both spawn r(S+1) minimal/structural/delete solvers",
+            "before spawning r(S+1) minimal/structural/delete solvers",
+            "router-owned stalled predicate",
+            "suppress next solvers",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, contract_section)
@@ -752,6 +754,39 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotIn("target_round <= marker.round", router)
         self.assertFalse((router_path.parent / "decision.py").exists())
         self.assertNotIn("MetaJudgeRouteProjection", combined)
+
+    def test_phase9_stalled_is_router_owned_predicate_source_regression(self) -> None:
+        # Refactor (issue-304): Old: fresh phase9 meta-judge artifacts could
+        # authorize `META_JUDGE_DONE:escalate:stalled`. New: prompt/profile
+        # allow only consensus/converge; router checks stalled predicate before
+        # r(S+1) solver dispatch, while legacy stalled markers are read-only.
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        marker_contract = (SKILL_ROOT / "scripts" / "test_marker_emission_contract.py").read_text(encoding="utf-8")
+        profile_contract = (SKILL_ROOT / "scripts" / "test_role_artifact_profiles.py").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge, router, marker_contract, profile_contract))
+
+        for token in (
+            "Refactor (issue-304)",
+            "meta-judge emits only consensus/converge",
+            "router-owned stalled predicate",
+            "_dispatch_stalled_reflector",
+            "legacy read-only `META_JUDGE_DONE:escalate:stalled`",
+            "r(S+1)",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+        allowlist = re.search(
+            r'    "meta-judge\.md": \(\n(?P<body>.*?)\n    \),',
+            marker_contract,
+            flags=re.S,
+        )
+        self.assertIsNotNone(allowlist)
+        assert allowlist is not None
+        self.assertNotIn("META_JUDGE_DONE:escalate:stalled:<short>", allowlist.group("body"))
+        self.assertIn(r"^META_JUDGE_DONE:(consensus|converge):.+$", profile_contract)
+        self.assertNotIn(r"^META_JUDGE_DONE:(consensus|converge|escalate):.+$", profile_contract)
 
     def test_phase9_solver_triplet_suppression_fallback_contract_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")

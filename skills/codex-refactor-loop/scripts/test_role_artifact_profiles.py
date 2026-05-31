@@ -83,8 +83,8 @@ PROFILES = {
     ),
     "phase9-meta-judge": ArtifactProfile(
         required_metadata=("issue", "cluster", "convergence_round", "solver_verdicts", "decision"),
-        required_sections=("Decision", "If consensus", "If converge", "If escalate", "Round audit trail"),
-        final_marker_patterns=(r"^META_JUDGE_DONE:(consensus|converge|escalate):.+$",),
+        required_sections=("Decision", "If consensus", "If converge", "Round audit trail"),
+        final_marker_patterns=(r"^META_JUDGE_DONE:(consensus|converge):.+$",),
         forbidden_marker_tokens=tuple(token for token in ROLE_MARKER_TOKENS if token != "META_JUDGE_DONE"),
         sentinel_policy="penultimate-before-final-marker",
     ),
@@ -211,9 +211,6 @@ Consensus reached on test-only profile fixtures.
 - Chosen framing: test-only
 
 ## If converge
-- Not applicable.
-
-## If escalate
 - Not applicable.
 
 ## Round audit trail
@@ -457,6 +454,20 @@ class RoleArtifactProfileTests(unittest.TestCase):
         artifact = VALID_META_JUDGE.replace("\n## Round audit trail\n- solver-minimal: path\n", "\n")
 
         self.assertInvalidBecause("phase9-meta-judge", artifact, "missing sections")
+
+    def test_meta_judge_rejects_fresh_stalled_marker_fixture(self) -> None:
+        # Refactor (issue-304): Old: phase9-meta-judge profile accepted
+        # escalate markers. New: fresh meta-judge artifacts are limited to
+        # consensus/converge; stalled is a router-owned derived route.
+        artifact = VALID_META_JUDGE.replace(
+            "META_JUDGE_DONE:consensus:test-only:all solvers aligned",
+            "META_JUDGE_DONE:escalate:stalled:no-change",
+        ).replace(
+            "decision: consensus",
+            "decision: converge",
+        )
+
+        self.assertInvalidBecause("phase9-meta-judge", artifact, "final line does not match")
 
     def test_reviewer_with_wrong_marker_fails(self) -> None:
         artifact = VALID_REVIEWER.replace("REVIEW_DONE:42:architect:approve", "SOLVER_DONE:minimal:propose:no")
