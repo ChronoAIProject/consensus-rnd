@@ -184,6 +184,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotIn("The loop has two supported entry modes", top)
         self.assertNotIn("audit-driven", top)
 
+    def test_detailed_reference_uses_issue_pr_main_path_and_audit_fallback(self) -> None:
+        producers = section_after_heading(self.skill, "Producers")
+        work_intake = section_after_heading(self.skill, "Consensus-rnd Phase work-intake — Fallback issue production")
+        bootstrap = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase bootstrap — Bootstrap (first wakeup only)",
+        )
+        detailed = "\n".join((producers, work_intake, bootstrap))
+
+        for needle in (
+            "The default main path is open actionable managed issue/PR resolution",
+            "`audit` is the fallback raw artifact issue producer",
+            "`audit` remains the stable compatibility producer value and fallback issue producer, not the default\nmain path",
+            "先扫 open actionable managed issue/PR 并派 next-step actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, detailed)
+        for forbidden in (
+            "`audit` remains the default producer",
+            "The default work-unit producer is `audit`",
+            "派默认 work-unit producer",
+            "默认 audit",
+            "默认 producer",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, detailed)
+
     def test_project_rules_do_not_duplicate_skill_local_main_path_contract(self) -> None:
         claude = read(REPO_ROOT / "CLAUDE.md")
         for forbidden in (

@@ -1534,12 +1534,12 @@ You are the **Controller**. You never edit production code yourself. You orchest
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
 3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派主路径或 fallback producer**:先扫 open actionable managed issue/PR 并派 next-step actor;只有没有 open actionable work / queued dispatch / clean marker route / CI-no-gap route / maintainer-comment route / higher-priority wakeup route 时,才派 Consensus-rnd Phase work-intake audit fallback(`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只建本地目录 + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
+- ❌ 只建本地目录 + 直接派 audit fallback,不起 6 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -1580,11 +1580,13 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 ---
 
 <a id="phase-routing-details"></a>
-## Consensus-rnd Phase work-intake — Work-unit production (audit default)
+## Consensus-rnd Phase work-intake — Fallback issue production
 
-The default work-unit producer is `audit`. Producer normalization is documented in
+The default main path is open actionable managed issue/PR resolution; the controller must dispatch those
+next-step actors before starting any new-work producer. Producer normalization is documented in
 [work-unit contract](#work-unit-contract): accepts only `producer: audit` and `producer: manual-issue`.
-`audit` is the raw artifact producer for this phase; `manual-issue` enters through Consensus-rnd Phase design-intake
+`audit` is the fallback raw artifact issue producer for this phase and runs only when no actionable managed
+issue/PR or higher-priority route exists. `manual-issue` enters through Consensus-rnd Phase design-intake
 triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
@@ -3194,10 +3196,12 @@ producer enum. The only allowed sidecar provenance values are `audit` and `manua
 
 ### `audit` producer
 
-`audit` remains the default producer. It reads the raw artifact contract from
-`prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
-The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
-the work-unit contract before dispatching or opening a design issue:
+`audit` remains the stable compatibility producer value and fallback issue producer, not the default
+main path. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route,
+CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. It reads the raw
+artifact contract from `prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md`
+cluster sections. The controller leaves `prompts/audit.md` unchanged and projects each accepted audit
+cluster into the work-unit contract before dispatching or opening a design issue:
 
 - `work_unit_id: <cluster-id>`
 - `id: <cluster-id>`
