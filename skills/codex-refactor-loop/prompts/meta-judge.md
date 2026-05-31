@@ -19,6 +19,7 @@ Policy: **3/3 unanimous + meta-judge consensus** is the sole gate. Anything less
 4. `gh issue view ${ISSUE_NUMBER}` — original cluster spec + maintainer comments
 5. Convergence round count: `${CONVERGENCE_ROUND}`
 6. Router-validated transition projection: `${TRANSITION_TYPE}`, `${TRANSITION_CONFIDENCE}`, `${TRANSITION_EVIDENCE_REFS}`
+7. Router-validated work-unit provenance: `${WORK_UNIT_PRODUCER}`, `${WORK_UNIT_SOURCE_REF}`
 
 ## Router-scoped input boundary
 
@@ -28,6 +29,8 @@ When this prompt is rendered by the router, the only local solver artifacts in s
 Fail closed if any solver frontmatter `issue` is not `${ISSUE_NUMBER}`, or if any listed solver path is not exactly for issue `${ISSUE_NUMBER}`, convergence round `${CONVERGENCE_ROUND}`, and its named role. Fail closed if `${META_JUDGE_OUTPUT_PATH}` is not the judge output path for issue `${ISSUE_NUMBER}` and round `${CONVERGENCE_ROUND}`.
 
 Use only the router-injected validated transition projection for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override this prompt's truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
+
+Use only the router-injected work-unit provenance to distinguish audit-backed work from issue-driven / Path A greenfield work. When `${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)` and `${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`, absence of an existing local audit artifact or existing code-to-delete is neutral for delete-solver classification; it supports an abstain-compatible Path A greenfield frame, not a delete-solver defect.
 
 ## Procedure
 
@@ -121,6 +124,8 @@ decision: consensus | converge
 - solver-minimal: ${SOLVER_MINIMAL_PATH}
 - solver-structural: ${SOLVER_STRUCTURAL_PATH}
 - solver-delete: ${SOLVER_DELETE_PATH}
+- work-unit-producer: ${WORK_UNIT_PRODUCER}
+- work-unit-source-ref: ${WORK_UNIT_SOURCE_REF}
 ```
 
 End with EXACTLY ONE marker:

@@ -457,12 +457,36 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "`${SOLVER_STRUCTURAL_PATH}`",
             "`${SOLVER_DELETE_PATH}`",
             "gh issue view ${ISSUE_NUMBER}",
+            "`${WORK_UNIT_PRODUCER}`",
+            "`${WORK_UNIT_SOURCE_REF}`",
             "Do not search for, infer from, or copy sibling judge artifacts",
             "solver frontmatter `issue` is not `${ISSUE_NUMBER}`",
             "`${META_JUDGE_OUTPUT_PATH}` is not the judge output path",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "abstain-compatible Path A greenfield frame",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
+
+    def test_path_a_greenfield_delete_abstain_provenance_is_documented(self) -> None:
+        solver_delete = (SKILL_ROOT / "prompts" / "solver-delete.md").read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, solver_delete, meta_judge, router))
+        for needle in (
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-<N>",
+            "`${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "Path A greenfield",
+            "absence of existing local code to delete is neutral evidence",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "compatible with `SOLVER_DONE:delete:abstain:<reason>`",
+            "classify as genuinely needed/no current deletion dependency and abstain",
+            '"WORK_UNIT_PRODUCER"',
+            '"WORK_UNIT_SOURCE_REF"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
