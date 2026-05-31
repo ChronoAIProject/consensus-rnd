@@ -265,14 +265,31 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
-        for forbidden in (
-            "copy, overwrite, reinstall",
-            "run installers",
-            "mutate `.git`",
-            "touches the network",
+
+    def test_skill_documents_issue_300_draft_then_ready_merge_contract(self) -> None:
+        for needle in (
+            "Refactor (issue-300)",
+            "gh pr create --draft",
+            "open PRs as draft by default",
+            "post-decision ready+merge",
+            "only when the controller has already decided `MERGE` or `MERGE_WITH_COMMENTS`",
+            "marks the PR ready before `gh pr merge`",
+            "it never computes Consensus-rnd Phase review-gate reviewer policy",
         ):
-            with self.subTest(forbidden=forbidden):
-                self.assertIn(forbidden, section)
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        self.assertIn("`MERGE`: post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.", self.skill)
+        self.assertIn(
+            "`MERGE_WITH_COMMENTS`: surface comment evidence, post 中文 merge comment, then call `merge_pr <pr>` for ready+merge.",
+            self.skill,
+        )
+        for needle in (
+            "`WAIT_EXPLICIT_APPROVAL`: surface comments, do not ready, do not merge",
+            "`FIX`: enter fix-retry loop; do not ready, do not merge",
+            "`WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
 
     def test_skill_documents_daemon_event_monitor_command(self) -> None:
         self.assertIn(

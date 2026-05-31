@@ -142,12 +142,109 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             self.assertEqual(0, self.actions.merge_pr("77", linked_issue="239"))
 
+        ready_index = gh_calls.index(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"])
+        merge_index = gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"])
+        self.assertLess(ready_index, merge_index)
         self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
         self.assertFalse(any(call[:5] == ["pr", "view", "77", "--json", "body"] for call in gh_calls), gh_calls)
         self.assertTrue(any(call[:3] == ["pr", "edit", "77"] for call in gh_calls), gh_calls)
         self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
         issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
         self.assertEqual(labels.PHASE_MERGED, issue_edit[issue_edit.index("--add-label") + 1])
+
+    def test_merge_pr_marks_draft_ready_before_merge(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args[:3] == ["pr", "ready", "77"]:
+                return mock.Mock(returncode=0, stdout="Ready\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue300",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "ready", "77"], gh_calls)
+        self.assertLess(gh_calls.index(["pr", "ready", "77"]), gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"]))
+
+    def test_merge_pr_ready_failure_fails_closed_before_merge_side_effects(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args[:3] == ["pr", "ready", "77"]:
+                return mock.Mock(returncode=9, stdout="", stderr="ready failed")
+            raise AssertionError(f"unexpected gh side effect after ready failure: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(9, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "ready", "77"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+
+    def test_merge_pr_already_ready_merges_without_pr_ready_call(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="false\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=0, stdout="Merged pull request #77\n", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "number,mergedAt,mergeCommit,baseRefName,headRefName"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 77,
+                            "mergedAt": "2026-05-29T00:00:00Z",
+                            "mergeCommit": {"oid": "abc123"},
+                            "baseRefName": "dev",
+                            "headRefName": "impl/issue300",
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:5] == ["pr", "view", "77", "--json", "headRefName"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            self.assertEqual(0, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "ready"] for call in gh_calls), gh_calls)
+        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
 
     def test_open_pr_with_label_rejects_malformed_create_url_before_post_create_edit(self) -> None:
         cases = (
@@ -314,6 +411,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(77, pr_num)
         self.assertIn(["push", "origin", "abc123:refs/heads/rollup/abc123"], git_calls)
         create_call = next(call for call in gh_calls if call[:2] == ["pr", "create"])
+        self.assertIn("--draft", create_call)
         self.assertIn("--head", create_call)
         self.assertEqual("rollup/abc123", create_call[create_call.index("--head") + 1])
         self.assertNotEqual("auto-refact-dev", create_call[create_call.index("--head") + 1])
@@ -466,6 +564,8 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(77, pr_num)
         self.assertTrue(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
+        create_call = next(call for call in gh_calls if call[:2] == ["pr", "create"])
+        self.assertIn("--draft", create_call)
         edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
         self.assertEqual("77", edit_call[2])
         self.assertEqual(
@@ -776,6 +876,18 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertIn("BODY_CLOSING_ISSUE_TARGET_RE", text)
         self.assertIn("source=\"body-link\"", text)
         self.assertIn("CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}", text)
+
+    def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn("Refactor (issue-300)", text)
+        self.assertIn('"pr", "create", "--draft"', text)
+        self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
+        self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)
+        self.assertIn('"pr", "ready", pr_target', text)
+        self.assertIn("ready = self._ensure_pr_ready_for_merge(pr_target)", text)
+        self.assertLess(text.index("ready = self._ensure_pr_ready_for_merge(pr_target)"), text.index('"pr", "merge", pr_target'))
+        self.assertNotIn("ReviewGateAction", text)
+        self.assertNotIn("review_gate.py", text)
 
     def test_lifecycle_gh_subject_slots_use_normalized_target_locals(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
