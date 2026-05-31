@@ -380,7 +380,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 10. Run controller wakeup step 1.5 for the concurrency floor before any `ScheduleWakeup`.
 11. Spawn the next codexes with harness background tasks if actionable work exists.
 12. Confirm the daemon-event Monitor bridge is still maintained; then confirm any in-flight background task notification or successfully registered ScheduleWakeup fallback that is being used for turn-level completion/fallback.
-13. Run `consensus-rnd-cli peek | tail -80` again after spawn, merge, banner, or close actions.
+13. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` again after spawn, merge, banner, or close actions.
 
 `consensus-rnd-cli wakeup-plan` named read-only surface:
 
@@ -1251,7 +1251,7 @@ gh issue view <N> --json comments --jq '
 - **Controller 自己 post banner** 使用 `maintainer` 或 host 配置的安全称谓,不写裸人名。
 - **@-mention whitelist** 来自 `$MAINTAINER_WHITELIST`,并且必须经 git blame / host 配置验证。
 
-### Wakeup 第一动作:`bash <skill-root>/scripts/consensus-rnd-cli peek`(强制)
+### Wakeup 第一动作:`python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80`(强制)
 
 减少人工 grep / parse 错误。一眼看全:
 - 活跃 codex 数(只数本 loop:命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`)
@@ -1274,7 +1274,7 @@ gh issue view <N> --json comments --jq '
 
 **铁律**:任何 active phase issue/PR(`🔍 design-solving` / `🔧 fixing` / `👀 reviewing` / `🛠️ implementing`)存在时,**应至少有 1 个本 loop codex 在跑**。本 loop codex = `consensus-rnd-cli spawn-codex` 命令行含 `.refactor-loop/logs/` 或 `.refactor-loop/prompts/`。实际为 0 且 GitHub 有 active phase → **P0 bug**(no-gap-violation)。
 
-**Controller wakeup 第一动作**:`bash <skill-root>/scripts/consensus-rnd-cli peek`。如果活跃 codex == 0:
+**Controller wakeup 第一动作**:`python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80`。如果活跃 codex == 0:
 1. **不允许** `ScheduleWakeup` 后 end-turn — 必须派下一步 codex 才允许 ScheduleWakeup
 2. **不允许**只看 marker 不 sweep:必须扫所有刚 finished marker(implement/judge/reviewer/fix/reflector)并按 marker→spawn-next 表派至少 1 codex
 3. 如果所有 active issue/PR 都真在等 maintainer(全是 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
@@ -1943,7 +1943,7 @@ dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converg
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
 python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons
 python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only >/dev/null
-bash <skill-root>/scripts/consensus-rnd-cli peek | tail -80
+python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
 若 heartbeat stale/missing/malformed → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper 重启。

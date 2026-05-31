@@ -214,6 +214,56 @@ class SkillEntrypointContractTests(unittest.TestCase):
             r"Confirm a wake source: an active daemon-event Monitor bridge,.*or.*ScheduleWakeup",
         )
 
+    def test_controller_cli_invocation_contract_forbids_bash_interpreter(self) -> None:
+        # Refactor (issue-303):
+        #   Old pattern: controller-actionable runbooks invoked the Python CLI
+        #   with `bash <skill-root>/scripts/consensus-rnd-cli peek`, so wakeup
+        #   docs looked executable but selected the wrong interpreter.
+        #   New principle: controller-actionable CLI examples spell the Python
+        #   interpreter explicitly; shell wrappers may only source env and exec
+        #   python3.
+        canonical = "python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80"
+        self.assertNotIn("bash <skill-root>/scripts/consensus-rnd-cli", self.skill)
+        self.assertIn(canonical, self.skill)
+
+    def test_wakeup_peek_uses_python_cli_invocation(self) -> None:
+        # Refactor (issue-303): lock the controller-actionable peek callsites to
+        # the Python CLI contract without rewriting conceptual command mentions.
+        canonical = "python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80"
+        skeleton = section_between(
+            self.skill,
+            r"^## Wakeup Skeleton$",
+            r"^## Workflow Stage Index$",
+        )
+        first_action = section_between(
+            self.skill,
+            r"^### Wakeup 第一动作:",
+            r"^<a id=\"wake-source-rules\"></a>$",
+        )
+        wake_source = section_between(
+            self.skill,
+            r"^## Wake source rules and no-gap details$",
+            r"^### Controller 每 wakeup 必派",
+        )
+        dev_sync = section_between(
+            self.skill,
+            r"^### Controller 每 wakeup 责任",
+            r"^### 反面",
+        )
+        self.assertTrue(skeleton)
+        self.assertTrue(first_action)
+        self.assertTrue(wake_source)
+        self.assertTrue(dev_sync)
+        self.assertIn(f"### Wakeup 第一动作:`{canonical}`(强制)", self.skill)
+        for label, section, needle in (
+            ("wakeup skeleton final peek", skeleton, f"Run `{canonical}` again after spawn, merge, banner, or close actions."),
+            ("wakeup first action body", first_action, canonical),
+            ("zero-codex first action", wake_source, f"**Controller wakeup 第一动作**:`{canonical}`。如果活跃 codex == 0:"),
+            ("dev-sync controller responsibility", dev_sync, canonical),
+        ):
+            with self.subTest(label=label):
+                self.assertIn(needle, section)
+
     def test_wakeup_plan_entrypoint_contract_is_read_only_and_authorized(self) -> None:
         skeleton = section_between(
             self.skill,
