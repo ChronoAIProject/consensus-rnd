@@ -149,6 +149,7 @@ Refactor (iter1/issue-141):
 -->
 
 This walkthrough is the only downstream install runbook for `codex-refactor-loop`. It documents existing checked-in surfaces only: plugin or copy install, host fact injection through `.refactor-loop/host.env`, user-level cron or launchd calling `consensus-rnd-cli restart-daemons`, Claude Code `statusLine` pointing at the read-only `consensus-rnd-cli statusline`, and uninstall/rollback.
+<!-- Refactor (issue-298): Old: downstream daemon status guidance reused restart-daemons or heartbeat/process checks for reads. New: daemon-status --json is the read-only status surface; restart-daemons remains the only repair/reload command. -->
 
 The skill must not modify a host repository's `.git` config, CI config, or policy files. It must not add installer scripts, host runtime installers, statusline installers, or a root `INSTALL.md`. Host facts come only from `.refactor-loop/host.env`; do not add a second host variable list in this skill.
 
@@ -198,6 +199,8 @@ launchd `ProgramArguments` example:
 ```
 
 The helper remains the existing cron/launchd-only anti-stop surface. It has no lifecycle authority: it must not commit, push, merge, label, create, close, or edit issues/PRs.
+
+For operator inspection, read daemon state with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`. If the projection reports stale/dead owner daemons, run the existing scheduler command above or `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` to repair/reload; do not use a separate start/stop/restart/reload verb.
 
 ### Add the Claude Code status line
 
@@ -324,8 +327,10 @@ New principle: singleton wrapper + actor-owned heartbeat lease; stale means acto
 Same heartbeat path/epoch/90s consumers; no new daemon, lifecycle authority, CLAUDE.md, or Tier change. -->
 <!-- Refactor (issue-264): Old: restart skip trusted one fresh pidfile wrapper and missed duplicate canonical instances.
 New: skip additionally requires zero duplicate canonical live wrapper for the same static allowlist command; process inventory is helper-private daemon-maintained state, not controller probing. -->
+<!-- Refactor (issue-298): Old: status reads and repair were both described through restart-daemons. New: daemon-status --json reads the same helper-private pid/heartbeat/fingerprint/inventory facts without lifecycle authority; restart-daemons is still the only write-side repair/reload path. -->
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` 是 checked-in,host-agnostic restart helper。它维护 static daemon allowlist 的 singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint(`concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler`)。事实源是 `.refactor-loop/locks/<daemon>.pid`、`.refactor-loop/heartbeats/<daemon>.ts`、`.refactor-loop/locks/<daemon>.fingerprint.json`,以及 helper-private `DaemonProcessInventory`;只有 pid alive、actor-loop heartbeat fresh(`<90s`)、fingerprint current、且同一 static allowlist command 零 duplicate canonical live wrapper 时才 skip,missing/malformed/mismatch fail-closed 并重启对应 wrapper。每次 helper tick 先调用 `consensus-rnd-cli log-retention`,直接删除超过 24h 的 `.refactor-loop/logs/*.log`;不 archive、不索引、不新增非 allowlist daemon。
 Before starting or repairing any of the six write daemons, `restart-daemons` acquires or renews the #191 active-controller lease. A non-owner restart writes local status `active_controller=noop:not-owner` and exits 0 without starting, killing, or repairing those daemons.
+`consensus-rnd-cli daemon-status --json` is the paired read-only daemon-status projection. It reports `running`, `stale`, `dead`, or `not-owner` from the existing static allowlist, helper-private launch fingerprint, pid/heartbeat readers, cached active-controller status, and `DaemonProcessInventory`; it has no public start/stop/restart/reload lifecycle verb. Repair/reload remains restart-daemons.
 
 完整下游装机顺序见 [Downstream install walkthrough](#downstream-install-walkthrough);本段保留 cron/launchd-only helper invariant。
 
@@ -336,6 +341,7 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli restart-daemons` = Consensus-rnd Phase design-consensus r3 授权的 cron/launchd-only anti-stop helper,不新增 watchdog daemon。
 
 - **Narrow allowlist**: helper 只 maintain singleton wrapper + actor-owned heartbeat lease + helper-private launch fingerprint for `concurrency_monitor`, `comment-monitor`, `codex-progress-reporter`, `dev_sync_daemon`, `phase9_router_daemon`, `closed_label_reconciler` in the existing static daemon allowlist;heartbeat 是 actor-loop progress lease,不是 wrapper sidecar liveness;daemon actor after tick / caught exception / lease sleep renews it;fingerprint artifact `.refactor-loop/locks/<daemon>.fingerprint.json` 只记录 daemon name、resolved command、CLI entrypoint hash、Python package tree hash 和文件计数,只用于 restart skip eligibility;`DaemonProcessInventory` 只在 helper 内部枚举 same resolved static allowlist command 的 canonical live wrapper,发现 duplicate canonical live wrapper 时 duplicate canonical wrappers fail closed:先 terminate 多余实例并等待下一 tick,绝不在 duplicate 存在时 spawn;并顺手运行 `consensus-rnd-cli log-retention` 对 24h+ `.refactor-loop/logs/*.log` direct rm;不 spawn codex / commit / push / merge / label / archive。
+- **Read-only status projection**: `consensus-rnd-cli daemon-status --json` mirrors the same static allowlist and helper-private pid/heartbeat/fingerprint/inventory facts plus cached active-controller status. It is read-only status only, has no public start/stop/restart/reload lifecycle verb, and repair/reload remains restart-daemons.
 - **Host-agnostic**: 只使用 `$REPO_ROOT` 相对路径和 `<skill-root>` self-location;无 host fact hardcode。
 - **No lifecycle authority**: 不开关 issue/PR,不打 label,不 commit/push/merge/tag/release;controller wakeup `STALE_CONTROLLER` 事件仅 alert。
 - **Behavior tests**: `test_restart_daemons.py` 覆盖 fresh heartbeat + matching fingerprint skip / stale/missing/malformed heartbeat repair / dead pid repair / missing/malformed/mismatched fingerprint restart / CLI entrypoint and package tree fingerprint restart / duplicate cleanup / concurrent helper no double-spawn / deterministic hung actor restart;`test_daemon_heartbeat.py` 覆盖 deterministic lease sleep renewal;`test_log_retention.py` 覆盖 24h direct rm / idempotency / restart hook。
@@ -356,7 +362,7 @@ These are local controller contract rules learned from dogfood incidents:
 2. Audit prompt rendering fails closed when `ITERATION` is empty; do not write `audit-iter-.md`, `audit-iter--candidates.ndjson`, or similarly empty-identity artifacts.
 3. Any new role prompt under `skills/codex-refactor-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
 4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; only missing or invalid review artifacts fall back to clean log-tail `REVIEW_DONE` markers.
-5. Daemon recovery goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
+5. To read daemon state, run `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`; daemon repair/reload goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
 
 ## Wakeup Skeleton
 
@@ -371,7 +377,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 1. Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and follow its prioritized `actions` / `recommendation` output.
 2. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` as the status lens.
 3. Load host config with `source .refactor-loop/host.env`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
-4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon heartbeats(`.refactor-loop/heartbeats/*.ts`);任 stale/missing/malformed `>90s` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
+4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon status with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`;任 owner daemon `stale` / `dead` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` repair/reload;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 5. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 6. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
 7. Parse verdict markers only after `EXIT=0`; marker text in prompt echoes is not a completed verdict.
@@ -1095,7 +1101,7 @@ Integration sync uses integration sync operation artifacts; the daemon writes `.
   Old pattern: Controller runbook still instructs ps|grep/pgrep liveness checks,与 SKILL.md canonical CLI 与 CLAUDE.md daemon-counts-authority 子句矛盾。
   New principle: Controller-facing 检查必须读 daemon-maintained state / heartbeat / canonical script CLI(consensus-rnd-cli restart-daemons / consensus-rnd-cli peek / consensus-rnd-cli concurrency);process probes 留在 daemon / helper 实现内部,不在 controller runbook 段。
 -->
-**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json`;任 heartbeat missing/malformed/stale `>90s` 时调用 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 让 helper 内部维护 singleton + restart。`consensus-rnd-cli phase9-router` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
+**单例强制**(尤其 `dev_sync_daemon` 多实例会 race):controller 不做 process probe。每 wakeup 读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json`;任 owner daemon `stale` / `dead` 时调用 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 让 helper 内部维护 singleton + restart/reload。`consensus-rnd-cli phase9-router` 的 singleton 由自身 lock/ledger/fallback event contract 维护;controller 只读其 log/ledger/pending event surface,未知状态走 fallback sweep。
 
 ### Controller 主链路 wake 源不变量(强制,精化 detached 规则)
 
@@ -1487,7 +1493,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
      #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
-3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `.refactor-loop/heartbeats/*.ts` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
+3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
 4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
@@ -1941,19 +1947,19 @@ dev sync stays with daemon; Consensus-rnd Phase design-consensus triplet/converg
 ### Controller 每 wakeup 责任(只 verify daemon)
 ```bash
 # Consensus-rnd Phase integration-sync 现在 controller 只读 daemon-maintained health/log surface
-python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons
+python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json
 python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only >/dev/null
 python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80
 tail -10 .refactor-loop/logs/dev_sync_daemon.log | grep -E "(DEV_SYNC_BLOCKED|FAIL|FATAL)" | tail -3
 ```
-若 heartbeat stale/missing/malformed → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper 重启。
+若 daemon-status 报 owner daemon `stale` / `dead` → 由 `consensus-rnd-cli restart-daemons` 按 canonical wrapper repair/reload。
 若发现 `DEV_SYNC_BLOCKED` → controller post 卡片到 rollup PR / 通知 maintainer。若发现 `DEV_SYNC_PENDING:release-rollup-needed:<json>` → controller 重新查是否已有覆盖同一 integration SHA 的 open rollup PR;已存在则 ledger/suppress,否则生成中文 body 并调用 `open_release_rollup_pr_from_pending_event <event-json> <body-file>`,由 helper 创建 `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`。该 PR 进入既有 Consensus-rnd Phase review-gate 与 CI/merge policy。
 ### 反面(❌ 禁止)
 
 - ❌ controller 自己跑 `git merge dev` 同步(daemon 已做,会 race / 冲突)
 - ❌ daemon push 后 controller 不 fetch 就 commit(stale base bug)
 - ❌ Daemon 派 codex 自己 push(daemon 决定 push 时机,codex 只 resolve + merge --continue)
-- ❌ controller 用 process probe 判断 daemon 单例;单例与 pid/kill 细节只属于 `consensus-rnd-cli restart-daemons` / daemon 自身 helper 实现。
+- ❌ controller 用 process probe 判断 daemon 单例;controller 只读 `consensus-rnd-cli daemon-status --json`,单例与 pid/kill 细节只属于 `consensus-rnd-cli restart-daemons` / daemon 自身 helper 实现。
 
 ### Manual recovery
 

@@ -20,8 +20,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
 from codex_refactor_loop import restart
-from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons
+from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons, daemon_targets
 
 
 DAEMON_NAMES = tuple(name for name, _command in DAEMON_COMMANDS)
@@ -95,6 +96,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     self.helpers.append(helper)
                     helper.run()
         return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
+
+    def collect_status_with_fake_allowlist(self):
+        command = (sys.executable, "-c", FAKE_DAEMON)
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
+            return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -399,10 +405,66 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                         helper = RestartDaemons(self.ctx, self.config)
                         self.assertEqual(0, helper.run())
 
+    # Refactor (issue-298): Old: daemon health reads were coupled to
+    # restart-daemons or process probes. New: daemon-status projects
+    # running/stale/dead/not-owner from restart helper facts without repair.
+    def test_daemon_status_reports_running_stale_dead_and_not_owner_without_repair(self) -> None:
+        self.run_helper()
+        (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "owner"}) + "\n",
+            encoding="utf-8",
+        )
+        report = self.collect_status_with_fake_allowlist()
+        by_name = {daemon.name: daemon for daemon in report.daemons}
+        self.assertEqual("owner", report.active_controller)
+        self.assertEqual("running", by_name["concurrency_monitor"].status)
+
+        self.stale_heartbeat("comment-monitor")
+        self.fingerprint_path("phase9_router_daemon").unlink()
+        dead_pid = self.read_pid("dev_sync_daemon")
+        self.terminate(dead_pid)
+        (self.repo / ".refactor-loop" / "locks" / "closed_label_reconciler.pid").unlink()
+
+        report = self.collect_status_with_fake_allowlist()
+        by_name = {daemon.name: daemon for daemon in report.daemons}
+        self.assertEqual("stale", by_name["comment-monitor"].status)
+        self.assertEqual("stale", by_name["phase9_router_daemon"].status)
+        self.assertEqual("dead", by_name["dev_sync_daemon"].status)
+        self.assertEqual("dead", by_name["closed_label_reconciler"].status)
+        self.assertEqual(1, self.start_count("comment-monitor"))
+        self.assertIsInstance(by_name["concurrency_monitor"], DaemonStatusProjection)
+
+        (self.repo / ".refactor-loop" / "state" / "active-controller-status.json").write_text(
+            json.dumps({"active_controller": "noop:not-owner"}) + "\n",
+            encoding="utf-8",
+        )
+        report = self.collect_status_with_fake_allowlist()
+        self.assertEqual({"not-owner"}, {daemon.status for daemon in report.daemons})
+
+    def test_daemon_status_resolves_static_allowlist_targets(self) -> None:
+        targets = daemon_targets(self.ctx)
+        self.assertEqual(DAEMON_NAMES, tuple(target.name for target in targets))
+        for target in targets:
+            with self.subTest(target=target.name):
+                self.assertIn("consensus-rnd-cli", " ".join(target.command))
+                self.assertEqual((self.repo / ".refactor-loop" / "locks" / f"{target.name}.pid").resolve(), target.pid_file)
+                self.assertEqual((self.repo / ".refactor-loop" / "heartbeats" / f"{target.name}.ts").resolve(), target.heartbeat_file)
+
+        one = daemon_targets(self.ctx, "comment-monitor")
+        self.assertEqual(("comment-monitor",), tuple(target.name for target in one))
+        with self.assertRaises(ValueError):
+            daemon_targets(self.ctx, "not-allowlisted")
+
     def test_restart_helper_source_mentions_launch_fingerprint_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
         for needle in (
             "DaemonLaunchFingerprint",
+            "DaemonTarget",
+            "daemon_targets",
+            "read_daemon_pid",
+            "read_heartbeat_age_seconds",
+            "expected_launch_fingerprint",
             "DaemonProcessInventory",
             ".fingerprint.json",
             "package_tree_sha256",

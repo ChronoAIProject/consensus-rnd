@@ -348,6 +348,11 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "zero duplicate canonical live wrapper",
             "same resolved static allowlist command",
             "duplicate canonical wrappers fail closed",
+            "read-only daemon-status projection",
+            "repair/reload remains restart-daemons",
+            "cached active-controller status",
+            "public start/stop/restart/reload lifecycle verb",
+            "test_cli_command_router.py",
             "test_restart_daemons.py",
         ):
             with self.subTest(required=required):

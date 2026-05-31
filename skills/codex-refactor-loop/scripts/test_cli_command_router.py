@@ -110,6 +110,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "check-manifest",
                 "check-project-rules",
                 "closed-label-reconciler",
+                "daemon-status",
                 "labels",
                 "concurrency",
                 "dev-sync",
@@ -202,9 +203,27 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "daemon-status", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
+
+    def test_daemon_status_is_read_only_status_projection(self) -> None:
+        self.assertEqual(("read-state", "read-process"), COMMANDS["daemon-status"].authority)
+        self.assertFalse(set(COMMANDS["daemon-status"].authority) & MUTATION_TOKENS)
+        cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
+        daemon_status = (SCRIPT_DIR / "codex_refactor_loop" / "daemon_status.py").read_text(encoding="utf-8")
+        for token in (
+            "Refactor (issue-298)",
+            "daemon-status is read-only",
+            "restart-daemons remains",
+            "read-only projection",
+            "repair/reload stays exclusively",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, cli + daemon_status)
+        for forbidden in ("def start(", "def stop(", "def restart(", "def reload(", "spawn-daemon", "write-state"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, daemon_status)
 
     def test_daemon_commands_do_not_gain_lifecycle_authority(self) -> None:
         for name in DAEMON_COMMANDS:
