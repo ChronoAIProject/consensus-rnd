@@ -59,6 +59,7 @@ Owner map:
 | Owner | Operational names owned | Policy |
 |---|---|---|
 | `scripts/codex_refactor_loop/phase9/router.py` | `phase9-issue<N>-r<R>-<role>`, `solver-issue<N>-r<R>-<role>`, `meta-judge-issue<N>-r<R>`, and design-consensus artifact references | Canonical writer/parser for design-consensus filename identity and artifact references; legacy input is local to the router. |
+| `scripts/codex_refactor_loop/review_fix_dispatch.py` | `fix-pr<N>-round-<R>` review-fix dispatch filename identity | Canonical writer of review-fix prompt, log, and report artifact filename identity. |
 | `scripts/codex_refactor_loop/monitors/progress.py` | progress-comment target extraction for `review-pr<N>-<role>-r<R>`, `fix-pr<N>-<round>`, and `phase9-issue<N>-r<R>-<role>` | Read-only extraction owner only; malformed near-misses return empty and prompt fallback is allowed only when a prompt file exists. |
 | `scripts/codex_refactor_loop/monitors/concurrency.py` | mutable/read-only dispatch `task_id` prefix classification | Classification owner only; main-readonly prefixes must match exact owner-local forms before `$REPO_ROOT` `cd` is allowed. |
 | `scripts/codex_refactor_loop/controller_actions.py` and `scripts/codex_refactor_loop/git.py` | `refactor/iter<I>-<cluster>` branch/worktree generation | Validate iteration digits and cluster `[A-Za-z0-9._-]+` locally; this is duplicated owner-local safety until one implementation is removed or delegated. |

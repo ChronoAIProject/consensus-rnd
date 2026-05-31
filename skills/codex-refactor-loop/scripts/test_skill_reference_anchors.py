@@ -593,7 +593,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py"},
-            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py"},
+            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
