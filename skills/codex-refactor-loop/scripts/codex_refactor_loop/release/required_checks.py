@@ -147,6 +147,8 @@ class ReleaseRequiredChecksProjection:
         return {ref: self.check_ref(repo_slug, ref, since=since) for ref in refs}
 
     def _check_ref_once(self, repo_slug: str, ref: str, *, since: datetime | None) -> RequiredCheckStatus:
+        if not self.required_checks:
+            return self._failed(ref, "missing_host_required_release_checks", {}, [], [], [])
         result = self.runner(
             [
                 "gh",

@@ -140,6 +140,19 @@ class ReleaseRequiredChecksProjectionTests(unittest.TestCase):
         )
         self.assertEqual(required_release_checks({"REQUIRED_RELEASE_CHECKS": "legacy"}), ())
 
+    def test_default_projection_fails_closed_when_host_required_checks_missing_or_empty(self) -> None:
+        for env in ({}, {"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": ""}):
+            with self.subTest(env=env):
+                runner = FakeRunner([{"check_runs": [check_run("contract-tests")]}])
+                projection = ReleaseRequiredChecksProjection(runner=runner, now=lambda: NOW, env=env)
+
+                status = projection.check_ref("owner/repo", "dev", since=NOW - timedelta(hours=2))
+
+                self.assertFalse(status.passed)
+                self.assertEqual(status.reason, "missing_host_required_release_checks")
+                self.assertEqual(status.checks, {})
+                self.assertEqual(runner.commands, [])
+
 
 if __name__ == "__main__":
     unittest.main()
