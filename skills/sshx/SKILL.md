@@ -10,7 +10,7 @@ description: Use when a high-risk or multi-angle decision needs inline consensus
 <!--
 Refactor (iter342/issue-342):
   Old pattern: 共识引擎哲学只存在于 codex-refactor-loop 的 daemon/controller/GitHub 重编排里,无脱离脚本的轻量通用复刻
-  New principle: 新增独立纯 prompt skill skills/sshx/SKILL.md:InlineConsensusProtocol(intake→choose_isolation_mode→thinking_triplet→meta_judge→implement→review_triplet→fix_or_done)+ IsolationMode 固定 actor-isolated|sealed-transcript|abstain。严格按 DESIGN_DECISION_PATH 的 verbatim Concrete plan 逐条改;先写 .refactor-loop/runs/baseline-issue342-sshx.md TDD baseline(无 skill 失败模式)再实现
+  New principle: 新增独立纯 prompt skill skills/sshx/SKILL.md:InlineConsensusProtocol(intake→choose_isolation_mode→thinking_triplet→meta_judge→implement→review_triplet→fix_or_done)+ IsolationMode 固定 actor-isolated|sealed-transcript|abstain。严格按 DESIGN_DECISION_PATH 的 verbatim Concrete plan 逐条改;TDD baseline 只保留为 source-owned contract/test evidence,不把 .refactor-loop runtime artifact 纳入发布源
 -->
 
 ## Trigger
@@ -146,6 +146,16 @@ This skill is only a prompt contract. It must not add or depend on:
 
 Use external actors only as isolation capability, not as controller authority.
 
+## Baseline Failure Mode
+
+Without this skill, lightweight high-risk decisions tend to regress to:
+
+- single-threaded advice presented as enough for consensus;
+- no required isolation declaration for peer perspectives;
+- no fixed thinking truth table;
+- no same-shape review gate before done;
+- pressure to use daemon, GitHub, or git orchestration for cases that only need inline consensus.
+
 ## Transcript Template
 
 Use this compact transcript shape when the decision is non-trivial:
@@ -195,4 +205,4 @@ fix_or_done:
 
 The contract for this skill is verified by `skills/sshx/tests/test_sshx_contract.py`.
 
-Before adding or changing this skill, write a baseline artifact that records the no-skill failure mode. For issue-342 the baseline artifact is `.refactor-loop/runs/baseline-issue342-sshx.md`.
+Before adding or changing this skill, record the no-skill failure mode as source-owned contract or test evidence. Do not track `.refactor-loop/` runtime artifacts as published skill source.

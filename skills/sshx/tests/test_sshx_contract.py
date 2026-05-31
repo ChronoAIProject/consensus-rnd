@@ -8,6 +8,7 @@ SKILL = ROOT / "skills" / "sshx" / "SKILL.md"
 README = ROOT / "README.md"
 GEMINI = ROOT / "GEMINI.md"
 CI = ROOT / ".github" / "workflows" / "consensus-rnd-ci.yml"
+BASELINE_ARTIFACT = ROOT / ".refactor-loop" / "runs" / "baseline-issue342-sshx.md"
 
 
 def read(path: Path) -> str:
@@ -43,6 +44,7 @@ class SshxContractTests(unittest.TestCase):
             "## Review Truth Table",
             "## Fix Or Done",
             "## Boundaries",
+            "## Baseline Failure Mode",
             "## Verification",
         ]:
             self.assertIn(anchor, text)
@@ -101,6 +103,20 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
         self.assertIn("does not grant permission to commit, push, merge", text)
+
+    def test_sshx_baseline_evidence_is_source_owned(self) -> None:
+        text = read(SKILL)
+        for failure_mode in [
+            "single-threaded advice presented as enough for consensus",
+            "no required isolation declaration for peer perspectives",
+            "no fixed thinking truth table",
+            "no same-shape review gate before done",
+            "only need inline consensus",
+        ]:
+            self.assertIn(failure_mode, text)
+        self.assertIn("source-owned contract or test evidence", text)
+        self.assertIn("Do not track `.refactor-loop/` runtime artifacts", text)
+        self.assertFalse(BASELINE_ARTIFACT.exists())
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
         self.assertRegex(read(README), r"\| `sshx` \|")
