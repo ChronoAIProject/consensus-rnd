@@ -1,9 +1,5 @@
 """Manual issue triage decision artifacts and controller apply.
 
-Refactor (issue160/p3-triage):
-Old pattern: `triage_decisions.py` and `apply_triage_decision.py` split the
-ManualIssueTriageDecision schema from controller-owned GitHub apply behavior.
-New principle: expose the same schema validation and bounded apply behavior
 from an import-safe package module; legacy script callers remain unchanged
 until the caller switch. Host facts still resolve through host.env via
 LoopContext.
@@ -48,9 +44,6 @@ class HostIssueIntakeMappingError(ValueError):
 
 @dataclass(frozen=True)
 class ManualIssueTriageDecision:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     issue_number: int
     verdict: str
     body_artifact_path: str
@@ -163,9 +156,6 @@ def validate_decision_dict(data: dict[str, Any], *, expected_issue: int | None =
 
 
 def host_issue_intake_projection(ctx: LoopContext, mapping_name: str) -> dict[str, str]:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     try:
         spec = load_validated_workflow_spec(ctx)
     except WorkflowSpecError as exc:

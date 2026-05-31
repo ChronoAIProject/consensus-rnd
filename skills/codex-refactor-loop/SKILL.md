@@ -1,6 +1,6 @@
 ---
 name: codex-refactor-loop
-description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
+description: Use when the user wants an unattended Consensus R&D issue/PR resolution and work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as a fallback compatibility issue producer, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
 > Refactor (iter319/issue-319): Old pattern: 物理拆 REFERENCE.md 后跨平台加载/维护退化.
 > New principle: 单文件 SKILL.md 用 Controller Contract Index + Detailed reference anchors 分层,禁止重新拆 REFERENCE.md 作为默认修复.
@@ -9,7 +9,7 @@ description: Use when the user wants an unattended Consensus R&D work-unit loop 
 > New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 consensus-rnd-cli restart-daemons 不无限阻塞。
 > Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
 > New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
-# Codex Refactor Loop — Controller Contract
+# Consensus R&D Work-Unit Loop — Controller Contract
 This SKILL.md is the single controller contract and detailed reference by maintainer directive. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
 
 Use intra-file anchors when a phase needs the detailed body, such as [host runtime details](#host-runtime-details); do not force-load unrelated sections.
@@ -38,14 +38,14 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Hard rules | All worker prompts inherit controller-level hard rules. | Include scope, git, test, language, and no-scope-creep constraints in every spawned prompt. | [hard rules details](#hard-rules-details) | prompt templates |
 | Language | Source files are English-only; external user-facing artifacts are 中文 by default. README.md + README.zh-CN.md is the only English-canonical public-doc carve-out. No mandatory parallel English section. | Enforce on prompts, GitHub posts, commits, docs, source comments/logs. | [language policy details](#language-policy-details), [historical bilingual notes](#historical-bilingual-notes) | prompts, docs, commit text |
 
-## Two entry modes
+<a id="two-entry-modes"></a>
+## Main path and fallback producer
 
-The loop has two supported entry modes:
+The default main path is open actionable catalog-managed GitHub issue/PR resolution. The controller dispatches the next-step actor for managed issues and PRs before starting any producer for new work.
 
-- `audit-driven`: run the default audit producer, project accepted clusters into work-unit items, then route design decisions through Consensus-rnd Phase design-consensus.
-- `issue-driven / Path A`: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
+`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
 
-Audit is a seed producer, not the only entry. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Both entry modes still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
+`audit` remains a stable compatibility producer value and fallback issue producer. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. Audit produces or updates issues that feed back into the main path; it is not a co-equal entry mode or a parallel R&D lane. Issue-driven work uses the GitHub issue body/comments as the work-unit source when no local audit artifact is provided. Concrete plans still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
 Workflow stage display names are sourced from `scripts/codex_refactor_loop/workflow_stages.py`. The built-in registry remains the default compatibility vocabulary; public built-in stage display must use `Consensus-rnd Phase <stage>`. Legacy `phase9-router` and `phase9-issue...` strings are compatibility command and artifact dialects only.
 
@@ -68,7 +68,7 @@ Owner map:
 | `scripts/codex_refactor_loop/cli.py::COMMANDS` | public command names and authority tokens | Public command catalog and authority fact source; controller lifecycle primitives stay outside `COMMANDS`. |
 | `scripts/codex_refactor_loop/workflow_stages.py` | workflow stage display names and slugs | Sole built-in stage catalog; HostWorkflowSpec may project `host:` data without overwriting built-ins. |
 
-`HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings. All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases. Consensus-rnd Phase design-consensus router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely; its allowlist is always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`.
+`HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary and a seven-surface data-only projection for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings (`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`). All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases. Consensus-rnd Phase design-consensus router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely; its allowlist is always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`.
 
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-170):
@@ -98,6 +98,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
+| `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | host-owned comma-separated exact check-run names, e.g. `ci,lint,typecheck` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
 | `$UPDATE_CHECK_ENABLE` | optional-noop | update-check probe | `false` | false or empty exits 0 with noop reason and writes disabled update-check state | update-check, restart-daemons | `test_update_check.py`, `test_restart_daemons.py` |
 | `$UPDATE_CHECK_INTERVAL_SECONDS` | defaulted | update-check probe | `21600` | default to `21600` seconds; fresh local update-check state is reused for manual probes | update-check, concurrency snapshot projection | `test_update_check.py`, `test_concurrency_monitor_snapshot.py` |
 | `$UPDATE_CHECK_TIMEOUT_SECONDS` | defaulted | update-check probe | `5` | default to `5` seconds for GitHub release/tag reads; failures write unknown state and never block restart | update-check | `test_update_check.py` |
@@ -111,7 +112,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$ACTIVE_CONTROLLER_TTL_SECONDS` | defaulted | active-controller lease | `1800` | missing or invalid defaults to `1800`; owner renews before expiry; expired lease may be acquired by another device | active_controller | `test_active_controller_lease.py`, `test_host_env_surface_matrix.py` |
 | `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
 | `$COMMENT_MONITOR_LOOKBACK` | optional-noop | comment-monitor | empty or `YYYY-MM-DD` / `updated:>=YYYY-MM-DD` search fragment | empty adds no lookback filter; non-empty is limited to a GitHub `updated:` search qualifier and must not change labels, ownership, or write behavior | comment-monitor | `test_comment_monitor.py`, `test_host_env_surface_matrix.py` |
-| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `self-doc-comment` | missing/empty normalizes to `self-doc-comment`; `none` disables refactor-history source comments; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py` |
+| `$HOST_REFACTOR_COMMENT_POLICY` | defaulted | prompt templates | `none` | missing/empty/default normalizes to `none`; rationale belongs in external artifacts; explicit `self-doc-comment` is downstream compatibility opt-in and must obey source English-only; any other value is invalid and fail-closed | prompt templates | `test_host_env_surface_matrix.py`, `test_refactor_comment_policy_prompt_contract.py`, `test_source_language_policy.py` |
 | `$SOURCE_GLOBS` | optional-noop | review prompts | host source glob hints | empty means review from actual diff and project evidence; do not invent host source layout | review prompts | `test_host_env_surface_matrix.py` |
 | `$MAINTAINER_WHITELIST` | conditional-fail-closed | comment-monitor | host GitHub handles | optional for hosts without comment-monitor/direct-mention intake; when that surface runs, empty fails closed | comment-monitor | `test_comment_monitor.py` |
 | `$HOST_TEST_FILE_GLOBS` | prompt-empty-infer | prompt templates | empty | infer from existing tests; fail closed if unsafe to locate writable tests | prompt templates | `test_host_env_surface_matrix.py` |
@@ -120,12 +121,11 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_CODE_FENCE_LANG` | prompt-empty-infer | prompt templates | empty | omit language tag; do not invent a host language default | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_PROTO_POLICY` | prompt-empty-infer | prompt templates | empty | treat schema/protocol checks as diff/project-rule driven only; do not invent protobuf or schema defaults | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_ARCHITECTURE_GREP_CHECKS` | prompt-empty-infer | prompt templates | empty | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only | prompt templates | `test_host_env_surface_matrix.py` |
-| `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates HostWorkflowSpec at projection consumers; phase9 direct-spawn-intent ignores host roles/dispatch/policies and keeps the built-in allowlist | workflow_spec, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py`, `test_phase9_router_package.py` |
+| `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates exactly seven data-only projection surfaces: events, stages, work_unit_kinds, roles, prompt_bindings, consensus_policies, and issue_intake_mappings; phase9 direct-spawn-intent ignores host roles/dispatch/policies and keeps the built-in allowlist | workflow_spec, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py`, `test_phase9_router_package.py` |
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics: whether Old/New refactor comments are allowed, required, or rejected. `${HOST_COMMENT_RULE}` only supplies comment syntax in `self-doc-comment` mode; it does not override the policy.
+`$HOST_REFACTOR_COMMENT_POLICY` controls only refactor-history self-documentation source-comment semantics. Missing, empty, or default policy is `none`, which rejects Old/New refactor-history source comments and keeps rationale in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in; `${HOST_COMMENT_RULE}` only supplies comment syntax in that mode and does not override source English-only.
 
 Host config rules:
 1. `host.env` is the only loop runtime fact injection point. It is not host production configuration schema.
@@ -183,7 +183,20 @@ export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env
 
 Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. Legacy `.refactor-loop/host.env` remains a compatibility read fallback only.
 
-### Guided GitHub consensus workflow setup
+<a id="github-workflow-portability-checklist"></a>
+### GitHub workflow portability checklist
+
+#104 setup is folded into this skill's existing owner surface. It may only generate or fill host-owned `.config/consensus-rnd/host.env`, a repo-relative JSON file named by `HOST_WORKFLOW_SPEC`, and optional repo-relative prompt or body binding files referenced from that JSON. It must not create a standalone setup skill or a second protocol owner.
+
+Allowed host artifacts:
+
+- `.config/consensus-rnd/host.env` with `CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env`.
+- A repo-relative HostWorkflowSpec JSON with exactly seven data-only surfaces: `events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`.
+- Optional repo-relative prompt/body binding files referenced by HostWorkflowSpec.
+
+Forbidden setup actions: no host `.github` edits, no label mutation, no issue/PR mutation, no branch-protection probing or edits, no git mutation, no branch creation, and no merge/close side effects. Future #357 interactive configuration may guide a maintainer through the same contract, but it must output these same host-owned artifacts rather than owning a new setup protocol.
+
+#### Guided GitHub consensus workflow setup
 
 When a host user asks for guided setup, do not add a renderer, CLI command, setup skill, installer, template directory, or root install document. Follow this walkthrough and write advisory artifacts by hand under `.refactor-loop/runs/github-workflow-setup/<timestamp>/`:
 
@@ -256,7 +269,7 @@ Command contract:
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller-owned publisher owns bump/commit/push/tag/release after preflight. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
 
-Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `crnd:phase:blocked` PRs; zero `crnd:human:maintainer-decision` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
+Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `crnd:phase:blocked` PRs; zero `crnd:human:maintainer-decision` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `RELEASE_AUTO_ENABLE=true` with missing or empty `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` fails closed with `missing_host_required_release_checks`. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful non-admin `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
 
 `release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, target ref, expiry, decision digest, required signal projection, host opt-in name, publish preflight name, and controller lifecycle owner.
 
@@ -318,7 +331,7 @@ Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-excepti
 
 ## Skill degradation source-repo validation
 <!-- Refactor (iter259/issue-259): Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1). New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py. -->
-`skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; `consensus-rnd-cli release-gate` requires it beside `contract-tests` and `manifest-version-sync`. Static degradation checking against a non consensus-rnd source repo root must return rc=0 with `not-source-repo`, without emitting source-repo required-file findings, writing host artifacts, or creating runtime alerts/pending events; any source repo candidate remains fail-closed. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
+`skill-degradation` is source-repo CI/release validation, not downstream host runtime authority. Source validation runs through `consensus-rnd-cli check-degradation --static`; CI required `skill-degradation` runs `<skill-root>/scripts/consensus-rnd-cli check-degradation --static`; release required checks are not hardcoded by source-repo CI job names. `consensus-rnd-cli release-gate` consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` and checks whichever host-owned exact GitHub check-run names are listed there. Static degradation checking against a non consensus-rnd source repo root must return rc=0 with `not-source-repo`, without emitting source-repo required-file findings, writing host artifacts, or creating runtime alerts/pending events; any source repo candidate remains fail-closed. A downstream host has no runtime watch, no alert log, no pending event, no peek lens, and no host.env knobs for skill-degradation. **Forbidden actions**: no source mutation; no git reset/rebase/merge/push; no GitHub issue/PR/body/label lifecycle mutation; no codex dispatch; no standalone daemon creation; no WorkUnit/schema/envelope changes; no protocol/plugin registry; no auto-clean root garbage; no auto-fix API. Details: [skill degradation source-repo validation details](#skill-degradation-source-repo-validation-details).
 
 ## Claude Code statusline(per #51 consensus)
 `skills/codex-refactor-loop/scripts/consensus-rnd-cli statusline` 是 fast (<200ms) read-only Claude Code statusline reader,显示本仓库 loop 实时状态(codex 计数、PR/issue 数、daemon 健康、P0 streak、freeze 指示、optional update notice)。
@@ -420,6 +433,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
 - **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or legal audit fallback before ending the wakeup. There is no general low-floor exemption, and `AUDIT_DONE:none:0` still does not exempt the floor. The only single active audit boundary is when no actionable open work and no queue candidate exists, expected is 0, and the same-iteration `audit-iter-N` is already active; then the plan emits `WAIT:single-active-audit`, `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N` instead of duplicating the same audit; no duplicate same-iteration audit.
+- **Release countdown**: `crnd:milestone:release-target` may add a `release-countdown` status action sourced from release-gate scoring; release-countdown status is status-only and not dispatchable.
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `crnd:milestone:current` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
 - If no actionable open work exists, it emits `RECOMMEND:audit`; ordinary audit is the floor fallback only when no same-iteration audit is already active.
 
@@ -430,7 +444,7 @@ The workflow stage index is the local routing map. It intentionally links to hea
 | Phase | Local controller contract | Detail anchor |
 |---|---|---|
 | Consensus-rnd Phase bootstrap | Session bootstrap. Must complete before normal routing. | [Consensus-rnd Phase bootstrap details](#bootstrap-details) |
-| Consensus-rnd Phase work-intake | Produce work-unit items. Audit remains the default compatibility producer; manual issue intake is separate. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
+| Consensus-rnd Phase work-intake | Fallback issue production when no actionable managed issue/PR exists; audit is the built-in compatibility producer. | [work-unit contract](#work-unit-contract), [batching heuristics](#batching-heuristics) |
 | Consensus-rnd Phase implementation | Implement one codex per active work unit in the batch. Controller owns branch/worktree topology and prompt construction. | [phase routing details](#phase-routing-details) |
 | Consensus-rnd Phase verification | Verify with a separate codex from the implementer. Verification may return ok, rework, partial, or blocked. | [recovery playbook](#recovery-playbook) |
 | Consensus-rnd Phase publish | Controller commits, merges, pushes, and opens PRs. Workers never commit/push/checkout. | [merge and push details](#merge-and-push-details) |
@@ -574,7 +588,7 @@ The floor is local because it prevents loop stalls.
 - 自 PR #<本>: `consensus-rnd-cli concurrency` 不仅 alert; actual < floor 且 dispatch-queue 非空时自动派发(per host 实证 "低于预期数就继续派发"). controller 写 queue 即可,无需自己 ps grep + spawn.
 - controller 每次 wakeup 的 step 1.5 checks the count and 必须在任何 `ScheduleWakeup` 之前执行.
 - If below floor, consume real work first: existing dispatch queue, then higher-priority actionable marker, then maintainer comment, CI red, no-gap violation, or Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable route. "Actionable marker" 限定为:log tail `EXIT=0` 后的完成 verdict (FIX_DONE / REVIEW_DONE / IMPLEMENT_DONE / SOLVER_DONE / META_JUDGE_DONE / TEST_ADD_DONE / AUDIT_DONE / VERIFY_DONE),或新 maintainer comment、CI red、no-gap violation。in-flight codex (没 EXIT=0) 不是 actionable marker——以"等 cascade / fix 完会派 reviewers"为由 defer floor top-up 是绕规则。
-- If `deficit>0`, there is no general exemption: dispatch existing/open actionable work first, then legal audit fallback. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
+- If `deficit>0`, there is no general exemption: dispatch existing/open actionable managed issue/PR work first, then legal fallback issue production through audit only when no higher-priority route exists. The audit fallback remains: envsubst 下一 iteration `prompts/audit.md` 到 `.refactor-loop/prompts/audit-iter-N.md` → `consensus-rnd-cli spawn-codex` 用 harness background task 启动。
 - `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
@@ -588,6 +602,10 @@ More detail is in [concurrency floor details](#concurrency-floor-details).
 Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-milestone-priority`.
 
 GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Legacy milestone labels are migration aliases only and must be normalized through `codex_refactor_loop.labels`.
+
+GitHub label `crnd:milestone:release-target` marks open catalog-managed issue/PRs whose existence should surface release countdown status. It is a non-exclusive milestone fact and may coexist with `crnd:milestone:current`; `crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself.
+
+Release countdown is wakeup-plan-only and read-only. `consensus-rnd-cli wakeup-plan` may append a status-only, non-dispatchable `release-countdown` action only when an open actionable managed issue/PR has `crnd:milestone:release-target`. Its fields come from the release-gate scoring source, `.version-bump.json`, and the existing release commits projection: `targets`, `from_version`, `to_version`, `stability_score`, `ready`, `red_signals`, `blocked_reasons`, `no_lifecycle_authority`, and `source: "release-gate"`. It must not create a daemon, write state, update statusline, update peek, create a top-level duplicate object, write a release decision, mutate labels, tag, publish a release, or add lifecycle authority.
 
 Milestone active means at least one open catalog-managed issue/PR carries `crnd:milestone:current`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
 
@@ -656,6 +674,11 @@ exactly-one phase/human, then remove aliases. Workers and daemons must not
 mutate labels except the #238 `closed-label-reconciler`, which may mutate only
 CLOSED `crnd:lifecycle:managed` item phase/cleanup/stuck labels into exactly
 one terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
+
+Label exclusivity is per `LabelSpec.exclusive_axis`, not per group. Phase and
+human labels remain exactly-one axes; non-exclusive catalog labels such as
+`crnd:milestone:current` and `crnd:milestone:release-target` may coexist when
+`LabelSpec.exclusive_axis is None`.
 
 ## `crnd:human:maintainer-decision` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 
@@ -744,8 +767,7 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 
 1. No new features; only clean the authorized violation or implement the consensus plan.
 2. No external repo changes; `$EXTERNAL_REPOS` are out of scope unless the user explicitly expands scope.
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-3. Code self-documents refactors according to `$HOST_REFACTOR_COMMENT_POLICY`: `self-doc-comment` requires host-style refactor-history comments; `none` forbids those source comments and requires the rationale in external artifacts.
+3. Code refactor rationale follows `$HOST_REFACTOR_COMMENT_POLICY`: missing, empty, or default policy is `none`, which forbids refactor-history source comments and keeps rationale in external artifacts; explicit `self-doc-comment` is a downstream compatibility opt-in and must still obey source English-only.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
 6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
@@ -879,21 +901,24 @@ The controller recognizes two producers:
 
 | Producer | Intake | Controller behavior |
 |---|---|---|
-| `audit` | Default compatibility audit/refactor intake. | Run audit prompt, project accepted clusters into work-unit items, batch by dependencies/risk. |
-| `manual-issue` | Explicit GitHub issue intake via labels/triage. | Normalize problem and verification hints into a design issue, then use Consensus-rnd Phase design-consensus. |
+| `audit` | Compatibility audit/refactor fallback issue producer. | Run audit prompt only when no actionable managed issue/PR or higher-priority route exists; project accepted clusters into managed issues or work-unit items, then feed the main path. |
+| `manual-issue` | Explicit managed GitHub issue intake for main-path resolution. | Normalize problem and verification hints into a design issue, then use Consensus-rnd Phase design-consensus. |
 
 Producer rules:
 
-1. Audit is the default when the user asks for the unattended loop without a narrower producer.
-2. Manual issues enter only through explicit maintainer label or triage monitor routing.
-3. `requires_design` audit clusters open GitHub issues and do not auto-implement until Consensus-rnd Phase design-consensus consensus.
-4. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
-5. Batching should prefer independent, low-risk work and preserve dependency ordering.
-6. Detailed producer fields and batching heuristics live in [work-unit contract](#work-unit-contract) and [batching heuristics](#batching-heuristics).
+1. Issue/PR resolution is the main-path state, not a producer that creates new work.
+2. Audit runs only as a compatibility fallback issue producer when no actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists.
+3. Manual issues enter only through explicit maintainer label or triage monitor routing.
+4. `requires_design` audit clusters open GitHub issues and do not auto-implement until Consensus-rnd Phase design-consensus consensus.
+5. Direct implementation is allowed only for clusters already authorized by policy and not requiring design.
+6. Batching should prefer independent, low-risk work and preserve dependency ordering.
+7. Detailed producer fields and batching heuristics live in [work-unit contract](#work-unit-contract) and [batching heuristics](#batching-heuristics).
 
 ## Phase Guardrails
 
 Consensus-rnd Phase work-intake guardrails:
+
+This stage covers fallback issue production through the audit compatibility producer. The main issue/PR resolution path does not start here; it starts from open actionable managed GitHub issues and PRs already visible to the controller.
 
 1. Run the producer with host-injected `$SOURCE_GLOBS`.
 2. Write audit output to `.refactor-loop/runs/audit-iter-N.md`; `N` must be nonempty and unique among currently active audit fallback runs.
@@ -1079,7 +1104,7 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 
 | Signal key | Pass condition |
 |---|---|
-| `required_checks_recent_green` | Shared Checks API projection sees exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours. |
+| `required_checks_recent_green` | Shared Checks API projection sees exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours; auto-release with an empty list fails closed. |
 | `no_open_blocked_pr` | No open PR has `crnd:phase:blocked`. |
 | `no_human_decision_label` | No open issue or PR has `crnd:human:maintainer-decision`. |
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
@@ -1116,7 +1141,7 @@ dogfood 运行中固化的操作经验。host 注入的 loop runtime 配置集�
 <a id="skill-degradation-source-repo-validation-details"></a>
 ### Skill degradation source-repo validation details
 The skill-degradation checker is intentionally source-repo scoped: no standalone watchdog, no seventh daemon, no `DegradationCheck` protocol, no plugin registry, no new event envelope, no auto-clean, no auto-fix, no GitHub lifecycle mutation, and no codex dispatch path.
-Static checker: `python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-degradation --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`, mirrored by `release.yml`. The checker is read-only and returns nonzero on missing source-repo validation text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or downstream runtime watch markers.
+Static checker: `python3 skills/codex-refactor-loop/scripts/consensus-rnd-cli check-degradation --static`; CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`; release gate `consensus-rnd-cli release-gate:required_checks_recent_green` does not name source-repo CI jobs directly. It consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`, so each host configures the exact required GitHub check-run names in `host.env`; this source repo may list its own CI names in its host-owned `host.env`, but that example is not downstream runtime authority. The checker is read-only and returns nonzero on missing source-repo validation text, CI/release wiring, forbidden runtime files, forbidden expansion surfaces, or downstream runtime watch markers.
 Downstream plugin-installed hosts have no skill-degradation runtime watch, no degradation alert log, no degradation pending event, no degradation peek lens, and no degradation host.env knobs. `consensus-rnd-cli concurrency` must not invoke `check-degradation` as a runtime watch against a host repo root.
 Forbidden: no source mutation, git operations, GitHub issue/PR/body/label lifecycle mutation, codex dispatch, standalone daemon creation, WorkUnit/schema/envelope changes, protocol/plugin registry, auto-clean root garbage, and auto-fix API.
 ### Worktree 位置约定(强制)
@@ -1451,7 +1476,10 @@ and controller helpers. Prose may name individual canonical labels when
 explaining a single guard, but active label bundles and transition tables must
 come from catalog-backed helpers instead of SKILL.md examples. The invariant is
 still exactly one canonical phase label and exactly one canonical human label
-for managed open items after migration.
+for managed open items after migration. For loop-managed issue/PR routing, that
+means exactly one loop-owned `crnd:phase:*` label and exactly one loop-owned
+`crnd:human:*` label. Host business labels may coexist, but they are not
+routing authority and must not replace the loop-owned phase/human axes.
 
 ### Spawn pattern — Bash `run_in_background: true`(强制)
 
@@ -1531,12 +1559,12 @@ You are the **Controller**. You never edit production code yourself. You orchest
 1. **runtime dirs + integration 分支**:`mkdir -p .refactor-loop/{logs,runs,clusters,prompts,worktrees,state}` + idempotent 建/推 `$INTEGRATION_BRANCH`(下方细节)。Do not create or maintain root `.refactor-loop/state.json`.
 2. **建全套 labels**:跑「Label 系统」节的 catalog validation / GitHub drift plan, then controller-owned apply if authorized. **漏建 = 后续 phase transition 无 canonical label 可挂、comment-monitor 查 catalog-managed items 漏掉 PR**。
 3. **起并挂载全部 6 个 daemon**:按「Host 运行编排 → Daemon 启动」节的 `bash -c 'source host.env && exec'` pattern 起齐 `consensus-rnd-cli concurrency` / `consensus-rnd-cli progress-reporter` / `consensus-rnd-cli comment-monitor` / `consensus-rnd-cli dev-sync` / `consensus-rnd-cli phase9-router` / `consensus-rnd-cli closed-label-reconciler`。随后运行 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` 规范化 heartbeat-managed daemon,再读 `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json` / `.refactor-loop/state/statusline-snapshot.json` / `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` 确认健康面可见;Consensus-rnd Phase design-consensus router 读其 lock/ledger/log/fallback event surface。**首轮就必须把 6 个全起起来——它不是「以后某次 wakeup 才做的 liveness 检查」**。
-4. **派默认 work-unit producer**(Consensus-rnd Phase work-intake,默认 audit,`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
+4. **派主路径或 fallback producer**:先扫 open actionable managed issue/PR 并派 next-step actor;只有没有 open actionable work / queued dispatch / clean marker route / CI-no-gap route / maintainer-comment route / higher-priority wakeup route 时,才派 Consensus-rnd Phase work-intake audit fallback(`consensus-rnd-cli spawn-codex` + Bash `run_in_background:true`)+ ScheduleWakeup 兜底 + end turn。
 
 每步做完才进下一步。3 漏起任一 daemon、2 漏建 labels = bootstrap 失败,下次 wakeup 第一件事补齐。
 
 #### ❌ 严禁(首次唤醒反模式 — 均来自 baseline 失败)
-- ❌ 只建本地目录 + 派默认 producer,不起 6 daemon(baseline 默认失败模式)
+- ❌ 只建本地目录 + 直接派 audit fallback,不起 6 daemon(baseline 默认失败模式)
 - ❌ 不建 labels 就派 codex(phase transition 时无 label 可挂)
 - ❌ 把整个 skill 降级成「本地读代码 + 出 markdown 报告 + 本地 commit」而不碰 GitHub、不起 daemon、不派 audit
 - ❌ host.env 缺失时猜值硬跑
@@ -1577,11 +1605,13 @@ Create top-level TaskCreate items: audit / dispatch / merge.
 ---
 
 <a id="phase-routing-details"></a>
-## Consensus-rnd Phase work-intake — Work-unit production (audit default)
+## Consensus-rnd Phase work-intake — Fallback issue production
 
-The default work-unit producer is `audit`. Producer normalization is documented in
+The default main path is open actionable managed issue/PR resolution; the controller must dispatch those
+next-step actors before starting any new-work producer. Producer normalization is documented in
 [work-unit contract](#work-unit-contract): accepts only `producer: audit` and `producer: manual-issue`.
-`audit` is the raw artifact producer for this phase; `manual-issue` enters through Consensus-rnd Phase design-intake
+`audit` is the fallback raw artifact issue producer for this phase and runs only when no actionable managed
+issue/PR or higher-priority route exists. `manual-issue` enters through Consensus-rnd Phase design-intake
 triage and must already be reshaped before Consensus-rnd Phase design-consensus.
 
 1. Copy `prompts/audit.md` (this skill's template) to `.refactor-loop/prompts/audit-iter-N.md`.
@@ -2271,7 +2301,15 @@ Policy: all three solver outputs are mandatory, and all implementation-bearing p
 
 ### Solver source contract
 
+<!--
+Refactor (iter364/issue364):
+  Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+  New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
+-->
+
 Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>` mean `gh issue view <N>` issue body/comments are the scope source. If an issue body or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated. For Path A greenfield identity, absence of existing local code to delete is neutral evidence for the delete solver and is compatible with `SOLVER_DONE:delete:abstain:<reason>` when deletion/collapse is not justified.
+
+For Path A issue body/comments that cite files absent from the current checkout, solvers must not directly emit a generic `no-plan`. The issue body/comments may carry a read-only source locator: `git show <ref>:<path>` for a named ref/path, a raw URL, `gh api` for a GitHub object, or a host-provided path from `.refactor-loop/host.env`. Use the locator only to read the cited source; do not fetch, checkout, switch, merge, rebase, reset, create a source worktree, or add a source directory. If the locator is missing or invalid and the current checkout cannot verify the cited source, classify the no-plan reason precisely as `source-location-missing-or-invalid`.
 
 Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues. The router renders the same producer/source-ref provenance into meta-judge prompts so the judge can recognize Path A greenfield framing instead of treating delete-solver abstain as a failed deletion proof.
 
@@ -3053,8 +3091,7 @@ Bash(
 
 1. **No new features** — only clean violations of CLAUDE.md philosophy.
 2. **No external repo changes** — $EXTERNAL_REPOS are out of scope.
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-3. **Code self-documents the refactor according to policy** — `$HOST_REFACTOR_COMMENT_POLICY` empty/`self-doc-comment` requires a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; `none` forbids refactor-history source comments and moves the rationale to external artifacts.
+3. **Code refactor rationale follows policy** — `$HOST_REFACTOR_COMMENT_POLICY` missing/empty/default is `none`: source refactor-history comments are forbidden and rationale belongs in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in for a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; it must still obey source English-only.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
 6. **No `[Skip]` / disabled tests** as a way to make CI green.
@@ -3191,10 +3228,12 @@ producer enum. The only allowed sidecar provenance values are `audit` and `manua
 
 ### `audit` producer
 
-`audit` remains the default producer. It reads the raw artifact contract from
-`prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md` cluster sections.
-The controller leaves `prompts/audit.md` unchanged and projects each accepted audit cluster into
-the work-unit contract before dispatching or opening a design issue:
+`audit` remains the stable compatibility producer value and fallback issue producer, not the default
+main path. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route,
+CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. It reads the raw
+artifact contract from `prompts/audit.md` and the resulting `.refactor-loop/runs/audit-iter-N.md`
+cluster sections. The controller leaves `prompts/audit.md` unchanged and projects each accepted audit
+cluster into the work-unit contract before dispatching or opening a design issue:
 
 - `work_unit_id: <cluster-id>`
 - `id: <cluster-id>`

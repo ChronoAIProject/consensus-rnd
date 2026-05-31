@@ -12,13 +12,6 @@ from typing import Any
 from ..context import LoopContext
 
 
-# Refactor (issue160-p3-checks):
-#   Old: scripts/check_manifest_version_sync.py owned the manifest-version-sync
-#   CI check as a standalone script.
-#   New: expose the same fail-closed JSON field resolution and version parity
-#   check from codex_refactor_loop.checks for future CLI import.
-
-
 class ManifestVersionSyncError(Exception):
     """Raised when manifest version mappings cannot be resolved or synced."""
 

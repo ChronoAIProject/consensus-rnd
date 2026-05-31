@@ -58,6 +58,18 @@ def section_after_heading(markdown: str, heading: str) -> str:
     return _section_after_first_heading(markdown[match.start() :])
 
 
+def section_after_anchor_until_heading(markdown: str, anchor: str, level: int) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    pattern = re.compile(rf"(?m)^#{{1,{level}}}\s+")
+    first_heading = pattern.search(after_anchor)
+    start = first_heading.end() if first_heading else 0
+    match = pattern.search(after_anchor, start)
+    return after_anchor[: match.start()] if match else after_anchor
+
+
 def _section_after_first_heading(markdown: str) -> str:
     lines = markdown.splitlines(keepends=True)
     if not lines:
@@ -162,22 +174,70 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
-    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+    def test_skill_documents_main_path_and_fallback_producer_near_top(self) -> None:
         top = "\n".join(self.skill.splitlines()[:200])
         for needle in (
-            "## Two entry modes",
-            "audit-driven",
+            "## Main path and fallback producer",
+            "open actionable catalog-managed GitHub issue/PR resolution",
             "issue-driven / Path A",
             "catalog-derived design issue label bundle",
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
             "Legacy issue-entry labels are migration aliases only",
-            "Audit is a seed producer, not the only entry",
+            "`audit` remains a stable compatibility producer value and fallback issue producer",
+            "no open actionable managed issue/PR",
+            "Audit produces or updates issues that feed back into the main path",
+            "not a co-equal entry mode",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, top)
+        self.assertIn('<a id="two-entry-modes"></a>', top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+        self.assertNotIn("audit-driven", top)
 
+    def test_detailed_reference_uses_issue_pr_main_path_and_audit_fallback(self) -> None:
+        producers = section_after_heading(self.skill, "Producers")
+        work_intake = section_after_heading(self.skill, "Consensus-rnd Phase work-intake — Fallback issue production")
+        bootstrap = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase bootstrap — Bootstrap (first wakeup only)",
+        )
+        detailed = "\n".join((producers, work_intake, bootstrap))
+
+        for needle in (
+            "The default main path is open actionable managed issue/PR resolution",
+            "`audit` is the fallback raw artifact issue producer",
+            "`audit` remains the stable compatibility producer value and fallback issue producer, not the default\nmain path",
+            "先扫 open actionable managed issue/PR 并派 next-step actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, detailed)
+        for forbidden in (
+            "`audit` remains the default producer",
+            "The default work-unit producer is `audit`",
+            "派默认 work-unit producer",
+            "默认 audit",
+            "默认 producer",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, detailed)
+
+    def test_project_rules_do_not_duplicate_skill_local_main_path_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for forbidden in (
+            "issue resolution 是主路径",
+            "audit 是 fallback producer",
+            "open actionable managed GitHub issue/PR",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, claude)
+        self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
+        self.assertIn("## Main path and fallback producer", self.skill)
+
+    # Refactor (iter364/issue364):
+    #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+    #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
         phase9 = section_after_heading(
             self.skill,
@@ -192,9 +252,60 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "issue body/comments are the scope source",
             "must not be fabricated",
             "A missing audit `evidence:` block is not by itself a defect for manual issues",
+            "Path A issue body/comments that cite files absent from the current checkout",
+            "read-only source locator",
+            "git show <ref>:<path>",
+            "raw URL",
+            "gh api",
+            ".refactor-loop/host.env",
+            "must not directly emit a generic `no-plan`",
+            "source-location-missing-or-invalid",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
+
+    def test_release_countdown_contract_is_wakeup_plan_only_status_projection(self) -> None:
+        milestone = section_after_heading(self.skill, "Milestone priority(强制)")
+        wakeup = section_after_heading(self.skill, "Wakeup Skeleton")
+
+        for needle in (
+            "crnd:milestone:release-target",
+            "release countdown status",
+            "non-exclusive milestone fact",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "wakeup-plan-only and read-only",
+            "status-only, non-dispatchable `release-countdown` action",
+            "release-gate scoring source",
+            ".version-bump.json",
+            "existing release commits projection",
+            "no_lifecycle_authority",
+            "targets",
+            "from_version",
+            "to_version",
+            "stability_score",
+            "ready",
+            "red_signals",
+            "blocked_reasons",
+            'source: "release-gate"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, milestone)
+        for forbidden in (
+            "create a daemon",
+            "write state",
+            "update statusline",
+            "update peek",
+            "create a top-level duplicate object",
+            "write a release decision",
+            "mutate labels",
+            "tag",
+            "publish a release",
+            "add lifecycle authority",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, milestone)
+        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("not dispatchable", wakeup)
 
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
         work_unit = section_after_anchor(self.skill, "work-unit-contract")
@@ -275,11 +386,22 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
-    def test_guided_github_consensus_workflow_setup_is_artifact_only(self) -> None:
+    def test_github_workflow_portability_checklist_is_folded_into_skill(self) -> None:
         walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
-        self.assertIn("This walkthrough is the only downstream install runbook", walkthrough)
-        self.assertIn("### Guided GitHub consensus workflow setup", walkthrough)
+        checklist = section_after_anchor_until_heading(self.skill, "github-workflow-portability-checklist", 3)
+        self.assertIn("SKILL.md#github-workflow-portability-checklist", self.readme)
+        self.assertIn("Host GitHub workflow portability", self.readme)
         for needle in (
+            "#104 setup is folded into this skill's existing owner surface",
+            ".config/consensus-rnd/host.env",
+            "HOST_WORKFLOW_SPEC",
+            "exactly seven data-only surfaces",
+            "`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`",
+            "no host `.github` edits",
+            "no branch-protection probing or edits",
+            "Future #357 interactive configuration",
+            "must output these same host-owned artifacts",
+            "#### Guided GitHub consensus workflow setup",
             ".refactor-loop/runs/github-workflow-setup/<timestamp>/",
             "host-env.patch.md",
             "labels-plan.json",
@@ -299,7 +421,19 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "advisory only",
         ):
             with self.subTest(needle=needle):
-                self.assertIn(needle, walkthrough)
+                self.assertIn(needle, checklist)
+        self.assertIn("GitHub workflow portability checklist", walkthrough)
+        self.assertFalse((REPO_ROOT / "skills" / "consensus-github-workflow-setup").exists())
+        for forbidden in (
+            "HostWorkflowPortabilityProjection",
+            "GitHubHostPolicy",
+            "HOST_GITHUB_LABEL_MAP",
+            "branch-protection probe",
+            "Projects adapter",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.readme)
 
         for forbidden in (
             "summary.json",
@@ -328,12 +462,38 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "lifecycle surface",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertIn(forbidden, walkthrough)
+                self.assertIn(forbidden, checklist)
 
         self.assertNotIn("GuidedWorkflowSetupBundle", self.skill)
         self.assertFalse((REPO_ROOT / "skills" / "github-workflow-setup").exists())
         self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "setup.py").exists())
         self.assertEqual(0, len(list((SKILL_ROOT / "scripts" / "codex_refactor_loop").glob("*setup*"))))
+
+    def test_release_required_checks_contract_is_host_configurable(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        release_schema = section_after_anchor_until_heading(self.skill, "release-decision-schema", 3)
+        combined = "\n".join((source_repo_validation, details, release_schema))
+
+        for needle in (
+            "$HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
+            "required_release_checks()",
+            "host.env",
+            "host configures the exact required GitHub check-run names",
+            "release required checks are not hardcoded by source-repo CI job names",
+            "Shared Checks API projection sees exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`",
+            "auto-release with an empty list fails closed",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+        stale_contracts = (
+            "requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+            "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+        )
+        for stale in stale_contracts:
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
 
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
@@ -632,25 +792,22 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     def test_phase9_router_issue167_refactor_self_doc_source_regression(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         for token in (
-            "Refactor (iter1/issue-167)",
-            "Old pattern: solver triplet handoff recorded only the base dispatch row",
-            "durable triplet provenance",
-            "visible same-round peer artifact reference failure",
-            "New principle: keep row-level router-private ledger provenance",
-            "narrow fail-closed peer artifact token check",
-            "do not add a",
-            "standalone evidence file",
-            "hash",
-            "lifecycle authority",
+            "_solver_triplet_ledger_fields",
+            "_peer_solver_reference_violation",
+            "_peer_solver_reference_tokens",
+            "clean_exit_solver_logs",
+            "solver_input_prompts",
+            "judge_input_solver_logs",
+            "judge_prompt_scope",
+            "phase9-triplet-evidence-invalid",
+            "Dispatch ledger evidence:",
+            "phase9-router-fallback",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, router)
 
     def test_skill_documents_cli_runtime_authority_fact_source(self) -> None:
         required = (
-            "Refactor (iter1/issue-166)",
-            "Old pattern: CLI command authority was represented by coarse read_only metadata",
-            "New principle: `cli.py::COMMANDS[*].authority` is the inline closed-token mechanical fact source",
             "dev-sync's integration-worktree git surface",
             "## CLI runtime authority fact source(per #166)",
             "cli.py::COMMANDS[*].authority",
@@ -880,8 +1037,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for required in (
             "ROLES = (\"minimal\", \"structural\", \"delete\")",
             "JUDGE_ROLE = \"judge\"",
+            "def _solver_roles",
             "return ROLES",
+            "def _judge_role",
             "return JUDGE_ROLE",
+            "class Phase9Router",
             "Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely",
         ):
             with self.subTest(required=required):
@@ -901,7 +1061,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         helper = router + "\n" + (SKILL_ROOT / "scripts" / "consensus-rnd-cli").read_text(encoding="utf-8")
         combined = "\n".join((self.skill, router, helper))
-        self.assertIn("Refactor (issue-100/router-filename-identity)", router)
+        self.assertIn("parse_phase9_log_identity", router)
+        self.assertIn("PHASE9_LOG_RE", router)
+        self.assertIn("SOLVER_LOG_RE", router)
+        self.assertIn("META_JUDGE_LOG_RE", router)
         self.assertIn("SOLVER_DONE:<role>:", combined)
         self.assertNotIn("SOLVER_DONE:<issue>:<round>:", combined)
         self.assertIn("consensus-rnd-cli", helper)
@@ -919,8 +1082,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for token in (
             "_converge_target_round",
             "canonical payload is the judge log source round",
-            "source-round and legacy",
-            "non-adjacent payloads fall back",
+            "payload_round in {source_round, source_round + 1}",
+            "return source_round + 1",
+            "return None",
             "clean rS judge canonical payload is `round-S`",
             "legacy `round-(S+1)`",
             "non-adjacent payload mismatch falls back",
@@ -945,7 +1109,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         combined = "\n".join((self.skill, meta_judge, router, marker_contract, profile_contract))
 
         for token in (
-            "Refactor (issue-304)",
             "meta-judge emits only consensus/converge",
             "router-owned stalled predicate",
             "_dispatch_stalled_reflector",

@@ -256,9 +256,11 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
         gate_executable_source = "\n".join(line for line in gate_source.splitlines() if not line.lstrip().startswith("#"))
         skill_source = (SCRIPT_PATH.parents[1] / "SKILL.md").read_text(encoding="utf-8")
 
-        self.assertIn("Refactor (fix/pr236-split-release-commits-command)", producer_source)
-        self.assertIn("separate release-commits command reads git", producer_source)
+        self.assertIn("RELEASE_COMMITS_RELATIVE_PATH", producer_source)
         self.assertIn("def write_release_commits(", producer_source)
+        self.assertIn("run_git", producer_source)
+        self.assertIn("write_json", producer_source)
+        self.assertIn("latest_release_ref", producer_source)
         self.assertIn('"release-commits": CommandSpec(', cli_source)
         self.assertIn('("read-git", "write-artifact")', cli_source)
         self.assertNotIn("release_gate_with_pre_gate_commits", cli_source)

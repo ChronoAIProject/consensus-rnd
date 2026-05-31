@@ -66,11 +66,6 @@ class GitHubReleaseVersion:
 class UpdateCheckProbe:
     """Read local version and GitHub release/tag state, then write local notice state.
 
-    Refactor (issue231-update-check):
-      Old pattern: downstream installs had no checked-in version snapshot or
-      notify-only update surface.
-      New principle: opt-in probe only reads VERSION.json and GitHub release/tag
-      metadata, writes local state, and never applies, installs, or mutates hosts.
     """
 
     def __init__(

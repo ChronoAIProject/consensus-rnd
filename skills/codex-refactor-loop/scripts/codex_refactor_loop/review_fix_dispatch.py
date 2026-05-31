@@ -24,8 +24,6 @@ class ReviewFixDispatchSpec:
     def for_round(cls, pr_number: int, round_number: int) -> "ReviewFixDispatchSpec":
         pr = _validate_positive_int(pr_number, "pr_number")
         round_no = _validate_positive_int(round_number, "round_number")
-        # Refactor (issue-267): Old: review-fix output was a prompt-only
-        # convention. New: controller render owns the canonical artifact path.
         fix_output_path = f".refactor-loop/runs/fix-pr{pr}-round-{round_no}-report.md"
         return cls(
             prompt_path=f".refactor-loop/prompts/fixes/fix-pr{pr}-round-{round_no}.md",

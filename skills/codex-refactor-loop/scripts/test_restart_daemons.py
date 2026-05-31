@@ -515,12 +515,17 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             "package_tree_sha256",
             "entrypoint_sha256",
             "pid_alive(pid)",
-            "actor-owned heartbeat",
             "FORBIDDEN_LIFECYCLE_AUTHORITY",
             "def restart_managed_daemon_names(",
             "return tuple(name for name, _command in DAEMON_COMMANDS)",
         ):
             self.assertIn(needle, source)
+        self.assertIn("heartbeat_file", source)
+        self.assertIn("RESTART_DAEMON_HEARTBEAT_FILE", source)
+        self.assertIn("RESTART_DAEMON_HEARTBEAT_INTERVAL", source)
+        self.assertNotIn("Refactor (", source)
+        self.assertNotIn("Old pattern", source)
+        self.assertNotIn("New principle", source)
         for forbidden in ("gh issue", "gh pr", "git fetch", "git push", "git merge"):
             self.assertNotIn(forbidden, source)
         self.assertNotIn("RESTART_MANAGED_DAEMON_NAMES", source)

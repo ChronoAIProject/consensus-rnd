@@ -149,6 +149,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
     def test_defaults_and_missing_behaviors_match(self) -> None:
         cases = {
             "RELEASE_AUTO_ENABLE": ("false", "false or empty exits 0 with noop reason"),
+            "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": ("ci,lint,typecheck", "missing_host_required_release_checks"),
             "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
             "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
             "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
@@ -201,11 +202,17 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertGreaterEqual(len(host_rows), 7)
         for key, row in host_rows.items():
             with self.subTest(key=key):
-                self.assertEqual("", self.exports[key]["value"])
                 if key == "HOST_WORKFLOW_SPEC":
+                    self.assertEqual("", self.exports[key]["value"])
                     self.assertEqual("optional-noop", row["Category"])
                     self.assertIn("built-in behavior", row["Missing/empty behavior"])
+                elif key == "HOST_GITHUB_RELEASE_REQUIRED_CHECKS":
+                    self.assertEqual("defaulted", row["Category"])
+                    self.assertIn("exact GitHub check-run names", row["Missing/empty behavior"])
+                    self.assertIn("host-owned comma-separated exact check-run names", row["Default/example"])
+                    self.assertEqual("ci,lint,typecheck", self.exports[key]["value"])
                 else:
+                    self.assertEqual("", self.exports[key]["value"])
                     self.assertEqual("prompt-empty-infer", row["Category"])
                     self.assertRegex(row["Missing/empty behavior"], r"infer|mirror|match|omit|diff")
         self.assertIn("do not invent a host language default", self.rows["HOST_CODE_FENCE_LANG"]["Missing/empty behavior"])
@@ -220,12 +227,15 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertEqual("defaulted", row["Category"])
         self.assertEqual("prompt templates", row["Owner"])
         self.assertEqual("prompt templates", row["Consumer"])
-        self.assertIn("`self-doc-comment`", row["Default/example"])
-        self.assertEqual("self-doc-comment", self.exports[key]["value"])
-        self.assertIn("missing/empty normalizes to `self-doc-comment`", row["Missing/empty behavior"])
-        self.assertIn("`none` disables refactor-history source comments", row["Missing/empty behavior"])
+        self.assertIn("`none`", row["Default/example"])
+        self.assertEqual("none", self.exports[key]["value"])
+        self.assertIn("missing/empty/default normalizes to `none`", row["Missing/empty behavior"])
+        self.assertIn("rationale belongs in external artifacts", row["Missing/empty behavior"])
+        self.assertIn("explicit `self-doc-comment` is downstream compatibility opt-in", row["Missing/empty behavior"])
+        self.assertIn("source English-only", row["Missing/empty behavior"])
         self.assertIn("invalid and fail-closed", row["Missing/empty behavior"])
         self.assertIn("test_refactor_comment_policy_prompt_contract.py", row["Test owner"])
+        self.assertIn("test_source_language_policy.py", row["Test owner"])
         self.assertIn("defaulted", self.exports[key]["section"])
 
         text = "\n".join(
@@ -236,7 +246,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             ]
         )
         self.assertIn("${HOST_REFACTOR_COMMENT_POLICY}", text)
-        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=\"self-doc-comment\"", read(HOST_ENV_EXAMPLE))
+        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=\"none\"", read(HOST_ENV_EXAMPLE))
         for alias in ("HOST_SOURCE_COMMENT_POLICY", "HOST_REFACTOR_SELF_DOC_POLICY"):
             with self.subTest(alias=alias):
                 self.assertNotIn(alias, text)

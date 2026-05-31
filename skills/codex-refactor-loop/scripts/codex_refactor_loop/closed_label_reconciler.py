@@ -20,11 +20,7 @@ DEFAULT_INTERVAL_SECONDS = 1800
 
 
 class ClosedLabelReconciler:
-    """Refactor (issue238/closed-label-reconciler):
-      Old pattern: closed managed items relied on controller close-path cleanup
-      or peek hints. New principle: a restart-managed closed-only daemon owns
-      the narrow gh-label-closed-reconcile authority.
-    """
+    """Restart-managed closed-only phase label reconciler."""
 
     def __init__(self, ctx: LoopContext, *, dry_run: bool = False) -> None:
         self.ctx = ctx

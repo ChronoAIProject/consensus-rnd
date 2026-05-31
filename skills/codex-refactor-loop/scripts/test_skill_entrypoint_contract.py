@@ -53,6 +53,22 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertTrue(lines[1].startswith("description: Use when "))
         self.assertLessEqual(len(body), 1024)
 
+    def test_audit_is_not_documented_as_default_main_path(self) -> None:
+        match = re.match(r"\A---\n(?P<body>.*?)\n---\n", self.skill, flags=re.DOTALL)
+        self.assertIsNotNone(match)
+        body = match.group("body")
+        top = "\n".join(self.skill.splitlines()[:120])
+
+        self.assertIn("name: codex-refactor-loop", body)
+        self.assertIn("issue/PR resolution and work-unit loop", body)
+        self.assertIn("audit/refactor as a fallback compatibility issue producer", body)
+        self.assertIn("# Consensus R&D Work-Unit Loop", top)
+        self.assertIn("## Main path and fallback producer", top)
+        self.assertIn("open actionable catalog-managed GitHub issue/PR resolution", top)
+        self.assertNotIn("audit/refactor as the default compatibility intake", body)
+        self.assertNotIn("Audit is the default", top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+
     def test_entrypoint_line_budget_and_controller_contract_headings(self) -> None:
         headings = set(markdown_headings(self.skill))
 
@@ -319,17 +335,12 @@ class SkillEntrypointContractTests(unittest.TestCase):
     def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
         script = read(PACKAGE_WAKEUP_PLAN)
         for needle in (
-            "Allowed: read `.refactor-loop` files",
-            "issue-190",
-            "git fetch origin --quiet",
-            "git worktree list --porcelain",
-            "git rev-parse --verify HEAD",
-            "git rev-parse --verify refs/remotes/origin/<head>",
-            "git rev-list --count refs/remotes/origin/<head>..HEAD",
-            "Forbidden: no restart/spawn, no git lifecycle or mutation",
-            "no commit, push, checkout/switch",
-            "no GitHub lifecycle mutation",
-            ".refactor-loop/runs/phase9-issue190-r3-judge.md",
+            "def unpushed_worker_output_actions",
+            '["git", "-C", str(repo_root), "fetch", "origin", "--quiet"]',
+            '["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]',
+            '["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"]',
+            '["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref]',
+            '["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"]',
             "no_lifecycle_authority",
             "count_in_flight_codex",
             "HARD_GATE:dispatch_required",
@@ -338,6 +349,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, script)
+        for forbidden in ("Refactor (", "Old pattern", "New principle", '"git", "push"', '"git", "commit"', '"git", "checkout"'):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, script)
         self.assertNotIn("WorkerOutputProjection", script)
         self.assertNotIn("codex_refactor_loop.projections", script)
 

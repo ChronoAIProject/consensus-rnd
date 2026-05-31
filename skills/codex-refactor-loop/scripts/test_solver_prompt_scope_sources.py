@@ -59,6 +59,27 @@ class SolverPromptScopeSourceTests(unittest.TestCase):
                 for needle in required:
                     self.assertIn(needle, prompt)
 
+    # Refactor (iter364/issue364):
+    #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+    #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
+    def test_solver_prompts_document_divergent_source_locator_contract(self) -> None:
+        for prompt_name in SOLVER_PROMPTS:
+            prompt = (PROMPTS_DIR / prompt_name).read_text(encoding="utf-8")
+            with self.subTest(prompt=prompt_name):
+                for needle in (
+                    "source locator",
+                    "current checkout",
+                    "read-only",
+                    "git show <ref>:<path>",
+                    "raw URL",
+                    "gh api",
+                    ".refactor-loop/host.env",
+                    "must not fetch/checkout/switch/merge/rebase/reset",
+                    "must not create source worktree/add-dir",
+                    "source-location-missing-or-invalid",
+                ):
+                    self.assertIn(needle, prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

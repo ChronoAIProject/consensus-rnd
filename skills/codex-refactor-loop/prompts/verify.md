@@ -20,10 +20,9 @@ Artifact profile: marker-only-work-unit
 
 ### 1. 改动与设计原则一致
 
-<!-- Refactor (iter1/issue-237): Old pattern: unconditional refactor-history source comments caused no-comment hosts to get false rejects. New principle: HOST_REFACTOR_COMMENT_POLICY gates source refactor-history comments; when set to none, keep the rationale in external artifacts. -->
-- 检查 `${HOST_REFACTOR_COMMENT_POLICY}`。empty/`self-doc-comment` 归一化为 `self-doc-comment`；`none` 禁用 refactor-history source comments；其它值 invalid, fail-closed → 标 rework; do not guess.
-- empty/`self-doc-comment`：检查每个被重构的关键类/方法是否按 `${HOST_COMMENT_RULE}` 或目标文件现有注释风格带有 Refactor self-documentation，包含 Old pattern + New principle。缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。
-- `none`：missing Refactor self-documentation is not a defect and must not trigger rework. 新增 `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments → 标记缺陷；外部 artifact/实施摘要必须说明 rationale，包括 `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)` 或等价理由。
+- 检查 `${HOST_REFACTOR_COMMENT_POLICY}`。missing/empty/default/`none` 归一化为 `none`；`self-doc-comment` 是 explicit downstream compatibility opt-in；其它值 invalid, fail-closed → 标 rework; do not guess.
+- `self-doc-comment`：检查每个被重构的关键类/方法是否按 `${HOST_COMMENT_RULE}` 或目标文件现有注释风格带有 Refactor self-documentation，包含 Old pattern + New principle 且源码注释 English-only。缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。
+- missing/empty/default/`none`：missing Refactor self-documentation is not a defect and must not trigger rework. 新增 `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments → 标记缺陷；外部 artifact/实施摘要必须说明 rationale，包括 `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)` 或等价理由。
 - 检查改动是否真正消除了 `old_pattern` 描述的违反（用 `rg` 抽样确认 anti-pattern 不再出现在 scope_paths 内）。
 
 ### 2. 作用域诚实

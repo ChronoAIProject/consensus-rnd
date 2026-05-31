@@ -17,7 +17,7 @@ def read_prompt(name: str) -> str:
 
 
 class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
-    def test_default_policy_preserves_old_new_requirement(self) -> None:
+    def test_default_policy_is_none_and_external_rationale(self) -> None:
         implement = read_prompt("implement.md")
         verify = read_prompt("verify.md")
         architect = read_prompt("reviewer-architect.md")
@@ -33,15 +33,33 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
         }.items():
             with self.subTest(prompt=name):
                 self.assertIn("${HOST_REFACTOR_COMMENT_POLICY}", text)
-                self.assertIn("empty/`self-doc-comment`", text)
+                self.assertIn("missing/empty/default", text)
+                self.assertIn("`none`", text)
                 self.assertIn("self-doc-comment", text)
 
+        self.assertIn("missing/empty/default/`none` 归一化为 `none`", implement)
+        self.assertIn("MUST NOT add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster`", implement)
+        self.assertIn("refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)", implement)
+        self.assertIn("missing Refactor self-documentation is not a defect and must not trigger rework", verify)
+        self.assertIn("absence is compliant, rationale belongs in external artifacts", architect)
+        self.assertIn("missing/illegible self-doc must not be a reject reason", quality)
+        self.assertIn("keep rationale in the fix report/external artifact", review_fix)
+
+    def test_explicit_self_doc_policy_preserves_old_new_requirement(self) -> None:
+        implement = read_prompt("implement.md")
+        verify = read_prompt("verify.md")
+        quality = read_prompt("reviewer-quality.md")
+        review_fix = read_prompt("review-fix.md")
+
+        self.assertIn("`self-doc-comment`：被重构的每个类/关键方法必须", implement)
         self.assertIn("Refactor (iter${ITERATION}/${CLUSTER_ID}):", implement)
         self.assertIn("Old pattern: ${OLD_PATTERN}", implement)
         self.assertIn("New principle: ${NEW_PRINCIPLE}", implement)
+        self.assertIn("源码注释必须 English-only", implement)
         self.assertIn("缺失任何一处且无合理 not-applicable 说明 → 标记缺陷", verify)
+        self.assertIn("HOST_REFACTOR_COMMENT_POLICY=self-doc-comment", quality)
         self.assertIn("must be present and clear", quality)
-        self.assertIn("Preserve/add refactor self-doc comments only when", review_fix)
+        self.assertIn("Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}=self-doc-comment`", review_fix)
 
     def test_none_policy_forbids_refactor_history_source_comments(self) -> None:
         expected = (
@@ -59,11 +77,11 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
         self.assertIn("refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)", verify)
 
         architect = read_prompt("reviewer-architect.md")
-        self.assertIn("`none`: absence is compliant", architect)
+        self.assertIn("missing/empty/default/`none` normalizes to `none`: absence is compliant", architect)
         self.assertIn("new Old/New/iteration refactor-history source comments must be rejected", architect)
 
         review_fix = read_prompt("review-fix.md")
-        self.assertIn("When `${HOST_REFACTOR_COMMENT_POLICY}=none`", review_fix)
+        self.assertIn("When `${HOST_REFACTOR_COMMENT_POLICY}` is missing/empty/default/`none`", review_fix)
         self.assertIn("classify it as a host-policy conflict/false-positive", review_fix)
 
     def test_none_policy_disables_missing_self_doc_rejects(self) -> None:
@@ -72,12 +90,14 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
 
         self.assertIn("missing Refactor self-documentation is not a defect and must not trigger rework", verify)
         self.assertIn("missing/illegible self-doc must not be a reject reason", quality)
-        self.assertIn("Under `HOST_REFACTOR_COMMENT_POLICY=none`, missing/illegible self-doc alone is not a reject reason", quality)
-        self.assertIn("still comment/reject for naming, dead code, complexity, scope creep", quality)
+        self.assertIn("Under missing/empty/default/`HOST_REFACTOR_COMMENT_POLICY=none`, missing/illegible self-doc alone is not a reject reason", quality)
+        self.assertIn("Still comment/reject for naming, dead code, complexity, scope creep", quality)
 
         forbidden_unconditional = (
             "the cluster mandates `// Refactor (iterN/cluster-XXX):` Old/New blocks",
             "missing/illegible self-doc on a major refactor, or scope creep",
+            "empty/`self-doc-comment`",
+            "empty/`self-doc-comment` normalizes to `self-doc-comment`",
             "缺失任何一处且无合理 not-applicable 说明 → 标记缺陷。\n- 检查改动是否真正消除了",
         )
         combined = "\n".join(

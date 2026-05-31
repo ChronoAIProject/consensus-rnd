@@ -7,11 +7,6 @@ from functools import cmp_to_key
 from typing import Any
 
 
-# Refactor (issue231-update-check):
-#   Old pattern: release semver parsing lived inside release-gate and callers
-#   compared versions as exact strings.
-#   New principle: keep parse/bump compatibility while sharing SemVer ordering
-#   for release preflight and notify-only update checks.
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)"
@@ -89,9 +84,6 @@ def next_release_version(version: str, bump_type: str) -> str:
     bump_type records commit impact; for beta.N / rc.N it never authorizes
     stage/core promotion.
     """
-    # Refactor (iter272/issue-272):
-    #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
-    #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
     current = parse_semver_full(version)
     if not current.prerelease:
         return bump_semver(version, bump_type)
@@ -107,9 +99,6 @@ def next_release_version(version: str, bump_type: str) -> str:
 
 
 def validate_release_version_coordinate(from_version: str, to_version: str, bump_type: str | None) -> str | None:
-    # Refactor (iter272/issue-272):
-    #   Old pattern: release-gate semver 不遵循预发布阶梯:beta.3+patch commits → 误算 1.0.1(GA,三重越阶)
-    #   New principle: 结构化修复:新增 versions.next_release_version helper 按预发布阶梯递推(beta.N→beta.N+1,绝不自动升阶/off-ladder),preflight 增 off-ladder validation 拒绝越阶 target;不引入 schema v3 / ReleaseCoordinatePolicy
     if not isinstance(bump_type, str) or not bump_type:
         return "release_coordinate_off_ladder"
     try:

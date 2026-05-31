@@ -69,13 +69,19 @@ RESERVED_NAMES = {
     *(stage.slug for stage in WORKFLOW_STAGES),
 }
 FIXED_MARKER_FAMILIES = ("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")
+WORKFLOW_PROJECTION_KEYS = (
+    "events",
+    "stages",
+    "work_unit_kinds",
+    "roles",
+    "prompt_bindings",
+    "consensus_policies",
+    "issue_intake_mappings",
+)
 
 
 @dataclass(frozen=True)
 class HostWorkflowEvent:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     stage: str
     status: str = ""
@@ -84,18 +90,12 @@ class HostWorkflowEvent:
 
 @dataclass(frozen=True)
 class HostWorkflowRole:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     prompt_binding: str = ""
 
 
 @dataclass(frozen=True)
 class HostConsensusPolicy:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     solver_roles: tuple[str, ...]
     judge_role: str
@@ -106,9 +106,6 @@ class HostConsensusPolicy:
 
 @dataclass(frozen=True)
 class HostIssueIntakeMapping:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     name: str
     work_unit_kind: str
     producer: str
@@ -118,9 +115,6 @@ class HostIssueIntakeMapping:
 
 @dataclass(frozen=True)
 class ValidatedWorkflowSpec:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     source_path: Path | None
     stages: tuple[WorkflowStage, ...]
     events: tuple[HostWorkflowEvent, ...]
@@ -140,12 +134,49 @@ class ValidatedWorkflowSpec:
     def prompt_binding_path(self, name: str) -> str | None:
         return self.prompt_bindings.get(name)
 
+    def projection(self) -> dict[str, Any]:
+        return {
+            "events": [
+                {"name": event.name, "stage": event.stage, "status": event.status, "actor": event.actor}
+                for event in self.events
+            ],
+            "stages": [
+                {
+                    "slug": stage.slug,
+                    "title": stage.title,
+                    "contract": stage.contract,
+                    "detail_anchor": stage.detail_anchor,
+                }
+                for stage in self.stages
+            ],
+            "work_unit_kinds": list(self.work_unit_kinds),
+            "roles": [{"name": role.name, "prompt_binding": role.prompt_binding} for role in self.roles],
+            "prompt_bindings": dict(self.prompt_bindings),
+            "consensus_policies": [
+                {
+                    "name": policy.name,
+                    "solver_roles": list(policy.solver_roles),
+                    "judge_role": policy.judge_role,
+                    "peer_output_isolation": policy.peer_output_isolation,
+                    "marker_families": list(policy.marker_families),
+                    "stage": policy.stage,
+                }
+                for policy in self.consensus_policies
+            ],
+            "issue_intake_mappings": [
+                {
+                    "name": mapping.name,
+                    "work_unit_kind": mapping.work_unit_kind,
+                    "producer": mapping.producer,
+                    "stage": mapping.stage,
+                    "prompt_binding": mapping.prompt_binding,
+                }
+                for mapping in self.issue_intake_mappings
+            ],
+        }
+
 
 class HostWorkflowSpec:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-
     def __init__(self, data: Mapping[str, Any], *, source_path: Path, repo_root: Path) -> None:
         self.data = dict(data)
         self.source_path = source_path
@@ -156,19 +187,7 @@ class HostWorkflowSpec:
 
 
 class WorkflowInvariantValidator:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
-
-    ALLOWED_TOP_LEVEL = {
-        "events",
-        "stages",
-        "work_unit_kinds",
-        "roles",
-        "prompt_bindings",
-        "consensus_policies",
-        "issue_intake_mappings",
-    }
+    ALLOWED_TOP_LEVEL = set(WORKFLOW_PROJECTION_KEYS)
 
     def __init__(self, repo_root: Path, source_path: Path | None = None) -> None:
         self.repo_root = repo_root.resolve()
@@ -403,9 +422,6 @@ class WorkflowInvariantValidator:
 
 
 class WorkflowSpecLoader:
-    # Refactor (iter219/issue-219):
-    #   Old pattern: host 无法按 GitHub 模板自定义事件流/工作流/issue/prompt;workflow vocabulary 是闭集硬编码
-    #   New principle: 引入 data-only HostWorkflowSpec(HOST_WORKFLOW_SPEC,repo-relative JSON)+ WorkflowInvariantValidator;空/未设=built-in 行为;host 只能在 host: 命名空间加 data,不能覆盖 built-in/降共识闸/夺 lifecycle authority。严格按 plan 'Concrete plan' 逐条改,首版 scope 受限。
     _cache: dict[tuple[Path, int, int], ValidatedWorkflowSpec] = {}
 
     @classmethod

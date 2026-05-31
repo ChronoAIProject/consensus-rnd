@@ -147,7 +147,7 @@ class PackageChecksTests(unittest.TestCase):
         )
         for required in (
             "skill-degradation",
-            "manifest-version-sync",
+            "HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
             "consensus-rnd-cli check-degradation --static",
             "source-repo CI/release validation",
             "downstream host has no runtime watch",
@@ -170,12 +170,11 @@ class PackageChecksTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, evaluated_markers)
 
-        self.assertIn("Old: scripts/check_skill_degradation.py", source)
-        self.assertIn("New: expose the same read-only checks", source)
-        self.assertIn("Old pattern: the checker required downstream runtime watch hooks", source)
-        self.assertIn("New principle: skill-degradation is source-repo CI/release validation only", source)
+        self.assertIn("SOURCE_REPO_SENTINELS", source)
+        self.assertIn("FORBIDDEN_RUNTIME_FILES", source)
+        self.assertIn("REQUIRED_DETAILED_REFERENCE_MARKERS", source)
         self.assertIn("not-source-repo", source)
-        self.assertIn("source-repo CI/release validation only", source)
+        self.assertIn("source-repo CI/release validation", source)
         for sentinel in (
             "skills/codex-refactor-loop/SKILL.md",
             ".version-bump.json",

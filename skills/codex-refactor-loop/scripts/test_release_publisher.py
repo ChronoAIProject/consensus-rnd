@@ -22,7 +22,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.release.publish_preflight import PublishPreflightResult
 from codex_refactor_loop.release.publisher import ReleasePublisher
-from codex_refactor_loop.release.required_checks import REQUIRED_RELEASE_CHECKS
+FIXTURE_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
 
 
 def write_json(path: Path, data: object) -> None:
@@ -52,7 +52,11 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
-    (repo / ".refactor-loop/host.env").write_text('export GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
+    (repo / ".refactor-loop/host.env").write_text(
+        'export GH_REPO_SLUG="owner/repo"\n'
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
+        encoding="utf-8",
+    )
     return tmp
 
 
@@ -103,7 +107,7 @@ class FakeRunner:
 
     def _check_runs_payload(self) -> list[dict[str, object]]:
         check_runs = []
-        for name in REQUIRED_RELEASE_CHECKS:
+        for name in FIXTURE_RELEASE_CHECKS:
             status = "completed"
             conclusion = "success"
             if self.check_status == "pending":

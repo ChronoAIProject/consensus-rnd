@@ -28,9 +28,6 @@ class Git:
         return result
 
     def safe_worktree(self, iteration: str | int, cluster: str, base_ref: str) -> tuple[Path, str]:
-        # Refactor (iter81/issue-81):
-        #   Old pattern: 文件/分支/marker/label/role 命名混乱;松散 regex(parse_target ^phase9-issue([0-9]+).*)解析,缺 owner-local operational-name 契约
-        #   New principle: owner-local operational-name contract:CLAUDE.md 扩写命名不动点为 operational-name invariant + SKILL.md 增 owner map;收窄现有 owner parser/validation(progress.py parse_target 精确文法、safe_worktree 字段校验);behavior test + source-regression production-literal allowlist 防偷抄;**无**生产 OperationalNameRegistry/names.py/check_naming.py/全仓审美 lint
         _validate_safe_worktree_fields(str(iteration), cluster)
         wt_path = self.repo_root / ".worktrees" / f"iter{iteration}-{cluster}"
         branch = f"refactor/iter{iteration}-{cluster}"

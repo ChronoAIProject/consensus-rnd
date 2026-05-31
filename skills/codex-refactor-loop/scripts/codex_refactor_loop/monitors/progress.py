@@ -78,9 +78,6 @@ class ProgressReporter:
             self.post_or_update(base, log)
 
     def parse_target(self, base: str) -> str:
-        # Refactor (iter81/issue-81):
-        #   Old pattern: 文件/分支/marker/label/role 命名混乱;松散 regex(parse_target ^phase9-issue([0-9]+).*)解析,缺 owner-local operational-name 契约
-        #   New principle: owner-local operational-name contract:CLAUDE.md 扩写命名不动点为 operational-name invariant + SKILL.md 增 owner map;收窄现有 owner parser/validation(progress.py parse_target 精确文法、safe_worktree 字段校验);behavior test + source-regression production-literal allowlist 防偷抄;**无**生产 OperationalNameRegistry/names.py/check_naming.py/全仓审美 lint
         for pattern in (PROGRESS_REVIEW_TARGET_RE, PROGRESS_FIX_TARGET_RE, PROGRESS_PHASE9_TARGET_RE):
             match = pattern.fullmatch(base)
             if match:
@@ -129,10 +126,6 @@ class ProgressReporter:
         return body
 
     def post_or_update(self, base: str, log: Path) -> None:
-        # Refactor (impl/issue191-single-active-controller): Old pattern:
-        # progress reporters on multiple devices could create/edit/delete the
-        # same GitHub progress comment. New principle: GitHub comment writes
-        # require the single active-controller owner.
         decision = require_active_controller(self.ctx, "progress-reporter-write")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:

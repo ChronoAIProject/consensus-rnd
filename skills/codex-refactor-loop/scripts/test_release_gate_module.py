@@ -93,7 +93,7 @@ class FakeRunner:
             created = gate.isoformat(NOW)
             runs = [
                 {"id": index + 1, "created_at": created, "started_at": created, "completed_at": created, "conclusion": "success", "status": "completed", "name": name}
-                for index, name in enumerate(gate.REQUIRED_CHECKS)
+                for index, name in enumerate(("contract-tests", "manifest-version-sync", "skill-degradation"))
             ]
             return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps({"check_runs": runs}), stderr="")
         if len(cmd) >= 2 and cmd[0] == "gh" and cmd[2:3] == ["list"]:
@@ -159,11 +159,12 @@ class ReleaseGateModuleTests(unittest.TestCase):
             write_live_state(repo)
             runner = FakeRunner()
             release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
-            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH")}
+            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS")}
             try:
                 gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
                 gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
                 gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
+                gate.os.environ["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = "contract-tests,manifest-version-sync,skill-degradation"
                 stability = release_gate.compute_stability(min_recent_merges=1)
             finally:
                 for key, value in old_env.items():
@@ -189,6 +190,43 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 6)
             self.assertTrue(heartbeat_signal["heartbeats"]["closed_label_reconciler"])
 
+    def test_live_release_gate_fails_closed_when_auto_release_lacks_host_required_checks(self) -> None:
+        for value in (None, ""):
+            with self.subTest(value=value), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_live_state(repo)
+                runner = FakeRunner()
+                release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
+                keys = ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH", "RELEASE_AUTO_ENABLE", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS")
+                old_env = {key: gate.os.environ.get(key) for key in keys}
+                try:
+                    gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
+                    gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
+                    gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
+                    gate.os.environ["RELEASE_AUTO_ENABLE"] = "true"
+                    if value is None:
+                        gate.os.environ.pop("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", None)
+                    else:
+                        gate.os.environ["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = value
+
+                    stability = release_gate.compute_stability(min_recent_merges=1)
+                finally:
+                    for key, previous in old_env.items():
+                        if previous is None:
+                            gate.os.environ.pop(key, None)
+                        else:
+                            gate.os.environ[key] = previous
+
+                self.assertFalse(stability.ready)
+                signal = stability.signals["required_checks_recent_green"]
+                self.assertFalse(signal["passed"])
+                self.assertEqual(signal["source"], "host.env")
+                self.assertEqual(
+                    signal["reason"],
+                    "required_checks_recent_green:missing_host_required_release_checks",
+                )
+                self.assertFalse(any(cmd[:2] == ["gh", "api"] for cmd in runner.commands))
+
     def test_release_gate_blocks_on_legacy_blocked_and_human_labels(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -197,11 +235,12 @@ class ReleaseGateModuleTests(unittest.TestCase):
             runner.label_results["⏸️ phase:blocked"] = [{"number": 10}]
             runner.label_results["👤 human:需-maintainer-决策"] = [{"number": 11}]
             release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
-            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH")}
+            old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS")}
             try:
                 gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
                 gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
                 gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
+                gate.os.environ["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = "contract-tests,manifest-version-sync,skill-degradation"
                 stability = release_gate.compute_stability(min_recent_merges=1)
             finally:
                 for key, value in old_env.items():
@@ -285,8 +324,15 @@ class ReleaseGateModuleTests(unittest.TestCase):
         source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
         cli_source = (SCRIPT_PATH.parent / "codex_refactor_loop/cli.py").read_text(encoding="utf-8")
         executable_source = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
-        self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#autonomous-release-gate-56", source)
         self.assertIn("decision-artifact-only", source)
+        self.assertIn('parser.add_argument("--dispatch"', source)
+        self.assertIn('host_env.get("RELEASE_AUTO_ENABLE") != "true"', source)
+        self.assertIn("ReleaseRequiredChecksProjection", source)
+        self.assertIn("write_json(self.decision_path, decision)", source)
+        self.assertIn("write_json(self.candidate_path, self.release_candidate(decision))", source)
+        self.assertNotIn("Refactor (", source)
+        self.assertNotIn("Old pattern", source)
+        self.assertNotIn("New principle", source)
         self.assertNotIn('["git"', executable_source)
         self.assertNotIn('"git"', executable_source)
         self.assertNotIn("release.commits", source)
@@ -311,7 +357,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
                 self.assertNotIn(forbidden, executable_source)
 
     def test_required_check_names_and_daemon_heartbeat_allowlist_are_stable(self) -> None:
-        self.assertEqual(gate.REQUIRED_CHECKS, ("contract-tests", "manifest-version-sync", "skill-degradation"))
+        self.assertEqual(gate.REQUIRED_CHECKS({"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests,manifest-version-sync,skill-degradation"}), ("contract-tests", "manifest-version-sync", "skill-degradation"))
         self.assertEqual(gate.HEARTBEAT_FRESH_SECONDS, 90)
         self.assertEqual(gate.DAEMON_NAMES, restart.restart_managed_daemon_names())
         self.assertEqual(6, len(gate.DAEMON_NAMES))

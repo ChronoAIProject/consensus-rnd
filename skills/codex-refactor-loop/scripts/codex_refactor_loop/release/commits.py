@@ -61,7 +61,6 @@ def write_release_commits(
     target_ref: str | None = None,
     fetch_tags: bool = False,
 ) -> Path:
-    # Refactor (fix/pr236-split-release-commits-command): Old pattern: release-gate consumed release-commits.json but also inlined the git-reading producer. New principle: a separate release-commits command reads git, then atomically writes the state artifact while the decider stays git-free.
     repo_root = Path(repo_root).expanduser().resolve()
     commits = collect_release_commits(
         repo_root,

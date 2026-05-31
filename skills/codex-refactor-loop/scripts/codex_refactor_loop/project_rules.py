@@ -72,9 +72,6 @@ class ProjectRulesFixedPointReport:
 
 
 class ProjectRulesPatchArtifact:
-    # Refactor (iter218/issue-218):
-    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
-    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
     def __init__(self, repo_root: Path, filename: str = "project-rules-fixed-point.patch") -> None:
         self.repo_root = repo_root
         self.path = repo_root / ".refactor-loop" / "runs" / filename
@@ -98,9 +95,6 @@ class ProjectRulesPatchArtifact:
 
 
 class ProjectRulesFixedPointProbe:
-    # Refactor (iter218/issue-218):
-    #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
-    #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
     def __init__(self, repo_root: str, project_rules: str | None = None) -> None:
         self.repo_root = self._resolve_repo_root(repo_root)
         self.target = self._resolve_target(project_rules if project_rules else "CLAUDE.md")
@@ -111,9 +105,6 @@ class ProjectRulesFixedPointProbe:
         return cls(os.environ.get("REPO_ROOT", ""), os.environ.get("PROJECT_RULES"))
 
     def inspect(self) -> ProjectRulesFixedPointReport:
-        # Refactor (iter218/issue-218):
-        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
-        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
         original = self._read_target()
         return self._inspect_text(original)
 
@@ -146,9 +137,6 @@ class ProjectRulesFixedPointProbe:
         return text
 
     def _inspect_text(self, text: str) -> ProjectRulesFixedPointReport:
-        # Refactor (iter218/issue-218):
-        #   Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
-        #   New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
         starts = list(START_RE.finditer(text))
         end_count = text.count(END_MARKER)
         if len(starts) != end_count:
