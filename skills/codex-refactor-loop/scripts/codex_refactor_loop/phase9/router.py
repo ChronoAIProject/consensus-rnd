@@ -531,12 +531,21 @@ class Phase9Router:
         # target round only, so clean rS judge logs with canonical round-S
         # markers fell back. New principle: accept source-round and legacy
         # adjacent payloads locally, both dispatching r(S+1).
+        # Refactor (issue-304): Old pattern: fresh judge-emitted
+        # `META_JUDGE_DONE:escalate:stalled` was normal stalled authority.
+        # New principle: judge emits converge; before spawning r(S+1) solvers,
+        # router-owned stalled predicate may dispatch the round-S reflector and
+        # suppress solver churn. Legacy stalled markers remain read-only replay
+        # compatibility under the same predicate/source gates.
         for marker in markers:
             if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
                 if marker.role != self._judge_role():
                     continue
                 target_round = self._converge_target_round(marker.marker, marker.round)
                 if target_round is None:
+                    continue
+                if self._stalled_predicate_holds(marker.issue, marker.round):
+                    self._dispatch_stalled_reflector(marker, ledger)
                     continue
                 for role in self._solver_roles():
                     key = self._key(marker.issue, target_round, role)
@@ -565,24 +574,7 @@ class Phase9Router:
             if marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
                 if marker.role != self._judge_role():
                     continue
-                key = self._key(marker.issue, marker.round, "reflector")
-                log_path = self._log_path(marker.issue, marker.round, "reflector")
-                if key in ledger or self._in_flight(log_path):
-                    continue
-                if not self._stalled_predicate_holds(marker.issue, marker.round):
-                    continue
-                if not self._require_open_source_issue(
-                    marker.issue,
-                    marker.round,
-                    "stalled_to_reflector",
-                    marker.marker,
-                    marker.log_path,
-                ):
-                    continue
-                prompt = self._write_prompt(marker.issue, marker.round, "reflector", self._reflector_prompt(marker))
-                if self._spawn(prompt, log_path):
-                    self._append_ledger(key, marker.marker, log_path)
-                    ledger.add(key)
+                self._dispatch_stalled_reflector(marker, ledger)
 
     def _append_fallbacks(self, markers: list[Marker], ledger: set[str]) -> None:
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern: dedup
@@ -610,6 +602,10 @@ class Phase9Router:
             target_round = self._converge_target_round(marker.marker, marker.round)
             if target_round is None:
                 return False
+            if self._stalled_predicate_holds(marker.issue, marker.round):
+                if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
+                    return True
+                return self._key(marker.issue, marker.round, "reflector") in ledger
             if f"phase9-source-eligibility:{marker.issue}-{target_round}-converge_to_next_solvers" in self._fallback_seen:
                 return True
             return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
@@ -633,6 +629,26 @@ class Phase9Router:
         if payload_round in {source_round, source_round + 1}:
             return source_round + 1
         return None
+
+    def _dispatch_stalled_reflector(self, marker: Marker, ledger: set[str]) -> None:
+        key = self._key(marker.issue, marker.round, "reflector")
+        log_path = self._log_path(marker.issue, marker.round, "reflector")
+        if key in ledger or self._in_flight(log_path):
+            return
+        if not self._stalled_predicate_holds(marker.issue, marker.round):
+            return
+        if not self._require_open_source_issue(
+            marker.issue,
+            marker.round,
+            "stalled_to_reflector",
+            marker.marker,
+            marker.log_path,
+        ):
+            return
+        prompt = self._write_prompt(marker.issue, marker.round, "reflector", self._reflector_prompt(marker))
+        if self._spawn(prompt, log_path):
+            self._append_ledger(key, marker.marker, log_path)
+            ledger.add(key)
 
     def _stalled_predicate_holds(self, issue: str, round_no: int) -> bool:
         if round_no < 3:

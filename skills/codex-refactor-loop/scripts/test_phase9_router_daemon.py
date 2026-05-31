@@ -952,7 +952,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.write_ledger_key("91-2-judge")
         self.write_log(
             "phase9-issue91-r3-judge.log",
-            "META_JUDGE_DONE:escalate:stalled:no-change",
+            "META_JUDGE_DONE:converge:round-3:no-change",
         )
 
         self.router.tick()
@@ -1067,17 +1067,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
         self.assertNotIn("81-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
-    def test_phase9_router_stalled_requires_valid_predicate(self) -> None:
-        self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+    def test_phase9_router_converge_routes_to_stalled_reflector_when_predicate_holds(self) -> None:
+        # Refactor (issue-304): Old: fresh judge-emitted stalled markers were
+        # the normal happy path. New: a clean r3 converge marker checks the
+        # router-owned stalled predicate before spawning r4 solvers.
+        self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
         self.router.tick()
-        self.assertEqual(self.commands, [])
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue37-r3-minimal.log", logs)
+        self.assertNotIn("phase9-issue37-r2-reflector.log", logs)
 
         self.commands.clear()
         for round_no in (1, 2, 3):
             self.solver_triplet(issue=38, round_no=round_no, verdict="same")
         self.write_ledger_key("38-1-judge")
         self.write_ledger_key("38-2-judge")
-        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:converge:round-3:no-change")
         self.router.tick()
 
         reflector_commands = [
@@ -1086,6 +1091,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(reflector_commands), 1)
         self.assertEqual(len(self.commands), 1)
         self.assertIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+        self.assertNotIn("38-4-minimal", [entry["key"] for entry in self.ledger_entries()])
 
     def test_phase9_router_closed_issue_suppresses_stalled_reflector_dispatch(self) -> None:
         self.source_issue_states["38"] = "CLOSED"
@@ -1093,7 +1099,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.solver_triplet(issue=38, round_no=round_no, verdict="same")
         self.write_ledger_key("38-1-judge")
         self.write_ledger_key("38-2-judge")
-        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.write_log("phase9-issue38-r3-judge.log", "META_JUDGE_DONE:converge:round-3:no-change")
 
         self.router.tick()
 
@@ -1113,7 +1119,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(by_key["phase9-triplet-suppression:38-3-judge"]["reason"], "phase9-triplet-target-log-exists")
         self.assertEqual(by_key["phase9-triplet-suppression:38-3-judge"]["route"], "solver_triplet_to_judge")
 
-    def test_phase9_router_accepts_meta_judge_issue_log_for_stalled(self) -> None:
+    def test_phase9_router_accepts_meta_judge_issue_log_for_router_derived_stalled(self) -> None:
         for round_no in (1, 2, 3):
             for role in ("minimal", "structural", "delete"):
                 self.write_log(
@@ -1122,7 +1128,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 )
         self.write_ledger_key("100-1-judge")
         self.write_ledger_key("100-2-judge")
-        self.write_log("meta-judge-issue100-r3.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.write_log("meta-judge-issue100-r3.log", "META_JUDGE_DONE:converge:round-3:no-change")
 
         self.router.tick()
 
@@ -1133,12 +1139,25 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(self.commands), 1)
         self.assertIn("100-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
+    def test_phase9_router_accepts_legacy_stalled_marker_read_only_compatibility(self) -> None:
+        for round_no in (1, 2, 3):
+            self.solver_triplet(issue=101, round_no=round_no, verdict="same")
+        self.write_ledger_key("101-1-judge")
+        self.write_ledger_key("101-2-judge")
+        self.write_log("phase9-issue101-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:legacy-replay")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertIn("phase9-issue101-r3-reflector.log", " ".join(self.commands[0]))
+        self.assertIn("101-3-reflector", [entry["key"] for entry in self.ledger_entries()])
+
     def test_stalled_reflector_prompt_uses_full_template_and_evidence(self) -> None:
         for round_no in (1, 2, 3):
             self.solver_triplet(issue=85, round_no=round_no, verdict="same")
         self.write_ledger_key("85-1-judge")
         self.write_ledger_key("85-2-judge")
-        stalled_marker = "META_JUDGE_DONE:escalate:stalled:no-actionable-framing"
+        stalled_marker = "META_JUDGE_DONE:converge:round-3:no-actionable-framing"
         self.write_log("phase9-issue85-r3-judge.log", stalled_marker)
 
         self.router.tick()
@@ -1180,7 +1199,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.solver_triplet(issue=86, round_no=round_no, verdict="same")
         self.write_ledger_key("86-1-judge")
         self.write_ledger_key("86-2-judge")
-        stalled_marker = "META_JUDGE_DONE:escalate:stalled:no-actionable-framing"
+        stalled_marker = "META_JUDGE_DONE:converge:round-3:no-actionable-framing"
         self.write_log("phase9-issue86-r3-judge.log", stalled_marker)
 
         original_read_text = Path.read_text
@@ -1213,13 +1232,14 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.solver_triplet(issue=39, round_no=round_no, verdict=verdict)
         self.write_ledger_key("39-1-judge")
         self.write_ledger_key("39-2-judge")
-        self.write_log("phase9-issue39-r3-judge.log", "META_JUDGE_DONE:escalate:stalled:no-change")
+        self.write_log("phase9-issue39-r3-judge.log", "META_JUDGE_DONE:converge:round-3:no-change")
 
         self.router.tick()
 
         self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
         self.assertNotIn("39-3-reflector", [entry["key"] for entry in self.ledger_entries()])
-        self.assertIn("META_JUDGE_DONE:escalate:stalled:no-change", self.pending_events())
+        logs = " ".join(" ".join(command) for command in self.commands)
+        self.assertIn("phase9-issue39-r4-minimal.log", logs)
 
     def test_phase9_router_lifecycle_markers_never_spawn(self) -> None:
         markers = (

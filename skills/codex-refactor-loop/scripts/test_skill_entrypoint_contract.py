@@ -365,6 +365,9 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertIn("SOLVER_DONE", self.skill)
         self.assertIn("META_JUDGE_DONE:converge", self.skill)
         self.assertIn("META_JUDGE_DONE:escalate:stalled", self.skill)
+        self.assertIn("router-derived stalled continuation", self.skill)
+        self.assertIn("legacy read-only `META_JUDGE_DONE:escalate:stalled`", self.skill)
+        self.assertIn("meta-judge returns consensus/converge only", self.skill)
         self.assertIn("do not introduce migrated work-unit schema, public marker aliases, ControllerOrchestrator, ControllerEvent, ControllerCommand, or lifecycle authority", self.skill)
 
     def test_issue276_lifecycle_target_normalization_contract_is_documented(self) -> None:
