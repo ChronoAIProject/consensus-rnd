@@ -10,7 +10,6 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
-REPO_ROOT = SCRIPT_PATH.parents[3]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
