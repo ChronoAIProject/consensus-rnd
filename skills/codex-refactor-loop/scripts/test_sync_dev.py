@@ -17,7 +17,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.sync.dev import IntegrationSyncDaemon, codex_resolve_in_flight, dispatch_codex_resolve, merge_in_progress
+from codex_refactor_loop.sync.dev import (
+    IntegrationSyncDaemon,
+    RollupAdoption,
+    codex_resolve_in_flight,
+    dispatch_codex_resolve,
+    merge_in_progress,
+)
 
 
 SYNC_DEV = SCRIPT_DIR / "codex_refactor_loop" / "sync" / "dev.py"
@@ -38,10 +44,12 @@ class FakeGit:
         merge_base_adopted: bool = False,
         old_head_is_ancestor: bool = True,
         replay_count: int = 0,
+        invalid_replay_count: bool = False,
         integration_ref_exists: bool = True,
         dirty: bool = False,
         unresolved: bool = False,
         ff_fails: bool = False,
+        head_rev_parse_fails: bool = False,
     ) -> None:
         self.ahead = ahead
         self.release_ahead = release_ahead
@@ -54,10 +62,12 @@ class FakeGit:
         self.merge_base_adopted = merge_base_adopted
         self.old_head_is_ancestor = old_head_is_ancestor
         self.replay_count = replay_count
+        self.invalid_replay_count = invalid_replay_count
         self.integration_ref_exists = integration_ref_exists
         self.dirty = dirty
         self.unresolved = unresolved
         self.ff_fails = ff_fails
+        self.head_rev_parse_fails = head_rev_parse_fails
         self.commands: list[list[str]] = []
 
     def __call__(self, cmd: list[str], cwd: Path | None = None, check: bool = False) -> subprocess.CompletedProcess[str]:
@@ -78,11 +88,14 @@ class FakeGit:
             elif spec.startswith("HEAD..origin/dev"):
                 stdout = f"{self.behind}\n"
             elif spec.startswith("old-head..origin/auto-refact-dev"):
-                stdout = f"{self.replay_count}\n"
+                stdout = "unknown\n" if self.invalid_replay_count else f"{self.replay_count}\n"
             else:
                 stdout = "0\n"
         elif cmd[:3] == ["git", "rev-parse", "HEAD"]:
-            stdout = f"{self.head_sha}\n"
+            if self.head_rev_parse_fails:
+                returncode = 1
+            else:
+                stdout = f"{self.head_sha}\n"
         elif cmd[:3] == ["git", "rev-parse", "origin/auto-refact-dev"]:
             stdout = f"{self.remote_sha}\n"
         elif cmd[:3] == ["git", "rev-parse", "origin/dev"]:
@@ -182,6 +195,107 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual(45, operation["pr_number"])
         self.assertEqual({"reason": "merged-rollup-adoption", "replay_count": 2}, operation["evidence"])
         self.assertIn(["git", "push", "--force-with-lease=refs/heads/auto-refact-dev:remote-sha", "origin", "HEAD:auto-refact-dev"], fake.commands)
+
+    def test_rollup_old_head_not_ancestor_does_not_block_forward_sync(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 45,
+                    "headRefName": "auto-refact-dev",
+                    "headRefOid": "old-head",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            old_head_is_ancestor=False,
+            behind=3,
+            remote_sha="head-sha",
+        )
+        self.daemon(fake).tick()
+
+        self.assertEqual(["DEV_SYNC_PENDING:rollup-adoption-ambiguous:old-head-not-ancestor:old-head"], self.pending_events())
+        self.assertFalse(any("--force-with-lease=refs/heads/auto-refact-dev:remote-sha" in command for command in fake.commands))
+        self.assertEqual("forward-sync-review-base", self.operation_jsons()[0]["kind"])
+        self.assertIn(["git", "merge", "--ff-only", "origin/dev"], fake.commands)
+
+    def test_rollup_ambiguity_still_detects_release_rollup_needed_without_forward_sync(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 45,
+                    "headRefName": "auto-refact-dev",
+                    "headRefOid": "old-head",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            old_head_is_ancestor=False,
+            merge_base_adopted=False,
+            release_ahead=3,
+            remote_sha="head-sha",
+            head_sha="head-sha",
+            review_base_sha="base-sha",
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        events = self.pending_events()
+        self.assertEqual("DEV_SYNC_PENDING:rollup-adoption-ambiguous:old-head-not-ancestor:old-head", events[0])
+        self.assertTrue(events[1].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
+        event = json.loads(events[1].removeprefix("DEV_SYNC_PENDING:release-rollup-needed:"))
+        self.assertEqual("head-sha", event["integration_sha"])
+        self.assertEqual([], self.operation_jsons())
+
+    def test_rollup_adoption_replay_ambiguity_does_not_block_forward_sync(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 45,
+                    "headRefName": "auto-refact-dev",
+                    "headRefOid": "old-head",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            invalid_replay_count=True,
+            behind=2,
+            remote_sha="head-sha",
+        )
+        self.daemon(fake).tick()
+
+        self.assertEqual(["DEV_SYNC_PENDING:rollup-adoption-ambiguous:post-rollup-count-unknown"], self.pending_events())
+        self.assertFalse(any("--force-with-lease=refs/heads/auto-refact-dev:remote-sha" in command for command in fake.commands))
+        self.assertEqual("forward-sync-review-base", self.operation_jsons()[0]["kind"])
+
+    def test_rollup_adoption_missing_expected_remote_sha_does_not_block_reset(self) -> None:
+        fake = FakeGit(remote_sha="remote-sha", head_sha="old-local")
+        daemon = self.daemon(fake)
+
+        executed = daemon.execute_merged_rollup_adoption(
+            self.worktree,
+            RollupAdoption(pr_number=45, old_head="old-head", expected_remote_sha=""),
+        )
+        self.assertFalse(executed)
+        self.assertTrue(daemon.execute_reset_to_remote(self.worktree))
+
+        self.assertEqual(["DEV_SYNC_PENDING:rollup-adoption-ambiguous:missing-expected-remote-sha"], self.pending_events())
+        self.assertEqual("reset-to-remote", self.operation_jsons()[0]["kind"])
+
+    def test_rollup_adoption_head_ambiguity_continues_to_reset_gate(self) -> None:
+        fake = FakeGit(
+            gh_rows=[
+                {
+                    "number": 45,
+                    "headRefName": "auto-refact-dev",
+                    "headRefOid": "old-head",
+                    "mergedAt": "2026-05-25T00:00:00Z",
+                }
+            ],
+            head_rev_parse_fails=True,
+            behind=2,
+        )
+        self.daemon(fake).tick()
+
+        events = self.pending_events()
+        self.assertEqual("DEV_SYNC_PENDING:rollup-adoption-ambiguous:head-unknown", events[0])
+        self.assertFalse(any("--force-with-lease=refs/heads/auto-refact-dev:remote-sha" in command for command in fake.commands))
+        self.assertEqual("reset-to-remote-ambiguous", events[1].split(":")[1])
 
     def test_merged_throwaway_rollup_head_emits_adoption_request(self) -> None:
         fake = FakeGit(
@@ -422,6 +536,18 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, src)
+
+    def test_no_whole_tick_halt_on_rollup_adoption_ambiguity(self) -> None:
+        src = SYNC_DEV.read_text(encoding="utf-8")
+        self.assertNotRegex(src, r'rollup\.status == "ambiguous"[\s\S]{0,120}\breturn\b')
+
+    def test_skill_documents_rollup_ambiguity_fallthrough(self) -> None:
+        skill = (SCRIPT_DIR.parent / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("rollup-adoption-ambiguous", skill)
+        self.assertIn("blocks only force-with-lease adoption", skill)
+        self.assertIn("RESET_TO_REMOTE", skill)
+        self.assertIn("FORWARD_SYNC", skill)
+        self.assertIn("DETECT_RELEASE_ROLLUP_NEEDED", skill)
 
 
 if __name__ == "__main__":

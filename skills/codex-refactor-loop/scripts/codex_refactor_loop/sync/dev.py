@@ -644,19 +644,19 @@ class IntegrationSyncDaemon:
     def execute_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
         if not adoption.expected_remote_sha:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-expected-remote-sha")
-            return True
+            return False
 
         replay_count = self.run(["git", "rev-list", "--count", f"{adoption.old_head}..origin/{self.integration}"], cwd=cwd)
         try:
             replay_n = int(replay_count.stdout.strip())
         except ValueError:
             self.append_pending_event("rollup-adoption-ambiguous", "post-rollup-count-unknown")
-            return True
+            return False
 
         head = self.run(["git", "rev-parse", "HEAD"], cwd=cwd)
         if head.returncode != 0:
             self.append_pending_event("rollup-adoption-ambiguous", "head-unknown")
-            return True
+            return False
         self.execute_sync_operation(
             IntegrationSyncOperation(
                 kind="adopt-merged-rollup",
@@ -784,10 +784,8 @@ class IntegrationSyncDaemon:
 
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
-            self.execute_merged_rollup_adoption(cwd, rollup.adoption)
-            return
-        if rollup and rollup.status == "ambiguous":
-            return
+            if self.execute_merged_rollup_adoption(cwd, rollup.adoption):
+                return
 
         if self.execute_reset_to_remote(cwd):
             return
