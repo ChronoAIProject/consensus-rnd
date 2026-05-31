@@ -113,7 +113,7 @@ def write_ready_artifacts(
     expires_at: datetime | None = None,
     signals: dict[str, object] | None = None,
 ) -> None:
-    set_mapped_version(repo, version)
+    set_mapped_version(repo, from_version)
     decision = {
         "from_version": from_version,
         "to_version": version,
@@ -356,8 +356,8 @@ class ReleasePublishPreflightTests(unittest.TestCase):
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_host_opt_in(repo)
-            write_ready_artifacts(repo, version="2.0.0")
-            set_mapped_version(repo, "1.9.9")
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
+            set_mapped_version(repo, "1.9.8")
 
             result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
 
@@ -369,7 +369,7 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             write_host_opt_in(repo)
             write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10+candidate")
-            set_mapped_version(repo, "1.9.10+manifest")
+            set_mapped_version(repo, "1.9.9+manifest")
 
             result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
 
@@ -391,9 +391,9 @@ class ReleasePublishPreflightTests(unittest.TestCase):
                 current = current[int(part)] if isinstance(current, list) else current[part]
             last = parts[-1]
             if isinstance(current, list):
-                current[int(last)] = "1.9.9"
+                current[int(last)] = "1.9.8"
             else:
-                current[last] = "1.9.9"
+                current[last] = "1.9.8"
             write_json(path, data)
 
             self.assert_preflight_denies_with_reason(repo, "manifest_versions_not_synchronized")
