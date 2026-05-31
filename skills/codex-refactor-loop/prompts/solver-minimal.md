@@ -120,9 +120,6 @@ Refactor (iter6/issue-118):
 - 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
 - Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
 
-可调:`gh issue/pr comment`、`gh pr edit --body-file`、`gh api .../reactions`、`mktemp`
-不可调:`git commit/push/checkout`、`gh pr create`、`gh pr merge`、`gh issue create/close`
-
 
 ---
 

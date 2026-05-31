@@ -54,9 +54,10 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 
 ## 你不能调的(controller 边界)
 
-- 任何 `git commit` / `git push` / `git checkout` / `git branch`
+- 任何 git topology / history mutation: `git commit` / `git push` / `git checkout` / `git branch` / `git merge` / `git reset` / `git rebase`
 - `gh pr create`(controller 创 PR;你只 comment / edit body)
 - `gh pr merge` / `gh pr close` / `gh issue create` / `gh issue close`(lifecycle 决策归 controller)
+- `gh issue edit --add-label` / `gh issue edit --remove-label` / `gh pr edit --add-label` / `gh pr edit --remove-label`(label 决策归 controller)
 - 改源码 / scope_paths(若你是 reviewer 你只看;若 fix-codex 见自己 prompt)
 - 调度其他 codex
 
