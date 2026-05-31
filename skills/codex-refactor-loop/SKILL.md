@@ -434,6 +434,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 - **Allowed git topology observation(issue #190 only)**: `git fetch origin --quiet`, `git -C <repo-root> worktree list --porcelain`, `git -C <worktree> rev-parse --verify HEAD`, `git -C <worktree> rev-parse --verify refs/remotes/origin/<head>`, and `git -C <worktree> rev-list --count refs/remotes/origin/<head>..HEAD`, solely for committed-but-unpushed worker output detection on open auto-loop PR heads. Committed `FIX_DONE` / `IMPLEMENT_DONE` output is not reviewer/CI visible until `origin/<head>` contains it; ahead local output emits actionable `UNPUSHED_WORKER_OUTPUT:<pr>:<n>`.
 - **Forbidden / no lifecycle authority**: no restart, no spawn, no git lifecycle or mutation commands, no checkout/switch, no branch create/delete/update, no worktree add/remove/prune, no commit, no push, no reset, no rebase, no merge, no label mutation, no issue/PR create-close-edit, no tag/release, and no GitHub lifecycle mutation.
 - **Hard-gate**: computes canonical `actual`, `target=max(CODEX_FLOOR, expected_from_active_tasks)`, `deficit=max(0,target-actual)`, and when `deficit>0` emits `HARD_GATE:dispatch_required=N` plus structured `hard_gate`; this is not advisory and requires dispatching enough ordered actionable tasks or legal audit fallback before ending the wakeup. There is no general low-floor exemption, and `AUDIT_DONE:none:0` still does not exempt the floor. The only single active audit boundary is when no actionable open work and no queue candidate exists, expected is 0, and the same-iteration `audit-iter-N` is already active; then the plan emits `WAIT:single-active-audit`, `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N` instead of duplicating the same audit; no duplicate same-iteration audit.
+- **Release countdown**: `crnd:milestone:release-target` may add a `release-countdown` status action sourced from release-gate scoring; release-countdown status is status-only and not dispatchable.
 - Output priority order mirrors the controller checklist: bootstrap or missing wake source, maintainer comment, unpushed worker output, completed `EXIT=0` marker, CI red, no-gap violation, `crnd:milestone:current` open issue/PR, ordinary open existing issue/PR, then producer or audit fixed-point recommendation.
 - If no actionable open work exists, it emits `RECOMMEND:audit`; ordinary audit is the floor fallback only when no same-iteration audit is already active.
 
@@ -603,6 +604,10 @@ Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#
 
 GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Legacy milestone labels are migration aliases only and must be normalized through `codex_refactor_loop.labels`.
 
+GitHub label `crnd:milestone:release-target` marks open catalog-managed issue/PRs whose existence should surface release countdown status. It is a non-exclusive milestone fact and may coexist with `crnd:milestone:current`; `crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself.
+
+Release countdown is wakeup-plan-only and read-only. `consensus-rnd-cli wakeup-plan` may append a status-only, non-dispatchable `release-countdown` action only when an open actionable managed issue/PR has `crnd:milestone:release-target`. Its fields come from the release-gate scoring source, `.version-bump.json`, and the existing release commits projection: `targets`, `from_version`, `to_version`, `stability_score`, `ready`, `red_signals`, `blocked_reasons`, `no_lifecycle_authority`, and `source: "release-gate"`. It must not create a daemon, write state, update statusline, update peek, create a top-level duplicate object, write a release decision, mutate labels, tag, publish a release, or add lifecycle authority.
+
 Milestone active means at least one open catalog-managed issue/PR carries `crnd:milestone:current`. Before any non-milestone existing-issue work or ordinary audit fallback, controller MUST first dispatch the next-step actor for milestone-labeled issue/PRs that lack in-flight codex coverage for their current phase label. Non-milestone design/audit work is downgraded while milestone is active; do not kill already-running non-milestone codexes solely because milestone became active.
 
 Only these actions stay above milestone priority: bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation. Correctness still wins: no-gap violation means an active item has no required worker and must be repaired before discretionary prioritization.
@@ -670,6 +675,11 @@ exactly-one phase/human, then remove aliases. Workers and daemons must not
 mutate labels except the #238 `closed-label-reconciler`, which may mutate only
 CLOSED `crnd:lifecycle:managed` item phase/cleanup/stuck labels into exactly
 one terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
+
+Label exclusivity is per `LabelSpec.exclusive_axis`, not per group. Phase and
+human labels remain exactly-one axes; non-exclusive catalog labels such as
+`crnd:milestone:current` and `crnd:milestone:release-target` may coexist when
+`LabelSpec.exclusive_axis is None`.
 
 ## `crnd:human:maintainer-decision` 严格语义(强制) <a id="human-label-strict-semantics"></a>
 

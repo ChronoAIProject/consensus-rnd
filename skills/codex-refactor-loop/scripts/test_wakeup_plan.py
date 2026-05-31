@@ -22,7 +22,13 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
-from codex_refactor_loop.wakeup_plan import resolve_repo_root  # noqa: E402
+from codex_refactor_loop.wakeup_plan import (  # noqa: E402
+    GhItem,
+    existing_issue_actions,
+    has_dispatchable_action,
+    release_countdown_actions,
+    resolve_repo_root,
+)
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -669,6 +675,101 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(actions[1]["item"], "PR #30")
         self.assertTrue(actions[0]["milestone"])
         self.assertFalse(actions[-1]["milestone"])
+
+    def test_release_countdown_ignores_absent_or_current_only_milestone_labels(self) -> None:
+        def scorer(_: Path) -> dict:
+            raise AssertionError("release scorer should not run without crnd:milestone:release-target")
+
+        no_target = [
+            GhItem("issue", 10, "ordinary", (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO)),
+            GhItem("issue", 20, "current", (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT)),
+        ]
+
+        self.assertEqual(release_countdown_actions(self.repo, no_target, scorer=scorer), [])
+
+    def test_release_countdown_projects_release_gate_score_without_dispatch_authority(self) -> None:
+        calls: list[Path] = []
+
+        def scorer(repo_root: Path) -> dict:
+            calls.append(repo_root)
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 75,
+                "ready": False,
+                "signals": {
+                    "required_checks_recent_green": {"passed": False, "reason": "pending_required_checks"},
+                    "fresh_heartbeats": {"passed": True},
+                },
+                "blocked_reasons": ["required_checks_recent_green", "min_interval"],
+            }
+
+        items = [
+            GhItem(
+                "issue",
+                344,
+                "release target",
+                (
+                    label_catalog.MANAGED,
+                    label_catalog.PHASE_IMPLEMENTING,
+                    label_catalog.HUMAN_AUTO,
+                    label_catalog.MILESTONE_CURRENT,
+                    label_catalog.MILESTONE_RELEASE_TARGET,
+                ),
+            ),
+            GhItem("PR", 345, "ordinary PR", (label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO)),
+        ]
+
+        actions = release_countdown_actions(self.repo, items, scorer=scorer)
+
+        self.assertEqual(calls, [self.repo])
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["kind"], "release-countdown")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["source"], "release-gate")
+        self.assertEqual(action["targets"], [{"kind": "issue", "number": 344, "item": "issue #344", "title": "release target"}])
+        self.assertEqual(action["from_version"], "1.2.3-beta.4")
+        self.assertEqual(action["to_version"], "1.2.3-beta.5")
+        self.assertEqual(action["stability_score"], 75)
+        self.assertFalse(action["ready"])
+        self.assertEqual(action["red_signals"], ["required_checks_recent_green"])
+        self.assertEqual(action["blocked_reasons"], ["required_checks_recent_green", "min_interval"])
+        self.assertFalse(has_dispatchable_action(actions))
+
+    def test_release_countdown_status_does_not_change_existing_issue_order(self) -> None:
+        def scorer(_: Path) -> dict:
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.4",
+                "stability_score": 100,
+                "ready": False,
+                "signals": {},
+                "blocked_reasons": ["no_commits_since_last_release"],
+            }
+
+        items = [
+            GhItem(
+                "issue",
+                20,
+                "current release target",
+                (
+                    label_catalog.MANAGED,
+                    label_catalog.PHASE_DESIGN_SOLVING,
+                    label_catalog.HUMAN_AUTO,
+                    label_catalog.MILESTONE_CURRENT,
+                    label_catalog.MILESTONE_RELEASE_TARGET,
+                ),
+            ),
+            GhItem("issue", 10, "ordinary", (label_catalog.MANAGED, label_catalog.PHASE_FIXING, label_catalog.HUMAN_AUTO)),
+        ]
+
+        combined = release_countdown_actions(self.repo, items, scorer=scorer) + existing_issue_actions(items, self.repo)
+        combined.sort(key=lambda action: action["priority"])
+
+        existing = [action for action in combined if action["kind"] == "existing-issue"]
+        self.assertEqual([action["item"] for action in existing], ["issue #20", "issue #10"])
 
     def test_existing_issue_routes_before_audit_fallback(self) -> None:
         plan = self.run_plan(fixture="existing")

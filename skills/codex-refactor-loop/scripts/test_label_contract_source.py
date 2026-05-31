@@ -106,6 +106,24 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertIn("Closed terminal protocol state", source)
         self.assertEqual(labels.PHASE_CLOSED, "crnd:phase:closed")
 
+    def test_release_target_label_contract_stays_in_milestone_catalog(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        labels_source = (SCRIPT_DIR / "codex_refactor_loop" / "labels.py").read_text(encoding="utf-8")
+        wakeup_source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        combined = "\n".join((skill, labels_source, wakeup_source))
+
+        self.assertEqual(labels.MILESTONE_RELEASE_TARGET, "crnd:milestone:release-target")
+        self.assertIn('_spec("milestone", "release-target", "Release countdown target issue/PR.", "f9d0c4")', labels_source)
+        self.assertIn('MILESTONE_RELEASE_TARGET = canonical_name("milestone", "release-target")', labels_source)
+        self.assertIn("crnd:milestone:release-target", skill)
+        self.assertIn("crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself", skill)
+        self.assertIn("Label exclusivity is per `LabelSpec.exclusive_axis`, not per group", skill)
+        self.assertNotIn("crnd:release-target", combined)
+        self.assertNotIn('"release"', labels_source)
+        self.assertNotIn("release-countdown.json", combined)
+        self.assertIn("label_catalog.MILESTONE_RELEASE_TARGET", wakeup_source)
+        self.assertNotIn("label_catalog.MILESTONE_CURRENT in projection.canonical", wakeup_source)
+
     def test_runtime_code_has_no_legacy_routing_literals_outside_catalog(self) -> None:
         allow = {
             SCRIPT_DIR / "codex_refactor_loop" / "labels.py",
