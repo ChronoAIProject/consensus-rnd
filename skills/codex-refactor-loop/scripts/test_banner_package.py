@@ -3,11 +3,8 @@
 
 from __future__ import annotations
 
-import io
 import os
-import subprocess
 import sys
-import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -16,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop import banners
 from codex_refactor_loop.banners import BannerRequest
-from codex_refactor_loop.context import LoopContext
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -79,91 +75,12 @@ class BannerPackageTests(unittest.TestCase):
             ["gh", "issue", "comment", "161", "--repo", "owner/repo", "--body-file", "/tmp/body.md"],
         )
 
-    def test_post_status_banner_writes_body_file_posts_and_removes_tempfile(self) -> None:
-        captured: dict[str, object] = {}
-
-        def fake_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
-            body_file = Path(command[-1])
-            captured["command"] = command
-            captured["body_file"] = body_file
-            captured["body"] = body_file.read_text(encoding="utf-8")
-            return subprocess.CompletedProcess(command, 0, "https://github.com/owner/repo/pull/160#issuecomment-1\n", "")
-
-        url = banners.post_status_banner(self.request(), repo_slug="owner/repo", command_runner=fake_runner)
-
-        self.assertEqual(url, "https://github.com/owner/repo/pull/160#issuecomment-1")
-        self.assertEqual(captured["command"][:4], ["gh", "pr", "comment", "160"])
-        self.assertIn("⟦AI:AUTO-LOOP⟧", str(captured["body"]))
-        self.assertFalse(Path(captured["body_file"]).exists())
-
-    def test_main_preserves_legacy_success_and_failure_stderr_contract(self) -> None:
-        success = subprocess.CompletedProcess(["gh"], 0, "https://example.test/comment\n", "")
-        stderr = io.StringIO()
-        with mock.patch.object(sys, "stderr", stderr):
-            code = banners.main(
-                [
-                    "--banner-target",
-                    "160",
-                    "--banner-kind",
-                    "pr",
-                    "--banner-role",
-                    "fix",
-                    "--banner-detail",
-                    "r2",
-                    "--log",
-                    "/tmp/fix.log",
-                    "--cd",
-                    "/repo/wt",
-                    "--stall",
-                    "60",
-                ],
-                command_runner=lambda command: success,
-            )
-        self.assertEqual(code, 0)
-        self.assertEqual(stderr.getvalue(), "BANNER_POSTED: pr #160 https://example.test/comment\n")
-
-        failure = subprocess.CompletedProcess(["gh"], 1, "", "denied\n")
-        stderr = io.StringIO()
-        with mock.patch.object(sys, "stderr", stderr):
-            code = banners.main(
-                [
-                    "--banner-target",
-                    "160",
-                    "--banner-kind",
-                    "pr",
-                    "--banner-role",
-                    "fix",
-                    "--log",
-                    "/tmp/fix.log",
-                    "--cd",
-                    "/repo/wt",
-                    "--stall",
-                    "60",
-                ],
-                command_runner=lambda command: failure,
-            )
-        self.assertEqual(code, 1)
-        self.assertEqual(stderr.getvalue(), "FAIL banner post: denied\n")
-
-    def test_host_env_repo_slug_resolution_reuses_loop_context_primitive(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            repo = Path(tmp)
-            host_env = repo / ".refactor-loop" / "host.env"
-            host_env.parent.mkdir(parents=True)
-            host_env.write_text(f"REPO_ROOT={repo}\nGH_REPO_SLUG=host/repo\n", encoding="utf-8")
-
-            ctx = LoopContext.load(repo_root=repo)
-
-        self.assertEqual(banners.repo_slug_from_context(ctx), "host/repo")
-
     def test_source_preserves_authorization_and_forbidden_lifecycle_tokens(self) -> None:
         source = PACKAGE_BANNERS.read_text(encoding="utf-8")
         for required in (
             "observability-comment-writers",
             "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53",
             "ROLE_NEXT_STEPS",
-            "BANNER_POSTED",
-            "FAIL banner post",
             "controller status banner",
             "⟦AI:AUTO-LOOP⟧",
             "TEST_ADD_DONE",
@@ -196,7 +113,29 @@ class BannerPackageTests(unittest.TestCase):
 
     def test_module_import_has_no_repo_root_side_effect(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
-            self.assertEqual(banners.repo_slug_from_context(env={}), None)
+            self.assertIn("implement", banners.ROLE_NEXT_STEPS)
+
+    def test_banner_module_has_no_public_posting_entrypoint_or_env_fallback(self) -> None:
+        source = PACKAGE_BANNERS.read_text(encoding="utf-8")
+        for required in (
+            "def build_status_banner(",
+            "def gh_comment_command(",
+            "AUTO_LOOP_SENTINEL",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        for forbidden in (
+            "def main(",
+            "argparse",
+            "load_optional_context",
+            "post_status_banner(",
+            "repo_slug_from_context",
+            "repo_slug_from_env",
+            "BANNER_POSTED",
+            "FAIL banner post",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
 
 if __name__ == "__main__":

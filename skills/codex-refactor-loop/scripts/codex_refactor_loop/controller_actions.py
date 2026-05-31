@@ -15,6 +15,7 @@ from typing import Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
+from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
@@ -142,6 +143,35 @@ class ControllerActions:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
         publisher = ReleasePublisher(self.ctx.repo_root)
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
+
+    def post_status_banner(self, request: BannerRequest) -> str:
+        self._require_owner_or_raise("post-banner")
+        target = self._normalize_lifecycle_target_or_raise(
+            request.target,
+            kind=request.kind,
+            action="post-banner",
+            source="argument",
+        )
+        normalized = BannerRequest(
+            target=target,
+            kind=request.kind,
+            role=request.role,
+            detail=request.detail,
+            log=request.log,
+            cd=request.cd,
+            stall=request.stall,
+        )
+        body = build_status_banner(normalized)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+            handle.write(body)
+            tmp = handle.name
+        try:
+            result = self.gh(gh_comment_command(normalized, Path(tmp))[1:], check=False)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"post_status_banner: {result.stderr.strip() or result.stdout.strip()}")
+        return result.stdout.strip()
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         if not self._require_owner_or_return("safe-sync-main", code=3):

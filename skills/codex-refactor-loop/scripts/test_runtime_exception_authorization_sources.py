@@ -699,6 +699,33 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         assert skill_allowlist is not None
         self.assertEqual(mirror_allowlist.group(0), skill_allowlist.group(0))
 
+    def test_banner_public_cli_removed_and_controller_action_owner_gated(self) -> None:
+        cli = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        banners = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "banners.py")
+        actions = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
+        observability_entry = mirror_entry(self.mirror, "observability-comment-writers-53")
+
+        self.assertNotIn('"post-banner": CommandSpec', cli)
+        self.assertNotIn("banners.main", cli)
+        for forbidden in ("def main(", "argparse", "load_optional_context", "post_status_banner("):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, banners)
+        for required in (
+            "def post_status_banner(self, request: BannerRequest) -> str:",
+            'self._require_owner_or_raise("post-banner")',
+            "_normalize_lifecycle_target_or_raise",
+            "gh_comment_command",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, actions)
+        for required in (
+            "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "not a cross-device write permit",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.skill)
+                self.assertIn(required, observability_entry)
+
 
 if __name__ == "__main__":
     unittest.main()

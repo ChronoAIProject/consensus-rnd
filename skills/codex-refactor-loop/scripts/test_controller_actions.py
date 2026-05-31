@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import ast
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
+from codex_refactor_loop.banners import BannerRequest
 from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
@@ -109,6 +111,84 @@ class ControllerActionsTests(unittest.TestCase):
     def pending_events(self) -> str:
         path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def banner_request(self, **overrides: object) -> BannerRequest:
+        values = {
+            "target": "77",
+            "kind": "pr",
+            "role": "implement",
+            "detail": "issue-371",
+            "log": "/tmp/implement-371.log",
+            "cd": "/repo/.worktrees/iter371-issue371",
+            "stall": 5400,
+        }
+        values.update(overrides)
+        return BannerRequest(**values)
+
+    def test_post_status_banner_owner_posts_after_active_controller_gate(self) -> None:
+        gh_calls: list[list[str]] = []
+        captured_body = ""
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            nonlocal captured_body
+            gh_calls.append(args)
+            body_path = Path(args[-1])
+            captured_body = body_path.read_text(encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77#issuecomment-1\n", stderr="")
+
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                url = self.actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(url, "https://github.com/owner/repo/pull/77#issuecomment-1")
+        self.assertEqual(gh_calls[0][:3], ["pr", "comment", "77"])
+        self.assertEqual(gh_calls[0][-2], "--body-file")
+        self.assertFalse(Path(gh_calls[0][-1]).exists())
+        self.assertIn("⟦AI:AUTO-LOOP⟧", captured_body)
+        status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("owner", status["active_controller"])
+        self.assertEqual("post-banner", status["action"])
+
+    def test_post_status_banner_non_owner_does_not_call_gh_or_create_tempfile(self) -> None:
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile", side_effect=AssertionError("tempfile should not be created")):
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner action=post-banner"):
+                        self.actions.post_status_banner(self.banner_request())
+
+        status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", status["active_controller"])
+        self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
+
+    def test_post_status_banner_invalid_target_blocks_before_tempfile_or_gh(self) -> None:
+        invalid_targets = ("", "0", "01", "https://github.com/owner/repo/pull/77", "refactor/branch")
+        for target in invalid_targets:
+            with self.subTest(target=target):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                with mock.patch("codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile", side_effect=AssertionError("tempfile should not be created")):
+                    with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                        with self.assertRaisesRegex(RuntimeError, "post-banner: invalid pr target from argument"):
+                            self.actions.post_status_banner(self.banner_request(target=target))
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:post-banner:pr:argument",
+                    self.pending_events(),
+                )
 
     # Refactor (iter276/issue-276): Old pattern: controller lifecycle targets
     # accepted empty or non-canonical GitHub ids before gh calls. New principle:
@@ -985,6 +1065,24 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
+
+    def test_status_banner_action_is_owner_gated_and_uses_gh_comment_command(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        method = text[text.index("def post_status_banner") : text.index("    def safe_sync_main")]
+        for needle in (
+            "def post_status_banner(self, request: BannerRequest) -> str:",
+            'self._require_owner_or_raise("post-banner")',
+            "_normalize_lifecycle_target_or_raise(",
+            "build_status_banner(normalized)",
+            "tempfile.NamedTemporaryFile",
+            "gh_comment_command(normalized, Path(tmp))",
+            "self.gh(",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        self.assertLess(method.index('self._require_owner_or_raise("post-banner")'), method.index("_normalize_lifecycle_target_or_raise("))
+        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index("tempfile.NamedTemporaryFile"))
+        self.assertLess(method.index("tempfile.NamedTemporaryFile"), method.index("self.gh("))
 
     def test_no_legacy_branch_alias_reads(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
