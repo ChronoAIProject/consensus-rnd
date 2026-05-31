@@ -373,6 +373,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(block=index):
                 self.assertNotRegex(block, r"(?<!\\)\$[0-9]")
 
+    # Refactor (issue-275): Old pattern: SKILL.md executable probes could carry raw positional shell parameters and clobber skill loading. New principle: source-regression locks the removal and the canonical CLI replacement wording.
     def test_issue275_shell_clobber_patterns_are_removed_from_skill(self) -> None:
         forbidden = (
             "comm -13",

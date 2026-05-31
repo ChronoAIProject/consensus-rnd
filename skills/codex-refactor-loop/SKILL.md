@@ -1838,6 +1838,7 @@ If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 
 ### Read the watch
 
+<!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
 Do not run a controller-authored shell poller for remote CI. Every controller wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`. For each red PR, the controller then reads the failed check details with `gh pr checks "$PR_NUMBER" --json name,bucket,state,link`, selects `bucket: fail`, and uses the check `name` plus `link` for the focused remote-CI fix route.
 
 The persistent daemon-event Monitor bridge remains the wake source for pending controller events; remote CI triage is driven by `consensus-rnd-cli wakeup-plan` output, not by an executable fenced shell watch in SKILL.md.
@@ -2635,6 +2636,7 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 
 **判定脚本**(controller wakeup step 1.5):
 
+<!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
 ```bash
 source .refactor-loop/host.env                              # 取 REPO_ROOT / CODEX_FLOOR
 FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2

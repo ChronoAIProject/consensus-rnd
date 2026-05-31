@@ -416,6 +416,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
 
+    # Refactor (issue-275): Old pattern: remote CI routing depended on inline shell poller marker text. New principle: behavior tests assert wakeup-plan emits structured ci-red actions without marker coupling.
     def test_ci_red_check_projection_requests_triage_fields_without_remote_ci_done_marker(self) -> None:
         plan = self.run_plan(fixture="ci_red")
 
