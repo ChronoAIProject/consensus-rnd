@@ -37,6 +37,13 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
 )
 
+# Refactor (iterissue-331/issue-331):
+#   Old pattern: release gate 与 wakeup_plan 各自维护本地 daemon-name literal(5/EXPECTED_DAEMONS),与 restart.py DAEMON_COMMANDS 漂移,违反事实源唯一
+#   New principle: restart.py::restart_managed_daemon_names() 作唯一 canonical daemon-name projection;release 保留 DAEMON_NAMES 仅 derived alias;wakeup 删 EXPECTED_DAEMONS;health 收紧为每个 restart-managed heartbeat 都 fresh
+def restart_managed_daemon_names() -> tuple[str, ...]:
+    return tuple(name for name, _command in DAEMON_COMMANDS)
+
+
 FORBIDDEN_LIFECYCLE_AUTHORITY = (
     "create/merge/close PR",
     "open/close issue",

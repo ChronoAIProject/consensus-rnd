@@ -20,6 +20,7 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import resolve_repo_root  # noqa: E402
 
@@ -272,13 +273,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         heartbeats = self.repo / ".refactor-loop" / "heartbeats"
         heartbeats.mkdir(parents=True, exist_ok=True)
         now = str(int(time.time()))
-        for name in (
-            "concurrency_monitor",
-            "comment-monitor",
-            "codex-progress-reporter",
-            "dev_sync_daemon",
-            "phase9_router_daemon",
-        ):
+        for name in restart_managed_daemon_names():
             (heartbeats / f"{name}.ts").write_text(now, encoding="utf-8")
 
     def run_plan(self, *, fixture: str = "empty", ps_count: int = 5, active_audit: bool = False) -> dict:
@@ -653,6 +648,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         health = plan["daemon_health"]
         self.assertTrue(all(item["name"] != "solver-output" for item in health["items"]))
         self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "missing" for item in health["items"]))
+        self.assertTrue(any(item["name"] == "closed_label_reconciler" and item["status"] == "missing" for item in health["items"]))
 
     def test_daemon_health_reports_stale_and_missing_with_restart_hint(self) -> None:
         heartbeats = self.repo / ".refactor-loop" / "heartbeats"
@@ -667,6 +663,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(health["recommendation"], "consensus-rnd-cli restart-daemons")
         self.assertTrue(any(item["name"] == "concurrency_monitor" and item["status"] == "stale" for item in health["items"]))
         self.assertTrue(any(item["status"] == "missing" for item in health["items"]))
+
+    def test_daemon_health_reports_closed_label_reconciler_missing(self) -> None:
+        (self.repo / ".refactor-loop" / "heartbeats" / "closed_label_reconciler.ts").unlink()
+
+        plan = self.run_plan()
+
+        health = plan["daemon_health"]
+        self.assertFalse(health["ok"])
+        self.assertTrue(
+            any(
+                item["name"] == "closed_label_reconciler" and item["status"] == "missing"
+                for item in health["items"]
+            )
+        )
 
     def test_deficit_calculates_from_floor_when_actual_below_target(self) -> None:
         plan, stdout = self.run_plan_with_stdout(ps_count=2)
