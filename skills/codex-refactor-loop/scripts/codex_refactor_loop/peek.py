@@ -59,7 +59,7 @@ class PeekStatusLens:
         lines.extend(self._spawn_drop())
         lines.extend(["", "▍Drift (label vs codex mismatch):"])
         lines.extend(self._drift())
-        lines.extend(["", "▍Stale worktree (branch merged and should be cleaned):"])
+        lines.extend(["", "▍Stale worktree (remote branch missing; cleanup is controller-owned):"])
         lines.extend(self._stale_worktrees())
         lines.extend(["", "▍Stuck too long (>6h without maintainer reply; consider 4h reflector re-evaluation):"])
         lines.extend(self._stuck_too_long())
@@ -258,6 +258,9 @@ class PeekStatusLens:
         return ManagedWorkProjection(items)
 
     def _stale_worktrees(self) -> list[str]:
+        # Refactor (iter/issue-332):
+        #   Old pattern: peek 只读 status lens 在输出里打印可复制的破坏性 lifecycle cleanup 命令(git worktree remove --force && git branch -D)
+        #   New principle: read-only lens 只报 fact 字段(path/branch/remote_missing/cleanup_owner/no_lifecycle_authority),lifecycle cleanup 命令只属授权 controller runbook;保留 stale worktree 只读检测
         out = []
         result = subprocess.run(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"], capture_output=True, text=True, check=False)
         current: Path | None = None
@@ -273,7 +276,10 @@ class PeekStatusLens:
             branch = line.removeprefix("branch refs/heads/")
             remote = subprocess.run(["git", "-C", str(self.ctx.repo_root), "ls-remote", "--exit-code", "--heads", "origin", branch], capture_output=True, text=True, check=False)
             if remote.returncode != 0:
-                out.append(f"  ⚠️ {current}  branch={branch}(remote no longer exists — git worktree remove {current} --force && git branch -D {branch})")
+                out.append(
+                    f"  ⚠️ path={current} branch={branch} remote_missing=true "
+                    "cleanup_owner=controller-runbook no_lifecycle_authority=true"
+                )
         return out
 
     def _stuck_too_long(self) -> list[str]:
