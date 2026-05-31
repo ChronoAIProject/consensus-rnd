@@ -200,6 +200,109 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
 
+    def test_phase9_router_legacy_r1_solver_triplet_dispatches_canonical_judge(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"solver-issue284-r1-{role}.log",
+                f"SOLVER_DONE:{role}:same:summary",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        joined = " ".join(self.commands[0])
+        self.assertIn("phase9-issue284-r1-judge.log", joined)
+        self.assertNotIn("meta-judge-issue284-r1.log", joined)
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["284-1-judge"])
+
+    def test_phase9_router_unledgered_target_log_suppression_appends_once(self) -> None:
+        self.solver_triplet(issue=284, round_no=1)
+        self.router._log_path("284", 1, "judge").write_text("reserved by controller fallback\n", encoding="utf-8")
+
+        self.router.tick()
+        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+        fresh_router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-triplet-suppression:284-1-judge")
+        self.assertEqual(event["reason"], "phase9-triplet-target-log-exists")
+        self.assertEqual(event["issue"], "284")
+        self.assertEqual(event["round"], 1)
+        self.assertEqual(event["route"], "solver_triplet_to_judge")
+        self.assertEqual(event["marker"], "SOLVER_DONE:triplet")
+        self.assertEqual(event["target_actor"], "judge")
+        self.assertEqual(event["log_path"], ".refactor-loop/logs/phase9-issue284-r1-judge.log")
+        self.assertIn("phase9-triplet-suppression:284-1-judge", fresh_router._fallback_seen)
+        self.assertEqual(self.pending_events().count("phase9-triplet-suppression:284-1-judge"), 1)
+
+    def test_phase9_router_triplet_equivalent_legacy_judge_log_suppression_appends_single_fallback(self) -> None:
+        self.solver_triplet(issue=284, round_no=1)
+        self.write_log("meta-judge-issue284-r1.log", "reserved by legacy judge log")
+
+        self.router.tick()
+        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+        fresh_router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-triplet-suppression:284-1-judge")
+        self.assertEqual(event["reason"], "phase9-triplet-equivalent-log-exists")
+        self.assertEqual(event["issue"], "284")
+        self.assertEqual(event["round"], 1)
+        self.assertEqual(event["route"], "solver_triplet_to_judge")
+        self.assertEqual(event["marker"], "SOLVER_DONE:triplet")
+        self.assertEqual(event["target_actor"], "judge")
+        self.assertEqual(event["log_path"], ".refactor-loop/logs/phase9-issue284-r1-judge.log")
+        self.assertIn("phase9-triplet-suppression:284-1-judge", fresh_router._fallback_seen)
+        self.assertEqual(self.pending_events().count("phase9-triplet-suppression:284-1-judge"), 1)
+
+    def test_phase9_router_triplet_in_flight_target_suppression_appends_single_fallback(self) -> None:
+        self.solver_triplet(issue=284, round_no=1)
+        target_log = self.router._log_path("284", 1, "judge")
+        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {target_log} --stall 3600\n"
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
+            self.router.tick()
+            fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+            fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+            fresh_router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-triplet-suppression:284-1-judge")
+        self.assertEqual(event["reason"], "phase9-triplet-in-flight")
+        self.assertEqual(event["issue"], "284")
+        self.assertEqual(event["round"], 1)
+        self.assertEqual(event["route"], "solver_triplet_to_judge")
+        self.assertEqual(event["marker"], "SOLVER_DONE:triplet")
+        self.assertEqual(event["target_actor"], "judge")
+        self.assertEqual(event["log_path"], ".refactor-loop/logs/phase9-issue284-r1-judge.log")
+        self.assertIn("phase9-triplet-suppression:284-1-judge", fresh_router._fallback_seen)
+        self.assertEqual(self.pending_events().count("phase9-triplet-suppression:284-1-judge"), 1)
+
+    def test_phase9_router_ledgered_triplet_duplicate_is_silent(self) -> None:
+        self.solver_triplet(issue=284, round_no=1)
+        self.write_ledger_key("284-1-judge")
+        self.router._log_path("284", 1, "judge").write_text("already dispatched\n", encoding="utf-8")
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["284-1-judge"])
+        self.assertEqual(self.pending_events(), "")
+
     def test_phase9_router_closed_issue_suppresses_triplet_to_judge_and_appends_skip_event(self) -> None:
         self.source_issue_states["37"] = "CLOSED"
         self.solver_triplet(issue=37, round_no=4)
@@ -949,10 +1052,18 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertNotIn("38-3-reflector", [entry["key"] for entry in self.ledger_entries()])
         events = self.pending_event_payloads()
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["key"], "phase9-source-eligibility:38-3-stalled_to_reflector")
-        self.assertEqual(events[0]["reason"], "phase9-source-not-open")
-        self.assertEqual(events[0]["route"], "stalled_to_reflector")
+        self.assertEqual(
+            {event["key"] for event in events},
+            {
+                "phase9-source-eligibility:38-3-stalled_to_reflector",
+                "phase9-triplet-suppression:38-3-judge",
+            },
+        )
+        by_key = {event["key"]: event for event in events}
+        self.assertEqual(by_key["phase9-source-eligibility:38-3-stalled_to_reflector"]["reason"], "phase9-source-not-open")
+        self.assertEqual(by_key["phase9-source-eligibility:38-3-stalled_to_reflector"]["route"], "stalled_to_reflector")
+        self.assertEqual(by_key["phase9-triplet-suppression:38-3-judge"]["reason"], "phase9-triplet-target-log-exists")
+        self.assertEqual(by_key["phase9-triplet-suppression:38-3-judge"]["route"], "solver_triplet_to_judge")
 
     def test_phase9_router_accepts_meta_judge_issue_log_for_stalled(self) -> None:
         for round_no in (1, 2, 3):

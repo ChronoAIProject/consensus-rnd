@@ -703,6 +703,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertFalse((router_path.parent / "decision.py").exists())
         self.assertNotIn("MetaJudgeRouteProjection", combined)
 
+    def test_phase9_solver_triplet_suppression_fallback_contract_source_regression(self) -> None:
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, router))
+
+        for token in (
+            "_solver_triplet_suppression_reason",
+            "_append_solver_triplet_suppression_event",
+            "phase9-triplet-suppression:",
+            "phase9-triplet-target-log-exists",
+            "phase9-triplet-equivalent-log-exists",
+            "phase9-triplet-in-flight",
+            "A solver-triplet-to-judge duplicate with `key` already in the ledger is silent",
+            "when the triplet is not ledgered but target log / equivalent legacy judge log / in-flight target suppresses dispatch",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, combined)
+
+        self.assertIn("if key in ledger:\n                continue", router)
+        self.assertIn("prefix `phase9-triplet-suppression:`", self.skill)
+        self.assertIn("reason exactly one of", self.skill)
+
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
     # Refactor (iter1/issue-140):
