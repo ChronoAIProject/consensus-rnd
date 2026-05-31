@@ -253,6 +253,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 #!/usr/bin/env bash
                 count="${WAKEUP_PLAN_PS_COUNT:-5}"
                 repo="${WAKEUP_PLAN_REPO_ROOT:?missing repo}"
+                if [[ -n "${WAKEUP_PLAN_PS_EXTRA:-}" ]]; then
+                  printf '%s\n' "$WAKEUP_PLAN_PS_EXTRA"
+                fi
                 if [[ "${WAKEUP_PLAN_ACTIVE_AUDIT:-0}" == "1" ]]; then
                   audit_iter="${WAKEUP_PLAN_AUDIT_ITER:-8}"
                   printf 'python3 /skill/consensus-rnd-cli spawn-codex --cd %s --prompt %s/.refactor-loop/prompts/audit-iter-%s.md --log %s/.refactor-loop/logs/audit-iter-%s.log\n' "$repo" "$repo" "$audit_iter" "$repo" "$audit_iter"
@@ -300,6 +303,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
             }
         )
+        if "WAKEUP_PLAN_PS_EXTRA" in os.environ:
+            env["WAKEUP_PLAN_PS_EXTRA"] = os.environ["WAKEUP_PLAN_PS_EXTRA"]
         result = subprocess.run(
             ["python3", str(WAKEUP_PLAN), "wakeup-plan", "--repo-root", str(self.repo)],
             cwd=self.repo,
@@ -342,6 +347,157 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "EXIT=0\n",
             encoding="utf-8",
         )
+
+    def append_harness_spawn_intent(self, **overrides: object) -> dict[str, object]:
+        intent: dict[str, object] = {
+            "intent_id": "phase9-router:330:4:judge",
+            "source": "phase9-router",
+            "route": "solver_triplet_to_judge",
+            "task_id": "phase9-issue330-r4-judge",
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md",
+            "log": ".refactor-loop/logs/phase9-issue330-r4-judge.log",
+            "stall": 3600,
+            "reason": "test intent",
+            "queued_at": "2026-05-31T00:00:00Z",
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        intent.update(overrides)
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(intent, sort_keys=True)}\n")
+        return intent
+
+    def append_raw_harness_spawn_intent(self, payload: str) -> None:
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {payload}\n")
+
+    def assert_harness_spawn_intent_invalid(self, expected_reason: str, **overrides: object) -> None:
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+        self.append_harness_spawn_intent(**overrides)
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+        self.assertEqual(action["reason"], expected_reason)
+
+    def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
+        self.append_harness_spawn_intent()
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent")
+        self.assertEqual(action["command"], "spawn-codex")
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["cd"], str(self.repo.resolve()))
+        self.assertEqual(action["prompt"], str((self.repo / ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md").resolve()))
+        self.assertEqual(action["log"], str((self.repo / ".refactor-loop/logs/phase9-issue330-r4-judge.log").resolve()))
+        self.assertTrue(action["run_in_background_required"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("argv", action)
+        self.assertNotIn("shell", action)
+
+    def test_harness_spawn_intent_rejects_argv_command_array(self) -> None:
+        self.append_harness_spawn_intent(command=["consensus-rnd-cli", "spawn-codex"])
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+        self.assertEqual(action["reason"], "command-not-spawn-codex")
+
+    def test_harness_spawn_intent_rejects_generic_command_fields(self) -> None:
+        forbidden_fields = ("argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor", "target_ref")
+        for field in forbidden_fields:
+            with self.subTest(field=field):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.append_harness_spawn_intent(intent_id=f"bad-{field}", **{field: "forbidden"})
+
+                plan = self.run_plan()
+
+                action = plan["actions"][0]
+                self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+                self.assertEqual(action["reason"], f"forbidden-fields:{field}")
+
+    def test_harness_spawn_intent_rejects_malformed_json_non_object_and_missing_id(self) -> None:
+        cases = (
+            ("{not-json", "invalid-json"),
+            ("[]", "intent-not-object"),
+            (json.dumps({"command": "spawn-codex"}), "missing-intent-id"),
+        )
+        for payload, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.append_raw_harness_spawn_intent(payload)
+
+                plan = self.run_plan()
+
+                action = plan["actions"][0]
+                self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+                self.assertEqual(action["reason"], expected_reason)
+
+    def test_harness_spawn_intent_rejects_missing_path_fields_and_bad_path(self) -> None:
+        for field in ("cd", "prompt", "log"):
+            with self.subTest(field=field):
+                self.assert_harness_spawn_intent_invalid(f"missing-{field}", **{field: ""})
+
+        self.assert_harness_spawn_intent_invalid(
+            "invalid-path:artifact path must be repo-relative POSIX text: '../outside'",
+            cd="../outside",
+        )
+
+    def test_harness_spawn_intent_rejects_invalid_stall_and_required_flags(self) -> None:
+        cases = (
+            ("controller-action-not-spawn-codex-background", {"controller_action": "spawn_codex_now"}),
+            ("invalid-stall", {"stall": "not-an-int"}),
+            ("invalid-stall", {"stall": 0}),
+            ("missing-background-requirement", {"run_in_background_required": False}),
+            ("missing-no-lifecycle-authority", {"no_lifecycle_authority": False}),
+        )
+        for expected_reason, overrides in cases:
+            with self.subTest(expected_reason=expected_reason):
+                self.assert_harness_spawn_intent_invalid(expected_reason, **overrides)
+
+    def test_harness_spawn_intent_dedupes_and_filters_existing_or_in_flight_log(self) -> None:
+        self.append_harness_spawn_intent(intent_id="duplicate")
+        self.append_harness_spawn_intent(intent_id="duplicate")
+        self.append_harness_spawn_intent(
+            intent_id="existing-log",
+            task_id="existing-log",
+            log=".refactor-loop/logs/existing-log.log",
+        )
+        (self.logs / "existing-log.log").write_text("already exists\n", encoding="utf-8")
+        self.append_harness_spawn_intent(
+            intent_id="in-flight",
+            task_id="in-flight",
+            log=".refactor-loop/logs/in-flight.log",
+        )
+        os.environ["WAKEUP_PLAN_PS_EXTRA"] = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} "
+            f"--prompt {self.repo.resolve()}/.refactor-loop/prompts/in-flight.md "
+            f"--log {self.repo.resolve()}/.refactor-loop/logs/in-flight.log"
+        )
+        try:
+            plan = self.run_plan()
+        finally:
+            os.environ.pop("WAKEUP_PLAN_PS_EXTRA", None)
+
+        actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
+        self.assertEqual([action["intent_id"] for action in actions], ["duplicate"])
+
+    def test_wakeup_plan_uses_concurrency_monitor_for_spawn_intent_in_flight_detection(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
+        self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
+        self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
 
     def test_completed_marker_routes_before_ci_red(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")

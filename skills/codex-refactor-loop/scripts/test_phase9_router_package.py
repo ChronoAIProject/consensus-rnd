@@ -31,7 +31,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
-        self.commands: list[list[str]] = []
+        self.commands: list[dict[str, object]] = []
         self.ctx = LoopContext.load(repo_root=self.repo)
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
@@ -57,6 +57,9 @@ class Phase9RouterPackageTests(unittest.TestCase):
 
     def open_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
         return Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")
+
+    def intent_text(self, intent: dict[str, object]) -> str:
+        return json.dumps(intent, ensure_ascii=False, sort_keys=True)
 
     def write_host_policy(self, *, invalid: bool = False) -> LoopContext:
         (self.repo / "prompts").mkdir(exist_ok=True)
@@ -95,12 +98,12 @@ class Phase9RouterPackageTests(unittest.TestCase):
         (self.repo / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
         return LoopContext.load(repo_root=self.repo, env={"REPO_ROOT": str(self.repo), "HOST_WORKFLOW_SPEC": "workflow.json"})
 
-    def test_package_router_uses_loop_context_paths_and_legacy_spawn_script(self) -> None:
+    def test_package_router_uses_loop_context_paths(self) -> None:
         self.assertEqual(self.router.loop_dir, self.ctx.paths.refactor_loop)
         self.assertEqual(self.router.logs_dir, self.ctx.paths.logs)
         self.assertEqual(self.router.prompts_dir, self.ctx.paths.prompts / "phase9")
         self.assertEqual(self.router.pending_events_path, self.ctx.paths.pending_events)
-        self.assertEqual(self.router.spawn_codex, self.ctx.skill_root / "scripts" / "consensus-rnd-cli")
+        self.assertFalse(hasattr(self.router, "spawn_codex"))
 
     def test_package_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -110,9 +113,9 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        joined = " ".join(self.commands[0])
+        joined = self.intent_text(self.commands[0])
         self.assertIn("phase9-issue160-r3-judge.log", joined)
-        self.assertIn(str(self.ctx.skill_root / "scripts" / "consensus-rnd-cli"), joined)
+        self.assertEqual(self.commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
 
     # Refactor (impl/issue191-single-active-controller): Old pattern: every
@@ -140,7 +143,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue149-r3-minimal.log", logs)
         self.assertIn("phase9-issue149-r3-structural.log", logs)
         self.assertIn("phase9-issue149-r3-delete.log", logs)
@@ -163,7 +166,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue244-r7-minimal.log", logs)
         self.assertIn("phase9-issue244-r7-structural.log", logs)
         self.assertIn("phase9-issue244-r7-delete.log", logs)
@@ -229,7 +232,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
 
         reflector_commands = [
-            command for command in self.commands if "phase9-issue160-r3-reflector.log" in " ".join(command)
+            command for command in self.commands if "phase9-issue160-r3-reflector.log" in self.intent_text(command)
         ]
         self.assertEqual(len(reflector_commands), 1)
         self.assertIn("160-3-reflector", [entry["key"] for entry in self.ledger_entries()])
@@ -256,7 +259,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue219-r1-judge.log", " ".join(self.commands[0]))
+        self.assertIn("phase9-issue219-r1-judge.log", self.intent_text(self.commands[0]))
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["219-1-judge"])
         self.assertEqual(self.pending_events(), "")
 
@@ -270,7 +273,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue220-r1-judge.log", " ".join(self.commands[0]))
+        self.assertIn("phase9-issue220-r1-judge.log", self.intent_text(self.commands[0]))
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["220-1-judge"])
         self.assertEqual(self.pending_events(), "")
 
@@ -400,7 +403,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
     def test_package_main_once_dispatches_via_absolute_repo_root(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(f"phase9-issue160-r5-{role}.log", f"SOLVER_DONE:{role}:same:summary")
-        commands: list[list[str]] = []
+        commands: list[dict[str, object]] = []
 
         with mock.patch.object(
             Phase9Router,

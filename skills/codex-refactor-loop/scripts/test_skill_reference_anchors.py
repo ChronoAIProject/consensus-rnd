@@ -391,7 +391,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
     def test_skill_documents_phase9_router_daemon_boundary(self) -> None:
         self.assertIn("consensus-rnd-cli phase9-router --daemon --repo-root", self.skill)
-        self.assertIn("Allowlist(唯一 direct spawn authority)", self.skill)
+        self.assertIn("Allowlist(唯一 direct spawn-intent authority)", self.skill)
         self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.skill)
         self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.skill)
         self.assertIn("meta-judge-issue<N>-r<R>.log", self.skill)
@@ -417,6 +417,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "missing template",
             "phase9-meta-judge-template-unavailable",
             "phase9-meta-judge-scope-invalid",
+            "HARNESS_SPAWN_INTENT",
+            '`command` field is exactly `"spawn-codex"` as a closed semantic enum',
+            "not argv and not shell",
+            "actual CLI binary and argv construction live only in the controller/harness consumption layer",
+            'dispatch_state="harness-intent"',
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.skill)
@@ -427,7 +432,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("phase9-source-not-open", self.skill)
         self.assertIn("phase9-source-state-unavailable", self.skill)
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
-        self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+        self.assertIn("must not introduce ControllerEvent, ControllerCommand, SpawnIntentInbox, spawn-intents, ControllerOrchestrator", self.skill)
 
     def test_meta_judge_prompt_documents_router_scoped_input_boundary(self) -> None:
         meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
@@ -697,7 +702,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "First-version scope is bounded",
             "not a DAG executor",
             "does not create public marker aliases",
-            "router direct-spawn ignores host `roles`, `dispatch`, and `consensus_policies` completely",
+            "router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely",
             "always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`",
         ):
             with self.subTest(needle=needle):
@@ -731,7 +736,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, FORBIDDEN_FIELD_NAMES)
 
-    def test_phase9_direct_spawn_allowlist_ignores_host_workflow_spec_sources(self) -> None:
+    def test_phase9_direct_spawn_intent_allowlist_ignores_host_workflow_spec_sources(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         router_section = router[router.index("class Phase9Router") :]
         heading = "### Consensus-rnd Phase design-consensus router daemon command body"
@@ -740,11 +745,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         contract_section = self.skill[start:end]
 
         for token in (
-            "HostWorkflowSpec is not a phase9 direct-spawn authority",
+            "HostWorkflowSpec is not a phase9 direct-spawn-intent authority",
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "SOLVER_DONE:<minimal|structural|delete>:*",
-            "before spawning r(S+1) minimal/structural/delete solvers",
+            "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
             "suppress next solvers",
         ):
@@ -756,7 +761,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "JUDGE_ROLE = \"judge\"",
             "return ROLES",
             "return JUDGE_ROLE",
-            "Phase9 direct-spawn ignores HostWorkflowSpec role/dispatch/policy data entirely",
+            "Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, router)
