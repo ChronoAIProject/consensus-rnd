@@ -231,6 +231,37 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
         self.assertEqual(self.ledger_entries()[0]["dispatch_state"], "harness-intent")
 
+    def test_phase9_router_default_runner_appends_parseable_spawn_intent_event(self) -> None:
+        self.solver_triplet(issue=330, round_no=4)
+        default_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo))
+
+        with mock.patch.object(
+            Phase9Router,
+            "_read_source_issue_decision",
+            return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
+        ):
+            default_router.tick()
+
+        intent_lines = [
+            line for line in self.pending_events().splitlines() if " HARNESS_SPAWN_INTENT " in line
+        ]
+        self.assertEqual(len(intent_lines), 1)
+        intent = json.loads(intent_lines[0].split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(intent["cd"], ".")
+        self.assertEqual(intent["prompt"], ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md")
+        self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue330-r4-judge.log")
+        self.assertTrue(intent["run_in_background_required"])
+        self.assertTrue(intent["no_lifecycle_authority"])
+        for forbidden in ("argv", "shell", "cmd"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, intent)
+        ledger = self.ledger_entries()
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["key"], "330-4-judge")
+        self.assertEqual(ledger[0]["dispatch_state"], "harness-intent")
+
     def test_phase9_router_legacy_r1_solver_triplet_dispatches_canonical_judge(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
