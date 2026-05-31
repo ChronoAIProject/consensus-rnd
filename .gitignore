@@ -15,7 +15,8 @@ node_modules/
 # Git worktrees(skill 运行时可能创建)
 /.worktrees/
 
-# Claude Code 本地设置(.claude/skills 软链需 track,故只忽略本地设置)
+# Claude Code local setup
+.claude/skills
 .claude/settings.json
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
