@@ -30,7 +30,7 @@ class FloorFillNotOptionalTests(unittest.TestCase):
 
     def test_refactor_self_doc_block_present(self) -> None:
         self.assertIn(
-            "Refactor (iter4/skill-floor-fill-not-optional)",
+            "Refactor (issue-277)",
             self.section,
             "Refactor self-doc block must remain present",
         )
@@ -51,19 +51,28 @@ class FloorFillNotOptionalTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, self.section)
         self.assertIn("deficit>0", self.section)
-        self.assertIn("no exemption", self.section)
+        self.assertIn("no general exemption", self.section)
         self.assertIn("audit fallback", self.section)
+        self.assertIn("one same-iteration active slot", self.section)
+        self.assertIn("WAIT:single-active-audit", self.section)
+        self.assertIn("blocked_deficit", self.section)
 
     def test_none_zero_no_longer_stops_floor_refill(self) -> None:
         for required in (
             "AUDIT_DONE:none:0",
-            "no longer exempts",
+            "still does not exempt",
             "RECOMMEND:audit",
             "HARD_GATE:dispatch_required=N",
+            "no duplicate same-iteration audit",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, self.section)
         self.assertNotIn("CONCURRENCY_LOW:no-work-after-audit-none", self.section)
+
+    def test_issue277_does_not_add_lane_protocol(self) -> None:
+        for forbidden in ("AuditLaneIdentity", "AUDIT_LANE_ID", "audit-iter-N-laneK"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
 
     def test_rationalization_wording_blocked(self) -> None:
         # Typical defer wording must stay explicitly blocked before the fixed point.

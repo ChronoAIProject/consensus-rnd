@@ -327,6 +327,34 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
 
+    def test_tick_queue_empty_active_audit_writes_wait_event(self) -> None:
+        active_audit = (
+            f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
+            f"--prompt {self.refactor_loop}/prompts/audit-iter-8.md "
+            f"--log {self.refactor_loop}/logs/audit-iter-8.log"
+        )
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            "WAIT:single-active-audit:dispatch_required=0:actual=1 expected=0 queue=0 blocked_deficit=1",
+            events,
+        )
+        self.assertNotIn("HARD_GATE:dispatch_required=1", events)
+
+    def test_tick_queue_empty_no_active_audit_still_writes_positive_hard_gate(self) -> None:
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
+                with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[]):
+                    self.monitor.tick()
+
+        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
+        self.assertNotIn("WAIT:single-active-audit", events)
+
     def test_monitor_archives_dispatched_json_with_timestamp(self) -> None:
         self.write_dispatch("p0", "fix-pr44-round-3", reason="PR #44 r3 fix needed")
         calls: list[list[str]] = []

@@ -248,15 +248,23 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "no GitHub lifecycle mutation",
             "`RECOMMEND:audit`",
             "`AUDIT_DONE:none:0` no longer exempts",
+            "`AUDIT_DONE:none:0` still does not exempt",
             "deficit hard-gate",
-            "controller 不得带 `deficit>0` 结束唤醒",
+            "no general low-floor exemption",
             "`HARD_GATE:dispatch_required=N`",
+            "`WAIT:single-active-audit`",
+            "`reason=single_active_audit_in_flight`",
+            "`blocked_deficit=N`",
+            "no duplicate same-iteration audit",
             "structured `hard_gate`",
             "not advisory",
             "`consensus-rnd-cli peek` is a status lens",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
+        for forbidden in ("AuditLaneIdentity", "AUDIT_LANE_ID", "audit-iter-N-laneK"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, combined)
 
     def test_wakeup_plan_script_declares_allowed_forbidden_boundary(self) -> None:
         script = read(PACKAGE_WAKEUP_PLAN)

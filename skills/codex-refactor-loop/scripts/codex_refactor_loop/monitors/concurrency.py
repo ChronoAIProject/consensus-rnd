@@ -9,9 +9,10 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
@@ -37,8 +38,17 @@ MAIN_READONLY_DISPATCH_PATTERNS = (
 )
 
 PHASE_EXPECTED = {label: label_catalog.phase_expected_workers(label) for label in label_catalog.labels_for_group("phase")}
+AUDIT_TASK_ID_RE = re.compile(r"(?<![A-Za-z0-9_-])(audit-iter-[0-9]+)(?:\.log|\.md|\b)")
 
 _DEFAULT_MONITOR: ConcurrencyMonitor | None = None
+
+
+@dataclass(frozen=True)
+class Boundary:
+    """refactor helper, no behavior change"""
+
+    task_id: str
+    evidence: str
 
 
 def utc_ts() -> str:
@@ -52,6 +62,54 @@ def log(msg: str) -> None:
 
 def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(cmd), capture_output=True, text=True, check=False)
+
+
+def _queue_state_empty(repo_root: Path, monitor: Any | None, queue_state: Any | None) -> bool:
+    if isinstance(queue_state, bool):
+        return queue_state
+    if isinstance(queue_state, (list, tuple, set, dict)):
+        return len(queue_state) == 0
+    if monitor is not None:
+        try:
+            return bool(monitor.dispatch_queue_empty())
+        except Exception:
+            pass
+    queue_root = repo_root / ".refactor-loop" / "dispatch-queue"
+    if not queue_root.exists():
+        return True
+    return not any(queue_root.glob("*/*.dispatch.json"))
+
+
+def _active_audit_task_from_lines(lines: Sequence[str]) -> Boundary | None:
+    for line in lines:
+        match = AUDIT_TASK_ID_RE.search(line)
+        if match:
+            return Boundary(task_id=match.group(1), evidence=line)
+    return None
+
+
+def single_active_audit_boundary(
+    repo_root: Path,
+    monitor: Any | None,
+    gh_items: Any | None,
+    queue_state: Any | None,
+) -> Boundary | None:
+    # Refactor (issue-277):
+    #   Old pattern: floor deficits treated audit fallback as endlessly repeatable.
+    #   New principle: one active same-iteration audit occupies the only ordinary
+    #   fallback slot; callers expose blocked capacity without duplicate audit.
+    del gh_items
+    if not _queue_state_empty(repo_root, monitor, queue_state):
+        return None
+    lines: list[str] = []
+    if monitor is not None:
+        try:
+            lines = list(monitor.list_in_flight_codex_lines())
+        except Exception:
+            lines = []
+    if not lines:
+        return None
+    return _active_audit_task_from_lines(lines)
 
 
 class ConcurrencyMonitor:
@@ -523,7 +581,17 @@ class ConcurrencyMonitor:
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
-                if owner_allowed:
+                boundary = None
+                if expected == 0:
+                    boundary = single_active_audit_boundary(self.repo_root, self, items, True)
+                if owner_allowed and boundary is not None:
+                    event = (
+                        "WAIT:single-active-audit:dispatch_required=0:"
+                        f"actual={actual} expected={expected} queue=0 blocked_deficit={deficit}"
+                    )
+                    self.write_pending_event(event)
+                    log(event)
+                elif owner_allowed:
                     self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                 else:

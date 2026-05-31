@@ -237,6 +237,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 #!/usr/bin/env bash
                 count="${WAKEUP_PLAN_PS_COUNT:-5}"
                 repo="${WAKEUP_PLAN_REPO_ROOT:?missing repo}"
+                if [[ "${WAKEUP_PLAN_ACTIVE_AUDIT:-0}" == "1" ]]; then
+                  audit_iter="${WAKEUP_PLAN_AUDIT_ITER:-8}"
+                  printf 'python3 /skill/consensus-rnd-cli spawn-codex --cd %s --prompt %s/.refactor-loop/prompts/audit-iter-%s.md --log %s/.refactor-loop/logs/audit-iter-%s.log\n' "$repo" "$repo" "$audit_iter" "$repo" "$audit_iter"
+                fi
                 i=0
                 while [[ "$i" -lt "$count" ]]; do
                   printf 'python3 /skill/consensus-rnd-cli spawn-codex --cd %s/.worktrees/task-%s --log %s/.refactor-loop/logs/task-%s.log\n' "$repo" "$i" "$repo" "$i"
@@ -262,10 +266,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ):
             (heartbeats / f"{name}.ts").write_text(now, encoding="utf-8")
 
-    def run_plan(self, *, fixture: str = "empty", ps_count: int = 5) -> dict:
-        return self.run_plan_with_stdout(fixture=fixture, ps_count=ps_count)[0]
+    def run_plan(self, *, fixture: str = "empty", ps_count: int = 5, active_audit: bool = False) -> dict:
+        return self.run_plan_with_stdout(fixture=fixture, ps_count=ps_count, active_audit=active_audit)[0]
 
-    def run_plan_with_stdout(self, *, fixture: str = "empty", ps_count: int = 5) -> tuple[dict, str]:
+    def run_plan_with_stdout(
+        self,
+        *,
+        fixture: str = "empty",
+        ps_count: int = 5,
+        active_audit: bool = False,
+    ) -> tuple[dict, str]:
         env = os.environ.copy()
         env.update(
             {
@@ -274,6 +284,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "GH_REPO_SLUG": "owner/repo",
                 "WAKEUP_PLAN_GH_FIXTURE": fixture,
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
+                "WAKEUP_PLAN_ACTIVE_AUDIT": "1" if active_audit else "0",
                 "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
                 "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
                 "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
@@ -588,6 +599,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
+    def test_single_active_audit_boundary_reports_wait_not_positive_hard_gate(self) -> None:
+        plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
+
+        self.assertEqual(plan["concurrency"]["actual"], 1)
+        self.assertEqual(plan["concurrency"]["deficit"], 4)
+        self.assertEqual(plan["recommendation"], "WAIT:single-active-audit")
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertEqual(plan["hard_gate"]["reason"], "single_active_audit_in_flight")
+        self.assertEqual(plan["hard_gate"]["blocked_deficit"], 4)
+        self.assertEqual(plan["hard_gate"]["boundary_task_id"], "audit-iter-8")
+        self.assertNotIn("HARD_GATE:dispatch_required=4", stdout)
+
+    def test_no_active_audit_after_audit_done_none_still_recommends_audit(self) -> None:
+        (self.logs / "audit-iter-8.log").write_text(
+            "AUDIT_DONE:none:0\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(ps_count=0)
+
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertEqual(plan["hard_gate"]["reason"], None)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+
+    def test_open_or_queued_work_bypasses_single_audit_wait(self) -> None:
+        plan, stdout = self.run_plan_with_stdout(fixture="existing", ps_count=0, active_audit=True)
+
+        self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
+        self.assertEqual(plan["hard_gate"]["reason"], None)
+        self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
+        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
 
     def test_all_wakeup_actions_emit_registered_phase_slugs(self) -> None:
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").unlink()
