@@ -94,8 +94,8 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$GH_REPO_NAME` | compatibility | LoopContext | optional repo-name fallback | noop when `$GH_REPO_SLUG` is present; used only with `$GH_OWNER` compatibility construction | LoopContext | `test_loop_context.py` |
 | `$BUILD_CMD` | required | LoopContext | host shell command string | fail closed for build-required work; callers must execute with `bash -lc "$BUILD_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$TEST_CMD` | required | LoopContext | host shell command string | fail closed for test-required work; callers must execute with `bash -lc "$TEST_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
-| `$INTEGRATION_BRANCH` | defaulted | sync helpers | `auto-refact-dev` | default to `auto-refact-dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
-| `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$INTEGRATION_BRANCH` | required | sync helpers | host integration branch name | fail closed when missing or empty; never infer host branch topology or default to a product branch | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$REVIEW_BASE_BRANCH` | required | sync helpers | host review-base branch name | fail closed when missing or empty; never infer host branch topology or default to a product branch | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
 | `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | host-owned comma-separated exact check-run names, e.g. `ci,lint,typecheck` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
@@ -1581,17 +1581,17 @@ There is no root `.refactor-loop/state.json` bootstrap schema. Work-unit recover
 GitHub labels/comments, clean `EXIT=0` log tails, prompt artifacts, git topology, and named
 producer-owned state artifacts.
 
-**Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
+**Integration branch setup**: `$INTEGRATION_BRANCH` and `$REVIEW_BASE_BRANCH` are required host.env facts. The integration branch is the long-lived branch where all auto-refactor cluster PRs land before rolling up to the review base. On a fresh loop:
 
 ```bash
-# Idempotent setup — safe to re-run
+test -n "${INTEGRATION_BRANCH:-}" && test -n "${REVIEW_BASE_BRANCH:-}"
 git fetch origin
-git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
-  || git checkout -b auto-refact-dev origin/dev
-git push -u origin auto-refact-dev 2>/dev/null || true
+git checkout -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null \
+  || git checkout -b "$INTEGRATION_BRANCH" "origin/$REVIEW_BASE_BRANCH"
+git push -u origin "$INTEGRATION_BRANCH" 2>/dev/null || true
 ```
 
-Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies only to **new** Consensus-rnd Phase bootstrap runs.
+Do not infer branch names from this skill. Existing loops keep their host.env branch names; missing or empty branch variables fail closed before bootstrap, sync, PR creation, release-commit projection, or release-gate branch checks.
 
 **`pr_mode` choice (set in Consensus-rnd Phase bootstrap; do not change mid-loop)**:
 
@@ -1783,10 +1783,10 @@ git pull --ff-only origin auto-refact-dev
 bash -lc "$BUILD_CMD"
 ```
 
-若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):
+若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 `$INTEGRATION_BRANCH`,不开 PR):
 - 在 `$REPO_ROOT/.worktrees/hotfix-trunk` worktree 跑 codex 修
 - 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iterN hotfix 模板)
-- IMPLEMENT_DONE marker + controller commit/push 到 auto-refact-dev 直接
+- IMPLEMENT_DONE marker + controller commit/push 到 `$INTEGRATION_BRANCH` 直接
 
 结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
 
@@ -2767,9 +2767,9 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 Policy:controller must sync with remote promptly before deriving GitHub and branch state.
 
-- After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
+- After EVERY skill edit that affects controller behavior, `git commit && git push origin "$INTEGRATION_BRANCH"` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
 - After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / maintainer all need to see latest state, not yesterday's local state.
-- Consensus-rnd Phase integration-sync sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
+- Consensus-rnd Phase integration-sync sync (`$INTEGRATION_BRANCH` ← `origin/$REVIEW_BASE_BRANCH`) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
 - Consensus-rnd Phase ci-watch CI watch reads `consensus-rnd-cli pr-checks`
   (PR-head Checks API projection, always remote), never a local cached value.
 - Consensus-rnd Phase design-intake/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.

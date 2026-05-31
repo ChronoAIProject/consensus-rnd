@@ -15,10 +15,6 @@ from ..context import LoopContext
 from .operations import IntegrationSyncOperation, IntegrationSyncOperationError
 
 
-DEFAULT_INTEGRATION_BRANCH = "auto-refact-dev"
-DEFAULT_REVIEW_BASE_BRANCH = "dev"
-
-
 @dataclass(frozen=True)
 class SyncExecutionResult:
     status: str
@@ -89,10 +85,24 @@ class IntegrationSyncExecutor:
         staged = command_runner(["git", "diff", "--cached", "--quiet"], worktree)
         return unstaged.returncode == 0 and staged.returncode == 0, False
 
-    def _expected_branches(self, env: dict[str, str] | None = None) -> tuple[str, str]:
-        source_env = os.environ if env is None else env
-        expected_integration = source_env.get("INTEGRATION_BRANCH") or DEFAULT_INTEGRATION_BRANCH
-        expected_review_base = source_env.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH
+    def _expected_branches(self, env: dict[str, str] | None = None, cwd: Path | str | None = None) -> tuple[str, str]:
+        source_env = dict(os.environ if env is None else env)
+        host_env: dict[str, str] = {}
+        if not (str(source_env.get("INTEGRATION_BRANCH", "")).strip() and str(source_env.get("REVIEW_BASE_BRANCH", "")).strip()):
+            try:
+                host_env = LoopContext.load(env=source_env, cwd=cwd or os.getcwd()).host_env
+            except Exception:
+                host_env = {}
+        merged_env = {**source_env, **host_env}
+        expected_integration = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
+        expected_review_base = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
+        missing = [
+            name
+            for name, value in (("INTEGRATION_BRANCH", expected_integration), ("REVIEW_BASE_BRANCH", expected_review_base))
+            if not value
+        ]
+        if missing:
+            raise IntegrationSyncOperationError(f"missing required host branch env: {', '.join(missing)}")
         return expected_integration, expected_review_base
 
     def _validate_common(
@@ -107,7 +117,7 @@ class IntegrationSyncExecutor:
         command_runner = command_runner or run
         if self._applied_record(repo, operation).exists():
             raise IntegrationSyncOperationError("already-executed")
-        expected_integration, expected_review_base = self._expected_branches(env)
+        expected_integration, expected_review_base = self._expected_branches(env, cwd=repo)
         if operation.integration_branch != expected_integration:
             raise IntegrationSyncOperationError("branch mismatch: integration")
         if operation.review_base_branch != expected_review_base:
