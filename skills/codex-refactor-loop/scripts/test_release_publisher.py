@@ -155,6 +155,21 @@ def manifest_mismatch_result(repo: Path, version: str = "2.0.0-beta.4") -> Publi
     )
 
 
+def mixed_manifest_mismatch_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPreflightResult:
+    result = allowed_result(repo, version=version)
+    return PublishPreflightResult(
+        allowed=False,
+        reasons=("manifest_version_mismatch", "host_opt_in_not_true"),
+        candidate=result.candidate,
+        decision=result.decision,
+        candidate_path=result.candidate_path,
+        decision_path=result.decision_path,
+        target_ref=result.target_ref,
+        version=result.version,
+        candidate_digest=result.candidate_digest,
+    )
+
+
 def set_mapped_version(repo: Path, version: str) -> None:
     mapping = read_json(repo / ".version-bump.json")
     assert isinstance(mapping, dict)
@@ -357,6 +372,26 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["target_ref"], "bumpcommit456")
+
+    def test_already_bumped_reentry_denies_mixed_manifest_mismatch_reasons_without_commands(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.head_subject = "Release v2.0.0-beta.4"
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(mixed_manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertFalse(result.published)
+            self.assertEqual(result.reasons, ("manifest_version_mismatch", "host_opt_in_not_true"))
+            self.assertEqual(runner.commands, [])
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_already_bumped_reentry_pending_fails_closed_without_result_and_can_retry_green(self) -> None:
         with copy_repo_fixture() as tmp:
