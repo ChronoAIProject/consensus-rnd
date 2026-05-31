@@ -366,6 +366,36 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertNotIn("peek --json", self.skill)
         self.assertNotIn("`--json`", read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py"))
 
+    def test_executable_shell_blocks_do_not_embed_raw_positional_parameters(self) -> None:
+        fenced_bash_blocks = re.findall(r"```(?:bash|sh|shell)\n(.*?)```", self.skill, flags=re.DOTALL)
+        self.assertTrue(fenced_bash_blocks)
+        for index, block in enumerate(fenced_bash_blocks):
+            with self.subTest(block=index):
+                self.assertNotRegex(block, r"(?<!\\)\$[0-9]")
+
+    def test_issue275_shell_clobber_patterns_are_removed_from_skill(self) -> None:
+        forbidden = (
+            "comm -13",
+            "awk -F'\\t' '$2==\"fail\"",
+            "ps -eo command= | awk",
+            "index($0,r)",
+            "REMOTE_CI_DONE",
+        )
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, self.skill)
+
+        required = (
+            "kind: \"ci-red\"",
+            'gh pr checks "$PR_NUMBER" --json name,bucket,state,link',
+            "concurrency --count-only",
+            "--list-codex",
+            "ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
         forbidden = (
             "Write initial state.json",

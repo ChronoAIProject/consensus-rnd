@@ -1836,26 +1836,11 @@ PR_NUMBER=$(gh pr list --head "<trunk_branch>" --json number --jq '.[0].number')
 
 If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 
-### Arm the watch
+### Read the watch
 
-```bash
-# Poll every 60s; emit one event per failed check; exit when all checks settled.
-prev=""
-while true; do
-  state=$(gh pr checks "$PR_NUMBER" --json name,bucket,state)
-  cur=$(jq -r '.[] | "\(.name)\t\(.bucket)\t\(.state)"' <<<"$state" | sort)
-  comm -13 <(printf '%s\n' "$prev") <(printf '%s\n' "$cur") | awk -F'\t' '$2=="fail"{print $0}'
-  prev=$cur
-  if jq -e 'all(.bucket != "pending")' <<<"$state" >/dev/null; then
-    failed=$(jq -r '[.[] | select(.bucket=="fail") | .name] | length' <<<"$state")
-    echo "REMOTE_CI_DONE:failed=$failed"
-    break
-  fi
-  sleep 60
-done
-```
+Do not run a controller-authored shell poller for remote CI. Every controller wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`. For each red PR, the controller then reads the failed check details with `gh pr checks "$PR_NUMBER" --json name,bucket,state,link`, selects `bucket: fail`, and uses the check `name` plus `link` for the focused remote-CI fix route.
 
-Arm as a Monitor with `persistent: true`. Each emitted line is a notification you wake on. Stop only on the `REMOTE_CI_DONE:` line.
+The persistent daemon-event Monitor bridge remains the wake source for pending controller events; remote CI triage is driven by `consensus-rnd-cli wakeup-plan` output, not by an executable fenced shell watch in SKILL.md.
 
 ### Triage on failure
 
@@ -2653,8 +2638,8 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 ```bash
 source .refactor-loop/host.env                              # 取 REPO_ROOT / CODEX_FLOOR
 FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2
-# 只数本仓库 codex:含 consensus-rnd-cli spawn-codex 且含本仓库绝对路径 $REPO_ROOT(scope,防同机多 loop 过计)
-ACTIVE=$(ps -eo command= | awk -v r="$REPO_ROOT" 'r!="" && /spawn-codex[.]sh/ && index($0,r) && index($0," -c ")==0 { n++ } END { print n+0 }')
+# 只数本仓库 codex:使用 canonical CLI 计数;diagnostic 明细可用 --list-codex
+ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)
 NEEDED=$(( FLOOR - ACTIVE ))
 [ "$NEEDED" -le 0 ] && return  # floor 已满(本仓库 codex 已 >= FLOOR)
 
