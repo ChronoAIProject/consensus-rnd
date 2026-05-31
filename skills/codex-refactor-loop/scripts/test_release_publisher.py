@@ -78,6 +78,7 @@ class FakeRunner:
         self.failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {}
         self.rev_list_stdout = "0\n"
         self.head_sha = "bumpcommit456"
+        self.head_subject = "Release v2.0.0-beta.4"
         self.check_status = "green"
 
     def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -90,6 +91,8 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout=self.rev_list_stdout, stderr="")
         if command == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_sha}\n", stderr="")
+        if command == ["git", "show", "-s", "--format=%s", "HEAD"]:
+            return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_subject}\n", stderr="")
         if command == expected_check_runs_command(self.head_sha):
             if self.check_status == "api_failure":
                 return subprocess.CompletedProcess(command, 1, stdout="", stderr="api failed")
@@ -137,6 +140,39 @@ def allowed_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPrefligh
     )
 
 
+def manifest_mismatch_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPreflightResult:
+    result = allowed_result(repo, version=version)
+    return PublishPreflightResult(
+        allowed=False,
+        reasons=("manifest_version_mismatch",),
+        candidate=result.candidate,
+        decision=result.decision,
+        candidate_path=result.candidate_path,
+        decision_path=result.decision_path,
+        target_ref=result.target_ref,
+        version=result.version,
+        candidate_digest=result.candidate_digest,
+    )
+
+
+def set_mapped_version(repo: Path, version: str) -> None:
+    mapping = read_json(repo / ".version-bump.json")
+    assert isinstance(mapping, dict)
+    for item in mapping["files"]:
+        path = repo / item["path"]
+        data = read_json(path)
+        current = data
+        parts = item["field"].split(".")
+        for part in parts[:-1]:
+            current = current[int(part)] if isinstance(current, list) else current[part]
+        last = parts[-1]
+        if isinstance(current, list):
+            current[int(last)] = version
+        else:
+            current[last] = version
+        write_json(path, data)
+
+
 def expected_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
     release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
     if prerelease:
@@ -156,6 +192,21 @@ def expected_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = 
             "skills/codex-refactor-loop/VERSION.json",
         ],
         ["git", "commit", "-m", f"Release v{version}"],
+        ["git", "rev-parse", "HEAD"],
+        ["git", "fetch", "origin", "HEAD"],
+        ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
+        ["git", "push", "origin", "HEAD"],
+        expected_check_runs_command("bumpcommit456"),
+        release_command,
+    ]
+
+
+def expected_reentry_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
+    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
+    if prerelease:
+        release_command.append("--prerelease")
+    return [
+        ["git", "show", "-s", "--format=%s", "HEAD"],
         ["git", "rev-parse", "HEAD"],
         ["git", "fetch", "origin", "HEAD"],
         ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
@@ -281,6 +332,94 @@ class ReleasePublisherTests(unittest.TestCase):
                 self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
                 self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
                 self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_already_bumped_reentry_skips_bump_add_commit_and_creates_release_after_green(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, "bumpcommit456")
+            self.assertEqual(runner.commands, expected_reentry_success_commands())
+            self.assertFalse(any(command[:2] == ["python3", ".github/scripts/bump_version.py"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "add"] for command in runner.commands))
+            self.assertFalse(any(command[:2] == ["git", "commit"] for command in runner.commands))
+            payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
+            self.assertIsInstance(payload, dict)
+            assert isinstance(payload, dict)
+            self.assertEqual(payload["target_ref"], "bumpcommit456")
+
+    def test_already_bumped_reentry_pending_fails_closed_without_result_and_can_retry_green(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            preflight = FakePreflight(manifest_mismatch_result(repo))
+            pending_runner = FakeRunner()
+            pending_runner.check_status = "pending"
+            publisher = ReleasePublisher(repo, preflight=preflight, runner=pending_runner, now=lambda: NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "pending_required_checks"):
+                publisher.publish(target_ref="abc123")
+
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in pending_runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+            green_runner = FakeRunner()
+            retry = ReleasePublisher(repo, preflight=preflight, runner=green_runner, now=lambda: NOW)
+            result = retry.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(green_runner.commands, expected_reentry_success_commands())
+
+    def test_already_bumped_reentry_red_checks_fail_closed_without_release(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.check_status = "red"
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "ci_red"):
+                publisher.publish(target_ref="abc123")
+
+            self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_target_version_manifests_without_release_head_subject_fail_closed(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.head_subject = "not a release commit"
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertFalse(result.published)
+            self.assertEqual(result.reasons, ("manifest_version_mismatch",))
+            self.assertEqual(runner.commands, [["git", "show", "-s", "--format=%s", "HEAD"]])
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_publisher_requires_repo_slug_for_fresh_commit_check_gate(self) -> None:
         with copy_repo_fixture() as tmp:
