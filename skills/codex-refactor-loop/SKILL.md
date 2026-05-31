@@ -68,7 +68,7 @@ Owner map:
 | `scripts/codex_refactor_loop/cli.py::COMMANDS` | public command names and authority tokens | Public command catalog and authority fact source; controller lifecycle primitives stay outside `COMMANDS`. |
 | `scripts/codex_refactor_loop/workflow_stages.py` | workflow stage display names and slugs | Sole built-in stage catalog; HostWorkflowSpec may project `host:` data without overwriting built-ins. |
 
-`HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings. All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases. Consensus-rnd Phase design-consensus router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely; its allowlist is always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`.
+`HOST_WORKFLOW_SPEC` may point at one repo-relative JSON HostWorkflowSpec. Empty or unset keeps built-in behavior. The file is data-only route vocabulary and a seven-surface data-only projection for events, host stages, work-unit kinds, roles, prompt bindings, consensus policies, and issue-intake mappings (`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`). All host-added names must use the reserved `host:` namespace, and `WorkflowInvariantValidator` rejects attempts to overwrite built-ins, public compatibility aliases, marker families, producers, or cluster aliases. HostWorkflowSpec grants no lifecycle authority: no command, shell, argv, git, commit, push, merge, close, label mutation, assignee, milestone, import, or executor fields are allowed. It also cannot downgrade consensus: design-consensus-shaped host policy still requires at least three independent solvers, exactly one independent judge, peer-output isolation, and fixed marker families. First-version scope is bounded to status/prompt/intake projection; it is not a DAG executor and does not create public marker aliases. Consensus-rnd Phase design-consensus router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely; its allowlist is always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`.
 
 ## Host 配置(通用化注入点)
 <!-- Refactor (iter1/issue-170):
@@ -98,6 +98,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
+| `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | `contract-tests,manifest-version-sync,skill-degradation` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
 | `$UPDATE_CHECK_ENABLE` | optional-noop | update-check probe | `false` | false or empty exits 0 with noop reason and writes disabled update-check state | update-check, restart-daemons | `test_update_check.py`, `test_restart_daemons.py` |
 | `$UPDATE_CHECK_INTERVAL_SECONDS` | defaulted | update-check probe | `21600` | default to `21600` seconds; fresh local update-check state is reused for manual probes | update-check, concurrency snapshot projection | `test_update_check.py`, `test_concurrency_monitor_snapshot.py` |
 | `$UPDATE_CHECK_TIMEOUT_SECONDS` | defaulted | update-check probe | `5` | default to `5` seconds for GitHub release/tag reads; failures write unknown state and never block restart | update-check | `test_update_check.py` |
@@ -120,7 +121,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$HOST_CODE_FENCE_LANG` | prompt-empty-infer | prompt templates | empty | omit language tag; do not invent a host language default | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_PROTO_POLICY` | prompt-empty-infer | prompt templates | empty | treat schema/protocol checks as diff/project-rule driven only; do not invent protobuf or schema defaults | prompt templates | `test_host_env_surface_matrix.py` |
 | `$HOST_ARCHITECTURE_GREP_CHECKS` | prompt-empty-infer | prompt templates | empty | use `$PROJECT_RULES`, `$SOURCE_GLOBS`, `$CI_GUARDS`, and diff evidence only | prompt templates | `test_host_env_surface_matrix.py` |
-| `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates HostWorkflowSpec at projection consumers; phase9 direct-spawn-intent ignores host roles/dispatch/policies and keeps the built-in allowlist | workflow_spec, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py`, `test_phase9_router_package.py` |
+| `$HOST_WORKFLOW_SPEC` | optional-noop | WorkflowSpecLoader | empty or repo-relative JSON | empty/unset keeps built-in behavior; non-empty validates exactly seven data-only projection surfaces: events, stages, work_unit_kinds, roles, prompt_bindings, consensus_policies, and issue_intake_mappings; phase9 direct-spawn-intent ignores host roles/dispatch/policies and keeps the built-in allowlist | workflow_spec, triage, wakeup plan, controller templates | `test_host_workflow_spec.py`, `test_skill_reference_anchors.py`, `test_phase9_router_package.py` |
 
 Prompt templates reference these fields as `${HOST_*}` placeholders so normal `host.env` sourcing plus `render_template`/`envsubst` injects them at prompt construction time. Do not add aliases for the rejected Set B names.
 
@@ -183,6 +184,19 @@ export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env
 
 Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. Legacy `.refactor-loop/host.env` remains a compatibility read fallback only.
 
+<a id="github-workflow-portability-checklist"></a>
+### GitHub workflow portability checklist
+
+#104 setup is folded into this skill's existing owner surface. It may only generate or fill host-owned `.config/consensus-rnd/host.env`, a repo-relative JSON file named by `HOST_WORKFLOW_SPEC`, and optional repo-relative prompt or body binding files referenced from that JSON. It must not create a standalone setup skill or a second protocol owner.
+
+Allowed host artifacts:
+
+- `.config/consensus-rnd/host.env` with `CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env`.
+- A repo-relative HostWorkflowSpec JSON with exactly seven data-only surfaces: `events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`.
+- Optional repo-relative prompt/body binding files referenced by HostWorkflowSpec.
+
+Forbidden setup actions: no host `.github` edits, no label mutation, no issue/PR mutation, no branch-protection probing or edits, no git mutation, no branch creation, and no merge/close side effects. Future #357 interactive configuration may guide a maintainer through the same contract, but it must output these same host-owned artifacts rather than owning a new setup protocol.
+
 ### Keep existing daemons alive
 
 Install exactly one user-level scheduler. The command must `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before it execs the checked-in helper; this preserves values with spaces and keeps all loop runtime facts in the host env file.
@@ -243,7 +257,7 @@ Command contract:
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --dispatch` | Compute a ready decision and write `.refactor-loop/state/release-decision.json` plus `.refactor-loop/state/release-candidate.json`; print a hint that the controller-owned publisher owns bump/commit/push/tag/release after preflight. |
 | `python3 <skill-root>/scripts/consensus-rnd-cli release-gate --score-only` | Compute and print stability only; it does not require release opt-in and does not write the decision file. |
 
-Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `crnd:phase:blocked` PRs; zero `crnd:human:maintainer-decision` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
+Stability requires all signals green and fail-closed handling on missing or red evidence: the shared Checks API projection must see exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env); zero open `crnd:phase:blocked` PRs; zero `crnd:human:maintainer-decision` labels; zero Consensus-rnd Phase review-gate reject churn at three or more consecutive rounds; last 30 minutes P0 alert streak at most 3; at least `RELEASE_AUTO_MIN_MERGES` recent merge commits in `.refactor-loop/state/recent-pr-merges.json` for the last two hours(default 1); at least five fresh daemon heartbeats; and zero unresolved `META_RESOLVED:escalate-human` records. `RELEASE_AUTO_ENABLE=true` with missing or empty `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` fails closed with `missing_host_required_release_checks`. `recent-pr-merges.json` is a controller-owned post-merge projection produced by `merge_pr` after successful non-admin `gh pr merge`; the release decider only reads it and never discovers merge facts from `git` or GitHub. Release cadence also requires more than `RELEASE_AUTO_MIN_INTERVAL_HOURS` hours since last release(default 2). Detailed scoring and the release decision schema live in [release decision schema](#release-decision-schema).
 
 `release-decision.json` records `from_version`, `to_version`, `bump_type`, `commits`, `decided_at`, `stability_score`, `signals`, `ready`, `blocked_reasons`, and `release_interval`. `release-candidate.json` records the artifact-only handoff metadata, including the decision artifact path, target version, target ref, expiry, decision digest, required signal projection, host opt-in name, publish preflight name, and controller lifecycle owner.
 
@@ -1066,7 +1080,7 @@ Stability score is the percentage of the eight boolean signals that pass. `ready
 
 | Signal key | Pass condition |
 |---|---|
-| `required_checks_recent_green` | Shared Checks API projection sees exact check-run name success for `contract-tests`, `manifest-version-sync`, and `skill-degradation` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours. |
+| `required_checks_recent_green` | Shared Checks API projection sees exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` on both `$REVIEW_BASE_BRANCH` and `$INTEGRATION_BRANCH` (host.env) within two hours; auto-release with an empty list fails closed. |
 | `no_open_blocked_pr` | No open PR has `crnd:phase:blocked`. |
 | `no_human_decision_label` | No open issue or PR has `crnd:human:maintainer-decision`. |
 | `no_phase8_reject_churn` | `.refactor-loop/state/phase8-review-state.json` reports fewer than three consecutive reject rounds. |
@@ -1438,7 +1452,10 @@ and controller helpers. Prose may name individual canonical labels when
 explaining a single guard, but active label bundles and transition tables must
 come from catalog-backed helpers instead of SKILL.md examples. The invariant is
 still exactly one canonical phase label and exactly one canonical human label
-for managed open items after migration.
+for managed open items after migration. For loop-managed issue/PR routing, that
+means exactly one loop-owned `crnd:phase:*` label and exactly one loop-owned
+`crnd:human:*` label. Host business labels may coexist, but they are not
+routing authority and must not replace the loop-owned phase/human axes.
 
 ### Spawn pattern — Bash `run_in_background: true`(强制)
 

@@ -17,7 +17,7 @@ from .. import labels as label_catalog
 from ..context import HostEnvLocator, parse_host_env
 from ..restart import restart_managed_daemon_names
 from ..state import read_json, write_json
-from .required_checks import REQUIRED_RELEASE_CHECKS, ReleaseRequiredChecksProjection
+from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
 
 
@@ -50,7 +50,7 @@ SIGNAL_NAMES = (
     "no_unresolved_human_escalation",
 )
 DAEMON_NAMES = restart_managed_daemon_names()
-REQUIRED_CHECKS = REQUIRED_RELEASE_CHECKS
+REQUIRED_CHECKS = required_release_checks
 HEARTBEAT_FRESH_SECONDS = 90
 
 
@@ -251,6 +251,11 @@ class AutoReleaseGate:
             reason = "empty GH_REPO_SLUG, REVIEW_BASE_BRANCH, or INTEGRATION_BRANCH; unsafe to infer release check branch"
             print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
             return {"passed": False, "reason": reason, "source": "env"}
+        checks = required_release_checks(os.environ)
+        if not checks and os.environ.get("RELEASE_AUTO_ENABLE") == "true":
+            reason = "missing_host_required_release_checks"
+            print(f"auto-release unsafe abort: {reason}", file=sys.stderr)
+            return {"passed": False, "reason": reason, "source": "host.env"}
         branches = (review_base, integration)
         print(f"check branches: {review_base}, {integration}")
         # Refactor (issue157 release gate):
@@ -261,6 +266,7 @@ class AutoReleaseGate:
         projection = ReleaseRequiredChecksProjection(
             runner=lambda cmd: self.runner(cmd, self.repo_root),
             now=self.now,
+            required_checks=checks,
         )
         evidence: dict[str, Any] = {}
         red_checks: list[dict[str, str]] = []

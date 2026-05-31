@@ -58,6 +58,18 @@ def section_after_heading(markdown: str, heading: str) -> str:
     return _section_after_first_heading(markdown[match.start() :])
 
 
+def section_after_anchor_until_heading(markdown: str, anchor: str, level: int) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    pattern = re.compile(rf"(?m)^#{{1,{level}}}\s+")
+    first_heading = pattern.search(after_anchor)
+    start = first_heading.end() if first_heading else 0
+    match = pattern.search(after_anchor, start)
+    return after_anchor[: match.start()] if match else after_anchor
+
+
 def _section_after_first_heading(markdown: str) -> str:
     lines = markdown.splitlines(keepends=True)
     if not lines:
@@ -274,6 +286,37 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "including `REPO_ROOT`, `GH_REPO_SLUG`, `BUILD_CMD`, `TEST_CMD`, `SOURCE_GLOBS`, and `MAINTAINER_WHITELIST`",
             walkthrough,
         )
+
+    def test_github_workflow_portability_checklist_is_folded_into_skill(self) -> None:
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
+        checklist = section_after_anchor_until_heading(self.skill, "github-workflow-portability-checklist", 3)
+        self.assertIn("SKILL.md#github-workflow-portability-checklist", self.readme)
+        self.assertIn("Host GitHub workflow portability", self.readme)
+        for needle in (
+            "#104 setup is folded into this skill's existing owner surface",
+            ".config/consensus-rnd/host.env",
+            "HOST_WORKFLOW_SPEC",
+            "exactly seven data-only surfaces",
+            "`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`",
+            "no host `.github` edits",
+            "no branch-protection probing or edits",
+            "Future #357 interactive configuration",
+            "must output these same host-owned artifacts",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, checklist)
+        self.assertIn("GitHub workflow portability checklist", walkthrough)
+        self.assertFalse((REPO_ROOT / "skills" / "consensus-github-workflow-setup").exists())
+        for forbidden in (
+            "HostWorkflowPortabilityProjection",
+            "GitHubHostPolicy",
+            "HOST_GITHUB_LABEL_MAP",
+            "branch-protection probe",
+            "Projects adapter",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.readme)
 
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")

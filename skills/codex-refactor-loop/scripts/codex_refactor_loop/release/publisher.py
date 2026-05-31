@@ -12,7 +12,7 @@ from typing import Callable, Literal, Sequence
 from ..state import write_json
 from .gate import isoformat, load_host_env
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
-from .required_checks import ReleaseRequiredChecksProjection
+from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import parse_semver_full
 
 
@@ -272,6 +272,7 @@ class ReleasePublisher:
         projection = ReleaseRequiredChecksProjection(
             runner=self._run_check_command,
             now=self.now,
+            required_checks=required_release_checks(load_host_env(self.repo_root)),
         )
         status = projection.check_ref(repo_slug, release_target_ref, since=since, wait_seconds=0)
         if not status.passed:

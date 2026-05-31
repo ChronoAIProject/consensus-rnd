@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 from ..state import read_json
 from .gate import isoformat, load_host_env, parse_time, resolve_field
-from .required_checks import REQUIRED_RELEASE_CHECKS
+from .required_checks import required_release_checks
 from .versions import compare_semver, validate_release_version_coordinate
 
 
@@ -227,7 +227,11 @@ class ReleasePublishPreflight:
         for name, signal in signals.items():
             if not isinstance(signal, dict) or signal.get("passed") is not True:
                 reasons.append(f"required_signal_red:{name}")
-        missing = [name for name in REQUIRED_RELEASE_CHECKS if not _required_check_is_green(signals, name)]
+        checks = required_release_checks(load_host_env(self.repo_root))
+        if not checks:
+            reasons.append("missing_host_required_release_checks")
+            return
+        missing = [name for name in checks if not _required_check_is_green(signals, name)]
         if missing:
             reasons.append("required_check_red:" + ",".join(missing))
         decision_signals = decision.get("signals") if isinstance(decision, dict) else None

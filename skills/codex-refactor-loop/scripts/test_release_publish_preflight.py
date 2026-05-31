@@ -71,7 +71,8 @@ def set_mapped_version(repo: Path, version: str) -> None:
 def write_host_opt_in(repo: Path, enabled: bool = True) -> None:
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
     (repo / ".refactor-loop/host.env").write_text(
-        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
+        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n"
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
     )
 
@@ -80,7 +81,8 @@ def write_explicit_host_opt_in(repo: Path, enabled: bool = True) -> Path:
     path = repo / ".config/consensus-rnd/host.env"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
+        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n"
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
     )
     return path
