@@ -41,6 +41,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
@@ -896,6 +897,46 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
     return actions
 
 
+def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any | None = None) -> list[dict[str, Any]]:
+    targets = []
+    for item in open_actionable_managed_items(_projection_items(items)):
+        projection = label_catalog.normalize_label_set(item.labels)
+        if label_catalog.MILESTONE_RELEASE_TARGET not in projection.canonical:
+            continue
+        targets.append(
+            {
+                "kind": "PR" if item.kind == "pr" else item.kind,
+                "number": item.number,
+                "item": f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}",
+                "title": item.title,
+            }
+        )
+    if not targets:
+        return []
+
+    score = (scorer or decide_release_artifact)(repo_root)
+    signals = score.get("signals") if isinstance(score.get("signals"), dict) else {}
+    red_signals = [name for name, signal in signals.items() if isinstance(signal, dict) and not signal.get("passed")]
+    blocked = score.get("blocked_reasons")
+    blocked_reasons = [str(reason) for reason in blocked] if isinstance(blocked, list) else red_signals
+    return [
+        {
+            "priority": 7,
+            "kind": "release-countdown",
+            "status_only": True,
+            "no_lifecycle_authority": True,
+            "targets": targets,
+            "from_version": score.get("from_version"),
+            "to_version": score.get("to_version"),
+            "stability_score": score.get("stability_score"),
+            "ready": bool(score.get("ready")),
+            "red_signals": red_signals,
+            "blocked_reasons": blocked_reasons,
+            "source": "release-gate",
+        }
+    ]
+
+
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     dispatchable = {
         "maintainer-comment",
@@ -1043,6 +1084,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         )
     else:
         actions.extend(host_actions)
+    actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     actions.sort(key=lambda action: action["priority"])
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)

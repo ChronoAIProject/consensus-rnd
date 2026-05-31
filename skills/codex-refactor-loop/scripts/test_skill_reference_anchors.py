@@ -241,6 +241,49 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
 
+    def test_release_countdown_contract_is_wakeup_plan_only_status_projection(self) -> None:
+        milestone = section_after_heading(self.skill, "Milestone priority(强制)")
+        wakeup = section_after_heading(self.skill, "Wakeup Skeleton")
+
+        for needle in (
+            "crnd:milestone:release-target",
+            "release countdown status",
+            "non-exclusive milestone fact",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "wakeup-plan-only and read-only",
+            "status-only, non-dispatchable `release-countdown` action",
+            "release-gate scoring source",
+            ".version-bump.json",
+            "existing release commits projection",
+            "no_lifecycle_authority",
+            "targets",
+            "from_version",
+            "to_version",
+            "stability_score",
+            "ready",
+            "red_signals",
+            "blocked_reasons",
+            'source: "release-gate"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, milestone)
+        for forbidden in (
+            "create a daemon",
+            "write state",
+            "update statusline",
+            "update peek",
+            "create a top-level duplicate object",
+            "write a release decision",
+            "mutate labels",
+            "tag",
+            "publish a release",
+            "add lifecycle authority",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, milestone)
+        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("not dispatchable", wakeup)
+
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
         work_unit = section_after_anchor(self.skill, "work-unit-contract")
         producers = section_after_heading(self.skill, "Producers")

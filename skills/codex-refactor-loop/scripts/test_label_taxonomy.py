@@ -38,10 +38,24 @@ class LabelTaxonomyTests(unittest.TestCase):
         self.assertEqual(labels.canonical_name("phase", "design-solving"), labels.PHASE_DESIGN_SOLVING)
         self.assertIn(labels.HUMAN_AUTO, labels.labels_for_group("human"))
         self.assertIn(labels.PHASE_CLOSED, labels.labels_for_group("phase"))
+        self.assertEqual(labels.MILESTONE_RELEASE_TARGET, "crnd:milestone:release-target")
+        self.assertIn(labels.MILESTONE_RELEASE_TARGET, labels.labels_for_group("milestone"))
         labels.PHASE_CLOSED.encode("ascii")
         self.assertEqual(labels.phase_expected_workers(labels.PHASE_FIXING), 1)
         self.assertEqual(labels.actor_for_phase(labels.PHASE_REVIEWING), "reviewer-codex")
         self.assertEqual(labels.actor_for_phase(labels.PHASE_CLOSED), "closed-label-reconciler")
+
+    def test_release_target_uses_existing_milestone_grammar_without_groupless_exception(self) -> None:
+        self.assertEqual(labels.LABEL_GROUPS, ("phase", "human", "lifecycle", "triage", "milestone"))
+        self.assertRegex(labels.MILESTONE_RELEASE_TARGET, labels.CANONICAL_RE)
+        self.assertIsNone(re.fullmatch(labels.CANONICAL_RE, "crnd:release-target"))
+
+        projection = labels.normalize_label_set([labels.MILESTONE_CURRENT, labels.MILESTONE_RELEASE_TARGET])
+
+        self.assertEqual(
+            projection.canonical,
+            frozenset({labels.MILESTONE_CURRENT, labels.MILESTONE_RELEASE_TARGET}),
+        )
 
     def test_managed_query_labels_include_canonical_and_legacy_aliases(self) -> None:
         self.assertEqual(
