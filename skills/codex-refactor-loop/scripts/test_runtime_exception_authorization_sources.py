@@ -333,8 +333,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("#322 是唯一 controller-owned release publication carveout", self.repo_rules)
         self.assertIn("active-controller owner 的 `ReleasePublisher`", self.repo_rules)
         self.assertIn("`ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`", self.repo_rules)
+        self.assertIn("`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取", self.repo_rules)
+        self.assertIn("`gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp`", self.repo_rules)
+        self.assertIn("确认该 exact fresh SHA required checks 全绿后才运行", self.repo_rules)
         self.assertIn("`gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`", self.repo_rules)
         self.assertIn("禁止 public release-publish CLI", self.repo_rules)
+        self.assertIn("tag target without exact-SHA green checks", self.repo_rules)
         self.assertIn("release edit/delete/upload", self.repo_rules)
 
     def test_controller_release_publisher_334_mirror_preserves_exact_sha_green_gate(self) -> None:

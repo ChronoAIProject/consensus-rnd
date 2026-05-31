@@ -246,7 +246,7 @@ class ReleasePublisherTests(unittest.TestCase):
                 [expected_success_commands()[-1]],
             )
 
-    def test_publisher_waits_for_fresh_release_commit_checks_before_release_creation(self) -> None:
+    def test_publisher_checks_fresh_release_commit_before_release_creation(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             runner = FakeRunner()
