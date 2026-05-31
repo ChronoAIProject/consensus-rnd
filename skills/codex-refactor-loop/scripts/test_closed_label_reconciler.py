@@ -20,7 +20,7 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
 from codex_refactor_loop.closed_phase_labels import (
     ClosedPhaseLabelPlan,
-    has_exactly_one_phase_and_human,
+    has_exactly_one_terminal_phase,
     labels_after_plan,
     plan_closed_phase_labels,
 )
@@ -135,22 +135,47 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
             )
         )
 
-    def test_has_exactly_one_phase_and_human_helper_matches_invariant(self) -> None:
+    def test_has_exactly_one_terminal_phase_helper_is_phase_only(self) -> None:
         self.assertTrue(
-            has_exactly_one_phase_and_human(
-                [labels.MANAGED, labels.PHASE_CLOSED, labels.HUMAN_AUTO]
+            has_exactly_one_terminal_phase(
+                [labels.MANAGED, labels.PHASE_CLOSED],
+                labels.PHASE_CLOSED,
             )
         )
         self.assertFalse(
-            has_exactly_one_phase_and_human(
-                [labels.MANAGED, labels.PHASE_CLOSED, labels.PHASE_MERGED, labels.HUMAN_AUTO]
+            has_exactly_one_terminal_phase(
+                [labels.MANAGED, labels.PHASE_CLOSED, labels.PHASE_MERGED],
+                labels.PHASE_CLOSED,
             )
         )
         self.assertFalse(
-            has_exactly_one_phase_and_human(
-                [labels.MANAGED, labels.PHASE_CLOSED]
+            has_exactly_one_terminal_phase(
+                [labels.MANAGED, labels.PHASE_MERGED],
+                labels.PHASE_CLOSED,
             )
         )
+
+    def test_closed_phase_plan_preserves_canonical_human_labels(self) -> None:
+        source_labels = [
+            labels.MANAGED,
+            labels.PHASE_REVIEWING,
+            labels.HUMAN_AUTO,
+            labels.HUMAN_MAINTAINER_DECISION,
+            "🆘 human:卡死",
+        ]
+        plan = plan_closed_phase_labels(
+            kind="issue",
+            number=19,
+            state="CLOSED",
+            labels=source_labels,
+        )
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        after = labels_after_plan(source_labels, plan)
+        self.assertIn(labels.HUMAN_AUTO, after)
+        self.assertIn(labels.HUMAN_MAINTAINER_DECISION, after)
+        self.assertNotIn("🆘 human:卡死", after)
 
 
 class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
@@ -398,6 +423,93 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "post-edit label invariant failed"):
                 reconciler.verify_plan(plan)
+
+    def test_verify_plan_is_phase_only_and_does_not_require_human_label(self) -> None:
+        plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=25,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch.object(
+            reconciler,
+            "_view_item",
+            return_value={
+                "number": 25,
+                "state": "CLOSED",
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_CLOSED},
+                ],
+            },
+        ):
+            reconciler.verify_plan(plan)
+
+    def test_run_once_catches_single_item_failure_and_continues(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        failing = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=26,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        continuing = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=27,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_FIXING,),
+            reason="closed-no-merged-evidence",
+        )
+        reconciler = ClosedLabelReconciler(self.ctx)
+
+        def apply_plan(plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan:
+            if plan.number == 26:
+                raise RuntimeError("single item failed")
+            return plan
+
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "collect_plans", return_value=(failing, continuing)):
+                with mock.patch.object(reconciler, "apply_plan", side_effect=apply_plan) as apply_mock:
+                    with mock.patch.object(reconciler, "verify_plan") as verify_mock:
+                        self.assertEqual(0, reconciler.run_once())
+
+        self.assertEqual([mock.call(failing), mock.call(continuing)], apply_mock.mock_calls)
+        verify_mock.assert_called_once_with(continuing)
+
+    def test_daemon_run_once_renews_heartbeat_during_tick(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        plans = (
+            ClosedPhaseLabelPlan(
+                kind="issue",
+                number=28,
+                terminal_phase=labels.PHASE_CLOSED,
+                add_labels=(),
+                remove_labels=(),
+                reason="closed-no-merged-evidence",
+            ),
+            ClosedPhaseLabelPlan(
+                kind="issue",
+                number=29,
+                terminal_phase=labels.PHASE_CLOSED,
+                add_labels=(labels.PHASE_CLOSED,),
+                remove_labels=(labels.PHASE_FIXING,),
+                reason="closed-no-merged-evidence",
+            ),
+        )
+        beats: list[str] = []
+        reconciler = ClosedLabelReconciler(self.ctx, dry_run=True)
+
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "collect_plans", return_value=plans):
+                self.assertEqual(0, reconciler.run_once(beat=lambda: beats.append("beat")))
+
+        self.assertEqual(["beat", "beat", "beat"], beats)
 
 
 if __name__ == "__main__":
