@@ -32,7 +32,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
-        self.commands: list[list[str]] = []
+        self.commands: list[dict[str, object]] = []
         self.source_issue_states: dict[str, str] = {}
         self.original_source_issue_reader = Phase9Router._read_source_issue_decision
 
@@ -108,6 +108,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 continue
             payloads.append(json.loads(line.split(f"{prefix} ", 1)[1]))
         return payloads
+
+    def intent_text(self, intent: dict[str, object]) -> str:
+        return json.dumps(intent, ensure_ascii=False, sort_keys=True)
 
     def solver_triplet(self, issue: int = 37, round_no: int = 4, verdict: str = "same") -> None:
         for role in ("minimal", "structural", "delete"):
@@ -218,10 +221,46 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        command = self.commands[0]
-        self.assertIn(str(self.repo.resolve()), command)
-        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue37-r4-judge.log").resolve()), command)
+        intent = self.commands[0]
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(intent["cd"], ".")
+        self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue37-r4-judge.log")
+        self.assertNotIn("argv", intent)
+        self.assertNotIn("shell", intent)
         self.assertEqual(self.ledger_entries()[0]["key"], "37-4-judge")
+        self.assertEqual(self.ledger_entries()[0]["dispatch_state"], "harness-intent")
+
+    def test_phase9_router_default_runner_appends_parseable_spawn_intent_event(self) -> None:
+        self.solver_triplet(issue=330, round_no=4)
+        default_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo))
+
+        with mock.patch.object(
+            Phase9Router,
+            "_read_source_issue_decision",
+            return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
+        ):
+            default_router.tick()
+
+        intent_lines = [
+            line for line in self.pending_events().splitlines() if " HARNESS_SPAWN_INTENT " in line
+        ]
+        self.assertEqual(len(intent_lines), 1)
+        intent = json.loads(intent_lines[0].split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(intent["cd"], ".")
+        self.assertEqual(intent["prompt"], ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md")
+        self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue330-r4-judge.log")
+        self.assertTrue(intent["run_in_background_required"])
+        self.assertTrue(intent["no_lifecycle_authority"])
+        for forbidden in ("argv", "shell", "cmd"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, intent)
+        ledger = self.ledger_entries()
+        self.assertEqual(len(ledger), 1)
+        self.assertEqual(ledger[0]["key"], "330-4-judge")
+        self.assertEqual(ledger[0]["dispatch_state"], "harness-intent")
 
     def test_phase9_router_legacy_r1_solver_triplet_dispatches_canonical_judge(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -233,7 +272,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        joined = " ".join(self.commands[0])
+        joined = self.intent_text(self.commands[0])
         self.assertIn("phase9-issue284-r1-judge.log", joined)
         self.assertNotIn("meta-judge-issue284-r1.log", joined)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["284-1-judge"])
@@ -531,6 +570,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "# Role: Meta-judge",
             "Artifact profile: phase9-meta-judge",
             "WORK_UNIT_ID=issue-169",
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-169",
+            "Router-validated work-unit provenance",
+            "Path A greenfield work",
             "cluster: issue-169",
             "convergence_round: 8",
             "Round number this fires: 9",
@@ -612,7 +655,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(events[0]["reason"], "phase9-meta-judge-scope-invalid")
         self.assertIn("scope mismatch", events[0]["detail"])
 
-    def test_phase9_router_durable_artifacts_store_relative_paths_but_spawn_argv_absolute(self) -> None:
+    def test_phase9_router_durable_artifacts_store_relative_paths_and_intent_uses_semantic_command(self) -> None:
         self.solver_triplet(issue=202, round_no=1)
 
         self.router.tick()
@@ -620,9 +663,13 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         ledger = self.ledger_entries()[0]
         self.assertEqual(".refactor-loop/logs/phase9-issue202-r1-judge.log", ledger["log_path"])
         self.assertNotIn(str(self.repo), json.dumps(ledger, ensure_ascii=False))
-        command = self.commands[0]
-        self.assertIn(str((self.repo / ".refactor-loop" / "prompts" / "phase9" / "phase9-issue202-r1-judge.md").resolve()), command)
-        self.assertIn(str((self.repo / ".refactor-loop" / "logs" / "phase9-issue202-r1-judge.log").resolve()), command)
+        intent = self.commands[0]
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertEqual(intent["prompt"], ".refactor-loop/prompts/phase9/phase9-issue202-r1-judge.md")
+        self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue202-r1-judge.log")
+        self.assertNotIn(str(self.repo), json.dumps(intent, ensure_ascii=False))
+        self.assertNotIn("argv", intent)
+        self.assertNotIn("shell", intent)
 
         self.write_log("phase9-issue202-r2-judge.log", "META_RESOLVED:re-design:scope")
         self.router.tick()
@@ -630,6 +677,25 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         events = self.pending_events()
         self.assertIn('"log_path": ".refactor-loop/logs/phase9-issue202-r2-judge.log"', events)
         self.assertNotIn(str(self.repo), events)
+
+    def test_router_intent_command_is_closed_spawn_codex_enum(self) -> None:
+        self.solver_triplet(issue=330, round_no=4)
+
+        self.router.tick()
+
+        intent = self.commands[0]
+        self.assertIs(type(intent), dict)
+        self.assertEqual(intent["command"], "spawn-codex")
+        self.assertNotIsInstance(intent["command"], list)
+        for forbidden in ("argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor", "target_ref"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, intent)
+        source = PHASE9_ROUTER.read_text(encoding="utf-8")
+        self.assertIn('"command": "spawn-codex"', source)
+        self.assertNotIn("class HarnessSpawnIntent", source)
+        self.assertNotIn("def __iter__", source)
+        self.assertNotIn('"nohup"', source)
+        self.assertNotIn("start_new_session", source)
 
     def test_phase9_router_fallback_restart_dedupe_reads_legacy_absolute_and_writes_relative(self) -> None:
         legacy_log = self.repo / ".refactor-loop" / "logs" / "phase9-issue203-r1-judge.log"
@@ -700,7 +766,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue149-r1-judge.log", " ".join(self.commands[0]))
+        self.assertIn("phase9-issue149-r1-judge.log", self.intent_text(self.commands[0]))
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["149-1-judge"])
 
     def test_phase9_router_controller_dispatched_triplet_across_ticks(self) -> None:
@@ -722,7 +788,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue149-r2-judge.log", " ".join(self.commands[0]))
+        self.assertIn("phase9-issue149-r2-judge.log", self.intent_text(self.commands[0]))
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["149-2-judge"])
 
     def test_phase9_router_accepts_solver_issue_logs_for_triplet(self) -> None:
@@ -735,7 +801,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        joined = " ".join(self.commands[0])
+        joined = self.intent_text(self.commands[0])
         self.assertIn("phase9-issue100-r4-judge.log", joined)
         self.assertNotIn("solver-issue100-r4-judge.log", joined)
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["100-4-judge"])
@@ -754,7 +820,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        joined_commands = "\n".join(" ".join(command) for command in self.commands)
+        joined_commands = "\n".join(self.intent_text(command) for command in self.commands)
         self.assertNotIn("phase9-issue100-r4-judge.log", joined_commands)
         self.assertNotIn("100-4-judge", [entry["key"] for entry in self.ledger_entries()])
 
@@ -789,7 +855,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue37-r5-minimal.log", logs)
         self.assertIn("phase9-issue37-r5-structural.log", logs)
         self.assertIn("phase9-issue37-r5-delete.log", logs)
@@ -872,7 +938,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue149-r3-minimal.log", logs)
         self.assertIn("phase9-issue149-r3-structural.log", logs)
         self.assertIn("phase9-issue149-r3-delete.log", logs)
@@ -887,7 +953,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue100-r3-minimal.log", logs)
         self.assertIn("phase9-issue100-r3-structural.log", logs)
         self.assertIn("phase9-issue100-r3-delete.log", logs)
@@ -922,7 +988,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.assertNotIn(forbidden_key, ledger_keys,
                              "body-position round-9 echo must not dispatch round-9 solvers")
         for command in self.commands:
-            joined = " ".join(command)
+            joined = self.intent_text(command)
             self.assertNotIn("phase9-issue90-r9-", joined,
                              "no command may target round-9 (body echo)")
             self.assertNotIn("body-echo-from-test-fixture", joined)
@@ -958,7 +1024,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         reflector_commands = [
-            command for command in self.commands if "phase9-issue91-r3-reflector.log" in " ".join(command)
+            command for command in self.commands if "phase9-issue91-r3-reflector.log" in self.intent_text(command)
         ]
         self.assertEqual(reflector_commands, [],
                          "body-only SOLVER_DONE echoes must not satisfy stalled predicate")
@@ -981,7 +1047,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         for command in self.commands:
-            joined = " ".join(command)
+            joined = self.intent_text(command)
             self.assertNotIn("phase9-issue79-r3-", joined,
                              "solver-log converge marker must not spawn next round")
         ledger_keys = [entry["key"] for entry in self.ledger_entries()]
@@ -1000,7 +1066,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue79-r3-minimal.log", logs)
         self.assertIn("phase9-issue79-r3-structural.log", logs)
         self.assertIn("phase9-issue79-r3-delete.log", logs)
@@ -1020,7 +1086,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue80-r5-minimal.log", logs)
         self.assertIn("phase9-issue80-r5-structural.log", logs)
         self.assertIn("phase9-issue80-r5-delete.log", logs)
@@ -1033,7 +1099,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertNotIn("phase9-issue79-r4-minimal.log", logs)
         self.assertNotIn("phase9-issue79-r6-minimal.log", logs)
         self.assertEqual(self.ledger_entries(), [])
@@ -1047,7 +1113,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertNotIn("phase9-issue82-r5-minimal.log", logs)
         self.assertNotIn("phase9-issue82-r6-minimal.log", logs)
         self.assertEqual(self.ledger_entries(), [])
@@ -1064,7 +1130,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
+        self.assertFalse(any("reflector" in self.intent_text(command) for command in self.commands))
         self.assertNotIn("81-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
     def test_phase9_router_converge_routes_to_stalled_reflector_when_predicate_holds(self) -> None:
@@ -1073,7 +1139,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         # router-owned stalled predicate before spawning r4 solvers.
         self.write_log("phase9-issue37-r2-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
         self.router.tick()
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue37-r3-minimal.log", logs)
         self.assertNotIn("phase9-issue37-r2-reflector.log", logs)
 
@@ -1086,7 +1152,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         reflector_commands = [
-            command for command in self.commands if "phase9-issue38-r3-reflector.log" in " ".join(command)
+            command for command in self.commands if "phase9-issue38-r3-reflector.log" in self.intent_text(command)
         ]
         self.assertEqual(len(reflector_commands), 1)
         self.assertEqual(len(self.commands), 1)
@@ -1133,7 +1199,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         reflector_commands = [
-            command for command in self.commands if "phase9-issue100-r3-reflector.log" in " ".join(command)
+            command for command in self.commands if "phase9-issue100-r3-reflector.log" in self.intent_text(command)
         ]
         self.assertEqual(len(reflector_commands), 1)
         self.assertEqual(len(self.commands), 1)
@@ -1149,7 +1215,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         self.assertEqual(len(self.commands), 1)
-        self.assertIn("phase9-issue101-r3-reflector.log", " ".join(self.commands[0]))
+        self.assertIn("phase9-issue101-r3-reflector.log", self.intent_text(self.commands[0]))
         self.assertIn("101-3-reflector", [entry["key"] for entry in self.ledger_entries()])
 
     def test_stalled_reflector_prompt_uses_full_template_and_evidence(self) -> None:
@@ -1236,9 +1302,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.router.tick()
 
-        self.assertFalse(any("reflector" in " ".join(command) for command in self.commands))
+        self.assertFalse(any("reflector" in self.intent_text(command) for command in self.commands))
         self.assertNotIn("39-3-reflector", [entry["key"] for entry in self.ledger_entries()])
-        logs = " ".join(" ".join(command) for command in self.commands)
+        logs = " ".join(self.intent_text(command) for command in self.commands)
         self.assertIn("phase9-issue39-r4-minimal.log", logs)
 
     def test_phase9_router_lifecycle_markers_never_spawn(self) -> None:
@@ -1298,7 +1364,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         events = self.pending_events()
         self.assertEqual(len(self.commands), 3)
-        self.assertTrue(all("phase9-issue41-r2-" in " ".join(command) for command in self.commands))
+        self.assertTrue(all("phase9-issue41-r2-" in self.intent_text(command) for command in self.commands))
         for forbidden_token in ("r+1", "round-3|Choose", "no-op;", "stalled:*", "CANONICAL_HUMAN_LABELS"):
             with self.subTest(forbidden_token=forbidden_token):
                 self.assertNotIn(
@@ -1382,7 +1448,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_main_once_dispatches_via_temp_repo_root(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
-        commands: list[list[str]] = []
+        commands: list[dict[str, object]] = []
 
         with mock.patch.object(
             Phase9Router,
@@ -1393,11 +1459,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(commands), 1)
-        self.assertIn(str(self.repo.resolve()), commands[0])
+        self.assertEqual(commands[0]["cd"], ".")
+        self.assertEqual(commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
 
     def test_main_rejects_relative_repo_root(self) -> None:
-        commands: list[list[str]] = []
+        commands: list[dict[str, object]] = []
 
         with self.assertRaisesRegex(SystemExit, "must be absolute"):
             main(["--once", "--repo-root", "relative/path"], command_runner=commands.append)
@@ -1406,7 +1473,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_main_dry_run_records_no_dispatch(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
-        commands: list[list[str]] = []
+        commands: list[dict[str, object]] = []
 
         exit_code = main(["--once", "--repo-root", str(self.repo), "--dry-run"], command_runner=commands.append)
 

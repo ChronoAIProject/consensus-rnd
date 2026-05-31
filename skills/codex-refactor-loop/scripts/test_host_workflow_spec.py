@@ -15,6 +15,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext  # noqa: E402
 from codex_refactor_loop.workflow_spec import (  # noqa: E402
+    WORKFLOW_PROJECTION_KEYS,
     WorkflowSpecError,
     load_validated_workflow_spec,
 )
@@ -100,6 +101,27 @@ class HostWorkflowSpecTests(unittest.TestCase):
         self.assertIn("host:design-work", spec.work_unit_kinds)
         self.assertEqual(spec.prompt_binding_path("host:solver"), "prompts/host-solver.md")
         self.assertTrue(any(mapping.name == "host:template" for mapping in spec.issue_intake_mappings))
+
+    def test_projection_outputs_exact_seven_data_only_surfaces(self) -> None:
+        spec = load_validated_workflow_spec(self.ctx("workflow.json"))
+        projection = spec.projection()
+
+        self.assertEqual(tuple(projection), WORKFLOW_PROJECTION_KEYS)
+        self.assertEqual(set(projection), set(WORKFLOW_PROJECTION_KEYS))
+        self.assertIn("minimal", [role["name"] for role in projection["roles"]])
+        self.assertIn("host:solver-a", [role["name"] for role in projection["roles"]])
+        self.assertEqual(projection["prompt_bindings"]["host:solver"], "prompts/host-solver.md")
+        forbidden_fields = {"label", "labels", "assignee", "assignees", "milestone", "merge", "command", "executor", "git"}
+        stack = [projection]
+        seen_keys: set[str] = set()
+        while stack:
+            value = stack.pop()
+            if isinstance(value, dict):
+                seen_keys.update(value)
+                stack.extend(value.values())
+            elif isinstance(value, list):
+                stack.extend(value)
+        self.assertTrue(forbidden_fields.isdisjoint(seen_keys), seen_keys & forbidden_fields)
 
     def test_spec_rejects_absolute_parent_or_symlink_escape_paths(self) -> None:
         data = self.valid_spec()

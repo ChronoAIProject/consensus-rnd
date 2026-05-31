@@ -341,6 +341,38 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("tag target without exact-SHA green checks", self.repo_rules)
         self.assertIn("release edit/delete/upload", self.repo_rules)
 
+    def test_release_publication_322_allows_only_first_bump_or_already_bumped_reentry(self) -> None:
+        entry = mirror_entry(self.mirror, "release-publication-322")
+        for required in (
+            "already-bumped reentry",
+            "only preflight mismatch is mapped manifests already equal `to_version`",
+            "git show -s --format=%s HEAD",
+            "HEAD subject is exactly `Release v<to_version>`",
+            "skip only `python3 .github/scripts/bump_version.py --version <to_version>`, `git add .version-bump.json <mapped manifests>`, and `git commit -m \"Release v<to_version>\"`",
+            "git rev-parse HEAD",
+            "git fetch origin HEAD",
+            "git rev-list --count HEAD..origin/HEAD",
+            "git push origin HEAD",
+            "gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp",
+            "gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]",
+            "pending/red/missing/API-fail fail closed",
+            "no proof-ticket/resume system",
+            "no public `consensus-rnd-cli release-publish`",
+            "no workflow tag/release creation",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+        for repo_rules_required in (
+            "only preflight mismatch 是 mapped manifests 已==`to_version`",
+            "`git show -s --format=%s HEAD`",
+            "HEAD subject 精确为 `Release v<to_version>`",
+            "`gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp`",
+            "`gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]`",
+        ):
+            with self.subTest(repo_rules_required=repo_rules_required):
+                self.assertIn(repo_rules_required, self.repo_rules)
+
     def test_controller_release_publisher_334_mirror_preserves_exact_sha_green_gate(self) -> None:
         entry = mirror_entry(self.mirror, "controller-release-publisher-334")
 
@@ -553,6 +585,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "source-OPEN gate",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
+            "HARNESS_SPAWN_INTENT",
+            '`command: "spawn-codex"`',
+            'dispatch_state="harness-intent"',
             "test_phase9_router_open_state_gate.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
@@ -566,6 +601,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "gh label",
             "gh pr merge",
             "gh release",
+            "daemon direct `nohup spawn-codex`",
+            "argv array",
+            "shell command",
+            "generic command bus",
             "label lifecycle",
             "issue close",
             "PR merge",

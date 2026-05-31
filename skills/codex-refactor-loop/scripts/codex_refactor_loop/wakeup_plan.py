@@ -20,6 +20,7 @@ from typing import Any
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
@@ -50,6 +51,18 @@ PHASE_TO_STAGE = {
     label_catalog.PHASE_CONSENSUS_REACHED: "implementation",
     label_catalog.PHASE_BLOCKED: "bootstrap",
     label_catalog.PHASE_MERGED: "publish",
+}
+HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
+    "argv",
+    "args",
+    "shell",
+    "cmd",
+    "commands",
+    "env",
+    "git",
+    "gh",
+    "executor",
+    "target_ref",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -112,6 +125,122 @@ def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]]
         for event in spec.events
     ]
     return actions, None
+
+
+def _canonical_in_flight_for_log(log_path: Path, monitor: Any | None) -> bool:
+    if monitor is None:
+        return False
+    try:
+        lines = monitor.list_in_flight_codex_lines()
+    except Exception:
+        return False
+    target = str(log_path)
+    return any(target in line for line in lines)
+
+
+def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any | None = None) -> list[dict[str, Any]]:
+    pending_path = ctx.paths.pending_events
+    if not pending_path.exists():
+        return []
+    try:
+        lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    actions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in lines:
+        if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        raw_json = line.split(" HARNESS_SPAWN_INTENT ", 1)[1]
+        try:
+            intent = json.loads(raw_json)
+        except json.JSONDecodeError:
+            actions.append(_invalid_harness_spawn_intent("invalid-json", line))
+            continue
+        if not isinstance(intent, dict):
+            actions.append(_invalid_harness_spawn_intent("intent-not-object", line))
+            continue
+        intent_id = intent.get("intent_id")
+        if not isinstance(intent_id, str) or not intent_id:
+            actions.append(_invalid_harness_spawn_intent("missing-intent-id", line))
+            continue
+        if intent_id in seen:
+            continue
+        seen.add(intent_id)
+        invalid_reason = _harness_spawn_intent_invalid_reason(intent)
+        if invalid_reason:
+            actions.append(_invalid_harness_spawn_intent(invalid_reason, line, intent_id=intent_id))
+            continue
+        try:
+            cd = ctx.artifact_execution_path(str(intent["cd"]))
+            prompt = ctx.artifact_execution_path(str(intent["prompt"]))
+            log_path = ctx.artifact_execution_path(str(intent["log"]))
+        except Exception as exc:
+            actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
+            continue
+        if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
+            continue
+        actions.append(
+            {
+                "priority": 2,
+                "kind": "harness-spawn-intent",
+                "item": intent.get("task_id"),
+                "phase": "work-intake",
+                "actor": "controller",
+                "route": intent.get("route"),
+                "intent_id": intent_id,
+                "source": intent.get("source"),
+                "command": "spawn-codex",
+                "controller_action": "spawn_codex_harness_background",
+                "cd": str(cd),
+                "prompt": str(prompt),
+                "log": str(log_path),
+                "stall": int(intent.get("stall", 5400)),
+                "run_in_background_required": True,
+                "no_lifecycle_authority": True,
+                "reason": intent.get("reason"),
+                "evidence": line,
+            }
+        )
+    return actions
+
+
+def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
+    forbidden = sorted(HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS.intersection(intent))
+    if forbidden:
+        return f"forbidden-fields:{','.join(forbidden)}"
+    if intent.get("command") != "spawn-codex":
+        return "command-not-spawn-codex"
+    if intent.get("controller_action") != "spawn_codex_harness_background":
+        return "controller-action-not-spawn-codex-background"
+    for field in ("cd", "prompt", "log"):
+        if not isinstance(intent.get(field), str) or not intent.get(field):
+            return f"missing-{field}"
+    try:
+        stall = int(intent.get("stall", 5400))
+    except (TypeError, ValueError):
+        return "invalid-stall"
+    if stall <= 0:
+        return "invalid-stall"
+    if intent.get("run_in_background_required") is not True:
+        return "missing-background-requirement"
+    if intent.get("no_lifecycle_authority") is not True:
+        return "missing-no-lifecycle-authority"
+    return None
+
+
+def _invalid_harness_spawn_intent(reason: str, evidence: str, *, intent_id: str | None = None) -> dict[str, Any]:
+    return {
+        "priority": 2,
+        "kind": "harness-spawn-intent-invalid",
+        "item": intent_id,
+        "phase": "bootstrap",
+        "actor": "controller",
+        "route": "harness-spawn-intent",
+        "reason": reason,
+        "evidence": evidence,
+        "no_lifecycle_authority": True,
+    }
 
 
 def configured_floor() -> int:
@@ -199,9 +328,18 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
     return total, breakdown
 
 
-def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhItem] | None = None) -> dict[str, Any]:
-    concurrency_module = import_concurrency_monitor(repo_root)
-    monitor = build_concurrency_monitor(repo_root, concurrency_module)
+def concurrency_plan(
+    repo_root: Path,
+    *,
+    fixed_point: bool,
+    gh_items: list[GhItem] | None = None,
+    monitor: Any | None = None,
+    concurrency_module: Any | None = None,
+) -> dict[str, Any]:
+    if concurrency_module is None:
+        concurrency_module = import_concurrency_monitor(repo_root)
+    if monitor is None:
+        monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
     expected, breakdown = expected_from_open_items(gh_items or [])
     if expected == 0:
@@ -233,7 +371,7 @@ def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhIte
             "dispatch_required": deficit if hard_gate_active else 0,
             "line": hard_gate_line,
             "semantics": (
-                "controller must dispatch this many actionable tasks or audit fallback before ending the wakeup"
+                "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
                 if hard_gate_active
                 else None
             ),
@@ -693,6 +831,46 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
     return actions
 
 
+def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any | None = None) -> list[dict[str, Any]]:
+    targets = []
+    for item in open_actionable_managed_items(_projection_items(items)):
+        projection = label_catalog.normalize_label_set(item.labels)
+        if label_catalog.MILESTONE_RELEASE_TARGET not in projection.canonical:
+            continue
+        targets.append(
+            {
+                "kind": "PR" if item.kind == "pr" else item.kind,
+                "number": item.number,
+                "item": f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}",
+                "title": item.title,
+            }
+        )
+    if not targets:
+        return []
+
+    score = (scorer or decide_release_artifact)(repo_root)
+    signals = score.get("signals") if isinstance(score.get("signals"), dict) else {}
+    red_signals = [name for name, signal in signals.items() if isinstance(signal, dict) and not signal.get("passed")]
+    blocked = score.get("blocked_reasons")
+    blocked_reasons = [str(reason) for reason in blocked] if isinstance(blocked, list) else red_signals
+    return [
+        {
+            "priority": 7,
+            "kind": "release-countdown",
+            "status_only": True,
+            "no_lifecycle_authority": True,
+            "targets": targets,
+            "from_version": score.get("from_version"),
+            "to_version": score.get("to_version"),
+            "stability_score": score.get("stability_score"),
+            "ready": bool(score.get("ready")),
+            "red_signals": red_signals,
+            "blocked_reasons": blocked_reasons,
+            "source": "release-gate",
+        }
+    ]
+
+
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     dispatchable = {
         "maintainer-comment",
@@ -717,7 +895,7 @@ def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], acti
             "dispatch_required": deficit if deficit > 0 else 0,
             "line": f"HARD_GATE:dispatch_required={deficit}" if deficit > 0 else None,
             "semantics": (
-                "controller must dispatch this many actionable tasks or audit fallback before ending the wakeup"
+                "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
                 if deficit > 0
                 else None
             ),
@@ -806,10 +984,19 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     health = daemon_health(repo_root)
     gh_items = load_github_items(repo_root)
     audit_none_fixed_point = latest_controller_validated_audit_none(repo_root)
-    concurrency = concurrency_plan(repo_root, fixed_point=audit_none_fixed_point, gh_items=gh_items)
+    concurrency_module = import_concurrency_monitor(repo_root)
+    monitor = build_concurrency_monitor(repo_root, concurrency_module)
+    concurrency = concurrency_plan(
+        repo_root,
+        fixed_point=audit_none_fixed_point,
+        gh_items=gh_items,
+        monitor=monitor,
+        concurrency_module=concurrency_module,
+    )
 
     actions: list[dict[str, Any]] = []
     actions.extend(pending_bootstrap_actions(repo_root, health))
+    actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))
@@ -831,6 +1018,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         )
     else:
         actions.extend(host_actions)
+    actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     actions.sort(key=lambda action: action["priority"])
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)

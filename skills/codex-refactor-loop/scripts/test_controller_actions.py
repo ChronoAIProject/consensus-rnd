@@ -196,9 +196,9 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual(0, self.actions.merge_pr("77", linked_issue="239"))
 
         ready_index = gh_calls.index(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"])
-        merge_index = gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"])
+        merge_index = gh_calls.index(["pr", "merge", "77", "--squash", "--delete-branch"])
         self.assertLess(ready_index, merge_index)
-        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
         self.assertFalse(any(call[:5] == ["pr", "view", "77", "--json", "body"] for call in gh_calls), gh_calls)
         self.assertTrue(any(call[:3] == ["pr", "edit", "77"] for call in gh_calls), gh_calls)
         self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
@@ -240,7 +240,7 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual(0, self.actions.merge_pr("77"))
 
         self.assertIn(["pr", "ready", "77"], gh_calls)
-        self.assertLess(gh_calls.index(["pr", "ready", "77"]), gh_calls.index(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"]))
+        self.assertLess(gh_calls.index(["pr", "ready", "77"]), gh_calls.index(["pr", "merge", "77", "--squash", "--delete-branch"]))
 
     def test_merge_pr_ready_failure_fails_closed_before_merge_side_effects(self) -> None:
         gh_calls: list[list[str]] = []
@@ -262,6 +262,28 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(["pr", "ready", "77"], gh_calls)
         self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
         self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+
+    def test_merge_pr_failure_surfaces_blocked_by_host_policy_without_cleanup(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="false\n", stderr="")
+            if args[:2] == ["pr", "merge"]:
+                return mock.Mock(returncode=9, stdout="", stderr="merge blocked by host policy")
+            raise AssertionError(f"unexpected gh side effect after merge failure: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(9, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "edit"] for call in gh_calls), gh_calls)
+        self.assertFalse((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").exists())
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:blocked-by-host-policy:merge-pr:pr:77", self.pending_events())
 
     def test_merge_pr_already_ready_merges_without_pr_ready_call(self) -> None:
         gh_calls: list[list[str]] = []
@@ -297,7 +319,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertIn(["pr", "view", "77", "--json", "isDraft", "--jq", ".isDraft"], gh_calls)
         self.assertFalse(any(call[:2] == ["pr", "ready"] for call in gh_calls), gh_calls)
-        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
 
     def test_open_pr_with_label_rejects_malformed_create_url_before_post_create_edit(self) -> None:
         cases = (
@@ -780,7 +802,7 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             self.assertEqual(0, self.actions.merge_pr("77"))
 
-        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
         self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
         issue_edit = next(call for call in gh_calls if call[:3] == ["issue", "edit", "239"])
         self.assertEqual(labels.PHASE_MERGED, issue_edit[issue_edit.index("--add-label") + 1])
@@ -815,7 +837,7 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             self.assertEqual(0, self.actions.merge_pr("77"))
 
-        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
         self.assertTrue(any(call[:3] == ["issue", "close", "239"] for call in gh_calls), gh_calls)
 
     def test_merge_pr_does_not_guess_issue_when_body_closes_multiple_issues(self) -> None:
@@ -848,7 +870,7 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             self.assertEqual(0, self.actions.merge_pr("77"))
 
-        self.assertIn(["pr", "merge", "77", "--admin", "--squash", "--delete-branch"], gh_calls)
+        self.assertIn(["pr", "merge", "77", "--squash", "--delete-branch"], gh_calls)
         self.assertTrue(any(call[:3] == ["pr", "edit", "77"] for call in gh_calls), gh_calls)
         self.assertFalse(any(call[:2] == ["issue", "close"] for call in gh_calls), gh_calls)
         self.assertFalse(any(call[:2] == ["issue", "edit"] for call in gh_calls), gh_calls)
@@ -1010,6 +1032,12 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertIn('"pr", "ready", pr_target', text)
         self.assertIn("ready = self._ensure_pr_ready_for_merge(pr_target)", text)
         self.assertLess(text.index("ready = self._ensure_pr_ready_for_merge(pr_target)"), text.index('"pr", "merge", pr_target'))
+
+    def test_merge_pr_uses_non_admin_merge_and_surfaces_host_policy_block(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn('["pr", "merge", pr_target, "--squash", "--delete-branch"]', text)
+        self.assertIn("blocked-by-host-policy", text)
+        self.assertNotIn("--admin", text)
         self.assertNotIn("ReviewGateAction", text)
         self.assertNotIn("review_gate.py", text)
 

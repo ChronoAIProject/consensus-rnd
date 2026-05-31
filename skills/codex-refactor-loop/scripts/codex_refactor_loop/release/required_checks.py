@@ -4,15 +4,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
-REQUIRED_RELEASE_CHECKS = ("contract-tests", "manifest-version-sync", "skill-degradation")
+# Compatibility alias only. Runtime callers must use required_release_checks()
+# or inject check names into ReleaseRequiredChecksProjection.
+REQUIRED_RELEASE_CHECKS: tuple[str, ...] = ()
+HOST_REQUIRED_CHECKS_ENV = "HOST_GITHUB_RELEASE_REQUIRED_CHECKS"
+
+
+def required_release_checks(env_or_ctx: Mapping[str, str] | Any | None = None) -> tuple[str, ...]:
+    if env_or_ctx is None:
+        source: Mapping[str, str] = os.environ
+    elif isinstance(env_or_ctx, Mapping):
+        source = env_or_ctx
+    else:
+        source = getattr(env_or_ctx, "host_env", {}) or {}
+    raw = str(source.get(HOST_REQUIRED_CHECKS_ENV, "") or "")
+    return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
 @dataclass(frozen=True)
@@ -94,10 +109,13 @@ class ReleaseRequiredChecksProjection:
         runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = run_command,
         now: Callable[[], datetime] = utc_now,
         sleep: Callable[[float], None] = time.sleep,
+        required_checks: Sequence[str] | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self.runner = runner
         self.now = now
         self.sleep = sleep
+        self.required_checks = tuple(required_checks) if required_checks is not None else required_release_checks(env)
 
     def check_ref(
         self,
@@ -129,6 +147,8 @@ class ReleaseRequiredChecksProjection:
         return {ref: self.check_ref(repo_slug, ref, since=since) for ref in refs}
 
     def _check_ref_once(self, repo_slug: str, ref: str, *, since: datetime | None) -> RequiredCheckStatus:
+        if not self.required_checks:
+            return self._failed(ref, "missing_host_required_release_checks", {}, [], [], [])
         result = self.runner(
             [
                 "gh",
@@ -153,7 +173,7 @@ class ReleaseRequiredChecksProjection:
             if not isinstance(check, dict):
                 continue
             name = check.get("name")
-            if name not in REQUIRED_RELEASE_CHECKS:
+            if name not in self.required_checks:
                 continue
             previous = latest_by_name.get(name)
             if previous is None or _check_sort_time(check) >= _check_sort_time(previous):
@@ -164,7 +184,7 @@ class ReleaseRequiredChecksProjection:
         pending_checks: list[str] = []
         stale_checks: list[str] = []
         missing_checks: list[str] = []
-        for name in REQUIRED_RELEASE_CHECKS:
+        for name in self.required_checks:
             check = latest_by_name.get(name)
             if check is None:
                 checks[name] = False
@@ -218,7 +238,7 @@ class ReleaseRequiredChecksProjection:
         return RequiredCheckStatus(
             passed=False,
             reason=reason,
-            checks={name: checks.get(name, False) for name in REQUIRED_RELEASE_CHECKS},
+            checks={name: checks.get(name, False) for name in self.required_checks},
             red_checks=red_checks,
             pending_checks=pending_checks,
             stale_checks=stale_checks,
@@ -235,8 +255,10 @@ def check_ref(
     poll_seconds: int = 10,
     runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = run_command,
     now: Callable[[], datetime] = utc_now,
+    required_checks: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> RequiredCheckStatus:
-    return ReleaseRequiredChecksProjection(runner=runner, now=now).check_ref(
+    return ReleaseRequiredChecksProjection(runner=runner, now=now, required_checks=required_checks, env=env).check_ref(
         repo_slug,
         ref,
         since=since,
@@ -252,8 +274,10 @@ def check_refs(
     since: datetime,
     runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] = run_command,
     now: Callable[[], datetime] = utc_now,
+    required_checks: Sequence[str] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> dict[str, RequiredCheckStatus]:
-    return ReleaseRequiredChecksProjection(runner=runner, now=now).check_refs(repo_slug, refs, since=since)
+    return ReleaseRequiredChecksProjection(runner=runner, now=now, required_checks=required_checks, env=env).check_refs(repo_slug, refs, since=since)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -285,6 +309,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 __all__ = [
     "REQUIRED_RELEASE_CHECKS",
+    "HOST_REQUIRED_CHECKS_ENV",
     "ReleaseRequiredChecksProjection",
     "RequiredCheckStatus",
     "check_ref",
@@ -292,4 +317,5 @@ __all__ = [
     "isoformat",
     "main",
     "parse_time",
+    "required_release_checks",
 ]

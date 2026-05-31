@@ -129,6 +129,14 @@ class MetaJudgePromptContext:
         return f"issue-{self.issue}"
 
     @property
+    def work_unit_producer(self) -> str:
+        return "manual-issue (prompt-only provenance)"
+
+    @property
+    def work_unit_source_ref(self) -> str:
+        return f"gh-issue-{self.issue}"
+
+    @property
     def convergence_round_plus_one(self) -> int:
         return self.round + 1
 
@@ -138,6 +146,8 @@ class MetaJudgePromptRenderer:
         "ISSUE_NUMBER",
         "WORK_UNIT_ID",
         "CLUSTER_ID",
+        "WORK_UNIT_PRODUCER",
+        "WORK_UNIT_SOURCE_REF",
         "CONVERGENCE_ROUND",
         "CONVERGENCE_ROUND_PLUS_ONE",
         "SOLVER_MINIMAL_PATH",
@@ -158,6 +168,8 @@ class MetaJudgePromptRenderer:
             "ISSUE_NUMBER": context.issue,
             "WORK_UNIT_ID": context.work_unit_id,
             "CLUSTER_ID": context.work_unit_id,
+            "WORK_UNIT_PRODUCER": context.work_unit_producer,
+            "WORK_UNIT_SOURCE_REF": context.work_unit_source_ref,
             "CONVERGENCE_ROUND": str(context.round),
             "CONVERGENCE_ROUND_PLUS_ONE": str(context.convergence_round_plus_one),
             "SOLVER_MINIMAL_PATH": context.solver_paths["minimal"],
@@ -220,7 +232,7 @@ class Phase9Router:
         *,
         ctx: LoopContext | None = None,
         dry_run: bool = False,
-        command_runner: Callable[[list[str]], None] | None = None,
+        command_runner: Callable[[dict[str, object]], None] | None = None,
     ) -> None:
         if ctx is None:
             if repo_root is None:
@@ -238,7 +250,6 @@ class Phase9Router:
         # .refactor-loop/.controller-pending-events.log.
         self.pending_events_path = ctx.paths.pending_events
         self.lock_path = self.loop_dir / "phase9-router.lock"
-        self.spawn_codex = self.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
@@ -637,6 +648,7 @@ class Phase9Router:
             "marker": marker,
             "log_path": self._artifact_path(log_path),
             "dispatched_at": self._now(),
+            "dispatch_state": "harness-intent",
         }
         if extra:
             entry.update(extra)
@@ -804,30 +816,38 @@ class Phase9Router:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
     def _spawn(self, prompt: Path, log_path: Path) -> bool:
-        command = [
-            str(self.spawn_codex),
-            "spawn-codex",
-            "--cd",
-            str(self.repo_root),
-            "--prompt",
-            str(prompt),
-            "--log",
-            str(log_path),
-            "--stall",
-            "3600",
-        ]
         if self.dry_run:
             return False
-        self.command_runner(command)
+        intent = {
+            "intent_id": self._intent_id_for_log(log_path),
+            "source": "phase9-router",
+            "route": "design-consensus-direct",
+            "task_id": log_path.stem,
+            "priority": "p1",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": ".",
+            "prompt": self._artifact_path(prompt),
+            "log": self._artifact_path(log_path),
+            "stall": 3600,
+            "reason": "phase9-router direct route",
+            "queued_at": self._now(),
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        self.command_runner(intent)
         return True
 
-    def _default_runner(self, command: list[str]) -> None:
-        subprocess.Popen(
-            ["nohup", *command],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+    def _default_runner(self, intent: dict[str, object]) -> None:
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _intent_id_for_log(self, log_path: Path) -> str:
+        identity = self._identity_from_path(log_path)
+        if identity is None:
+            return f"phase9-router:{log_path.stem}"
+        return f"phase9-router:{identity.issue}:{identity.round}:{identity.actor}"
 
     def _write_prompt(self, issue: str, round_no: int, actor: str, body: str) -> Path:
         prompt = self.prompts_dir / f"phase9-issue{issue}-r{round_no}-{actor}.md"
@@ -855,6 +875,8 @@ class Phase9Router:
                 f"ISSUE_NUMBER={context.issue}",
                 f"WORK_UNIT_ID={context.work_unit_id}",
                 f"CLUSTER_ID={context.work_unit_id}",
+                f"WORK_UNIT_PRODUCER={context.work_unit_producer}",
+                f"WORK_UNIT_SOURCE_REF={context.work_unit_source_ref}",
                 f"CONVERGENCE_ROUND={context.round}",
                 f"CONVERGENCE_ROUND_PLUS_ONE={context.convergence_round_plus_one}",
                 f"SOLVER_MINIMAL_PATH={context.solver_paths['minimal']}",
@@ -1091,6 +1113,7 @@ class Phase9Router:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def _solver_roles(self) -> tuple[str, ...]:
+        # Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely.
         return ROLES
 
     def _judge_role(self) -> str:
@@ -1113,7 +1136,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def main(argv: list[str] | None = None, command_runner: Callable[[list[str]], None] | None = None) -> int:
+def main(argv: list[str] | None = None, command_runner: Callable[[dict[str, object]], None] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
     repo_root = Path(args.repo_root) if args.repo_root else LoopContext.load(cwd=os.getcwd()).repo_root
     if not repo_root.is_absolute():

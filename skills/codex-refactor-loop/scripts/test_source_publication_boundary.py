@@ -53,8 +53,10 @@ class SourcePublicationBoundaryContract(unittest.TestCase):
             "python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'",
             workflow,
         )
-        self.assertIn('"contract-tests"', required_checks)
-        self.assertIn('"skill-degradation"', required_checks)
+        self.assertIn("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", required_checks)
+        self.assertIn("required_release_checks", required_checks)
+        self.assertNotIn('"contract-tests"', required_checks)
+        self.assertNotIn('"skill-degradation"', required_checks)
 
 
 if __name__ == "__main__":

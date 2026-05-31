@@ -58,6 +58,18 @@ def section_after_heading(markdown: str, heading: str) -> str:
     return _section_after_first_heading(markdown[match.start() :])
 
 
+def section_after_anchor_until_heading(markdown: str, anchor: str, level: int) -> str:
+    marker = f'<a id="{anchor}"></a>'
+    _, found, after_anchor = markdown.partition(marker)
+    if not found:
+        raise AssertionError(f"missing markdown anchor: {anchor}")
+    pattern = re.compile(rf"(?m)^#{{1,{level}}}\s+")
+    first_heading = pattern.search(after_anchor)
+    start = first_heading.end() if first_heading else 0
+    match = pattern.search(after_anchor, start)
+    return after_anchor[: match.start()] if match else after_anchor
+
+
 def _section_after_first_heading(markdown: str) -> str:
     lines = markdown.splitlines(keepends=True)
     if not lines:
@@ -162,21 +174,66 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
 
-    def test_skill_documents_two_entry_modes_near_top(self) -> None:
+    def test_skill_documents_main_path_and_fallback_producer_near_top(self) -> None:
         top = "\n".join(self.skill.splitlines()[:200])
         for needle in (
-            "## Two entry modes",
-            "audit-driven",
+            "## Main path and fallback producer",
+            "open actionable catalog-managed GitHub issue/PR resolution",
             "issue-driven / Path A",
             "catalog-derived design issue label bundle",
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
             "Legacy issue-entry labels are migration aliases only",
-            "Audit is a seed producer, not the only entry",
+            "`audit` remains a stable compatibility producer value and fallback issue producer",
+            "no open actionable managed issue/PR",
+            "Audit produces or updates issues that feed back into the main path",
+            "not a co-equal entry mode",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, top)
+        self.assertIn('<a id="two-entry-modes"></a>', top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+        self.assertNotIn("audit-driven", top)
+
+    def test_detailed_reference_uses_issue_pr_main_path_and_audit_fallback(self) -> None:
+        producers = section_after_heading(self.skill, "Producers")
+        work_intake = section_after_heading(self.skill, "Consensus-rnd Phase work-intake — Fallback issue production")
+        bootstrap = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase bootstrap — Bootstrap (first wakeup only)",
+        )
+        detailed = "\n".join((producers, work_intake, bootstrap))
+
+        for needle in (
+            "The default main path is open actionable managed issue/PR resolution",
+            "`audit` is the fallback raw artifact issue producer",
+            "`audit` remains the stable compatibility producer value and fallback issue producer, not the default\nmain path",
+            "先扫 open actionable managed issue/PR 并派 next-step actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, detailed)
+        for forbidden in (
+            "`audit` remains the default producer",
+            "The default work-unit producer is `audit`",
+            "派默认 work-unit producer",
+            "默认 audit",
+            "默认 producer",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, detailed)
+
+    def test_project_rules_do_not_duplicate_skill_local_main_path_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for forbidden in (
+            "issue resolution 是主路径",
+            "audit 是 fallback producer",
+            "open actionable managed GitHub issue/PR",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, claude)
+        self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
+        self.assertIn("## Main path and fallback producer", self.skill)
 
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
         phase9 = section_after_heading(
@@ -195,6 +252,49 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
+
+    def test_release_countdown_contract_is_wakeup_plan_only_status_projection(self) -> None:
+        milestone = section_after_heading(self.skill, "Milestone priority(强制)")
+        wakeup = section_after_heading(self.skill, "Wakeup Skeleton")
+
+        for needle in (
+            "crnd:milestone:release-target",
+            "release countdown status",
+            "non-exclusive milestone fact",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "wakeup-plan-only and read-only",
+            "status-only, non-dispatchable `release-countdown` action",
+            "release-gate scoring source",
+            ".version-bump.json",
+            "existing release commits projection",
+            "no_lifecycle_authority",
+            "targets",
+            "from_version",
+            "to_version",
+            "stability_score",
+            "ready",
+            "red_signals",
+            "blocked_reasons",
+            'source: "release-gate"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, milestone)
+        for forbidden in (
+            "create a daemon",
+            "write state",
+            "update statusline",
+            "update peek",
+            "create a top-level duplicate object",
+            "write a release decision",
+            "mutate labels",
+            "tag",
+            "publish a release",
+            "add lifecycle authority",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, milestone)
+        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("not dispatchable", wakeup)
 
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
         work_unit = section_after_anchor(self.skill, "work-unit-contract")
@@ -275,6 +375,115 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             walkthrough,
         )
 
+    def test_github_workflow_portability_checklist_is_folded_into_skill(self) -> None:
+        walkthrough = section_after_anchor(self.skill, "downstream-install-walkthrough")
+        checklist = section_after_anchor_until_heading(self.skill, "github-workflow-portability-checklist", 3)
+        self.assertIn("SKILL.md#github-workflow-portability-checklist", self.readme)
+        self.assertIn("Host GitHub workflow portability", self.readme)
+        for needle in (
+            "#104 setup is folded into this skill's existing owner surface",
+            ".config/consensus-rnd/host.env",
+            "HOST_WORKFLOW_SPEC",
+            "exactly seven data-only surfaces",
+            "`events`, `stages`, `work_unit_kinds`, `roles`, `prompt_bindings`, `consensus_policies`, and `issue_intake_mappings`",
+            "no host `.github` edits",
+            "no branch-protection probing or edits",
+            "Future #357 interactive configuration",
+            "must output these same host-owned artifacts",
+            "#### Guided GitHub consensus workflow setup",
+            ".refactor-loop/runs/github-workflow-setup/<timestamp>/",
+            "host-env.patch.md",
+            "labels-plan.json",
+            "scheduler.md",
+            "statusline.json",
+            "host-workflow-spec.json",
+            "walkthrough.md",
+            "Host env surface matrix",
+            "host.env.example",
+            "scripts/codex_refactor_loop/labels.py",
+            "consensus-rnd-cli restart-daemons",
+            "consensus-rnd-cli statusline",
+            "workflow_spec.py",
+            "WorkflowInvariantValidator",
+            "`host:` namespace",
+            "repo-relative paths",
+            "advisory only",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, checklist)
+        self.assertIn("GitHub workflow portability checklist", walkthrough)
+        self.assertFalse((REPO_ROOT / "skills" / "consensus-github-workflow-setup").exists())
+        for forbidden in (
+            "HostWorkflowPortabilityProjection",
+            "GitHubHostPolicy",
+            "HOST_GITHUB_LABEL_MAP",
+            "branch-protection probe",
+            "Projects adapter",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.readme)
+
+        for forbidden in (
+            "summary.json",
+            "host-workflow-spec.example.json",
+            "renderer",
+            "CLI command",
+            "setup skill",
+            "installer",
+            "template directory",
+            "root install document",
+            "host `.git`",
+            "`.github`",
+            "CI",
+            "policy",
+            "branch protection",
+            "GitHub labels",
+            "issues",
+            "PRs",
+            "commits",
+            "pushes",
+            "merges",
+            "closes",
+            "tags",
+            "releases",
+            "settings",
+            "lifecycle surface",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, checklist)
+
+        self.assertNotIn("GuidedWorkflowSetupBundle", self.skill)
+        self.assertFalse((REPO_ROOT / "skills" / "github-workflow-setup").exists())
+        self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "setup.py").exists())
+        self.assertEqual(0, len(list((SKILL_ROOT / "scripts" / "codex_refactor_loop").glob("*setup*"))))
+
+    def test_release_required_checks_contract_is_host_configurable(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        release_schema = section_after_anchor_until_heading(self.skill, "release-decision-schema", 3)
+        combined = "\n".join((source_repo_validation, details, release_schema))
+
+        for needle in (
+            "$HOST_GITHUB_RELEASE_REQUIRED_CHECKS",
+            "required_release_checks()",
+            "host.env",
+            "host configures the exact required GitHub check-run names",
+            "release required checks are not hardcoded by source-repo CI job names",
+            "Shared Checks API projection sees exact check-run name success for every name in `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`",
+            "auto-release with an empty list fails closed",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+        stale_contracts = (
+            "requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+            "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` requires `skill-degradation` beside `contract-tests` and `manifest-version-sync`",
+        )
+        for stale in stale_contracts:
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, combined)
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (
@@ -310,6 +519,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "fail closed before release creation",
             "before `.refactor-loop/state/release-publish-result.json` is written",
             "no tag target without exact-SHA green checks",
+            "no proof-ticket/resume system",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_release_publication_anchor_names_already_bumped_reentry(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — release-publication(per #322)")
+        for needle in (
+            "already-bumped reentry",
+            "only preflight mismatch is mapped manifests already equal `to_version`",
+            "git show -s --format=%s HEAD",
+            "HEAD subject is exactly `Release v<to_version>`",
+            "skip only `python3 .github/scripts/bump_version.py --version <to_version>`, `git add .version-bump.json <mapped manifests>`, and `git commit -m \"Release v<to_version>\"`",
+            "exact release/reentry commit sha",
+            "pending/red/missing/API-fail fail closed",
             "no proof-ticket/resume system",
         ):
             with self.subTest(needle=needle):
@@ -391,7 +615,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
     def test_skill_documents_phase9_router_daemon_boundary(self) -> None:
         self.assertIn("consensus-rnd-cli phase9-router --daemon --repo-root", self.skill)
-        self.assertIn("Allowlist(唯一 direct spawn authority)", self.skill)
+        self.assertIn("Allowlist(唯一 direct spawn-intent authority)", self.skill)
         self.assertIn("phase9-issue<N>-r<R>-<minimal|structural|delete|judge|reflector>.log", self.skill)
         self.assertIn("solver-issue<N>-r<R>-<minimal|structural|delete>.log", self.skill)
         self.assertIn("meta-judge-issue<N>-r<R>.log", self.skill)
@@ -417,6 +641,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "missing template",
             "phase9-meta-judge-template-unavailable",
             "phase9-meta-judge-scope-invalid",
+            "HARNESS_SPAWN_INTENT",
+            '`command` field is exactly `"spawn-codex"` as a closed semantic enum',
+            "not argv and not shell",
+            "actual CLI binary and argv construction live only in the controller/harness consumption layer",
+            'dispatch_state="harness-intent"',
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.skill)
@@ -427,7 +656,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("phase9-source-not-open", self.skill)
         self.assertIn("phase9-source-state-unavailable", self.skill)
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
-        self.assertIn("must not introduce ControllerEvent, ControllerCommand, ControllerOrchestrator", self.skill)
+        self.assertIn("must not introduce ControllerEvent, ControllerCommand, SpawnIntentInbox, spawn-intents, ControllerOrchestrator", self.skill)
 
     def test_meta_judge_prompt_documents_router_scoped_input_boundary(self) -> None:
         meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
@@ -437,12 +666,58 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "`${SOLVER_STRUCTURAL_PATH}`",
             "`${SOLVER_DELETE_PATH}`",
             "gh issue view ${ISSUE_NUMBER}",
+            "`${WORK_UNIT_PRODUCER}`",
+            "`${WORK_UNIT_SOURCE_REF}`",
             "Do not search for, infer from, or copy sibling judge artifacts",
             "solver frontmatter `issue` is not `${ISSUE_NUMBER}`",
             "`${META_JUDGE_OUTPUT_PATH}` is not the judge output path",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "abstain-compatible Path A greenfield frame",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
+
+    def test_path_a_greenfield_delete_abstain_provenance_is_documented(self) -> None:
+        solver_delete = (SKILL_ROOT / "prompts" / "solver-delete.md").read_text(encoding="utf-8")
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, solver_delete, meta_judge, router))
+        for needle in (
+            "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
+            "WORK_UNIT_SOURCE_REF=gh-issue-<N>",
+            "`${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "Path A greenfield",
+            "absence of existing local code to delete is neutral evidence",
+            "absence of an existing local audit artifact or existing code-to-delete is neutral",
+            "compatible with `SOLVER_DONE:delete:abstain:<reason>`",
+            "classify as genuinely needed/no current deletion dependency and abstain",
+            '"WORK_UNIT_PRODUCER"',
+            '"WORK_UNIT_SOURCE_REF"',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_path_a_greenfield_delete_abstain_truth_table_is_authoritative(self) -> None:
+        meta_judge = (SKILL_ROOT / "prompts" / "meta-judge.md").read_text(encoding="utf-8")
+        combined = "\n".join((self.skill, meta_judge))
+        for needle in (
+            "all implementation-bearing proposals agree + meta-judge consensus",
+            "all three solver outputs are mandatory",
+            "Path A greenfield compatible-neutral exception",
+            "exactly 2 implementation-bearing `propose` verdicts plus delete `abstain`",
+            "${WORK_UNIT_PRODUCER}` is `manual-issue (prompt-only provenance)`",
+            "${WORK_UNIT_SOURCE_REF}` is `gh-issue-${ISSUE_NUMBER}`",
+            "issue body/comments plus delete reverse-evidence prove greenfield/no current deletion target",
+            "delete abstain does not contradict that plan",
+            "This is not a generic 2/3 gate and has no host override",
+            "Missing/unknown/audit-backed/non-greenfield provenance",
+            "delete `false-positive:nothing-to-delete`",
+            "delete `escalate:no-plan`",
+            "implementation-bearing disagreement",
+            "fail closed to convergence",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
 
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
@@ -694,7 +969,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "First-version scope is bounded",
             "not a DAG executor",
             "does not create public marker aliases",
-            "router direct-spawn ignores host `roles`, `dispatch`, and `consensus_policies` completely",
+            "router direct-spawn-intent ignores host `roles`, `dispatch`, and `consensus_policies` completely",
             "always the built-in `minimal`/`structural`/`delete` solver triplet plus built-in `judge`",
         ):
             with self.subTest(needle=needle):
@@ -728,7 +1003,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, FORBIDDEN_FIELD_NAMES)
 
-    def test_phase9_direct_spawn_allowlist_ignores_host_workflow_spec_sources(self) -> None:
+    def test_phase9_direct_spawn_intent_allowlist_ignores_host_workflow_spec_sources(self) -> None:
         router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
         router_section = router[router.index("class Phase9Router") :]
         heading = "### Consensus-rnd Phase design-consensus router daemon command body"
@@ -737,11 +1012,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         contract_section = self.skill[start:end]
 
         for token in (
-            "HostWorkflowSpec is not a phase9 direct-spawn authority",
+            "HostWorkflowSpec is not a phase9 direct-spawn-intent authority",
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "SOLVER_DONE:<minimal|structural|delete>:*",
-            "before spawning r(S+1) minimal/structural/delete solvers",
+            "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
             "suppress next solvers",
         ):
@@ -756,6 +1031,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "def _judge_role",
             "return JUDGE_ROLE",
             "class Phase9Router",
+            "Phase9 direct-spawn-intent ignores HostWorkflowSpec role/dispatch/policy data entirely",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, router)

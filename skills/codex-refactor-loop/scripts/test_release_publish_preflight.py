@@ -71,16 +71,26 @@ def set_mapped_version(repo: Path, version: str) -> None:
 def write_host_opt_in(repo: Path, enabled: bool = True) -> None:
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
     (repo / ".refactor-loop/host.env").write_text(
-        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
+        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n"
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
     )
+
+
+def write_host_auto_release_without_required_checks(repo: Path, *, value: str | None = None) -> None:
+    (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+    lines = ["export RELEASE_AUTO_ENABLE=true"]
+    if value is not None:
+        lines.append(f"export HOST_GITHUB_RELEASE_REQUIRED_CHECKS={value}")
+    (repo / ".refactor-loop/host.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def write_explicit_host_opt_in(repo: Path, enabled: bool = True) -> Path:
     path = repo / ".config/consensus-rnd/host.env"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n",
+        f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n"
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
     )
     return path
@@ -212,6 +222,20 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             self.assertTrue(result.allowed, result.reasons)
             self.assertEqual(result.version, "1.9.10")
             self.assertEqual(result.target_ref, "abc123")
+
+    def test_publish_preflight_fails_closed_when_auto_release_lacks_host_required_checks(self) -> None:
+        for value in (None, ""):
+            with self.subTest(value=value), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_host_auto_release_without_required_checks(repo, value=value)
+                write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10", target_ref="abc123")
+
+                result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+                self.assertFalse(result.allowed)
+                self.assertIn("missing_host_required_release_checks", result.reasons)
+                other_reasons = set(result.reasons) - {"missing_host_required_release_checks"}
+                self.assertEqual(other_reasons, set())
 
     def test_explicit_host_env_opt_in_allows_preflight_without_legacy_file(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -411,6 +435,18 @@ class ReleasePublishPreflightTests(unittest.TestCase):
             write_host_opt_in(repo)
             write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
             set_mapped_version(repo, "1.9.8")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("manifest_version_mismatch", result.reasons)
+
+    def test_preflight_still_rejects_target_version_manifests(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.9.9", version="1.9.10")
+            set_mapped_version(repo, "1.9.10")
 
             result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
 

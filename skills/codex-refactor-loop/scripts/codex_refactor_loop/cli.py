@@ -78,7 +78,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "concurrency": CommandSpec(
         concurrency_main,
         "run the Python concurrency monitor or read-only counter",
-        ("read-process", "read-gh", "write-state", "write-event", "spawn", "write-artifact"),
+        ("read-process", "read-gh", "write-state", "write-event", "write-artifact"),
     ),
     "progress-reporter": CommandSpec(
         progress_reporter_main,
@@ -105,7 +105,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "phase9-router": CommandSpec(
         phase9_router_main,
         "compatibility alias for the Python design-consensus router",
-        ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
+        ("read-log", "read-gh", "write-event", "write-artifact"),
     ),
     "release-gate": CommandSpec(
         release_gate_main,

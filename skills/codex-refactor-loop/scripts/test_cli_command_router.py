@@ -155,10 +155,16 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_phase9_router_declares_state_only_read_gh_authority_without_lifecycle_tokens(self) -> None:
         # Refactor (fix/pr245-router-authority-anchor): Old: the CLI authority source did not expose phase9-router's source-OPEN GitHub state read. New: lock the read-gh token while preserving the no-lifecycle daemon boundary.
         self.assertEqual(
-            ("read-log", "read-gh", "write-event", "write-artifact", "spawn"),
+            ("read-log", "read-gh", "write-event", "write-artifact"),
             COMMANDS["phase9-router"].authority,
         )
         self.assertFalse(set(COMMANDS["phase9-router"].authority) & LIFECYCLE_TOKENS)
+
+    def test_harness_spawn_intent_writers_do_not_declare_spawn_authority(self) -> None:
+        self.assertNotIn("spawn", COMMANDS["concurrency"].authority)
+        self.assertNotIn("spawn", COMMANDS["phase9-router"].authority)
+        self.assertIn("write-event", COMMANDS["concurrency"].authority)
+        self.assertIn("write-event", COMMANDS["phase9-router"].authority)
 
     def test_closed_label_reconciler_declares_only_closed_reconcile_label_authority(self) -> None:
         self.assertEqual(

@@ -2,7 +2,7 @@
 
 本文件给**在本仓库内工作的 agent**(增改 skill、维护清单、发版)看;不是给 host 项目运行时用的。host 运行时事实由 `host.env` 注入,见各 skill 的 SKILL.md。
 
-仓库定位与共识引擎设计哲学见 [`README.md`](./README.md);本文件是 agent 工作宪法,与 README 不重复。术语定义与项目当前状态归各 skill 的 SKILL.md / REFERENCE.md,不在本文件维护。
+仓库定位与共识引擎设计哲学见英文 canonical [`README.md`](./README.md);中文 companion 见 [`README.zh-CN.md`](./README.zh-CN.md)。本文件是 agent 工作宪法,与 README pair 不重复。术语定义与项目当前状态归各 skill 的 SKILL.md / REFERENCE.md,不在本文件维护。
 
 ## 仓库性质
 
@@ -18,6 +18,7 @@
 ├── gemini-extension.json + GEMINI.md   # Gemini:扩展清单 + 上下文入口
 ├── package.json           # npm 风格元数据 / 版本锚点
 ├── AGENTS.md → CLAUDE.md  # 跨 agent 约定(符号链接)
+├── README.md + README.zh-CN.md  # 英文 canonical 公开身份文档 + 中文 companion
 ├── LICENSE                # MIT
 ├── skills/<name>/         # 各 skill(SKILL.md 必备)
 └── .version-bump.json     # 版本号同步映射
@@ -36,7 +37,7 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 - **边界清晰,职责分层**:本文件承载**跨 skill 边界**与**仓库级宪法约束**;单个 skill 的工作流细则、术语定义、当前状态归该 skill 自维护,不复制回本文件。
 - **事实源唯一**:同一约束禁止在多处平行声明。版本号 → `.version-bump.json`;host 运行时事实 → `host.env`;skill 行为 → 该 skill 的 SKILL.md 与 `scripts/test_*.py`。
 - **抽象优先,行为契约**:skill 间通过 `host.env` + 文件 artifact + GitHub API 等稳定边界协作,不耦合彼此内部脚本;命名跟随职责,不泄露 runtime / 内部实现细节。
-- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority by default;授权来源必须 durable artifact + 仓库级文档双重锚定。#53 是唯一 integration-branch git carveout:`integration sync daemon` 在专用 integration worktree 内的 integration-branch git allowlist(`git fetch` / `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` / `rev-list` / `rev-parse` / `merge-base` / `reset --hard` / `rebase --rebase-merges` / `merge --ff-only|--no-ff` / `push HEAD:$INTEGRATION_BRANCH` / force-with-lease adoption),不得 commit worker diff、create/merge/close PR、开关 issue/PR/label、tag/release,不得作为 generic lifecycle actor。#191 是唯一跨设备 active-controller lease carveout:GitHub/已 push git 面只承载一个全局 `ActiveControllerLease`,允许 read/acquire/renew 专用 lease artifact 并暴露 owner/expiry;禁止 worker diff commit、issue/PR create/merge/close/edit、label mutation、tag/release、per-work claim、host-defined lease scope、跨设备 floor 聚合、daemon ownership matrix、active-active scheduler、generic lifecycle actor。#193 中 issue/PR author.login 与 updatedAt 仅可作为 planning/routing/stale metadata,不得作为 side-effect authorization、per-work owner authority、claim/lease scope 或 takeover permit;issue/PR target 写副作用的跨设备 permit 只来自 #191 ActiveControllerLease。#238 是唯一 closed managed item phase-label reconciliation carveout:active-controller owner 的 checked-in `closed-label-reconciler` 只可对 CLOSED `crnd:lifecycle:managed` issue/PR 做 phase-label reconciliation,移除 phase/cleanup/stuck label 并加 exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`;禁止 open item mutation、issue/PR create/close/reopen/body/title edit、PR merge、human/triage/milestone/lifecycle label mutation、tag/release、generic lifecycle actor。#322 是唯一 controller-owned release publication carveout:active-controller owner 的 `ReleasePublisher` 只可在 `ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`、fresh release-candidate/release-decision、decision_digest、target_ref、mapped manifest from_version、required checks 全绿后,运行 `python3 .github/scripts/bump_version.py --version <to_version>`、`git add .version-bump.json <mapped manifests>`、`git commit -m "Release v<to_version>"`、`git rev-parse HEAD`、`git fetch origin HEAD`、`git rev-list --count HEAD..origin/HEAD`、`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取 `gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp` 并确认该 exact fresh SHA required checks 全绿后才运行 `gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`,并写 `.refactor-loop/state/release-publish-result.json`;禁止 public release-publish CLI、workflow tag/release creation、tag target without exact-SHA green checks、`git tag`、force-push、release edit/delete/upload、approval-ticket/emoji gate、issue/PR/label lifecycle、merge/close、generic lifecycle actor。通用授权、escape hatch、宽口径修宪一律视为设计未完成。
+- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority by default;授权来源必须 durable artifact + 仓库级文档双重锚定。#53 是唯一 integration-branch git carveout:`integration sync daemon` 在专用 integration worktree 内的 integration-branch git allowlist(`git fetch` / `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` / `rev-list` / `rev-parse` / `merge-base` / `reset --hard` / `rebase --rebase-merges` / `merge --ff-only|--no-ff` / `push HEAD:$INTEGRATION_BRANCH` / force-with-lease adoption),不得 commit worker diff、create/merge/close PR、开关 issue/PR/label、tag/release,不得作为 generic lifecycle actor。#191 是唯一跨设备 active-controller lease carveout:GitHub/已 push git 面只承载一个全局 `ActiveControllerLease`,允许 read/acquire/renew 专用 lease artifact 并暴露 owner/expiry;禁止 worker diff commit、issue/PR create/merge/close/edit、label mutation、tag/release、per-work claim、host-defined lease scope、跨设备 floor 聚合、daemon ownership matrix、active-active scheduler、generic lifecycle actor。#193 中 issue/PR author.login 与 updatedAt 仅可作为 planning/routing/stale metadata,不得作为 side-effect authorization、per-work owner authority、claim/lease scope 或 takeover permit;issue/PR target 写副作用的跨设备 permit 只来自 #191 ActiveControllerLease。#238 是唯一 closed managed item phase-label reconciliation carveout:active-controller owner 的 checked-in `closed-label-reconciler` 只可对 CLOSED `crnd:lifecycle:managed` issue/PR 做 phase-label reconciliation,移除 phase/cleanup/stuck label 并加 exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`;禁止 open item mutation、issue/PR create/close/reopen/body/title edit、PR merge、human/triage/milestone/lifecycle label mutation、tag/release、generic lifecycle actor。#322 是唯一 controller-owned release publication carveout:active-controller owner 的 `ReleasePublisher` 只可在 `ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`、fresh release-candidate/release-decision、decision_digest、target_ref、mapped manifest from_version、required checks 全绿后,走同一 publish 主链路:首次发布运行 `python3 .github/scripts/bump_version.py --version <to_version>`、`git add .version-bump.json <mapped manifests>`、`git commit -m "Release v<to_version>"`;already-bumped reentry 仅当 only preflight mismatch 是 mapped manifests 已==`to_version` 且 `git show -s --format=%s HEAD` 证明 HEAD subject 精确为 `Release v<to_version>` 时跳过这三步。两条路径随后都必须运行 `git rev-parse HEAD`、`git fetch origin HEAD`、`git rev-list --count HEAD..origin/HEAD`、`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取 `gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp` 或 reentry 的 `gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp` 并确认该 exact fresh SHA required checks 全绿后才运行(或 reentry 时确认该 exact fresh/reentry SHA required checks 全绿后才运行) `gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]` 或 reentry 的 `gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]`,并写 `.refactor-loop/state/release-publish-result.json`;禁止 public release-publish CLI、workflow tag/release creation、tag target without exact-SHA green checks、`git tag`、force-push、release edit/delete/upload、approval-ticket/emoji gate、issue/PR/label lifecycle、merge/close、generic lifecycle actor。通用授权、escape hatch、宽口径修宪一律视为设计未完成。
 - **抽象一旦能被滥用即设计未完成**:允许绕过审查边界、merge gate、CLAUDE.md 修宪门槛的通用机制必须继续收窄。
 - **删除优先**:废弃 skill、deprecated wrapper、`*.bak/*.old/*.deprecated` 直接删除,不保留兼容空壳;历史由 git 与 CHANGELOG 保留。
 - **变更必须可验证**:行为约束必须落到机械验证手段(behavior test / source-regression test / 段落 lint);仅靠"agent 应该记得"承载的约束视为未落地。
@@ -47,7 +48,7 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 
 ## 共识引擎哲学(本仓库唯一产品身份)
 
-权威表述见 [`README.md`](./README.md)「核心」段;此处只述跨 skill 不动点:
+权威表述见英文 canonical [`README.md`](./README.md)「Core」段;[`README.zh-CN.md`](./README.zh-CN.md) 是中文 companion。此处只述跨 skill 不动点:
 
 - **偏置独立多角度**:同一决策点的多 solver / 多 reviewer **互相看不到对方输出**,各自带先验立场独立得出结论;禁止串行"先看 A 再写 B"或单源冒充多源。
 - **meta-judge 收敛**:分歧只收敛到固定数量的出口语义(达成 / 接近 / 真停滞);真停滞才升级到 meta-layer 调和,不直接升级到人。
@@ -84,6 +85,12 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 - **artifact 路径相对 `$REPO_ROOT`**:不硬编码 host 路径,不引入具体 host 事实。
 - **controller worktree 统一位置**:放在 `<repo-root>/.worktrees/<name>/`(gitignored),**不**创建 sibling `<repo>-wt-*` 目录。
 - **最小权限动作**:没有明确授权时,agent 不修改 host 配置、不发布 release、不关闭外部状态面、不执行不可逆生命周期动作。
+<!--
+Refactor (iter343/issue-343):
+  Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
+  New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
+-->
+- **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
 
 ## 版本同步(强制)
 
@@ -101,8 +108,8 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 
 ## 工程约定(精简)
 
-- **文档分层**:`README.md` 是仓库定位与共识引擎设计哲学权威源;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 是可选重型参考层;未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层。三者职责不重叠:README 写产品身份,CLAUDE.md 写仓库宪法,skill 自己维护行为合同/参考。
-- **根目录 `.md` 收口**:仅保留 `CLAUDE.md`、`README.md`、`AGENTS.md`(符号链接,内容同 `CLAUDE.md`)、`LICENSE`、`GEMINI.md`、`CHANGELOG.md`(若有)。
+- **文档分层**:`README.md` 是英文 canonical 仓库定位与共识引擎设计哲学权威源;`README.zh-CN.md` 是中文 companion,用于公开中文阅读入口,大段顺序对齐即可;`CLAUDE.md` 是 agent 工作宪法;`skills/<name>/SKILL.md` 是该 skill 的契约;`skills/<name>/REFERENCE.md` 是可选重型参考层;未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层。职责不重叠:README pair 写产品身份,CLAUDE.md 写仓库宪法,skill 自己维护行为合同/参考。
+- **根目录 `.md` 收口**:仅保留 `CLAUDE.md`、`README.md`、`README.zh-CN.md`、`AGENTS.md`(符号链接,内容同 `CLAUDE.md`)、`LICENSE`、`GEMINI.md`、`CHANGELOG.md`(若有)。
 - **不保留历史副本**:废弃文件直接删除,不留 `.bak/.old/.deprecated`;历史由 git 保留。
 - **Git**:分支名描述意图;提交信息祈使句聚焦单一目的;PR 写明动机、影响范围、验证命令与结果。
 - **CI / 守卫**:任何 controller-runtime 例外(narrow allowlist daemon、observability、decision-artifact 等)必须配套机械验证手段(behavior test + source-regression test)。

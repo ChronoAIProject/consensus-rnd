@@ -219,11 +219,11 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
 
         self.assertTrue(any(f.check == "forbidden-runtime-file" and "degradation_watchdog.py" in f.path for f in findings))
 
-    def test_checker_detects_release_projection_missing_skill_degradation(self) -> None:
+    def test_checker_detects_release_projection_missing_host_required_checks_parser(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
             projection = repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
-            projection.write_text(projection.read_text(encoding="utf-8").replace(', "skill-degradation"', ""), encoding="utf-8")
+            projection.write_text(projection.read_text(encoding="utf-8").replace("required_release_checks", "removed_release_checks"), encoding="utf-8")
 
             findings = self.checker_module.SkillDriftChecker(repo).run_static()
 

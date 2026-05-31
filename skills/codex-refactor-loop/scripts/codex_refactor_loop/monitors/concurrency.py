@@ -123,7 +123,6 @@ class ConcurrencyMonitor:
         self.dispatch_dispatched = ctx.paths.dispatch_dispatched
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
-        self.cli = ctx.skill_root / "scripts" / "consensus-rnd-cli"
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -396,6 +395,27 @@ class ConcurrencyMonitor:
         path.unlink()
         return archive
 
+    def append_harness_spawn_intent(self, payload: dict, task_id: str, priority: str, reason: str) -> dict[str, object]:
+        intent = {
+            "intent_id": f"dispatch:{task_id}",
+            "source": "concurrency-monitor",
+            "route": "dispatch-queue",
+            "task_id": task_id,
+            "priority": priority,
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": self.ctx.durable_artifact_path(Path(str(payload["cd"]))),
+            "prompt": self.ctx.durable_artifact_path(Path(str(payload["prompt"]))),
+            "log": self.ctx.durable_artifact_path(Path(str(payload["log"]))),
+            "stall": int(payload.get("stall", 5400)),
+            "reason": reason,
+            "queued_at": utc_ts(),
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+        }
+        self.write_pending_event(f"HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}")
+        return intent
+
     def validate_dispatch_cwd(self, payload: dict, task_id: str) -> tuple[bool, str]:
         cd_raw = payload.get("cd")
         if not cd_raw:
@@ -440,26 +460,6 @@ class ConcurrencyMonitor:
         path.unlink()
         return archive
 
-    def launch_dispatch(self, payload: dict) -> None:
-        subprocess.Popen(
-            [
-                "nohup",
-                str(self.cli),
-                "spawn-codex",
-                "--cd",
-                str(payload["cd"]),
-                "--prompt",
-                str(payload["prompt"]),
-                "--log",
-                str(payload["log"]),
-                "--stall",
-                str(payload.get("stall", 5400)),
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
     def dispatch_one_from_queue(self) -> tuple[str, str, str] | None:
         decision = require_active_controller(self.ctx, "concurrency-dispatch")
         write_active_controller_status(self.ctx, decision)
@@ -479,10 +479,13 @@ class ConcurrencyMonitor:
                 self.write_pending_event(event)
                 log(event)
                 continue
-            self.launch_dispatch(payload)
+            intent = self.append_harness_spawn_intent(payload, task_id, priority, reason)
+            payload["intent_id"] = intent["intent_id"]
+            payload["intent_queued_at"] = intent["queued_at"]
+            payload["dispatch_state"] = "harness-intent"
             self.archive_dispatched(path, payload, task_id)
-            self.write_pending_event(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
-            log(f"DISPATCH_FIRED:{task_id}:{priority}:{reason}")
+            self.write_pending_event(f"DISPATCH_INTENT:{task_id}:{priority}:{reason}")
+            log(f"DISPATCH_INTENT:{task_id}:{priority}:{reason}")
             return task_id, priority, reason
         return None
 
@@ -680,10 +683,6 @@ def validate_dispatch_cwd(payload: dict, task_id: str) -> tuple[bool, str]:
 
 def archive_rejected(path: Path, payload: dict, task_id: str, priority: str, reason: str) -> Path:
     return _default_monitor().archive_rejected(path, payload, task_id, priority, reason)
-
-
-def launch_dispatch(payload: dict) -> None:
-    _default_monitor().launch_dispatch(payload)
 
 
 def dispatch_one_from_queue() -> tuple[str, str, str] | None:

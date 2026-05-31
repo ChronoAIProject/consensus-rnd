@@ -226,9 +226,12 @@ class ReleasePipelineContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.workflow)
-        for needle in ("contract-tests", "manifest-version-sync", "skill-degradation", "REQUIRED_RELEASE_CHECKS"):
+        for needle in ("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", "required_release_checks", "ReleaseRequiredChecksProjection"):
             with self.subTest(required_check_projection=needle):
                 self.assertIn(needle, self.required_checks)
+        for forbidden in ('"contract-tests"', '"manifest-version-sync"', '"skill-degradation"'):
+            with self.subTest(forbidden_runtime_default=forbidden):
+                self.assertNotIn(forbidden, self.required_checks)
 
     def test_release_publish_preflight_source_guards_candidate_artifact_path(self) -> None:
         for needle in (
@@ -259,6 +262,34 @@ class ReleasePipelineContractTests(unittest.TestCase):
         self.assertLess(push_index, gate_index)
         self.assertLess(gate_index, release_index)
         self.assertLess(release_index, result_write_index)
+
+    def test_release_publisher_reentry_contract_is_private_and_gated(self) -> None:
+        for needle in (
+            "ReleasePublicationState",
+            'ReleasePublicationPhase = Literal["first_run", "already_bumped"]',
+            '["git", "show", "-s", "--format=%s", "HEAD"]',
+            'self._is_only_manifest_version_mismatch(result)',
+            "manifest_versions != {version}",
+            "self._current_commit_subject() != expected_subject",
+            "skip_bump_commit=True",
+            "already_bumped_reentry",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.publisher)
+        self.assertNotIn('"ReleasePublicationState"', self.publisher.split("__all__", 1)[-1])
+        self.assertNotIn("release-publish-state.json", self.publisher)
+        self.assertNotIn("proof ticket", self.publisher.lower())
+
+        inspect_index = self.publisher.index("state = self._inspect_publication_state(result)")
+        bump_index = self.publisher.index('["python3", ".github/scripts/bump_version.py"')
+        skip_index = self.publisher.index("if not state.skip_bump_commit:")
+        push_index = self.publisher.index("self._safe_push()")
+        gate_index = self.publisher.index("self._ensure_fresh_release_commit_checks_green(release_target_ref")
+        release_index = self.publisher.index('["gh", "release", "create"')
+        self.assertLess(inspect_index, skip_index)
+        self.assertLess(skip_index, bump_index)
+        self.assertLess(push_index, gate_index)
+        self.assertLess(gate_index, release_index)
 
     def snapshot_mapped_manifest_versions(self, repo: Path) -> dict[tuple[str, str], str]:
         mapping = json.loads(read(repo / ".version-bump.json"))

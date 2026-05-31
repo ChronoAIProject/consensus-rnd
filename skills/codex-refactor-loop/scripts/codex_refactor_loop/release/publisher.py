@@ -7,12 +7,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 from ..state import write_json
 from .gate import isoformat, load_host_env
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
-from .required_checks import ReleaseRequiredChecksProjection
+from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import parse_semver_full
 
 
@@ -34,10 +34,23 @@ class ReleasePublishResult:
     result_path: Path
 
 
-class ReleasePublisher:
-    """Publish a preflight-approved release from the controller boundary only.
+ReleasePublicationPhase = Literal["first_run", "already_bumped"]
 
-    """
+
+@dataclass(frozen=True)
+class ReleasePublicationState:
+    """Private publication classifier."""
+
+    phase: ReleasePublicationPhase
+    version: str
+    tag: str
+    release_target_ref: str | None
+    skip_bump_commit: bool
+    reason: str
+
+
+class ReleasePublisher:
+    """Publish a preflight-approved release from the controller boundary only."""
 
     def __init__(
         self,
@@ -63,18 +76,20 @@ class ReleasePublisher:
         target_ref: str,
     ) -> ReleasePublishResult:
         result = self.preflight.validate(candidate_path=candidate_path, target_ref=target_ref)
-        if not result.allowed:
+        state = self._inspect_publication_state(result)
+        if not result.allowed and not state.skip_bump_commit:
             return self._denied(result)
 
-        version = result.version
-        tag = f"v{version}"
-        bump = self._run(["python3", ".github/scripts/bump_version.py", "--version", version])
-        self._ensure_success(bump, "bump_version")
-        paths = [target["relative"] for target in load_manifest_targets(self.repo_root)]
-        add = self._run(["git", "add", ".version-bump.json", *paths])
-        self._ensure_success(add, "git add")
-        commit = self._run(["git", "commit", "-m", f"Release {tag}"])
-        self._ensure_success(commit, "git commit")
+        version = state.version
+        tag = state.tag
+        if not state.skip_bump_commit:
+            bump = self._run(["python3", ".github/scripts/bump_version.py", "--version", version])
+            self._ensure_success(bump, "bump_version")
+            paths = [target["relative"] for target in load_manifest_targets(self.repo_root)]
+            add = self._run(["git", "add", ".version-bump.json", *paths])
+            self._ensure_success(add, "git add")
+            commit = self._run(["git", "commit", "-m", self._release_bump_subject(version)])
+            self._ensure_success(commit, "git commit")
         release_target_ref = self._current_head_sha()
         release_push_started_at = self.now()
         self._safe_push()
@@ -103,6 +118,81 @@ class ReleasePublisher:
             release_url=release_url,
             result_path=self.result_path,
         )
+
+    def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
+        # refactor helper, no behavior change outside the private reentry classification
+        version = result.version
+        tag = f"v{version}" if version else ""
+        if result.allowed:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="preflight_allowed",
+            )
+        if not self._is_only_manifest_version_mismatch(result):
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="preflight_denied",
+            )
+        if not version:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="missing_version",
+            )
+        manifest_versions = self._mapped_manifest_versions()
+        if not manifest_versions or manifest_versions != {version}:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="mapped_manifests_not_to_version",
+            )
+        expected_subject = self._release_bump_subject(version)
+        if self._current_commit_subject() != expected_subject:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="release_head_subject_mismatch",
+            )
+        return ReleasePublicationState(
+            phase="already_bumped",
+            version=version,
+            tag=tag,
+            release_target_ref=None,
+            skip_bump_commit=True,
+            reason="already_bumped_reentry",
+        )
+
+    def _is_only_manifest_version_mismatch(self, result: PublishPreflightResult) -> bool:
+        return result.reasons == ("manifest_version_mismatch",)
+
+    def _mapped_manifest_versions(self) -> set[str]:
+        versions = {str(target["version"]) for target in load_manifest_targets(self.repo_root)}
+        return versions
+
+    def _release_bump_subject(self, version: str) -> str:
+        return f"Release v{version}"
+
+    def _current_commit_subject(self) -> str:
+        result = self._run(["git", "show", "-s", "--format=%s", "HEAD"])
+        self._ensure_success(result, "git show -s --format=%s HEAD")
+        return result.stdout.strip()
 
     def _denied(self, result: PublishPreflightResult) -> ReleasePublishResult:
         return ReleasePublishResult(
@@ -145,6 +235,7 @@ class ReleasePublisher:
         projection = ReleaseRequiredChecksProjection(
             runner=self._run_check_command,
             now=self.now,
+            required_checks=required_release_checks(load_host_env(self.repo_root)),
         )
         status = projection.check_ref(repo_slug, release_target_ref, since=since, wait_seconds=0)
         if not status.passed:

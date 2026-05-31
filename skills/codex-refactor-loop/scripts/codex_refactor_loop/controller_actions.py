@@ -231,12 +231,13 @@ class ControllerActions:
         ready = self._ensure_pr_ready_for_merge(pr_target)
         if ready != 0:
             return ready
-        merge = self.gh(["pr", "merge", pr_target, "--admin", "--squash", "--delete-branch"], check=False)
+        merge = self.gh(["pr", "merge", pr_target, "--squash", "--delete-branch"], check=False)
         if merge.stdout:
             print(merge.stdout.splitlines()[-1])
         elif merge.stderr:
             print(merge.stderr.splitlines()[-1])
         if merge.returncode != 0:
+            self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:blocked-by-host-policy:merge-pr:pr:{pr_target}")
             return merge.returncode
         self.record_recent_pr_merge(pr_target)
         args = ["pr", "edit", pr_target]
@@ -574,9 +575,12 @@ class ControllerActions:
         return target
 
     def _append_invalid_github_target_event(self, *, kind: str, action: str, source: str) -> None:
+        self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}")
+
+    def _append_pending_event(self, line: str) -> None:
         self.ctx.paths.pending_events.parent.mkdir(parents=True, exist_ok=True)
         with self.ctx.paths.pending_events.open("a", encoding="utf-8") as handle:
-            handle.write(f"CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}\n")
+            handle.write(f"{line}\n")
 
     def _single_body_linked_issue_or_block(self, body: str, *, action: str) -> str | None:
         for target in _body_closing_issue_targets(body):

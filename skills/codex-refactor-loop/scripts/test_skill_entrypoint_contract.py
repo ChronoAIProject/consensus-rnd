@@ -53,6 +53,22 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertTrue(lines[1].startswith("description: Use when "))
         self.assertLessEqual(len(body), 1024)
 
+    def test_audit_is_not_documented_as_default_main_path(self) -> None:
+        match = re.match(r"\A---\n(?P<body>.*?)\n---\n", self.skill, flags=re.DOTALL)
+        self.assertIsNotNone(match)
+        body = match.group("body")
+        top = "\n".join(self.skill.splitlines()[:120])
+
+        self.assertIn("name: codex-refactor-loop", body)
+        self.assertIn("issue/PR resolution and work-unit loop", body)
+        self.assertIn("audit/refactor as a fallback compatibility issue producer", body)
+        self.assertIn("# Consensus R&D Work-Unit Loop", top)
+        self.assertIn("## Main path and fallback producer", top)
+        self.assertIn("open actionable catalog-managed GitHub issue/PR resolution", top)
+        self.assertNotIn("audit/refactor as the default compatibility intake", body)
+        self.assertNotIn("Audit is the default", top)
+        self.assertNotIn("The loop has two supported entry modes", top)
+
     def test_entrypoint_line_budget_and_controller_contract_headings(self) -> None:
         headings = set(markdown_headings(self.skill))
 

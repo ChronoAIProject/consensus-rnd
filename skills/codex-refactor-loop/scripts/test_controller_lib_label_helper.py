@@ -335,7 +335,7 @@ exit 0
         calls = self.gh_calls()
         self.assertIn("pr view 55 --repo test-owner/test-repo --json isDraft --jq .isDraft", calls)
         self.assertNotIn("pr ready 55 --repo test-owner/test-repo", calls)
-        self.assertIn("pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch", calls)
+        self.assertIn("pr merge 55 --repo test-owner/test-repo --squash --delete-branch", calls)
         expected_pr_edit = ["pr", "edit", "55", "--repo", "test-owner/test-repo"]
         for label in (
             *labels.labels_for_group("phase"),
@@ -463,7 +463,7 @@ exit 0
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.gh_calls()
         ready_call = "pr ready 55 --repo test-owner/test-repo"
-        merge_call = "pr merge 55 --repo test-owner/test-repo --admin --squash --delete-branch"
+        merge_call = "pr merge 55 --repo test-owner/test-repo --squash --delete-branch"
         self.assertIn(ready_call, calls)
         self.assertIn(merge_call, calls)
         self.assertLess(calls.index(ready_call), calls.index(merge_call))

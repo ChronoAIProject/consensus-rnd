@@ -29,12 +29,16 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertNotIn("issue/PR 状态 → 期望 label", text)
         self.assertNotIn("crnd:phase:pr-open + crnd:phase:reviewing", text)
         self.assertNotIn('"crnd:lifecycle:managed,crnd:phase:design-solving,crnd:human:auto"', text)
+        self.assertIn("exactly one loop-owned `crnd:phase:*` label", text)
+        self.assertIn("exactly one loop-owned\n`crnd:human:*` label", text)
+        self.assertIn("Host business labels may coexist", text)
+        self.assertIn("not\nrouting authority", text)
 
     def test_active_skill_sections_use_catalog_managed_labels(self) -> None:
         text = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
 
         active_contracts = {
-            "entry mode": self._section(text, "## Two entry modes", "## Host 配置"),
+            "entry mode": self._section(text, "## Main path and fallback producer", "## Host 配置"),
             "bootstrap": self._section(text, "## Label bootstrap loops", "## Codex invocation details"),
             "pr open": self._section(text, "### Consensus-rnd Phase publish stacked", "### Consensus-rnd Phase publish stack-depth cap"),
             "existing priority": self._section(text, "### Existing-issue priority route table", "### Stale-issue revival"),
@@ -101,6 +105,24 @@ class LabelContractSourceTests(unittest.TestCase):
         self.assertIn('"closed"', source)
         self.assertIn("Closed terminal protocol state", source)
         self.assertEqual(labels.PHASE_CLOSED, "crnd:phase:closed")
+
+    def test_release_target_label_contract_stays_in_milestone_catalog(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        labels_source = (SCRIPT_DIR / "codex_refactor_loop" / "labels.py").read_text(encoding="utf-8")
+        wakeup_source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        combined = "\n".join((skill, labels_source, wakeup_source))
+
+        self.assertEqual(labels.MILESTONE_RELEASE_TARGET, "crnd:milestone:release-target")
+        self.assertIn('_spec("milestone", "release-target", "Release countdown target issue/PR.", "f9d0c4")', labels_source)
+        self.assertIn('MILESTONE_RELEASE_TARGET = canonical_name("milestone", "release-target")', labels_source)
+        self.assertIn("crnd:milestone:release-target", skill)
+        self.assertIn("crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself", skill)
+        self.assertIn("Label exclusivity is per `LabelSpec.exclusive_axis`, not per group", skill)
+        self.assertNotIn("crnd:release-target", combined)
+        self.assertNotIn('"release"', labels_source)
+        self.assertNotIn("release-countdown.json", combined)
+        self.assertIn("label_catalog.MILESTONE_RELEASE_TARGET", wakeup_source)
+        self.assertNotIn("label_catalog.MILESTONE_CURRENT in projection.canonical", wakeup_source)
 
     def test_runtime_code_has_no_legacy_routing_literals_outside_catalog(self) -> None:
         allow = {
