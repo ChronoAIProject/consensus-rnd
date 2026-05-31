@@ -89,9 +89,9 @@ class FakeRunner:
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
-def allowed_result(repo: Path) -> PublishPreflightResult:
-    candidate = {"to_version": "2.0.0", "target_ref": "abc123"}
-    decision = {"to_version": "2.0.0", "ready": True}
+def allowed_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPreflightResult:
+    candidate = {"to_version": version, "target_ref": "abc123"}
+    decision = {"to_version": version, "ready": True}
     return PublishPreflightResult(
         allowed=True,
         reasons=(),
@@ -100,14 +100,17 @@ def allowed_result(repo: Path) -> PublishPreflightResult:
         candidate_path=repo / ".refactor-loop/state/release-candidate.json",
         decision_path=repo / ".refactor-loop/state/release-decision.json",
         target_ref="abc123",
-        version="2.0.0",
+        version=version,
         candidate_digest="digest123",
     )
 
 
-def expected_success_commands() -> list[list[str]]:
+def expected_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = True) -> list[list[str]]:
+    release_command = ["gh", "release", "create", f"v{version}", "--target", "bumpcommit456", "--generate-notes"]
+    if prerelease:
+        release_command.append("--prerelease")
     return [
-        ["python3", ".github/scripts/bump_version.py", "--version", "2.0.0"],
+        ["python3", ".github/scripts/bump_version.py", "--version", version],
         [
             "git",
             "add",
@@ -120,18 +123,18 @@ def expected_success_commands() -> list[list[str]]:
             "gemini-extension.json",
             "skills/codex-refactor-loop/VERSION.json",
         ],
-        ["git", "commit", "-m", "Release v2.0.0"],
+        ["git", "commit", "-m", f"Release v{version}"],
         ["git", "rev-parse", "HEAD"],
         ["git", "fetch", "origin", "HEAD"],
         ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
         ["git", "push", "origin", "HEAD"],
-        ["gh", "release", "create", "v2.0.0", "--target", "bumpcommit456", "--generate-notes"],
+        release_command,
     ]
 
 
 def expected_violating_pre_bump_tag_command() -> list[str]:
     return [
-        ["gh", "release", "create", "v2.0.0", "--target", "abc123", "--generate-notes"],
+        ["gh", "release", "create", "v2.0.0-beta.4", "--target", "abc123", "--generate-notes", "--prerelease"],
     ][0]
 
 
@@ -168,23 +171,46 @@ class ReleasePublisherTests(unittest.TestCase):
             result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
-            self.assertEqual(result.tag, "v2.0.0")
+            self.assertEqual(result.tag, "v2.0.0-beta.4")
             self.assertEqual(result.target_ref, "bumpcommit456")
-            self.assertIn(["git", "commit", "-m", "Release v2.0.0"], runner.commands)
+            self.assertIn(["git", "commit", "-m", "Release v2.0.0-beta.4"], runner.commands)
             self.assertIn(["git", "rev-parse", "HEAD"], runner.commands)
             self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
             self.assertEqual(
                 runner.commands[-1],
-                ["gh", "release", "create", "v2.0.0", "--target", "bumpcommit456", "--generate-notes"],
+                [
+                    "gh",
+                    "release",
+                    "create",
+                    "v2.0.0-beta.4",
+                    "--target",
+                    "bumpcommit456",
+                    "--generate-notes",
+                    "--prerelease",
+                ],
             )
             self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)
             payload = read_json(repo / ".refactor-loop/state/release-publish-result.json")
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
-            self.assertEqual(payload["tag"], "v2.0.0")
+            self.assertEqual(payload["tag"], "v2.0.0-beta.4")
             self.assertEqual(payload["target_ref"], "bumpcommit456")
             self.assertEqual(payload["candidate_digest"], "digest123")
             self.assertEqual(payload["release_url"], "https://github.test/release/v2.0.0")
+
+    def test_publisher_does_not_mark_ga_release_as_prerelease(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            preflight = FakePreflight(allowed_result(repo, version="1.0.0"))
+            runner = FakeRunner()
+            publisher = ReleasePublisher(repo, preflight=preflight, runner=runner, now=lambda: NOW)
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.tag, "v1.0.0")
+            self.assertEqual(runner.commands, expected_success_commands(version="1.0.0", prerelease=False))
+            self.assertNotIn("--prerelease", runner.commands[-1])
 
     def test_publisher_never_runs_when_preflight_denies(self) -> None:
         with copy_repo_fixture() as tmp:

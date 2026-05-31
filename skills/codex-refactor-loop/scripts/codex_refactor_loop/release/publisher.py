@@ -11,6 +11,7 @@ from typing import Callable, Sequence
 from ..state import write_json
 from .gate import isoformat
 from .publish_preflight import PublishPreflightResult, ReleasePublishPreflight, load_manifest_targets
+from .versions import parse_semver_full
 
 
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
@@ -88,7 +89,10 @@ class ReleasePublisher:
         # bump SHA, so tag version and mapped manifest versions are coupled.
         release_target_ref = self._current_head_sha()
         self._safe_push()
-        release = self._run(["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"])
+        release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
+        if parse_semver_full(version).prerelease:
+            release_command.append("--prerelease")
+        release = self._run(release_command)
         self._ensure_success(release, "gh release create")
         release_url = release.stdout.strip().splitlines()[-1] if release.stdout.strip() else ""
         payload = {
