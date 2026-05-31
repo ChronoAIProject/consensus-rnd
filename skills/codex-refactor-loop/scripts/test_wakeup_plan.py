@@ -412,8 +412,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
         self.assertEqual(plan["actions"][0]["item"], "PR #31")
+        self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
         kinds = [action["kind"] for action in plan["actions"]]
         self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+
+    # Refactor (issue-275): Old pattern: remote CI routing depended on inline shell poller marker text. New principle: behavior tests assert wakeup-plan emits structured ci-red actions without marker coupling.
+    def test_ci_red_check_projection_requests_triage_fields_without_remote_ci_done_marker(self) -> None:
+        plan = self.run_plan(fixture="ci_red")
+
+        self.assertEqual(plan["actions"][0]["kind"], "ci-red")
+        self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
+        self.assertNotIn("REMOTE_CI_DONE", json.dumps(plan))
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
