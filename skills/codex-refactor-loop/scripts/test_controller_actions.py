@@ -157,6 +157,41 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("owner", status["active_controller"])
         self.assertEqual("post-banner", status["action"])
 
+    def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
+        cases = (
+            ("stderr", "permission denied\n", "", "permission denied"),
+            ("stdout", "", "api unavailable\n", "api unavailable"),
+        )
+        for label, stderr, stdout, expected in cases:
+            with self.subTest(label=label):
+                gh_calls: list[list[str]] = []
+                body_path: Path | None = None
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    nonlocal body_path
+                    gh_calls.append(args)
+                    body_path = Path(args[-1])
+                    self.assertTrue(body_path.exists())
+                    return mock.Mock(returncode=1, stdout=stdout, stderr=stderr)
+
+                decision = mock.Mock(
+                    allowed=True,
+                    owner_device="device-a",
+                    status="owner",
+                    action="post-banner",
+                    lease_id="lease-1",
+                    expires_at="2026-06-01T00:00:00Z",
+                )
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with self.assertRaisesRegex(RuntimeError, f"post_status_banner: {re.escape(expected)}"):
+                            self.actions.post_status_banner(self.banner_request())
+
+                self.assertEqual(1, len(gh_calls))
+                self.assertIsNotNone(body_path)
+                assert body_path is not None
+                self.assertFalse(body_path.exists())
+
     def test_post_status_banner_non_owner_does_not_call_gh_or_create_tempfile(self) -> None:
         decision = mock.Mock(
             allowed=False,
