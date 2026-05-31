@@ -190,6 +190,43 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 6)
             self.assertTrue(heartbeat_signal["heartbeats"]["closed_label_reconciler"])
 
+    def test_live_release_gate_fails_closed_when_auto_release_lacks_host_required_checks(self) -> None:
+        for value in (None, ""):
+            with self.subTest(value=value), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                write_live_state(repo)
+                runner = FakeRunner()
+                release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
+                keys = ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH", "RELEASE_AUTO_ENABLE", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS")
+                old_env = {key: gate.os.environ.get(key) for key in keys}
+                try:
+                    gate.os.environ["GH_REPO_SLUG"] = "owner/repo"
+                    gate.os.environ["REVIEW_BASE_BRANCH"] = "review-base"
+                    gate.os.environ["INTEGRATION_BRANCH"] = "integration-branch"
+                    gate.os.environ["RELEASE_AUTO_ENABLE"] = "true"
+                    if value is None:
+                        gate.os.environ.pop("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", None)
+                    else:
+                        gate.os.environ["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = value
+
+                    stability = release_gate.compute_stability(min_recent_merges=1)
+                finally:
+                    for key, previous in old_env.items():
+                        if previous is None:
+                            gate.os.environ.pop(key, None)
+                        else:
+                            gate.os.environ[key] = previous
+
+                self.assertFalse(stability.ready)
+                signal = stability.signals["required_checks_recent_green"]
+                self.assertFalse(signal["passed"])
+                self.assertEqual(signal["source"], "host.env")
+                self.assertEqual(
+                    signal["reason"],
+                    "required_checks_recent_green:missing_host_required_release_checks",
+                )
+                self.assertFalse(any(cmd[:2] == ["gh", "api"] for cmd in runner.commands))
+
     def test_release_gate_blocks_on_legacy_blocked_and_human_labels(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
