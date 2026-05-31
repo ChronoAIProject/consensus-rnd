@@ -1,51 +1,59 @@
 # consensus-rnd
 
-通用**共识式研发** skills 库 —— 可被任意 host 仓库注入的多角度共识构建引擎。
+English canonical public identity document. 中文 companion: [README.zh-CN.md](./README.zh-CN.md).
 
-## 定位
+`consensus-rnd` is a cross-platform Agent Skills repository for **consensus-driven R&D**: a reusable multi-perspective decision and verification engine that any host repository can inject into its own development loop.
 
-这里的"研发"取最广义:**任何持续向仓库提交状态的活动都是研发** —— 写代码是研发,写文档是研发,做 marketing、整理资料、维护配置同样是研发。只要产物落进 git、需要被审查、需要质量保证,就适用同一套引擎。
+## Positioning
 
-本库不绑定任何具体项目。host 通过 `host.env` 注入自己的 loop runtime 事实(仓库根、集成分支、规则文档、构建/测试命令、GitHub slug 等),引擎本身不写死任一项目。`.refactor-loop/` 是 skill runtime state;host-owned config 可通过 `CONSENSUS_RND_HOST_ENV` 指向。
+Here, "R&D" has the broadest meaning: any sustained activity that commits state back to a repository. Code changes, documentation, marketing assets, research notes, configuration maintenance, and release work all fit the same shape when the output lands in git, needs review, and needs quality control.
 
-## 核心:共识构建引擎
+This repository is not bound to one host project. A host injects loop runtime facts through `host.env`: repository root, integration branch, project rules, build and test commands, GitHub slug, and related surfaces. The engine must not hardcode host project facts. `.refactor-loop/` is skill runtime state; host-owned config may be located through `CONSENSUS_RND_HOST_ENV`.
 
-不是"多跑几遍取多数",而是**偏置独立的多角度逼近**:
+## Core: Consensus-Building Engine
 
-- **多 solver,先验对立**:每个 solver 带不同立场(如 minimal 最小改动 / structural 架构洁净 / delete 质疑必要性),且**互相看不到对方输出**,各自独立得出结论。
-- **meta-judge 仲裁**:把分歧收敛成 `consensus` / `converge`;产品层仍有 `stalled` 出口,但它由 router 在 qualifying `converge` 后按 deterministic predicate 派生,真停滞才升 reflector 调和。
-<!-- Refactor (issue-304): Old: README described stalled as a judge-owned third exit. New: stalled is product-level router-derived continuation after converge. -->
-- **任何 concrete plan 都必须过这道闸**:哪怕方向已明确,也不允许单个 agent 直接落地 —— 用多角度验证把"明显方向"证成"明显方案"。
-- **验证侧同构**:产物再经多 reviewer(架构 / 质量 / 测试)共识 gate 才允许合并。
-- **controller 纯编排**:所有思考、分析、诊断、验证都 delegate 给 agent;确定性脚本可按 allowlist 读 marker 并派发下一 actor;LLM controller 保留语义 fallback、未知状态、git 与状态面。
+This is not "run the same prompt several times and take a majority vote." The core is **biased, independent, multi-angle convergence**:
 
-## skills
+- **Multiple solvers with opposing priors**: each solver carries a different stance, such as minimal change, structural cleanliness, or deletion pressure, and cannot see the other solvers' outputs before forming its own conclusion.
+- **Meta-judge arbitration**: disagreement is reduced to `consensus` or `converge`; product-level `stalled` remains a router-derived continuation after qualifying `converge`, not a fresh judge-owned verdict.
+<!--
+Refactor (iter343/issue-343):
+  Old pattern: README 单一(非英文默认),CLAUDE.md 文档分层称 README 为权威源;无英文 canonical + 中文 companion 双文件,语言策略未给 README pair carve-out
+  New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
+-->
+- **Every concrete plan passes the gate**: even when the direction is obvious, a single agent does not implement directly. The gate turns an obvious direction into an evidenced plan.
+- **Symmetric verification**: implementation output goes through a multi-reviewer consensus gate before merge.
+- **Pure orchestration controller**: analysis, design, implementation, and verification are delegated to workers; deterministic scripts may read markers and dispatch allowlisted next actors; the LLM controller keeps semantic fallback, unknown states, git, and state surfaces.
 
-| skill | 说明 | 状态 |
+## Skills
+
+| skill | Description | Status |
 |---|---|---|
-| `codex-refactor-loop` | Consensus R&D 循环的稳定 skill 入口;默认以 audit/refactor 作为兼容 intake / producer,codex CLI 驱动,GitHub 为状态面 | 自 host 项目移植,verbatim;保留 refactor 作为合法 work-unit 隐喻 |
+| `codex-refactor-loop` | Stable Consensus R&D loop entrypoint; keeps audit/refactor as the compatibility intake and producer, uses Codex CLI workers, and treats GitHub as the visible state surface. | Ported from the original host project; `refactor` remains the accepted work-unit metaphor because the maintainer treats refactor as general development. |
 
-## 仓库结构
+## Repository Structure
 
-本库是一个**跨平台 Agent Skills 仓库**,同一份 `skills/` 被多个 coding agent 共享,各平台靠根目录的清单文件指向它:
+This is a **cross-platform Agent Skills repository**. The same `skills/` tree is shared by Claude Code, Codex, Cursor, and Gemini; each platform points at it through root manifests:
 
-```
+```text
 .
-├── .claude-plugin/        # Claude Code:plugin.json + marketplace.json
-├── .codex-plugin/         # Codex:plugin.json
-├── .cursor-plugin/        # Cursor:plugin.json
-├── gemini-extension.json  # Gemini:扩展清单(配 GEMINI.md 上下文入口)
-├── package.json           # npm 风格元数据 / 版本锚点
-├── AGENTS.md → CLAUDE.md   # 跨 agent 约定(符号链接)
-├── CLAUDE.md              # 本仓库内工作的 agent 指南
+├── .claude-plugin/        # Claude Code: plugin.json + marketplace.json
+├── .codex-plugin/         # Codex: plugin.json
+├── .cursor-plugin/        # Cursor: plugin.json
+├── gemini-extension.json + GEMINI.md   # Gemini: extension manifest + context entry
+├── package.json           # npm-style metadata / version anchor
+├── AGENTS.md -> CLAUDE.md # Cross-agent rules, symlinked
+├── CLAUDE.md              # Agent guide for work inside this repository
+├── README.md              # English canonical public identity document
+├── README.zh-CN.md        # Chinese companion public identity document
 ├── LICENSE                # MIT
-├── skills/<name>/         # 各 skill(SKILL.md 必备)
-└── .version-bump.json     # 各清单版本号同步映射
+├── skills/<name>/         # Each skill; SKILL.md is required
+└── .version-bump.json     # Manifest version synchronization map
 ```
 
-新增 / 修改 skill 的约定与版本同步规则见 [`CLAUDE.md`](./CLAUDE.md)。
+Rules for adding or changing skills, plus version synchronization requirements, live in [CLAUDE.md](./CLAUDE.md).
 
-## 安装
+## Install
 
 ### Claude Code
 
@@ -56,37 +64,29 @@
 
 ### Codex / Cursor
 
-按各自插件机制指向本仓库;`.codex-plugin/plugin.json` 与 `.cursor-plugin/plugin.json` 已通过 `"skills": "./skills/"` 暴露 skills。
+Point the platform plugin mechanism at this repository. `.codex-plugin/plugin.json` and `.cursor-plugin/plugin.json` expose skills through `"skills": "./skills/"`.
 
 ### Gemini CLI
 
-作为扩展安装,`gemini-extension.json` 以 `GEMINI.md` 为上下文入口,列出可用 skills 并指引按需读取。
+Install as an extension. `gemini-extension.json` uses `GEMINI.md` as the context entrypoint, lists available skills, and instructs the agent to read them on demand.
 
-### 直接拷贝(任意 agent)
+### Direct Copy, Any Agent
 
-把 `skills/<name>/` 拷进 agent 的个人 skills 目录(如 Claude Code 的 `~/.claude/skills/`)即可。
+Copy `skills/<name>/` into the agent's personal skills directory, such as Claude Code's `~/.claude/skills/`.
 
-### 下游 host quickstart
+### Downstream Host Quickstart
 
-<!--
-Refactor (iter1/issue-141):
-  Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
-  New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 restart-daemons.sh 不无限阻塞。
--->
+The host installation sequence for `codex-refactor-loop` is centralized in the [`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough). Use that walkthrough to install the skill, copy and fill the host-owned `host.env`, configure user-level cron or launchd, and connect the Claude Code `statusLine`; this README does not duplicate the command matrix.
 
-`codex-refactor-loop` 的 host 安装顺序集中在
-[`Downstream install walkthrough`](./skills/codex-refactor-loop/SKILL.md#downstream-install-walkthrough)。
-按该 walkthrough 安装 skill、复制并填写 host-owned `host.env`、配置用户级 cron/launchd 和 Claude Code `statusLine`;README 不复制命令矩阵。
+## Generalization Roadmap
 
-## 泛化路线(待迭代)
+The first shipped skill is a direct port and still carries the "refactor" shell plus a few host-shaped assumptions. The intended evolution is:
 
-第一块是直接移植,仍带"重构"外壳与少量 host 主张。后续迭代方向:
+1. **Extract the engine spine**: make `solve -> consensus -> implement -> verify` reusable while allowing the seed producer to change from audit output to any work-unit source, such as a design proposal, documentation task, marketing asset, or spec change.
+2. **Parameterize leaked host assumptions**: policies such as work language should be host-injected where appropriate, not hardcoded.
+3. **Keep "Consensus R&D" as the public product identity**: retain `codex-refactor-loop` as the stable skill entrypoint until there is a real discovery or installation reason to add another alias.
 
-1. **抽出引擎脊柱**(`solve → consensus → implement → verify`),让 audit 这一步(产生工作单元的种子)可替换 —— 换成任意 work-unit 来源(设计提案 / 文档任务 / 营销产出 / spec 变更),其余整套共识机制原样复用。
-2. **参数化漏入的 host 主张**:如"工作语言规则"应成为可注入的 host policy,而非写死。
-3. 对外以 "Consensus R&D" 为主产品身份; 保留 codex-refactor-loop 作为稳定 skill 入口,因为 maintainer 已接受 "refactor = development" 通用隐喻; 不新增重复 alias skill,除非未来出现真实平台发现/安装问题。
-
-> 泛化引擎本身宜走引擎自己那套共识 gate —— 用这个引擎来通用化这个引擎。
+The engine should generalize through its own consensus gate: use the engine to generalize the engine.
 
 ## License
 
