@@ -425,6 +425,8 @@ class Phase9Router:
                 seen.add(key)
             if isinstance(key, str) and key.startswith("phase9-meta-judge-prompt:"):
                 seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-triplet-suppression:"):
+                seen.add(key)
         return seen
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
@@ -452,6 +454,11 @@ class Phase9Router:
     # Refactor (iter229/issue-229):
     #   Old pattern: phase9-router 3 条 direct route(solver-triplet->judge / converge->next solvers / stalled->reflector)仅凭本地 clean EXIT=0 历史 marker/ledger/in-flight 状态派发,不校验 source GitHub issue 是否仍 OPEN
     #   New principle: 三条 direct route 在 prompt/spawn/ledger side-effect 前必须 read-only 确认 source GitHub issue state=OPEN;非 OPEN 或 state 不可证明则 fail-closed(不 spawn、不写 dispatch ledger,只追加 existing-format phase9-router-fallback pending event,reason ∈ phase9-source-not-open / phase9-source-state-unavailable);GitHub access 仅 state-only read,无 label/close/merge/release lifecycle authority;删旧 stale-marker-only dispatch authority
+    # Refactor (iter284/issue-284):
+    #   Old pattern: target log exists / in-flight and ledgered triplet
+    #   duplicates were both silent, hiding unledgered solver-triplet suppression.
+    #   New principle: ledgered duplicates stay silent; unledgered suppression
+    #   appends one existing-format fallback event with a narrow private reason.
     def _dispatch_solver_triplets(self, markers: list[Marker], ledger: set[str]) -> None:
         solver_roles = self._solver_roles()
         judge_role = self._judge_role()
@@ -466,7 +473,11 @@ class Phase9Router:
                 continue
             key = self._key(issue, round_no, judge_role)
             log_path = self._log_path(issue, round_no, judge_role)
-            if key in ledger or self._in_flight(log_path) or self._equivalent_actor_log_exists(issue, round_no, judge_role):
+            if key in ledger:
+                continue
+            suppression_reason = self._solver_triplet_suppression_reason(issue, round_no, judge_role, log_path)
+            if suppression_reason is not None:
+                self._append_solver_triplet_suppression_event(issue, round_no, judge_role, log_path, suppression_reason)
                 continue
             if not self._require_open_source_issue(
                 issue,
@@ -656,8 +667,9 @@ class Phase9Router:
         return parts[2] if len(parts) >= 3 else marker
 
     def _in_flight(self, log_path: Path) -> bool:
-        if log_path.exists():
-            return True
+        return log_path.exists() or self._spawn_codex_in_flight(log_path)
+
+    def _spawn_codex_in_flight(self, log_path: Path) -> bool:
         try:
             ps = subprocess.run(["ps", "-eo", "command="], capture_output=True, text=True, check=False)
         except OSError:
@@ -667,6 +679,25 @@ class Phase9Router:
             if "consensus-rnd-cli" in line and "spawn-codex" in line and target in line and " -c " not in line:
                 return True
         return False
+
+    def _solver_triplet_suppression_reason(
+        self,
+        issue: str,
+        round_no: int,
+        actor: str,
+        log_path: Path,
+    ) -> Literal[
+        "phase9-triplet-target-log-exists",
+        "phase9-triplet-equivalent-log-exists",
+        "phase9-triplet-in-flight",
+    ] | None:
+        if log_path.exists():
+            return "phase9-triplet-target-log-exists"
+        if self._equivalent_actor_log_exists(issue, round_no, actor):
+            return "phase9-triplet-equivalent-log-exists"
+        if self._spawn_codex_in_flight(log_path):
+            return "phase9-triplet-in-flight"
+        return None
 
     def _equivalent_actor_log_exists(self, issue: str, round_no: int, actor: str) -> bool:
         paths = [self._log_path(issue, round_no, actor)]
@@ -831,6 +862,37 @@ class Phase9Router:
             "marker": "SOLVER_DONE:triplet",
             "dispatched_at": self._now(),
             **extra,
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _append_solver_triplet_suppression_event(
+        self,
+        issue: str,
+        round_no: int,
+        target_actor: str,
+        log_path: Path,
+        reason: Literal[
+            "phase9-triplet-target-log-exists",
+            "phase9-triplet-equivalent-log-exists",
+            "phase9-triplet-in-flight",
+        ],
+    ) -> None:
+        event_key = f"phase9-triplet-suppression:{issue}-{round_no}-{target_actor}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": reason,
+            "issue": issue,
+            "round": round_no,
+            "route": "solver_triplet_to_judge",
+            "marker": "SOLVER_DONE:triplet",
+            "log_path": self._artifact_path(log_path),
+            "target_actor": target_actor,
+            "dispatched_at": self._now(),
         }
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
