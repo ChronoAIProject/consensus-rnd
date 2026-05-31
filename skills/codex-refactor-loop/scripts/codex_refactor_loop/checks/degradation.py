@@ -115,6 +115,9 @@ REQUIRED_SKILL_MARKERS = (
 )
 
 REQUIRED_DETAILED_REFERENCE_MARKERS = (
+    "single controller contract and detailed reference",
+    "use intra-file anchor links",
+    "## Detailed reference",
     "Skill degradation source-repo validation details",
     "consensus-rnd-cli check-degradation --static",
     "CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`",
@@ -207,7 +210,7 @@ class SkillDriftChecker:
         findings.extend(self.required_files_exist())
         findings.extend(self.forbidden_runtime_files_absent())
         findings.extend(self.skill_named_exception_present())
-        findings.extend(self.reference_contract_present())
+        findings.extend(self.single_file_reference_contract_present())
         findings.extend(self.ci_job_present())
         findings.extend(self.release_workflow_required_check_present())
         findings.extend(self.release_gate_required_check_present())
@@ -258,7 +261,10 @@ class SkillDriftChecker:
             "skill-named-exception",
         )
 
-    def reference_contract_present(self) -> list[Finding]:
+    def single_file_reference_contract_present(self) -> list[Finding]:
+        # Refactor (iter319/issue-319):
+        #   Old pattern: CLAUDE.md 把『重型参考必须物理拆 REFERENCE.md』当宪法,audit 据此反复把单文件 SKILL.md 判 R02/R03 违规
+        #   New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的 canonical reference surface;衡量标准从『必须物理拆文件』改为『事实源唯一+owner surface 清楚+anchor 可验证』
         return self.require_markers(
             SKILL_RELATIVE / "SKILL.md",
             REQUIRED_DETAILED_REFERENCE_MARKERS,

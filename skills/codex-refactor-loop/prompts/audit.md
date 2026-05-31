@@ -12,6 +12,13 @@ Artifact profile: marker-only-work-unit
 4. `docs/audit-scorecard/` 历史审计仅作起点参考，**不**作为唯一线索源。
 5. 当前 git 分支：`git branch --show-current`。
 
+<!--
+Refactor (iter319/issue-319): Old pattern: CLAUDE.md 把『重型参考必须物理拆 REFERENCE.md』当宪法,audit 据此反复把单文件 SKILL.md 判 R02/R03 违规
+New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的 canonical reference surface;衡量标准从『必须物理拆文件』改为『事实源唯一+owner surface 清楚+anchor 可验证』
+-->
+
+PROJECT_RULES 的 `SKILL.md`/`REFERENCE.md` 条款不得被机械解释成 `REFERENCE.md` 必须存在。只有存在事实源重复、跨文件职责重叠、anchor 不可达、host facts 写死、或脚本/prompt 细节未下沉到其 owner surface 时才报 R02/R03。单文件 `SKILL.md` + intra-file anchors 本身不是 violation。
+
 <!-- Refactor (iter205/issue-205):
   Old pattern: dogfood 实测的运维经验(audit 并行撞 iteration 号、新 role prompt 漏注册 marker contract、review verdict grep log tail 误判、daemon 恢复手 kill)只靠 agent 记忆,没落进 skill 合同与机械验证。
   New principle: 把四条经验写回局部合同:SKILL.md 增 #205 反面规则段(audit 同一时刻单 active iteration、新 role prompt 必同步 marker inventory、review verdict 权威源优先 review artifact frontmatter、daemon 恢复只走 restart-daemons);audit.md 渲染后 ITERATION 空则 fail-closed;peek.py 局部优先读 review artifact frontmatter verdict;配套 source-regression + behavior test。不新增跨模块抽象层。

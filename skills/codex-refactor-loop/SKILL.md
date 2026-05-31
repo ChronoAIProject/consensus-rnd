@@ -2,15 +2,15 @@
 name: codex-refactor-loop
 description: Use when the user wants an unattended Consensus R&D work-unit loop driven by codex CLI in isolated git worktrees, with audit/refactor as the default compatibility intake, dynamic /loop wakeups, GitHub status, and per-work-unit merges.
 ---
-> Refactor (iter3/skill-md-controller-split): Old pattern: 单文件 2537 行 entrypoint 混 contract + 重型参考.
-> New principle: SKILL.md 仅留 controller 契约 + workflow stage index + 硬不变量.
-> Maintainer directive merges the former REFERENCE.md back into this single SKILL.md; use intra-file anchor links.
+> Refactor (iter319/issue-319): Old pattern: 物理拆 REFERENCE.md 后跨平台加载/维护退化.
+> New principle: 单文件 SKILL.md 用 Controller Contract Index + Detailed reference anchors 分层,禁止重新拆 REFERENCE.md 作为默认修复.
+> Maintainer directive recognizes this single SKILL.md as the canonical controller contract and detailed reference; use intra-file anchor links.
 > Refactor (iter1/issue-141): Old pattern: 下游没有 installer 时,装机步骤散落在 README、SKILL statusline 段和 restart helper 段,缺乏从安装 skill 到配置 host.env、调度守护进程、接入 statusLine 的单步 walkthrough。
 > New principle: Downstream install walkthrough 是唯一装机主段;README 链到 SKILL 锚点,SKILL 内部段落互链;source-regression 锁住单文件链接与必备 surface,bounded scheduler behavior test 锁住 consensus-rnd-cli restart-daemons 不无限阻塞。
 > Refactor (iter218/issue-218): Old pattern: ensure-project-rules 是 public CLI 默认写 host policy 文件($PROJECT_RULES),违反 skill 无 host 改动权边界
 > New principle: 改为 read-only check-project-rules probe + patch artifact:probe 只读判 sentinel block,非 current 写 .refactor-loop/runs/ patch 并 fail-closed 不派 actor;删 ensure-project-rules/_atomic_write,不引入 PROJECT_RULES_WRITE_ENABLE。严格按 plan 逐条改。
 # Codex Refactor Loop — Controller Contract
-This SKILL.md is the single controller contract and detailed reference. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
+This SKILL.md is the single controller contract and detailed reference by maintainer directive. It must be enough to run the loop safely on first load while keeping heavy schemas, full templates, command bodies, and recovery runbooks reachable by intra-file anchors.
 
 Use intra-file anchors when a phase needs the detailed body, such as [host runtime details](#host-runtime-details); do not force-load unrelated sections.
 
