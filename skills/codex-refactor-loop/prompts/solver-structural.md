@@ -8,12 +8,19 @@ Your bias: **CLAUDE-philosophy-aligned, structurally clean**. You accept higher 
 
 ## Inputs
 
+<!--
+Refactor (iter364/issue364):
+  Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+  New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
+-->
+
 1. `gh issue view ${ISSUE_NUMBER}` — full body + comments (skip controller `## 🤖` markers).
 2. Work-unit scope source, by precedence:
    - Read the prompt header `WORK_UNIT_SOURCE_REF` / `source_ref` first.
    - Use only the router-injected validated transition projection lines (`TRANSITION_TYPE`, `TRANSITION_CONFIDENCE`, `TRANSITION_EVIDENCE_REFS`) for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override the meta-judge truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
    - If it points to an existing local artifact or audit section, read that source and verify it.
    - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
+   - If issue body/comments cite files absent from the current checkout, look for a read-only source locator in that source: `git show <ref>:<path>`, raw URL, `gh api`, or a host-provided path from `.refactor-loop/host.env`. Use it only to read source; must not fetch/checkout/switch/merge/rebase/reset; must not create source worktree/add-dir. If the locator is missing or invalid and the current checkout cannot verify the cited source, emit `SOLVER_DONE:structural:escalate:no-plan:source-location-missing-or-invalid` instead of a generic no-plan.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` — primary rules that frame the violation; `$REPO_ROOT/AGENTS.md` — supporting rules when present.
 4. `$REPO_ROOT/$REPO_ROOT 的架构/词汇文档(若有)` — repo vocabulary (Module / Interface / Depth / Seam / Adapter / Leverage / Locality).

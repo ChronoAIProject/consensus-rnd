@@ -235,6 +235,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    # Refactor (iter364/issue364):
+    #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
+    #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
     def test_skill_documents_phase9_solver_source_contract(self) -> None:
         phase9 = section_after_heading(
             self.skill,
@@ -249,6 +252,14 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "issue body/comments are the scope source",
             "must not be fabricated",
             "A missing audit `evidence:` block is not by itself a defect for manual issues",
+            "Path A issue body/comments that cite files absent from the current checkout",
+            "read-only source locator",
+            "git show <ref>:<path>",
+            "raw URL",
+            "gh api",
+            ".refactor-loop/host.env",
+            "must not directly emit a generic `no-plan`",
+            "source-location-missing-or-invalid",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
