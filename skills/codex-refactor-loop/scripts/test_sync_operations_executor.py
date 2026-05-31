@@ -40,6 +40,7 @@ class FakeGit:
         ff_fails: bool = False,
         ancestor_ok: bool = True,
         unresolved: bool = False,
+        stale_merge_msg: bool = False,
     ) -> None:
         self.remote_sha = remote_sha
         self.head_sha = head_sha
@@ -50,8 +51,10 @@ class FakeGit:
         self.ff_fails = ff_fails
         self.ancestor_ok = ancestor_ok
         self.unresolved = unresolved
+        self.stale_merge_msg = stale_merge_msg
         self.commands: list[list[str]] = []
         self.merge_head = Path("/tmp/no-merge-head")
+        self.merge_msg = Path("/tmp/stale-merge-msg")
 
     def __call__(self, cmd: list[str], cwd: Path, check: bool = False) -> subprocess.CompletedProcess[str]:
         self.commands.append(cmd)
@@ -62,7 +65,7 @@ class FakeGit:
         if cmd[:3] == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(cmd, 0, f"{self.head_sha}\n", "")
         if cmd[:3] == ["git", "rev-parse", "--git-path"]:
-            return subprocess.CompletedProcess(cmd, 0, f"{self.merge_head}\n", "")
+            return subprocess.CompletedProcess(cmd, 0, f"{self.merge_head if cmd[3] == 'MERGE_HEAD' else self.merge_msg}\n", "")
         if cmd[:3] == ["git", "diff", "--quiet"]:
             return subprocess.CompletedProcess(cmd, 1 if self.dirty else 0, "", "")
         if cmd[:3] == ["git", "diff", "--cached"]:
@@ -173,6 +176,10 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
             fake.merge_head = self.worktree / ".git" / "MERGE_HEAD"
             fake.merge_head.parent.mkdir(parents=True, exist_ok=True)
             fake.merge_head.write_text("merge\n", encoding="utf-8")
+        if fake.stale_merge_msg:
+            fake.merge_msg = self.worktree / ".git" / "MERGE_MSG"
+            fake.merge_msg.parent.mkdir(parents=True, exist_ok=True)
+            fake.merge_msg.write_text("stale message\n", encoding="utf-8")
         return self.executor.execute(
             operation,
             repo=self.repo,
@@ -294,6 +301,14 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
         )
         self.assertFalse(result.ok)
         self.assertIn("invalid rollup ancestry", self.record("rejected").read_text(encoding="utf-8"))
+
+    def test_stale_merge_msg_without_merge_head_rejects_continue_resolved_merge(self) -> None:
+        # Refactor (issue-264): Old: stale MERGE_MSG could be confused with a merge.
+        # New: executor continue-resolved-merge remains guarded by MERGE_HEAD only.
+        result = self.execute(self.operation(kind="continue-resolved-merge"), FakeGit(stale_merge_msg=True))
+
+        self.assertFalse(result.ok)
+        self.assertIn("no merge in progress", self.record("rejected").read_text(encoding="utf-8"))
 
     def test_rejects_already_executed_record(self) -> None:
         marker = self.record("applied")
