@@ -50,8 +50,12 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                   if [[ "${PEEK_TEST_UNPUSHED:-}" == "1" ]]; then
                     printf 'worktree %s/.worktrees/pr%s\nbranch refs/heads/refactor/iter%s-worker\n\n' "$REPO_ROOT" "$PEEK_TEST_PR" "$PEEK_TEST_PR"
                   fi
+                  if [[ "${PEEK_TEST_STALE_WORKTREE:-}" == "1" ]]; then
+                    printf 'worktree %s/.worktrees/impl-issue332\nbranch refs/heads/impl/issue332-peek-fact-only\n\n' "$REPO_ROOT"
+                  fi
                   exit 0
                 fi
+                if [[ "$args" == *"ls-remote --exit-code --heads origin impl/issue332-peek-fact-only"* ]]; then exit 2; fi
                 if [[ "$args" == *"rev-parse --verify HEAD"* ]]; then printf 'local-sha\n'; exit 0; fi
                 if [[ "$args" == *"rev-parse --verify refs/remotes/origin/refactor/iter"* ]]; then printf 'remote-sha\n'; exit 0; fi
                 if [[ "$args" == *"rev-list --count refs/remotes/origin/refactor/iter"* ]]; then printf '3\n'; exit 0; fi
@@ -200,6 +204,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         pr: int | None = None,
         milestone_fixtures: bool = False,
         unpushed: bool = False,
+        stale_worktree: bool = False,
         pr_open_issue: bool = False,
         represented_parent: bool = False,
         missing_link_pr: bool = False,
@@ -218,6 +223,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_MILESTONE_FIXTURES"] = "1"
         if unpushed:
             env["PEEK_TEST_UNPUSHED"] = "1"
+        if stale_worktree:
+            env["PEEK_TEST_STALE_WORKTREE"] = "1"
         if pr_open_issue:
             env["PEEK_TEST_PR_OPEN_ISSUE"] = "1"
         if represented_parent:
@@ -358,6 +365,32 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn("safe-push origin refactor/iter77-worker", result.stdout)
         self.assertNotIn('"actions"', result.stdout)
         self.assertNotIn('"schema": "wakeup-plan"', result.stdout)
+
+    def test_peek_stale_worktree_reports_fact_without_cleanup_command(self) -> None:
+        result = self.run_peek(stale_worktree=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Stale worktree (remote branch missing; cleanup is controller-owned)", result.stdout)
+        self.assertIn(f"path={self.root}/.worktrees/impl-issue332", result.stdout)
+        self.assertIn("branch=impl/issue332-peek-fact-only", result.stdout)
+        self.assertIn("remote_missing=true", result.stdout)
+        self.assertIn("cleanup_owner=controller-runbook", result.stdout)
+        self.assertIn("no_lifecycle_authority=true", result.stdout)
+        for token in ("git worktree remove", "--force", "git branch -D", "&&", "suggested_command"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, result.stdout)
+
+    def test_peek_source_has_no_stale_worktree_lifecycle_cleanup_command(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+        executable_source = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+
+        for token in ("git worktree remove", "--force", "git branch -D", "suggested_command"):
+            with self.subTest(token=token):
+                self.assertNotIn(token, executable_source)
+        self.assertIn("_stale_worktrees", source)
+        self.assertIn('"worktree", "list", "--porcelain"', source)
+        self.assertIn('"ls-remote", "--exit-code", "--heads"', source)
+        self.assertIn("no_lifecycle_authority", source)
 
     def test_peek_closed_label_projection_has_no_remediation_text(self) -> None:
         text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
