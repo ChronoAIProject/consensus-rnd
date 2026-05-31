@@ -91,22 +91,6 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
-        directive_dir = self.ctx.paths.runs / "maintainer-directives"
-        if directive_dir.is_dir():
-            target = pr_number.lstrip("#")
-            pr_pattern = re.compile(rf"(^|[^0-9])(PR[ -]?)?#?{re.escape(target)}([^0-9]|$)")
-            reason_pattern = (
-                re.compile(rf"(^|[^A-Za-z0-9_-]){re.escape(reason)}([^A-Za-z0-9_-]|$)") if reason else None
-            )
-            for path in directive_dir.glob("*.md"):
-                try:
-                    text = path.read_text(encoding="utf-8", errors="ignore")
-                except OSError:
-                    continue
-                if pr_pattern.search(text) or (reason_pattern and reason_pattern.search(text)):
-                    print("skip-label: maintainer-directive already covers this; see .refactor-loop/runs/maintainer-directives/")
-                    return 1
-
         result = self.gh(["pr", "edit", pr_number, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 

@@ -37,7 +37,6 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.root = Path(self.tmp.name)
         self.gh_log = self.root / "gh.log"
         self.directive_dir = self.root / ".refactor-loop" / "runs" / "maintainer-directives"
-        self.directive_dir.mkdir(parents=True)
 
         fake_gh = self.root / "gh"
         fake_gh.write_text(
@@ -87,6 +86,7 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         )
 
     def write_directive(self, name: str, body: str) -> None:
+        self.directive_dir.mkdir(parents=True, exist_ok=True)
         (self.directive_dir / name).write_text(body, encoding="utf-8")
 
     def gh_calls(self) -> list[str]:
@@ -100,18 +100,6 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
     def assert_human_label_applied_once(self) -> None:
         self.assertEqual(self.gh_calls(), [f"pr edit 55 --repo test-owner/test-repo --add-label {HUMAN_LABEL}"])
 
-    def test_apply_human_label_skips_when_directive_matches_pr(self) -> None:
-        self.write_directive(
-            "2026-05-26-pr.md",
-            "Maintainer already authorized this path for PR #55.\n",
-        )
-
-        result = self.run_helper("55", VALID_MARKER, "human-label-semantics-guard")
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("skip-label", result.stdout)
-        self.assert_gh_not_called()
-
     def test_apply_human_label_accepts_meta_resolved_marker_for_pr(self) -> None:
         result = self.run_helper("55", VALID_MARKER, "human-label-semantics-guard")
 
@@ -119,15 +107,12 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assert_human_label_applied_once()
 
     def test_apply_human_label_when_directives_dir_absent(self) -> None:
-        """Helper handles missing maintainer-directives directory gracefully."""
-        self.directive_dir.rmdir()
-
         result = self.run_helper("55", "META_RESOLVED:escalate-human:reason", "reason")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()
 
-    def test_apply_human_label_applies_when_directive_unrelated(self) -> None:
+    def test_apply_human_label_applies_when_local_directive_unrelated(self) -> None:
         self.write_directive(
             "2026-05-26-other.md",
             "Maintainer directive for a different PR and unrelated topic.\n",
@@ -138,11 +123,10 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()
 
-    def test_apply_human_label_no_substring_false_match(self) -> None:
-        """Directive containing PR #555 must NOT match helper run for PR 55."""
+    def test_apply_human_label_applies_when_local_directive_mentions_pr(self) -> None:
         self.write_directive(
-            "2026-05-26-pr-555.md",
-            "Maintainer directive for PR #555 covers a different path.\n",
+            "2026-05-26-pr.md",
+            "Maintainer already authorized this path for PR #55.\n",
         )
 
         result = self.run_helper("55", VALID_MARKER, "human-label-semantics-guard")
@@ -150,26 +134,13 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()
 
-    def test_apply_human_label_skips_when_topic_in_directive_body(self) -> None:
+    def test_apply_human_label_applies_when_local_directive_mentions_topic(self) -> None:
         self.write_directive(
             "2026-05-26-topic.md",
             "The human-label-semantics-guard route is covered by maintainer directive.\n",
         )
 
         result = self.run_helper("55", VALID_MARKER, "human-label-semantics-guard")
-
-        self.assertEqual(result.returncode, 1, result.stderr)
-        self.assertIn("skip-label", result.stdout)
-        self.assert_gh_not_called()
-
-    def test_apply_human_label_partial_topic_not_authorized(self) -> None:
-        """Directive containing a topic fragment must not authorize the full topic."""
-        self.write_directive(
-            "2026-05-26-topic-fragment.md",
-            "Maintainer directive mentions only the fragment concur.\n",
-        )
-
-        result = self.run_helper("55", "META_RESOLVED:escalate-human:concurrency", "concurrency")
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_human_label_applied_once()

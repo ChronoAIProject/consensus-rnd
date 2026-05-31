@@ -10,11 +10,13 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
+REPO_ROOT = SCRIPT_PATH.parents[3]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
+AUTH_MIRROR = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"
 
 
 def read(path: Path) -> str:
@@ -99,7 +101,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
             "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
-            ".refactor-loop/runs/maintainer-directives/2026-05-29-milestone-priority.md",
+            f"{AUTH_MIRROR}#maintainer-directive-milestone-priority",
         )
         for needle in required:
             with self.subTest(needle=needle):
@@ -229,7 +231,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "consensus-rnd-cli wakeup-plan",
             "每次唤醒",
             "Mechanically call `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root \"$REPO_ROOT\"`",
-            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+            f"{AUTH_MIRROR}#maintainer-directive-wakeup-plan-script",
+            f"{AUTH_MIRROR}#maintainer-directive-floor-no-exemption",
             "**Allowed**",
             "**Allowed git topology observation(issue #190 only)**",
             "**Forbidden / no lifecycle authority**",
@@ -274,7 +277,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "count_in_flight_codex",
             "HARD_GATE:dispatch_required",
             "hard_gate",
-            ".refactor-loop/runs/maintainer-directives/2026-05-29-wakeup-plan-script.md",
+            f"{AUTH_MIRROR}#maintainer-directive-wakeup-plan-script",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, script)

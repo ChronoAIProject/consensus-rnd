@@ -501,6 +501,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"], [])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
 
+    def test_wakeup_plan_does_not_require_local_maintainer_directive_directory(self) -> None:
+        directive_dir = self.repo / ".refactor-loop" / "runs" / "maintainer-directives"
+        self.assertFalse(directive_dir.exists())
+
+        plan = self.run_plan()
+
+        self.assertEqual(
+            plan["authorization"],
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script",
+        )
+        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+
     def test_all_empty_after_audit_none_zero_still_recommends_audit(self) -> None:
         (self.logs / "audit-iter-8.log").write_text(
             "AUDIT_DONE:none:0\nEXIT=0\n",
