@@ -1,16 +1,16 @@
 ---
 name: sshx
-description: Use when a high-risk or multi-angle decision needs inline consensus with isolated perspectives, fixed truth tables, and no daemon, GitHub, git, label, or release orchestration.
+description: Use when a high-risk or multi-angle decision needs worker-delegated inline consensus with isolated perspectives, fixed truth tables, and no daemon, GitHub, git, label, or release orchestration.
 ---
 
 # sshx
 
-`sshx` is a prompt-only inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task without using `codex-refactor-loop` runtime surfaces.
+`sshx` is a lightweight worker-delegated inline consensus skill. It applies the consensus engine philosophy to a single decision or implementation task by dispatching isolated worker perspectives without using `codex-refactor-loop` runtime surfaces.
 
 <!--
 Refactor (iter342/issue-342):
-  Old pattern: 共识引擎哲学只存在于 codex-refactor-loop 的 daemon/controller/GitHub 重编排里,无脱离脚本的轻量通用复刻
-  New principle: 新增独立纯 prompt skill skills/sshx/SKILL.md:InlineConsensusProtocol(intake→choose_isolation_mode→thinking_triplet→meta_judge→implement→review_triplet→fix_or_done)+ IsolationMode 固定 actor-isolated|sealed-transcript|abstain。严格按 DESIGN_DECISION_PATH 的 verbatim Concrete plan 逐条改;TDD baseline 只保留为 source-owned contract/test evidence,不把 .refactor-loop runtime artifact 纳入发布源
+  Old pattern: sshx 是 prompt-only 自应用 skill(r2/#349),用 sealed-transcript 作 isolation fallback,worker 推理在 caller 主上下文内
+  New principle: sshx = 轻量 worker-delegated inline consensus:WorkerMode 默认 codex-cli / 无则 isolated-token-subagent fallback / 两者无则 abstain;主上下文只 intake/派发/meta-judge/摘要/最终报告,不承载 worker 完整推理或同轮 peer 输出(No Context Pollution);删 prompt-only 自应用 + sealed-transcript。严格按 DESIGN_DECISION_PATH verbatim Concrete plan 逐条改
 -->
 
 ## Trigger
@@ -31,11 +31,11 @@ Do not use this skill for routine one-step answers where no separate perspective
 Run the stages in this exact order:
 
 1. `intake`
-2. `choose_isolation_mode`
-3. `thinking_triplet`
+2. `choose_worker_mode`
+3. `thinking_triplet_workers`
 4. `meta_judge`
-5. `implement`
-6. `review_triplet`
+5. `implementation_worker`
+6. `review_triplet_workers`
 7. `fix_or_done`
 
 Each thinking or review record must include these fields:
@@ -43,23 +43,39 @@ Each thinking or review record must include these fields:
 - `role`
 - `bias`
 - `visible_inputs`
-- `isolation_mode`
-- `sealed_before_peer_read`
+- `worker_mode`
+- `worker_carrier`
 - `verdict`
 
-## IsolationMode
+Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned summaries/verdicts, summarize outcomes, and produce the final report.
 
-`IsolationMode` has exactly these values, in priority order:
+## Worker Delegation
 
-1. `actor-isolated`
-2. `sealed-transcript`
+`WorkerDelegationContract` is the source-owned contract for choosing and using worker carriers. It is a prompt-level contract, not a runtime API.
+
+`WorkerMode` has exactly these values, in priority order:
+
+1. `codex-cli`
+2. `isolated-token-subagent`
 3. `abstain`
 
-`actor-isolated` uses isolated subagent, Task, or equivalent peer actors. Same-round peers must not see one another's outputs before they seal their own verdicts.
+`codex-cli` is the default worker carrier after a non-mutating capability check. The check may confirm that a Codex CLI worker can be invoked, but it must not mutate files, Git state, GitHub state, labels, releases, host configuration, or lifecycle state.
 
-`sealed-transcript` is a degraded fallback. The agent writes and seals each angle before reading same-round peer outputs. It is auditable weak isolation, not strict peer invisibility.
+`isolated-token-subagent` is the fallback when `codex-cli` is unavailable. It must run with isolated token context so same-round workers cannot read one another's full reasoning or peer outputs before returning their own verdict.
 
-`abstain` is required when strict peer invisibility is mandatory and `actor-isolated` is unavailable. Do not pretend that `sealed-transcript` is equivalent to strict actor isolation.
+`abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
+
+## No Context Pollution
+
+The caller context must not carry worker full reasoning or same-round peer outputs. It may carry only:
+
+- intake inputs and constraints;
+- dispatch briefs sent to each worker;
+- worker summaries, verdicts, and explicitly surfaced blockers;
+- meta-judge synthesis;
+- final summary and report.
+
+Same-round thinking workers must not see one another's outputs before their own verdicts are returned. Same-round review workers follow the same rule. If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay.
 
 ## Thinking Triplet
 
@@ -89,11 +105,13 @@ The meta-judge applies this fixed thinking truth table:
 
 `meta-layer convergence` must produce one concrete plan before implementation. If the bounded pass still cannot produce a concrete plan, stop with options instead of inventing agreement.
 
-## Implement
+## Implementation Worker
 
 Implement only the concrete plan approved by the thinking gate. Keep the implementation boundary narrow and state any deviation before making it.
 
 `sshx` does not grant permission to commit, push, merge, close issues, edit labels, publish releases, or mutate external lifecycle state.
+
+Implementation must be delegated to a worker using the selected `WorkerMode`. The caller context may pass the approved concrete plan and constraints, then receive a bounded implementation summary and changed-file/test evidence.
 
 ## Review Triplet
 
@@ -144,14 +162,16 @@ This skill is only a prompt contract. It must not add or depend on:
 - `.refactor-loop/host.env` as a production source of truth;
 - `codex-refactor-loop` internal prompts or scripts as an implementation dependency.
 
-Use external actors only as isolation capability, not as controller authority.
+Allowed worker carriers are limited to `codex-cli` and `isolated-token-subagent`. Use them only as worker delegation capability, not as controller authority.
 
 ## Baseline Failure Mode
 
 Without this skill, lightweight high-risk decisions tend to regress to:
 
+- prompt-only self-application where worker reasoning lives in the caller context;
+- transcript-based pseudo-isolation presented as enough for independent workers;
 - single-threaded advice presented as enough for consensus;
-- no required isolation declaration for peer perspectives;
+- no required worker mode declaration for peer perspectives;
 - no fixed thinking truth table;
 - no same-shape review gate before done;
 - pressure to use daemon, GitHub, or git orchestration for cases that only need inline consensus.
@@ -165,37 +185,44 @@ intake:
   goal:
   constraints:
   strict_peer_invisibility_required:
-isolation:
-  mode:
+worker_delegation:
+  worker_mode:
+  worker_carrier:
   reason:
-thinking_triplet:
+thinking_triplet_workers:
   - role: minimal
     bias:
     visible_inputs:
-    isolation_mode:
-    sealed_before_peer_read:
+    worker_mode:
+    worker_carrier:
     verdict:
   - role: structural
     bias:
     visible_inputs:
-    isolation_mode:
-    sealed_before_peer_read:
+    worker_mode:
+    worker_carrier:
     verdict:
   - role: delete
     bias:
     visible_inputs:
-    isolation_mode:
-    sealed_before_peer_read:
+    worker_mode:
+    worker_carrier:
     verdict:
 meta_judge:
   exit:
   concrete_plan:
-review_triplet:
+implementation_worker:
+  worker_mode:
+  summary:
+review_triplet_workers:
   - role: architecture
+    worker_mode:
     verdict:
   - role: quality
+    worker_mode:
     verdict:
   - role: tests
+    worker_mode:
     verdict:
 fix_or_done:
   exit:

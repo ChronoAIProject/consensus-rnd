@@ -24,7 +24,7 @@
 | skill | 说明 | 状态 |
 |---|---|---|
 | `codex-refactor-loop` | Consensus R&D 循环的稳定 skill 入口;默认以 audit/refactor 作为兼容 intake / producer,codex CLI 驱动,GitHub 为状态面 | 自 host 项目移植,verbatim;保留 refactor 作为合法 work-unit 隐喻 |
-| `sshx` | 轻量 inline 共识方法论;在无 daemon/GitHub/git 编排时,用固定隔离模式、thinking gate 与 review gate 做多角度决策 | 独立纯 prompt skill;不是 `codex-refactor-loop` 的重复 alias |
+| `sshx` | 轻量 worker-delegated inline 共识方法论;在无 daemon/GitHub/git 编排时,用 WorkerMode、thinking worker gate 与 review worker gate 做多角度决策 | 独立 worker-delegated prompt skill;不是 `codex-refactor-loop` 的重复 alias |
 
 ## 仓库结构
 
@@ -85,7 +85,7 @@ Refactor (iter1/issue-141):
 
 1. **抽出引擎脊柱**(`solve → consensus → implement → verify`),让 audit 这一步(产生工作单元的种子)可替换 —— 换成任意 work-unit 来源(设计提案 / 文档任务 / 营销产出 / spec 变更),其余整套共识机制原样复用。
 2. **参数化漏入的 host 主张**:如"工作语言规则"应成为可注入的 host policy,而非写死。
-3. 对外以 "Consensus R&D" 为主产品身份; 保留 codex-refactor-loop 作为稳定 skill 入口,因为 maintainer 已接受 "refactor = development" 通用隐喻; `sshx` 是轻量 inline 共识方法论,不是重型 loop 的重复 alias;除非未来出现真实平台发现/安装问题,不新增重复 alias skill。
+3. 对外以 "Consensus R&D" 为主产品身份; 保留 codex-refactor-loop 作为稳定 skill 入口,因为 maintainer 已接受 "refactor = development" 通用隐喻; `sshx` 是轻量 worker-delegated inline 共识方法论,不是重型 loop 的重复 alias;除非未来出现真实平台发现/安装问题,不新增重复 alias skill。
 
 > 泛化引擎本身宜走引擎自己那套共识 gate —— 用这个引擎来通用化这个引擎。
 

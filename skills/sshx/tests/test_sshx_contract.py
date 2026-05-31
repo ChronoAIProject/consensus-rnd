@@ -15,6 +15,10 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def without_refactor_comments(text: str) -> str:
+    return re.sub(r"<!--\nRefactor .*?\n-->\n", "", text, flags=re.DOTALL)
+
+
 def frontmatter(text: str) -> dict[str, str]:
     match = re.match(r"---\n(?P<body>.*?)\n---\n", text, re.DOTALL)
     if not match:
@@ -39,8 +43,10 @@ class SshxContractTests(unittest.TestCase):
         for anchor in [
             "## Trigger",
             "## InlineConsensusProtocol",
-            "## IsolationMode",
+            "## Worker Delegation",
+            "## No Context Pollution",
             "## Design Truth Table",
+            "## Implementation Worker",
             "## Review Truth Table",
             "## Fix Or Done",
             "## Boundaries",
@@ -49,18 +55,43 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(anchor, text)
         self.assertIn(
-            "`intake`\n2. `choose_isolation_mode`\n3. `thinking_triplet`\n4. `meta_judge`\n5. `implement`\n6. `review_triplet`\n7. `fix_or_done`",
+            "`intake`\n2. `choose_worker_mode`\n3. `thinking_triplet_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
             text,
         )
 
-    def test_sshx_isolation_modes(self) -> None:
+    def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)
-        mode_lines = re.findall(r"^\d+\. `(actor-isolated|sealed-transcript|abstain)`$", text, re.MULTILINE)
-        self.assertEqual(mode_lines, ["actor-isolated", "sealed-transcript", "abstain"])
-        self.assertIn("`sealed-transcript` is a degraded fallback", text)
-        self.assertIn("auditable weak isolation, not strict peer invisibility", text)
+        contract_text = without_refactor_comments(text)
+        mode_lines = re.findall(r"^\d+\. `(codex-cli|isolated-token-subagent|abstain)`$", text, re.MULTILINE)
+        self.assertEqual(mode_lines, ["codex-cli", "isolated-token-subagent", "abstain"])
+        self.assertIn("`WorkerDelegationContract`", text)
+        self.assertIn("`codex-cli` is the default worker carrier after a non-mutating capability check", text)
+        self.assertIn("`isolated-token-subagent` is the fallback when `codex-cli` is unavailable", text)
         self.assertIn(
-            "`abstain` is required when strict peer invisibility is mandatory and `actor-isolated` is unavailable",
+            "`abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available",
+            text,
+        )
+        self.assertIn("Do not self-apply the triplet inside the caller context", text)
+        self.assertNotIn("sealed-transcript", contract_text)
+        self.assertNotIn("actor-isolated", contract_text)
+
+    def test_sshx_no_context_pollution_contract(self) -> None:
+        text = read(SKILL)
+        self.assertIn("The caller context must not carry worker full reasoning or same-round peer outputs", text)
+        for allowed_context in [
+            "intake inputs and constraints",
+            "dispatch briefs sent to each worker",
+            "worker summaries, verdicts, and explicitly surfaced blockers",
+            "meta-judge synthesis",
+            "final summary and report",
+        ]:
+            self.assertIn(allowed_context, text)
+        self.assertIn(
+            "Same-round thinking workers must not see one another's outputs before their own verdicts are returned",
+            text,
+        )
+        self.assertIn(
+            "If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay",
             text,
         )
 
@@ -103,12 +134,16 @@ class SshxContractTests(unittest.TestCase):
             self.assertIn(forbidden_boundary, text)
         self.assertIn("It must not add or depend on", text)
         self.assertIn("does not grant permission to commit, push, merge", text)
+        self.assertIn("Allowed worker carriers are limited to `codex-cli` and `isolated-token-subagent`", text)
+        self.assertIn("not as controller authority", text)
 
     def test_sshx_baseline_evidence_is_source_owned(self) -> None:
         text = read(SKILL)
         for failure_mode in [
+            "prompt-only self-application where worker reasoning lives in the caller context",
+            "transcript-based pseudo-isolation presented as enough for independent workers",
             "single-threaded advice presented as enough for consensus",
-            "no required isolation declaration for peer perspectives",
+            "no required worker mode declaration for peer perspectives",
             "no fixed thinking truth table",
             "no same-shape review gate before done",
             "only need inline consensus",
@@ -120,9 +155,9 @@ class SshxContractTests(unittest.TestCase):
 
     def test_sshx_docs_and_ci_discovery(self) -> None:
         self.assertRegex(read(README), r"\| `sshx` \|")
-        self.assertIn("轻量 inline 共识方法论", read(README))
+        self.assertIn("轻量 worker-delegated inline 共识方法论", read(README))
         self.assertIn("`sshx`", read(GEMINI))
-        self.assertIn("inline consensus", read(GEMINI))
+        self.assertIn("worker-delegated inline consensus", read(GEMINI))
         self.assertIn("python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'", read(CI))
 
 
