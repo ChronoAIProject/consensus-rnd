@@ -377,6 +377,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(intent, sort_keys=True)}\n")
         return intent
 
+    def append_raw_harness_spawn_intent(self, payload: str) -> None:
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {payload}\n")
+
+    def assert_harness_spawn_intent_invalid(self, expected_reason: str, **overrides: object) -> None:
+        (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+        self.append_harness_spawn_intent(**overrides)
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+        self.assertEqual(action["reason"], expected_reason)
+
     def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
         self.append_harness_spawn_intent()
 
@@ -416,6 +431,45 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], f"forbidden-fields:{field}")
 
+    def test_harness_spawn_intent_rejects_malformed_json_non_object_and_missing_id(self) -> None:
+        cases = (
+            ("{not-json", "invalid-json"),
+            ("[]", "intent-not-object"),
+            (json.dumps({"command": "spawn-codex"}), "missing-intent-id"),
+        )
+        for payload, expected_reason in cases:
+            with self.subTest(expected_reason=expected_reason):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.append_raw_harness_spawn_intent(payload)
+
+                plan = self.run_plan()
+
+                action = plan["actions"][0]
+                self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+                self.assertEqual(action["reason"], expected_reason)
+
+    def test_harness_spawn_intent_rejects_missing_path_fields_and_bad_path(self) -> None:
+        for field in ("cd", "prompt", "log"):
+            with self.subTest(field=field):
+                self.assert_harness_spawn_intent_invalid(f"missing-{field}", **{field: ""})
+
+        self.assert_harness_spawn_intent_invalid(
+            "invalid-path:artifact path must be repo-relative POSIX text: '../outside'",
+            cd="../outside",
+        )
+
+    def test_harness_spawn_intent_rejects_invalid_stall_and_required_flags(self) -> None:
+        cases = (
+            ("controller-action-not-spawn-codex-background", {"controller_action": "spawn_codex_now"}),
+            ("invalid-stall", {"stall": "not-an-int"}),
+            ("invalid-stall", {"stall": 0}),
+            ("missing-background-requirement", {"run_in_background_required": False}),
+            ("missing-no-lifecycle-authority", {"no_lifecycle_authority": False}),
+        )
+        for expected_reason, overrides in cases:
+            with self.subTest(expected_reason=expected_reason):
+                self.assert_harness_spawn_intent_invalid(expected_reason, **overrides)
+
     def test_harness_spawn_intent_dedupes_and_filters_existing_or_in_flight_log(self) -> None:
         self.append_harness_spawn_intent(intent_id="duplicate")
         self.append_harness_spawn_intent(intent_id="duplicate")
@@ -442,6 +496,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
         self.assertEqual([action["intent_id"] for action in actions], ["duplicate"])
+
+    def test_wakeup_plan_uses_concurrency_monitor_for_spawn_intent_in_flight_detection(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
+        self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
+        self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
 
     def test_completed_marker_routes_before_ci_red(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")

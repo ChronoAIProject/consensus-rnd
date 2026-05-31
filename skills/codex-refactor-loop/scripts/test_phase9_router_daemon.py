@@ -649,6 +649,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router.tick()
 
         intent = self.commands[0]
+        self.assertIs(type(intent), dict)
         self.assertEqual(intent["command"], "spawn-codex")
         self.assertNotIsInstance(intent["command"], list)
         for forbidden in ("argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor", "target_ref"):
@@ -656,6 +657,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.assertNotIn(forbidden, intent)
         source = PHASE9_ROUTER.read_text(encoding="utf-8")
         self.assertIn('"command": "spawn-codex"', source)
+        self.assertNotIn("class HarnessSpawnIntent", source)
+        self.assertNotIn("def __iter__", source)
         self.assertNotIn('"nohup"', source)
         self.assertNotIn("start_new_session", source)
 

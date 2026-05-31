@@ -130,18 +130,6 @@ class Phase9SourceIssueDecision:
     reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
 
 
-class HarnessSpawnIntent(dict[str, object]):
-    # Refactor (iterissue-330/issue-330): refactor helper, no behavior change in default daemon dispatch.
-    #   Old pattern: daemon nohup spawn bypassed the harness-visible contract; command could mean argv/shell.
-    #   New principle: HARNESS_SPAWN_INTENT.command is closed enum Literal['spawn-codex']; argv is built by controller/harness.
-    def __init__(self, intent: dict[str, object], display_argv: list[str]) -> None:
-        super().__init__(intent)
-        self.display_argv = display_argv
-
-    def __iter__(self):
-        return iter(self.display_argv)
-
-
 @dataclass(frozen=True)
 class MetaJudgePromptContext:
     # Refactor (issue-262): Old: meta-judge prompt context had no validated
@@ -275,7 +263,6 @@ class Phase9Router:
         # .refactor-loop/.controller-pending-events.log.
         self.pending_events_path = ctx.paths.pending_events
         self.lock_path = self.loop_dir / "phase9-router.lock"
-        self.spawn_codex = ctx.skill_root / "scripts" / "consensus-rnd-cli"
         self.command_runner = command_runner or self._default_runner
         # Refactor (iter4/skill-router-fallback-flood-fix): Old pattern:
         # memory-only dedup was lost on daemon restart, re-emitting historical
@@ -959,27 +946,13 @@ class Phase9Router:
             "run_in_background_required": True,
             "no_lifecycle_authority": True,
         }
-        self.command_runner(HarnessSpawnIntent(intent, self._display_argv_for_intent(intent)))
+        self.command_runner(intent)
         return True
 
     def _default_runner(self, intent: dict[str, object]) -> None:
         self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}\n")
-
-    def _display_argv_for_intent(self, intent: dict[str, object]) -> list[str]:
-        return [
-            str(self.spawn_codex),
-            "spawn-codex",
-            "--cd",
-            str(self.ctx.artifact_execution_path(str(intent["cd"]))),
-            "--prompt",
-            str(self.ctx.artifact_execution_path(str(intent["prompt"]))),
-            "--log",
-            str(self.ctx.artifact_execution_path(str(intent["log"]))),
-            "--stall",
-            str(intent["stall"]),
-        ]
 
     def _intent_id_for_log(self, log_path: Path) -> str:
         identity = self._identity_from_path(log_path)

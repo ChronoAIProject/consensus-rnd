@@ -156,19 +156,18 @@ def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]]
     return actions, None
 
 
-def _spawn_codex_in_flight_for_log(log_path: Path) -> bool:
+def _canonical_in_flight_for_log(log_path: Path, monitor: Any | None) -> bool:
+    if monitor is None:
+        return False
     try:
-        ps = subprocess.run(["ps", "-eo", "command="], capture_output=True, text=True, check=False)
-    except OSError:
+        lines = monitor.list_in_flight_codex_lines()
+    except Exception:
         return False
     target = str(log_path)
-    for line in ps.stdout.splitlines():
-        if "consensus-rnd-cli" in line and "spawn-codex" in line and target in line and " -c " not in line:
-            return True
-    return False
+    return any(target in line for line in lines)
 
 
-def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext) -> list[dict[str, Any]]:
+def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any | None = None) -> list[dict[str, Any]]:
     # Refactor (iterissue-330/issue-330):
     #   Old pattern: daemon nohup spawn bypassed the harness-visible contract; command could mean argv/shell.
     #   New principle: HARNESS_SPAWN_INTENT.command is closed enum Literal['spawn-codex']; argv is built by controller/harness.
@@ -211,7 +210,7 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext) -> list[dict
         except Exception as exc:
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
-        if log_path.exists() or _spawn_codex_in_flight_for_log(log_path):
+        if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
             continue
         actions.append(
             {
@@ -374,14 +373,23 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
     return total, breakdown
 
 
-def concurrency_plan(repo_root: Path, *, fixed_point: bool, gh_items: list[GhItem] | None = None) -> dict[str, Any]:
+def concurrency_plan(
+    repo_root: Path,
+    *,
+    fixed_point: bool,
+    gh_items: list[GhItem] | None = None,
+    monitor: Any | None = None,
+    concurrency_module: Any | None = None,
+) -> dict[str, Any]:
     # Refactor (issue-277):
     #   Old pattern: AUDIT_DONE:none:0 converted a positive deficit into an
     #   exemption, then floor-no-exemption made audit repeatable without a slot.
     #   New principle: positive deficits stay visible; duplicate same-iteration
     #   audit is not legal dispatch when that audit is already active.
-    concurrency_module = import_concurrency_monitor(repo_root)
-    monitor = build_concurrency_monitor(repo_root, concurrency_module)
+    if concurrency_module is None:
+        concurrency_module = import_concurrency_monitor(repo_root)
+    if monitor is None:
+        monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
     expected, breakdown = expected_from_open_items(gh_items or [])
     if expected == 0:
@@ -1002,11 +1010,19 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     health = daemon_health(repo_root)
     gh_items = load_github_items(repo_root)
     audit_none_fixed_point = latest_controller_validated_audit_none(repo_root)
-    concurrency = concurrency_plan(repo_root, fixed_point=audit_none_fixed_point, gh_items=gh_items)
+    concurrency_module = import_concurrency_monitor(repo_root)
+    monitor = build_concurrency_monitor(repo_root, concurrency_module)
+    concurrency = concurrency_plan(
+        repo_root,
+        fixed_point=audit_none_fixed_point,
+        gh_items=gh_items,
+        monitor=monitor,
+        concurrency_module=concurrency_module,
+    )
 
     actions: list[dict[str, Any]] = []
     actions.extend(pending_bootstrap_actions(repo_root, health))
-    actions.extend(harness_spawn_intent_actions(repo_root, ctx))
+    actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))

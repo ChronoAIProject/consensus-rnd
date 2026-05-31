@@ -127,7 +127,6 @@ class ConcurrencyMonitor:
         self.dispatch_dispatched = ctx.paths.dispatch_dispatched
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
-        self.cli = ctx.skill_root / "scripts" / "consensus-rnd-cli"
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
