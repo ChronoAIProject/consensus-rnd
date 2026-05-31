@@ -641,6 +641,10 @@ class IntegrationSyncDaemon:
             ),
         )
 
+    # Refactor (fix/issue282-devsync-adoption-ambiguity):
+    # Old pattern: adoption metadata ambiguity consumed the whole daemon tick.
+    # New principle: adoption ambiguity blocks only force-with-lease adoption;
+    # later reset, forward-sync, and release-rollup gates still run.
     def execute_merged_rollup_adoption(self, cwd: Path, adoption: RollupAdoption) -> bool:
         if not adoption.expected_remote_sha:
             self.append_pending_event("rollup-adoption-ambiguous", "missing-expected-remote-sha")
@@ -782,6 +786,10 @@ class IntegrationSyncDaemon:
         if self.execute_clean_local_ahead(cwd):
             return
 
+        # Refactor (fix/issue282-devsync-adoption-ambiguity):
+        # Old pattern: ambiguous rollup detection returned before later sync gates.
+        # New principle: only a constructed adoption operation consumes the tick;
+        # ambiguity falls through to the existing fail-closed sync gates.
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
             if self.execute_merged_rollup_adoption(cwd, rollup.adoption):
