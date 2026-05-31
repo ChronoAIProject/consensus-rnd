@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 from ..state import write_json
 from .gate import isoformat, load_host_env
@@ -37,8 +37,32 @@ class ReleasePublishResult:
     result_path: Path
 
 
+ReleasePublicationPhase = Literal["first_run", "already_bumped"]
+
+
+@dataclass(frozen=True)
+class ReleasePublicationState:
+    """Private publication classifier.
+
+    Refactor (iter341/issue-341):
+      Old pattern: ReleasePublisher.publish() 线性 bump/add/commit→push→green-gate;push 后 CI pending 即陷入不可恢复授权态(manifests 已 bump,re-run git commit nothing-to-commit 失败)——beta.5 靠 controller hand-complete 绕过
+      New principle: 单一 publish() 主链路加 already-bumped reentry:仅当唯一 preflight mismatch 是 mapped manifests 已==to_version 且 git show -s --format=%s HEAD 证明 HEAD subject 精确为 'Release v<to_version>' 时跳过 bump/add/commit 三步,随后仍必须 _safe_push + exact-SHA required-checks green gate + gh release create + result artifact。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不新增 resume ticket/public CLI/workflow 发版权/host.env 事实源
+    """
+
+    phase: ReleasePublicationPhase
+    version: str
+    tag: str
+    release_target_ref: str | None
+    skip_bump_commit: bool
+    reason: str
+
+
 class ReleasePublisher:
     """Publish a preflight-approved release from the controller boundary only.
+
+    Refactor (iter341/issue-341):
+      Old pattern: ReleasePublisher.publish() 线性 bump/add/commit→push→green-gate;push 后 CI pending 即陷入不可恢复授权态(manifests 已 bump,re-run git commit nothing-to-commit 失败)——beta.5 靠 controller hand-complete 绕过
+      New principle: 单一 publish() 主链路加 already-bumped reentry:仅当唯一 preflight mismatch 是 mapped manifests 已==to_version 且 git show -s --format=%s HEAD 证明 HEAD subject 精确为 'Release v<to_version>' 时跳过 bump/add/commit 三步,随后仍必须 _safe_push + exact-SHA required-checks green gate + gh release create + result artifact。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不新增 resume ticket/public CLI/workflow 发版权/host.env 事实源
 
     Refactor (iter334/issue-334):
       Old pattern: fresh manifest-bump commits could be released before exact-SHA checks were green.
@@ -75,19 +99,24 @@ class ReleasePublisher:
         # Refactor (iter217/issue-217):
         #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
         #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        # Refactor (iter341/issue-341):
+        #   Old pattern: ReleasePublisher.publish() 线性 bump/add/commit→push→green-gate;push 后 CI pending 即陷入不可恢复授权态(manifests 已 bump,re-run git commit nothing-to-commit 失败)——beta.5 靠 controller hand-complete 绕过
+        #   New principle: 单一 publish() 主链路加 already-bumped reentry:仅当唯一 preflight mismatch 是 mapped manifests 已==to_version 且 git show -s --format=%s HEAD 证明 HEAD subject 精确为 'Release v<to_version>' 时跳过 bump/add/commit 三步,随后仍必须 _safe_push + exact-SHA required-checks green gate + gh release create + result artifact。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不新增 resume ticket/public CLI/workflow 发版权/host.env 事实源
         result = self.preflight.validate(candidate_path=candidate_path, target_ref=target_ref)
-        if not result.allowed:
+        state = self._inspect_publication_state(result)
+        if not result.allowed and not state.skip_bump_commit:
             return self._denied(result)
 
-        version = result.version
-        tag = f"v{version}"
-        bump = self._run(["python3", ".github/scripts/bump_version.py", "--version", version])
-        self._ensure_success(bump, "bump_version")
-        paths = [target["relative"] for target in load_manifest_targets(self.repo_root)]
-        add = self._run(["git", "add", ".version-bump.json", *paths])
-        self._ensure_success(add, "git add")
-        commit = self._run(["git", "commit", "-m", f"Release {tag}"])
-        self._ensure_success(commit, "git commit")
+        version = state.version
+        tag = state.tag
+        if not state.skip_bump_commit:
+            bump = self._run(["python3", ".github/scripts/bump_version.py", "--version", version])
+            self._ensure_success(bump, "bump_version")
+            paths = [target["relative"] for target in load_manifest_targets(self.repo_root)]
+            add = self._run(["git", "add", ".version-bump.json", *paths])
+            self._ensure_success(add, "git add")
+            commit = self._run(["git", "commit", "-m", self._release_bump_subject(version)])
+            self._ensure_success(commit, "git commit")
         # Refactor (fix/publisher-tag-target): Old pattern: publisher committed
         # synchronized release manifests, pushed HEAD, then created the release tag
         # on the preflight candidate ref whose manifests could still be old.
@@ -121,6 +150,81 @@ class ReleasePublisher:
             release_url=release_url,
             result_path=self.result_path,
         )
+
+    def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
+        # refactor helper, no behavior change outside the private reentry classification
+        version = result.version
+        tag = f"v{version}" if version else ""
+        if result.allowed:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="preflight_allowed",
+            )
+        if not self._is_only_manifest_version_mismatch(result):
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="preflight_denied",
+            )
+        if not version:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="missing_version",
+            )
+        manifest_versions = self._mapped_manifest_versions()
+        if not manifest_versions or manifest_versions != {version}:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="mapped_manifests_not_to_version",
+            )
+        expected_subject = self._release_bump_subject(version)
+        if self._current_commit_subject() != expected_subject:
+            return ReleasePublicationState(
+                phase="first_run",
+                version=version,
+                tag=tag,
+                release_target_ref=None,
+                skip_bump_commit=False,
+                reason="release_head_subject_mismatch",
+            )
+        return ReleasePublicationState(
+            phase="already_bumped",
+            version=version,
+            tag=tag,
+            release_target_ref=None,
+            skip_bump_commit=True,
+            reason="already_bumped_reentry",
+        )
+
+    def _is_only_manifest_version_mismatch(self, result: PublishPreflightResult) -> bool:
+        return result.reasons == ("manifest_version_mismatch",)
+
+    def _mapped_manifest_versions(self) -> set[str]:
+        versions = {str(target["version"]) for target in load_manifest_targets(self.repo_root)}
+        return versions
+
+    def _release_bump_subject(self, version: str) -> str:
+        return f"Release v{version}"
+
+    def _current_commit_subject(self) -> str:
+        result = self._run(["git", "show", "-s", "--format=%s", "HEAD"])
+        self._ensure_success(result, "git show -s --format=%s HEAD")
+        return result.stdout.strip()
 
     def _denied(self, result: PublishPreflightResult) -> ReleasePublishResult:
         return ReleasePublishResult(
