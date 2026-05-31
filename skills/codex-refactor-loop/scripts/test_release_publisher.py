@@ -139,6 +139,9 @@ def expected_violating_pre_bump_tag_command() -> list[str]:
 
 
 class ReleasePublisherTests(unittest.TestCase):
+    # Refactor (iter1/issue-322):
+    #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
+    #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
     def test_publisher_runs_preflight_before_mutation(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
@@ -160,6 +163,51 @@ class ReleasePublisherTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(runner.commands, expected_success_commands())
+
+    def test_release_publication_command_allowlist_is_exact(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(runner.commands, expected_success_commands())
+
+    def test_release_publication_forbids_extra_lifecycle_commands(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            publisher.publish(target_ref="abc123")
+
+            serialized = [" ".join(command) for command in runner.commands]
+            forbidden_exact = {
+                "git tag",
+                "git merge",
+                "git rebase",
+                "git reset",
+                "gh release edit",
+                "gh release delete",
+                "gh release upload",
+                "gh issue create",
+                "gh issue close",
+                "gh issue edit",
+                "gh pr create",
+                "gh pr close",
+                "gh pr edit",
+                "gh pr merge",
+            }
+            for forbidden in forbidden_exact:
+                with self.subTest(forbidden=forbidden):
+                    self.assertFalse(any(command.startswith(forbidden) for command in serialized), serialized)
+            self.assertFalse(any(command[:2] == ["git", "push"] and "--force" in command for command in runner.commands))
+            self.assertEqual(
+                [command for command in runner.commands if command[:3] == ["gh", "release", "create"]],
+                [expected_success_commands()[-1]],
+            )
 
     def test_publisher_records_result_and_uses_bump_commit_tag_target(self) -> None:
         with copy_repo_fixture() as tmp:
