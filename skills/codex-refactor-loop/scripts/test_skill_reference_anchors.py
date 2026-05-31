@@ -143,6 +143,21 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("物理拆 REFERENCE.md 后跨平台加载/维护退化", self.skill)
         self.assertIn("Detailed specifications, heavy templates, schemas, command bodies, and recovery playbooks", self.skill)
 
+    def test_project_rules_document_optional_reference_contract(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        for needle in (
+            "重型参考默认可下沉到 `REFERENCE.md`",
+            "跨平台 agent 加载或维护实证显示物理拆分退化",
+            "允许单文件 SKILL.md 同时承载 controller 合同与详细参考",
+            "用 intra-file anchor 分层并由 source-regression 锁住" + "事实源" + "唯一性",
+            "重型参考默认拆 `REFERENCE.md`",
+            "可留在 SKILL.md 的详细参考区并用 intra-file anchor 暴露",
+            "`skills/<name>/REFERENCE.md` 是可选重型参考层",
+            "未使用 `REFERENCE.md` 时,SKILL.md 的详细参考区是该 skill 的权威参考层",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
