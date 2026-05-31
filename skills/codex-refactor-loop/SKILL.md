@@ -1583,15 +1583,14 @@ the work-unit fields documented in [work-unit contract](#work-unit-contract) (`w
 
 For every cluster with `requires_design: true`:
 
-1. Open a GitHub issue via `gh issue create`:
-   ```bash
-   gh issue create \
-     --title "[refactor-design] <cluster-id>: <one-line problem from audit>" \
-     --label "$(python3 <skill-root>/scripts/consensus-rnd-cli labels design-issue-labels)" \
-     --body "$(envsubst < <skill-root>/prompts/design-issue-body.md)"
-   ```
-   The label expression is catalog-derived; do not inline the active label bundle
-   in SKILL.md or prompts.
+1. Open a GitHub design issue through the active-controller-gated
+   `ControllerActions.open_design_issue_with_labels(title, body_file)` internal
+   primitive. It validates the self-contained body file and applies the
+   catalog-derived design issue label bundle from `labels.design_issue_label_bundle()`.
+   <!-- Refactor (issue-297): Old: controller runbook exposed copyable issue
+   create and label commands. New: design issue creation is routed through a
+   narrow active-controller-gated ControllerActions contract. -->
+   Do not inline the active label bundle in SKILL.md or prompts.
    The body template at `prompts/design-issue-body.md` includes: the cluster's YAML block from audit, full evidence section, the audit's `Fix boundary` paragraph, and an explicit "decision needed" checklist (schema/protocol change? new contract? backward-compat strategy? whether to split into multiple PRs?).
 2. Record design-pending status on GitHub: the issue body/comment links the source work unit,
    `work_unit_id`, opened timestamp, and current status. Future routing reads GitHub labels,
@@ -1609,25 +1608,16 @@ Update GitHub-visible state, advance to Consensus-rnd Phase implementation (with
 
 **强制 pre-audit 步骤**(每次派 audit codex 前 controller 执行):
 
-```bash
-# 1. List worktrees,标记 main + active 之外的 stale
-git worktree list
-
-# 2. 对每个非 main / 非 active(active = in-flight cluster impl 用的)worktree:
-#    - 若对应 PR 已 merged → 删
-#    - 若对应 PR 已 closed(superseded / drop)→ 删
-#    - 若对应 branch 已不在 origin → 删
-git worktree remove <stale-wt> --force
-git worktree prune
-git branch -D <stale-branch>  # 同 step 一起清
-
-# 3. 验收:`git worktree list` 只剩 main + dev-sync + 当前 in-flight cluster wt
-```
+Use the owner-local worktree primitives instead of copyable git cleanup
+recipes: read the worktree projection, classify stale worktrees against open PR
+state, and perform cleanup only from the active controller's checked-in
+maintenance path. The desired postcondition is main + dev-sync + current
+in-flight cluster worktrees only.
 
 **反面禁止**:
 - ❌ 派 audit codex 前不 clean worktrees → bogus evidence + 浪费 5400s codex 时间
 - ❌ 见 audit-iter-N 的 cluster 直接 trust → 必须 controller 抽查 3 个 evidence file:line 真存在(且不在 stale wt)
-- ❌ "可能下次还要用" → worktree 是 disposable;branch 在 git history,需要时 `git worktree add -b <new-branch> <path> <commit>` 重建
+- ❌ "可能下次还要用" → worktree 是 disposable;branch 在 git history,需要时由 owner-local worktree primitive 重建
 
 如果发现 audit 输出含 stale-worktree evidence(典型征兆:file path 在 main `git ls-files` 中找不到):
 1. archive 该 audit md/ndjson 加 `.STALE-WORKTREES.md` 后缀
@@ -1640,13 +1630,10 @@ git branch -D <stale-branch>  # 同 step 一起清
 
 For each cluster in the current batch:
 
-1. Create worktree:
-
-   ```bash
-   mkdir -p "$REPO_ROOT/.worktrees"
-   git worktree add -b refactor/iterN-<cluster-id> \
-     "$REPO_ROOT/.worktrees/iterN-<cluster-id>" HEAD
-   ```
+1. Create or reuse the implementation worktree through
+   `ControllerActions.safe_worktree(iteration, cluster, base)`, which owns the
+   branch/path naming contract and keeps controller worktrees under
+   `$REPO_ROOT/.worktrees/`.
 
 2. Materialize prompt: copy `prompts/implement.md`, replace placeholders (`{{work_unit_id}}`,
    `{{cluster_id}}`, `{{worktree_path}}`, `{{branch}}`, `{{old_pattern}}`, `{{new_principle}}`,
@@ -1715,7 +1702,11 @@ bash -lc "$BUILD_CMD"
 
 结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
 
-**cwd discipline (critical)**: `git merge`, `git push`, and `gh pr create` MUST run from `$REPO_ROOT`, never from a worktree directory. Cwd persists across Bash invocations in the harness, so chained commands that include `cd "$REPO_ROOT/.worktrees/<id>"` leak cwd into the next call. Always either start the trunk-side command with `cd "$REPO_ROOT" && …` or run it in a separate Bash invocation after the worktree-scoped commit. If you see `Already up to date.` after a merge, that is the signature of cwd leak — diagnose and redo from `$REPO_ROOT`.
+**cwd discipline (critical)**: trunk-side git and GitHub mutations are
+active-controller-owned operations. Use the checked-in `ControllerActions`
+primitives from `$REPO_ROOT`, never from a worktree directory. Cwd persists
+across Bash invocations in the harness, so chained commands that include
+`cd "$REPO_ROOT/.worktrees/<id>"` leak cwd into the next call.
 
 For each `pass` cluster, serially:
 
@@ -1733,7 +1724,8 @@ For each `pass` cluster, serially:
    ```
    On fail → `git reset --soft HEAD~1` (undo the commit), mark cluster `rework`, re-dispatch implement codex with the failure log.
 
-3. **Push cluster branch**: `cd $REPO_ROOT && git push origin refactor/iterN-<cluster-id>`.
+3. **Push cluster branch** through `ControllerActions.safe_push(remote, branch)`;
+   it owns the active-controller lease check and remote-behind handling.
 
 4. **Branch off** by `pr_mode`:
 
@@ -1786,29 +1778,29 @@ For each `pass` cluster, serially:
     🤖 Auto-loop / codex-refactor-loop iter<N>
     ```
 
-    Run via:
-    ```bash
-    cd "$REPO_ROOT" && \
-    gh pr create \
-      --base "<base_branch>" \
-      --head "refactor/iterN-<cluster-id>" \
-      --title "<cluster id>: <short imperative title — same English title; PR title is not bilingual since GitHub UI truncates>" \
-      --body-file <generated_body_file>
-    ```
+    Open the PR through
+    `ControllerActions.open_pr_with_label(title, body_file, base, head)`. The
+    helper validates the self-contained body, opens the PR, and applies the
+    catalog-managed PR label bundle, including `crnd:lifecycle:managed`, in
+    the same active-controller-gated path.
 
     Controller must reject a generated body that reintroduces a parallel `## English` section as a required peer to 中文.
 
-7b. **立刻给 PR 加 catalog-managed label**:`gh pr edit <PR> --add-label "crnd:lifecycle:managed"` via the label catalog helper. **漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked 在 `gh pr create` 成功后立刻 chain 这条 catalog-backed label sync,不能延后到下一 turn。
+7b. The PR open helper must add the catalog-managed label bundle immediately.
+**漏加 → comment-monitor 不监控该 PR 评论 → maintainer 评论无 react 无回复**。漏加是 P0 bug,等同失保。Consensus-rnd Phase publish stacked cannot defer this label sync to the next turn.
 
 7b. Record the PR number in the GitHub banner/comment and run artifact for the active work unit.
 8b. **Stack rebase on upstream merge**: when an upstream (dependency) cluster's PR merges into `integration_branch`, immediately:
     - For each downstream cluster whose `dependencies` contained it:
-      - `git -C <worktree> rebase --onto integration_branch <old_upstream_branch>` (or `gh pr edit <pr> --base integration_branch` if stacked-on-stacked is no longer needed).
+      - Rebase the downstream worktree through the controller's checked-in stack-rebase path (or record a maintainer retarget request if stacked-on-stacked is no longer needed).
       - Re-run local CI in worktree; on conflict, mark cluster `rework` and re-dispatch implement codex with conflict diff.
-      - Force-push the cluster branch: `git push --force-with-lease origin refactor/iterN-<cluster-id>`.
+      - Force-push only through the stack-rebase path's guarded remote update.
 9b. Goto Consensus-rnd Phase ci-watch (remote CI watch on the cluster's PR).
 10b. After **all** iteration clusters have merged into `integration_branch`, Consensus-rnd Phase integration-sync may emit `DEV_SYNC_PENDING:release-rollup-needed:<json>`. Controller re-checks for an open rollup PR covering the same integration SHA to `$REVIEW_BASE_BRANCH` and, only when none exists, creates it through `open_release_rollup_pr_from_pending_event <event-json> <body-file>`. That helper pushes a one-time `rollup/<integration_sha>` head and opens `rollup/<integration_sha> -> $REVIEW_BASE_BRANCH`; merge auto-delete may delete only the throwaway head, never `$INTEGRATION_BRANCH`. Daemon only detects/writes the event; PR create, labels, review gate, CI, and merge policy stay controller-owned.
-After merge of the cluster branch into its target → `git worktree remove "$REPO_ROOT/.worktrees/<cluster-id>"`. **Do NOT** delete the cluster branch yet under `stacked` mode — downstream PRs may still reference it as base; let GitHub auto-delete on merge.
+After merge of the cluster branch into its target → request cleanup through the
+owner-local worktree cleanup primitive. **Do NOT** delete the cluster branch yet
+under `stacked` mode — downstream PRs may still reference it as base; let
+GitHub auto-delete on merge.
 
 If no clusters left in current batch → start next batch (Consensus-rnd Phase implementation again). If no batches left → start next iteration (Consensus-rnd Phase work-intake again) or **start Consensus-rnd Phase ci-watch if there is an open PR for the trunk/cluster branches**.
 
@@ -1841,7 +1833,16 @@ If no open PR → skip Consensus-rnd Phase ci-watch (local CI is sufficient).
 ### Read the watch
 
 <!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
-Do not run a controller-authored shell poller for remote CI. Every controller wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`. For each red PR, the controller then reads the failed check details with `gh pr checks "$PR_NUMBER" --json name,bucket,state,link`, selects `bucket: fail`, and uses the check `name` plus `link` for the focused remote-CI fix route.
+<!-- Refactor (issue-297): Old: controller runbook copied PR checks CLI
+recipes. New: PR-head check facts route through the named read-only
+`pr-checks` projection and wakeup-plan consumes that same projection. -->
+Do not run a controller-authored shell poller for remote CI. Every controller
+wakeup first reads `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan
+--repo-root "$REPO_ROOT"` and handles any structured action with `kind: "ci-red"`.
+For each red PR, the controller reads failed check details through
+`python3 <skill-root>/scripts/consensus-rnd-cli pr-checks --repo "$GH_REPO_SLUG"
+--pr "$PR_NUMBER" --json`, selects `bucket: fail`, and uses the check `name`
+plus `link` for the focused remote-CI fix route.
 
 The persistent daemon-event Monitor bridge remains the wake source for pending controller events; remote CI triage is driven by `consensus-rnd-cli wakeup-plan` output, not by an executable fenced shell watch in SKILL.md.
 
@@ -1851,7 +1852,7 @@ For each `bucket: fail` check:
 
 1. Fetch the failure logs:
    ```bash
-   RUN_URL=$(gh pr checks "$PR_NUMBER" --json name,link --jq '.[] | select(.name=="<check>") | .link')
+   RUN_URL=<link from consensus-rnd-cli pr-checks JSON for the failing check>
    RUN_ID=$(basename "$(dirname "$RUN_URL")")  # parse from link
    gh run view "$RUN_ID" --log-failed > .refactor-loop/logs/remote-ci-<check>-<sha>.log 2>&1 || \
      gh run view "$RUN_ID" --log | tail -200 > .refactor-loop/logs/remote-ci-<check>-<sha>.log
@@ -2670,7 +2671,8 @@ Policy:controller must sync with remote promptly before deriving GitHub and bran
 - After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
 - After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / maintainer all need to see latest state, not yesterday's local state.
 - Consensus-rnd Phase integration-sync sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
-- Consensus-rnd Phase ci-watch CI watch reads `gh pr checks <PR>` (always remote), never a local cached value.
+- Consensus-rnd Phase ci-watch CI watch reads `consensus-rnd-cli pr-checks`
+  (PR-head Checks API projection, always remote), never a local cached value.
 - Consensus-rnd Phase design-intake/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.
 
 If a push fails (network, conflict, branch protection): controller MUST surface the failure inline and either fix-and-retry or escalate within the same turn — never silently leave local changes uncommitted/unpushed.
@@ -3288,22 +3290,19 @@ Mitigations encoded in skill defaults:
 
 ### Consensus-rnd Phase publish PR creation idempotency
 
-`gh pr create` errors if a PR already exists for the same head→base. Detect first:
-
-```bash
-existing=$(gh pr list --head "<branch>" --base "<base>" --state open --json number --jq '.[0].number')
-if [[ -n "$existing" ]]; then
-  PR_NUMBER=$existing
-else
-  PR_NUMBER=$(gh pr create --base "<base>" --head "<branch>" --title "<title>" --body "<body>" --json number --jq .number)
-fi
-```
+`ControllerActions.open_pr_with_label(title, body_file, base, head)` is the
+controller-owned PR open primitive. Before calling it, read the open head/base PR projection from the controller's named GitHub read surface and
+reuse the existing PR number when one is already open.
 
 Re-running the loop after partial failure must NOT create duplicate PRs.
 
 ### Consensus-rnd Phase ci-watch long-running bash
 
-The Consensus-rnd Phase ci-watch Monitor polls `gh pr checks` every 60s for up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command and it hangs at architecture_guards.sh (observed in practice — appears stuck after the merge section), `TaskStop` it and run the remaining steps in separate foreground Bash calls. Do not assume the chain completed.
+The Consensus-rnd Phase ci-watch Monitor polls the `pr-checks` projection for
+up to ~30 minutes. If the harness backgrounds the merge+CI+push chain command
+and it hangs at architecture_guards.sh (observed in practice — appears stuck
+after the merge section), `TaskStop` it and run the remaining steps in separate
+foreground Bash calls. Do not assume the chain completed.
 
 ### Trunk branch moved while batch was in flight
 

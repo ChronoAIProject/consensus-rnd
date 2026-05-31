@@ -54,6 +54,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 args="$*"
                 cmd1="$1"
                 cmd2="$2"
+                api_path="$2"
+                api_flag1="$3"
+                api_flag2="$4"
                 label=""
                 while [[ "$#" -gt 0 ]]; do
                   if [[ "$1" == "--label" ]]; then
@@ -169,12 +172,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   esac
                   exit 0
                 fi
-                if [[ "$cmd1 $cmd2" == "pr checks" ]]; then
-                  if [[ "$fixture" == "ci_red" && "$args" == *"31"* ]]; then
-                    printf '[{"bucket":"fail"}]\n'
-                  else
-                    printf '[]\n'
+                if [[ "$cmd1" == "api" ]]; then
+                  if [[ "$api_flag1" == "--paginate" && "$api_flag2" == "--slurp" ]]; then
+                    if [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
+                      printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://checks/unit"},{"name":"lint","status":"completed","conclusion":"success","html_url":"https://checks/lint"}]}]\n'
+                    else
+                      printf '[{"check_runs":[]}]\n'
+                    fi
+                    exit 0
                   fi
+                  if [[ "$api_path" == "repos/owner/repo/pulls/31" ]]; then
+                    printf '{"head":{"sha":"ci-red-sha"}}\n'
+                    exit 0
+                  fi
+                  printf '{"head":{"sha":"empty-sha"}}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
@@ -425,7 +436,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
         self.assertEqual(plan["actions"][0]["actor"], "remote-ci-fix-codex")
+        self.assertEqual(plan["actions"][0]["check_names"], ["unit"])
+        self.assertEqual(plan["actions"][0]["head_sha"], "ci-red-sha")
         self.assertNotIn("REMOTE_CI_DONE", json.dumps(plan))
+
+    def test_ci_red_uses_pr_checks_projection_without_legacy_pr_checks_command(self) -> None:
+        plan = self.run_plan(fixture="ci_red")
+
+        self.assertEqual(plan["actions"][0]["kind"], "ci-red")
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertIn("PrChecksProjection", source)
+        self.assertNotIn('"pr", "checks"', source)
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(

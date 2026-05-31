@@ -388,7 +388,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
 
         required = (
             "kind: \"ci-red\"",
-            'gh pr checks "$PR_NUMBER" --json name,bucket,state,link',
+            "consensus-rnd-cli pr-checks --repo \"$GH_REPO_SLUG\"",
             "concurrency --count-only",
             "--list-codex",
             "ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)",
@@ -396,6 +396,37 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+    def test_issue297_controller_runbook_uses_named_projections_and_actions(self) -> None:
+        # Refactor (issue-297): Old: controller-facing SKILL runbook exposed
+        # copyable gh/git lifecycle recipes. New: source-regression locks named
+        # read projections and active-controller-gated ControllerActions.
+        forbidden = (
+            "gh issue create",
+            "gh pr edit <PR> --add-label",
+            "gh pr list --json",
+            "gh pr checks",
+            "git push origin refactor",
+            "git worktree add",
+            "git worktree remove",
+            "git worktree prune",
+            "git branch -D",
+        )
+        allowed_history = "must not run `gh pr create`"
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, skill_without_forbidden_history)
+        for required in (
+            "ControllerActions.open_design_issue_with_labels(title, body_file)",
+            "ControllerActions.safe_worktree(iteration, cluster, base)",
+            "ControllerActions.safe_push(remote, branch)",
+            "ControllerActions.open_pr_with_label(title, body_file, base, head)",
+            "consensus-rnd-cli pr-checks",
+            "open head/base PR projection",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, self.skill)
 
     def test_root_state_json_contract_deleted_but_specialized_artifacts_remain(self) -> None:
         forbidden = (

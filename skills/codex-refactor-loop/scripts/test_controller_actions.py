@@ -17,6 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
+from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.git import Git
@@ -67,6 +68,8 @@ class ControllerActionsTests(unittest.TestCase):
                     self.assertEqual(3, self.actions.apply_triage_decision_marker("TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/x.json"))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.open_pr_with_label("title", str(self.pr_body), head="branch")
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
+                        self.actions.open_design_issue_with_labels("title", str(self.pr_body))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.open_release_rollup_pr_from_pending_event("{}", str(self.pr_body))
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
@@ -350,6 +353,62 @@ class ControllerActionsTests(unittest.TestCase):
             issue_edit[issue_edit.index("--add-label") + 1],
         )
 
+    def write_design_issue_body(self) -> Path:
+        body = self.tmp / "design-issue-body.md"
+        body.write_text(
+            "## 🤖 Design issue\n\n"
+            "### TL;DR\n"
+            "- Self-contained design body.\n\n"
+            "<details>\n"
+            "<summary>内联 artifact 1: decision.md</summary>\n\n"
+            "```markdown\n"
+            "consensus artifact text\n"
+            "```\n\n"
+            "</details>\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return body
+
+    def test_open_design_issue_with_labels_uses_catalog_bundle_and_body_file(self) -> None:
+        body = self.write_design_issue_body()
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["issue", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/297\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            number, url = self.actions.open_design_issue_with_labels("[refactor-design] issue-297", str(body))
+
+        self.assertEqual(297, number)
+        self.assertEqual("https://github.com/owner/repo/issues/297", url)
+        self.assertEqual(len(gh_calls), 1)
+        create = gh_calls[0]
+        self.assertEqual(create[:2], ["issue", "create"])
+        self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
+        self.assertEqual(str(body), create[create.index("--body-file") + 1])
+
+    def test_open_design_issue_with_labels_rejects_bad_body_before_create(self) -> None:
+        bad_body = self.tmp / "bad-design-body.md"
+        bad_body.write_text("## body\n\nAuthority: .refactor-loop/runs/x.md\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/297\n", stderr="")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with self.assertRaisesRegex(RuntimeError, "local .refactor-loop artifact path"):
+                self.actions.open_design_issue_with_labels("title", str(bad_body))
+
+        self.assertFalse(gh_calls)
+
+    def test_open_design_issue_with_labels_is_internal_not_public_cli(self) -> None:
+        self.assertNotIn("open-design-issue", COMMANDS)
+
     def test_open_pr_with_label_does_not_guess_when_body_closes_multiple_issues(self) -> None:
         self.pr_body.write_text(
             "## 🤖 PR ready\n\nSelf-contained body.\n\nCloses #239\nCloses #240\n\n⟦AI:AUTO-LOOP⟧\n",
@@ -545,7 +604,7 @@ class ControllerActionsTests(unittest.TestCase):
 class ControllerActionsSourceRegressionTests(unittest.TestCase):
     def test_required_lifecycle_helpers_exist(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        for needle in ("merge_pr", "open_pr_with_label", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
+        for needle in ("merge_pr", "open_pr_with_label", "open_design_issue_with_labels", "open_release_rollup_pr_from_pending_event", "safe_worktree", "record_recent_pr_merge", "apply_triage_decision_marker", "render_template"):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)

@@ -40,6 +40,7 @@ from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -705,14 +706,19 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
 
 def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]:
     slug = github_repo_slug()
+    if not slug:
+        return []
+    projection = PrChecksProjection(cwd=repo_root)
     actions: list[dict[str, Any]] = []
     for item in items:
         if item.kind != "PR":
             continue
-        checks = run_json(["gh", "pr", "checks", str(item.number), *gh_args(slug), "--json", "bucket"], cwd=repo_root)
-        if not isinstance(checks, list):
+        # Refactor (issue-297): Old: ci-red routed through a naked PR checks CLI.
+        # New: wakeup-plan consumes the named PR-head Checks API projection.
+        status = projection.check_pr(slug, item.number)
+        if not status.ok:
             continue
-        fail_count = sum(1 for check in checks if isinstance(check, dict) and check.get("bucket") == "fail")
+        fail_count = sum(1 for check in status.runs if check.bucket == "fail")
         if fail_count <= 0:
             continue
         actions.append(
@@ -723,6 +729,8 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
                 "phase": "ci-watch",
                 "actor": "remote-ci-fix-codex",
                 "fail_count": fail_count,
+                "head_sha": status.head_sha,
+                "check_names": [check.name for check in status.runs if check.bucket == "fail"],
             }
         )
     return actions
