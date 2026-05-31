@@ -213,7 +213,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertEqual(human_signal["reason"], "no_human_decision_label:failed")
             self.assertEqual(human_signal["issue"]["reason"], "label_present:👤 human:需-maintainer-决策")
 
-    def test_host_env_precedence_and_opt_in_literals_are_unchanged(self) -> None:
+    def test_host_env_reads_canonical_refactor_loop_file_and_ignores_root(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             (repo / "host.env").write_text(
@@ -230,8 +230,15 @@ class ReleaseGateModuleTests(unittest.TestCase):
             loaded = gate.load_host_env(repo)
 
             self.assertEqual(loaded["RELEASE_AUTO_ENABLE"], "true")
-            self.assertEqual(loaded["REVIEW_BASE_BRANCH"], "root-review")
-        self.assertEqual(loaded["INTEGRATION_BRANCH"], "integration")
+            self.assertNotIn("REVIEW_BASE_BRANCH", loaded)
+            self.assertEqual(loaded["INTEGRATION_BRANCH"], "integration")
+
+    def test_release_gate_source_uses_shared_host_env_parser(self) -> None:
+        source = (SCRIPT_PATH.parent / "codex_refactor_loop/release/gate.py").read_text(encoding="utf-8")
+        self.assertIn("from ..context import parse_host_env", source)
+        self.assertIn('repo_root / ".refactor-loop" / "host.env"', source)
+        self.assertNotIn('repo_root / "host.env"', source)
+        self.assertNotIn("def parse_host_env_value", source)
 
     def test_fresh_heartbeats_reads_ts_files_and_rejects_legacy_state_only(self) -> None:
         with copy_repo_fixture() as tmp:

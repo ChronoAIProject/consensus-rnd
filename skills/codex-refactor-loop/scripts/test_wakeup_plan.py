@@ -21,6 +21,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
+from codex_refactor_loop.wakeup_plan import resolve_repo_root  # noqa: E402
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -389,6 +390,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, wakeup_source)
+
+    def test_resolve_repo_root_uses_loop_context_without_private_cwd_default(self) -> None:
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            with self.assertRaisesRegex(Exception, "REPO_ROOT is unset"):
+                resolve_repo_root(None)
+            self.assertEqual(self.repo.resolve(), resolve_repo_root(str(self.repo)))
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_wakeup_plan_source_has_no_private_host_env_parser(self) -> None:
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertNotIn("def read_host_env", wakeup_source)
+        self.assertNotIn("Path.cwd().resolve()", wakeup_source)
+        self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
 
     def test_unpushed_worker_output_routes_before_completed_marker_ci_and_existing_issue(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")

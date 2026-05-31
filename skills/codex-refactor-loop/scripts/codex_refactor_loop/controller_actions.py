@@ -55,8 +55,12 @@ class ControllerActions:
     #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
-        self.integration_branch = os.environ.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION") or "auto-refact-dev"
-        self.review_base_branch = os.environ.get("REVIEW_BASE_BRANCH") or os.environ.get("REVIEW_BASE") or "dev"
+        merged_env = {**os.environ, **ctx.host_env}
+        # Refactor (iter316/issue-316):
+        #   Old pattern: controller actions accepted legacy branch aliases from process env.
+        #   New principle: use ctx.host_env or canonical process env only, then defaults.
+        self.integration_branch = merged_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"
+        self.review_base_branch = merged_env.get("REVIEW_BASE_BRANCH") or "dev"
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         # Refactor (loop/gh-arg-coercion): Old pattern: gh() assumed every arg was

@@ -319,6 +319,23 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertIn("already-executed", self.record("rejected").read_text(encoding="utf-8"))
 
+    def test_expected_branches_ignore_legacy_aliases(self) -> None:
+        self.assertEqual(
+            ("auto-refact-dev", "dev"),
+            self.executor._expected_branches({"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}),
+        )
+        self.assertEqual(
+            ("canonical-integration", "canonical-review"),
+            self.executor._expected_branches(
+                {
+                    "INTEGRATION_BRANCH": "canonical-integration",
+                    "REVIEW_BASE_BRANCH": "canonical-review",
+                    "INTEGRATION": "legacy-integration",
+                    "REVIEW_BASE": "legacy-review",
+                }
+            ),
+        )
+
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
     def test_modules_are_import_safe_without_repo_root(self) -> None:
@@ -344,9 +361,7 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
             "integration-sync-operation-",
             "integration-sync-executions",
             "INTEGRATION_BRANCH",
-            "INTEGRATION",
             "REVIEW_BASE_BRANCH",
-            "REVIEW_BASE",
             "reset-to-remote",
             "--force-with-lease=refs/heads/",
         ):
@@ -395,6 +410,8 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
             "git tag",
             "release publish",
             "REQUIRED_CHECKS",
+            'get("INTEGRATION")',
+            'get("REVIEW_BASE")',
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)

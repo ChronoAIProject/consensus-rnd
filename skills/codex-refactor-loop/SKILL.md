@@ -132,9 +132,10 @@ Host config rules:
 4. Source `$REPO_ROOT/.refactor-loop/host.env` before daemon or codex supervision commands.
 5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
 6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source .refactor-loop/host.env && exec` pattern and why `env $(grep ...)` is unsafe.
-7. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
-8. Multi-device mode is safe only after all devices run a version that honors the #191 active-controller lease. Mixed old/new versions are not safe for multi-device mode.
-9. The active-controller lease ref is a code-owned singleton constant, not a host scope. Host env must not define alternate active-controller refs.
+7. Runtime scripts must consume host.env through LoopContext or the shared parser in context.py; root host.env and unlisted aliases such as INTEGRATION, REVIEW_BASE, and WORKTREE are not compatibility inputs.
+8. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
+9. Multi-device mode is safe only after all devices run a version that honors the #191 active-controller lease. Mixed old/new versions are not safe for multi-device mode.
+10. The active-controller lease ref is a code-owned singleton constant, not a host scope. Host env must not define alternate active-controller refs.
 
 ## Skill Root Contract
 `<skill-root>` means the installed `skills/codex-refactor-loop` directory containing this `SKILL.md`, `scripts/consensus-rnd-cli spawn-codex`, and `prompts/`. Runtime scripts self-locate from their own file path; `CODEX_REFACTOR_LOOP_SKILL_ROOT` is optional and only for wrappers or nonstandard packaging. If that override is set but invalid, scripts fail closed instead of falling back to `.claude/skills`.
@@ -1038,7 +1039,7 @@ The following excerpts preserve the detailed controller runbook in the single SK
 <a id="release-decision-schema"></a>
 ### Release decision schema
 
-`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads `$REPO_ROOT/host.env` or `$REPO_ROOT/.refactor-loop/host.env`; only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight. Controller scheduling order is fixed: first run `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then run `consensus-rnd-cli release-gate`.
+`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads only `$REPO_ROOT/.refactor-loop/host.env` through `LoopContext` or the shared parser in `context.py`; root `host.env` is not a migration read. Only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight. Controller scheduling order is fixed: first run `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then run `consensus-rnd-cli release-gate`.
 
 Stability score is the percentage of the eight boolean signals that pass. `ready=true` requires score 100 plus the release interval and at least one commit since the last release. Live signal inputs are intentionally narrow:
 

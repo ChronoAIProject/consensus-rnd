@@ -46,6 +46,10 @@ class LoopContext:
 
     Refactor (iter202/issue-202): Old pattern: durable artifact(ledger log_path、pending-event JSON log_path、meta-judge/reflector evidence、dev-sync resolver prompt、DEV_SYNC_REQUEST marker)写入 host absolute repo/worktree/log path,违反 CLAUDE.md R24『artifact 路径相对 $REPO_ROOT,不引入具体 host 事实』。
     New principle: 分层 durable-text-path vs execution-path:写入时所有 durable artifact/prompt/marker 只存 repo-relative POSIX text;读取或传 subprocess 时由 LoopContext.repo_root/rel_path 解析回 absolute;spawn-codex --cd/--add-dir/--prompt/--log 与 Popen argv 仍用 absolute(execution boundary 非 durable truth)。配套 behavior(写入存相对、读取解析绝对)+ source-regression(无 host absolute prefix)测试。不改 daemon lifecycle authority,不加规则例外。
+
+    Refactor (iter316/issue-316):
+      Old pattern: host runtime facts were parsed in wakeup_plan/release-gate/sync/controller_actions/heartbeat and read legacy aliases plus root host.env.
+      New principle: LoopContext/context.py is the single shared host.env parser; read only .refactor-loop/host.env; no unlisted aliases or HostEnvLocator.
     """
 
     repo_root: Path
@@ -187,9 +191,9 @@ def _git_root(cwd: str | Path | None) -> Path | None:
 
 
 def _load_host_env(repo_root: Path) -> dict[str, str]:
-    for path in (repo_root / ".refactor-loop" / "host.env", repo_root / "host.env"):
-        if path.exists():
-            return parse_host_env(path)
+    path = repo_root / ".refactor-loop" / "host.env"
+    if path.exists():
+        return parse_host_env(path)
     return {}
 
 

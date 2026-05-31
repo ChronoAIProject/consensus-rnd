@@ -76,7 +76,9 @@ def write_opt_in(
     integration: str = "integration-branch",
     repo_slug: str = "owner/repo",
 ) -> None:
-    (repo / "host.env").write_text(
+    env_path = repo / ".refactor-loop" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
         "\n".join(
             [
                 f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}",
@@ -408,7 +410,9 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 with copy_repo_fixture() as tmp:
                     repo = Path(tmp) / "repo"
-                    (repo / "host.env").write_text(host_env, encoding="utf-8")
+                    env_path = repo / ".refactor-loop" / "host.env"
+                    env_path.parent.mkdir(parents=True, exist_ok=True)
+                    env_path.write_text(host_env, encoding="utf-8")
                     write_live_state(repo)
                     bin_dir = repo / "bin"
                     bin_dir.mkdir()

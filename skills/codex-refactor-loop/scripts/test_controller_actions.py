@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import ast
+import os
 import shutil
 import subprocess
 import tempfile
@@ -53,6 +54,57 @@ class ControllerActionsTests(unittest.TestCase):
         data = json.loads((self.tmp / ".refactor-loop" / "state" / "recent-pr-merges.json").read_text(encoding="utf-8"))
         self.assertEqual(data["count"], 1)
         self.assertEqual(data["merges"][0]["sha"], "abc123")
+
+    def test_branch_configuration_ignores_legacy_alias_env(self) -> None:
+        with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+
+        self.assertEqual("auto-refact-dev", actions.integration_branch)
+        self.assertEqual("dev", actions.review_base_branch)
+
+    def test_branch_configuration_prefers_host_env_canonical_over_legacy_env(self) -> None:
+        (self.tmp / ".refactor-loop" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
+            'export INTEGRATION_BRANCH="canonical-integration"\n'
+            'export REVIEW_BASE_BRANCH="canonical-review"\n',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+
+        self.assertEqual("canonical-integration", actions.integration_branch)
+        self.assertEqual("canonical-review", actions.review_base_branch)
+
+    def test_pr_open_helpers_do_not_use_legacy_branch_alias_values(self) -> None:
+        body = self.tmp / "body.md"
+        body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+        gh_calls: list[list[str]] = []
+        git_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "create"]:
+                return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
+            git_calls.append(args)
+            if args[:3] == ["ls-remote", "--exit-code", "--heads"]:
+                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/auto-refact-dev\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(actions, "_require_owner_or_raise", return_value=None):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh), mock.patch.object(actions, "git", side_effect=fake_git):
+                actions.open_pr_with_label("Title", str(body), head="feature")
+                actions.open_release_rollup_pr_from_pending_event(json.dumps({"integration_sha": "abc123"}), str(body))
+
+        pr_creates = [call for call in gh_calls if call[:2] == ["pr", "create"]]
+        self.assertEqual("auto-refact-dev", pr_creates[0][pr_creates[0].index("--base") + 1])
+        self.assertEqual("dev", pr_creates[1][pr_creates[1].index("--base") + 1])
+        self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], git_calls)
+        self.assertFalse(any("legacy-" in " ".join(call) for call in gh_calls + git_calls))
 
     def pending_events(self) -> str:
         path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
@@ -911,6 +963,17 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
+
+    def test_no_legacy_branch_alias_reads(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        for forbidden in (
+            'os.environ.get("INTEGRATION")',
+            'os.environ.get("REVIEW_BASE")',
+            '"INTEGRATION"',
+            '"REVIEW_BASE"',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text)
 
     def test_legacy_dev_sync_request_controller_apply_is_removed(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

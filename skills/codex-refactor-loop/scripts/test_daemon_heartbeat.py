@@ -47,5 +47,31 @@ class DaemonHeartbeatLeaseTests(unittest.TestCase):
         self.assertEqual("1003", (self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").read_text().strip())
         self.assertEqual([], list((self.repo / ".refactor-loop" / "heartbeats").glob("*.tmp.*")))
 
+    def test_lease_requires_repo_root_context_or_explicit_heartbeat_file(self) -> None:
+        old_env = os.environ.copy()
+        try:
+            os.environ.clear()
+            with self.assertRaisesRegex(Exception, "REPO_ROOT is unset"):
+                DaemonHeartbeatLease("python-daemon")
+
+            explicit = self.tmp_root / "explicit.ts"
+            lease = DaemonHeartbeatLease("python-daemon", heartbeat_file=explicit, clock=lambda: 1000)
+            lease.beat()
+            self.assertEqual("1000", explicit.read_text(encoding="utf-8").strip())
+
+            (self.repo / ".refactor-loop" / "host.env").write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")
+            os.environ["REPO_ROOT"] = str(self.repo)
+            lease = DaemonHeartbeatLease("python-daemon", clock=lambda: 1001)
+            lease.beat()
+            self.assertEqual("1001", (self.repo / ".refactor-loop" / "heartbeats" / "python-daemon.ts").read_text().strip())
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_heartbeat_source_has_no_cwd_repo_root_default(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "heartbeat.py").read_text(encoding="utf-8")
+        self.assertIn("LoopContext.load", source)
+        self.assertNotIn('os.environ.get("REPO_ROOT", ".")', source)
+
 if __name__ == "__main__":
     unittest.main()
