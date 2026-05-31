@@ -33,6 +33,7 @@ TARGET_ANCHORS = {
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
+    "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -332,9 +333,53 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("#322 是唯一 controller-owned release publication carveout", self.repo_rules)
         self.assertIn("active-controller owner 的 `ReleasePublisher`", self.repo_rules)
         self.assertIn("`ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`", self.repo_rules)
+        self.assertIn("`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取", self.repo_rules)
+        self.assertIn("`gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp`", self.repo_rules)
+        self.assertIn("确认该 exact fresh SHA required checks 全绿后才运行", self.repo_rules)
         self.assertIn("`gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]`", self.repo_rules)
         self.assertIn("禁止 public release-publish CLI", self.repo_rules)
+        self.assertIn("tag target without exact-SHA green checks", self.repo_rules)
         self.assertIn("release edit/delete/upload", self.repo_rules)
+
+    def test_controller_release_publisher_334_mirror_preserves_exact_sha_green_gate(self) -> None:
+        entry = mirror_entry(self.mirror, "controller-release-publisher-334")
+
+        for required in (
+            "controller-owned release publisher",
+            "#334",
+            "r5",
+            "META_JUDGE_DONE:converge:round-4:decide",
+            "#release-pipeline-integrationpost-61",
+            "active-controller owner only",
+            "release candidate/decision artifacts",
+            "ReleasePublishPreflight",
+            "bump mapped manifests",
+            "commit/push the release manifest commit",
+            "read exact-SHA Checks API",
+            "only after that exact fresh SHA is green",
+            ".refactor-loop/state/release-publish-result.json",
+            "release candidate/decision artifacts + mapped manifests + exact fresh SHA + Checks API projection",
+            "test_release_publisher.py",
+            "test_release_pipeline_contract.py",
+            "test_runtime_exception_authorization_sources.py",
+            "test_skill_reference_anchors.py",
+            "mirror only, not a runtime API/loader/schema/proof ticket/authorization source",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "workflow tag/release",
+            "public CLI release-publish",
+            "proof-ticket/resume system",
+            "tag target without exact-SHA green checks",
+            "arbitrary branch push",
+            "issue/PR lifecycle",
+            "label mutation",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
 
     def test_closed_label_reconciler_238_preserves_closed_only_terminal_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "closed-label-reconciler-238")

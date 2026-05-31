@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
+from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
@@ -20,6 +22,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.release.publish_preflight import PublishPreflightResult
 from codex_refactor_loop.release.publisher import ReleasePublisher
+from codex_refactor_loop.release.required_checks import REQUIRED_RELEASE_CHECKS
 
 
 def write_json(path: Path, data: object) -> None:
@@ -48,6 +51,8 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+    (repo / ".refactor-loop/host.env").write_text('export GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
     return tmp
 
 
@@ -73,6 +78,7 @@ class FakeRunner:
         self.failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] = {}
         self.rev_list_stdout = "0\n"
         self.head_sha = "bumpcommit456"
+        self.check_status = "green"
 
     def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         command = list(cmd)
@@ -84,9 +90,35 @@ class FakeRunner:
             return subprocess.CompletedProcess(command, 0, stdout=self.rev_list_stdout, stderr="")
         if command == ["git", "rev-parse", "HEAD"]:
             return subprocess.CompletedProcess(command, 0, stdout=f"{self.head_sha}\n", stderr="")
+        if command == expected_check_runs_command(self.head_sha):
+            if self.check_status == "api_failure":
+                return subprocess.CompletedProcess(command, 1, stdout="", stderr="api failed")
+            return subprocess.CompletedProcess(command, 0, stdout=json.dumps(self._check_runs_payload()), stderr="")
         if command[:3] == ["gh", "release", "create"]:
             return subprocess.CompletedProcess(command, 0, stdout="https://github.test/release/v2.0.0\n", stderr="")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    def _check_runs_payload(self) -> list[dict[str, object]]:
+        check_runs = []
+        for name in REQUIRED_RELEASE_CHECKS:
+            status = "completed"
+            conclusion = "success"
+            if self.check_status == "pending":
+                status = "in_progress"
+                conclusion = ""
+            elif self.check_status == "red":
+                conclusion = "failure"
+            check_runs.append(
+                {
+                    "name": name,
+                    "status": status,
+                    "conclusion": conclusion,
+                    "completed_at": "2026-05-30T12:01:00Z",
+                }
+            )
+        if self.check_status == "missing":
+            check_runs.pop()
+        return [{"check_runs": check_runs}]
 
 
 def allowed_result(repo: Path, version: str = "2.0.0-beta.4") -> PublishPreflightResult:
@@ -128,8 +160,13 @@ def expected_success_commands(version: str = "2.0.0-beta.4", prerelease: bool = 
         ["git", "fetch", "origin", "HEAD"],
         ["git", "rev-list", "--count", "HEAD..origin/HEAD"],
         ["git", "push", "origin", "HEAD"],
+        expected_check_runs_command("bumpcommit456"),
         release_command,
     ]
+
+
+def expected_check_runs_command(sha: str) -> list[str]:
+    return ["gh", "api", f"repos/owner/repo/commits/{sha}/check-runs", "--paginate", "--slurp"]
 
 
 def expected_violating_pre_bump_tag_command() -> list[str]:
@@ -208,6 +245,58 @@ class ReleasePublisherTests(unittest.TestCase):
                 [command for command in runner.commands if command[:3] == ["gh", "release", "create"]],
                 [expected_success_commands()[-1]],
             )
+
+    def test_publisher_checks_fresh_release_commit_before_release_creation(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            check_index = runner.commands.index(expected_check_runs_command("bumpcommit456"))
+            push_index = runner.commands.index(["git", "push", "origin", "HEAD"])
+            release_index = runner.commands.index(expected_success_commands()[-1])
+            self.assertLess(push_index, check_index)
+            self.assertLess(check_index, release_index)
+
+    def test_publisher_refuses_release_creation_when_fresh_commit_checks_are_not_green(self) -> None:
+        for check_status, reason in (
+            ("pending", "pending_required_checks"),
+            ("red", "ci_red"),
+            ("missing", "missing_required_checks_recent_green"),
+            ("api_failure", "api_failure"),
+        ):
+            with self.subTest(check_status=check_status), copy_repo_fixture() as tmp:
+                repo = Path(tmp) / "repo"
+                runner = FakeRunner()
+                runner.check_status = check_status
+                publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+                with self.assertRaisesRegex(RuntimeError, reason):
+                    publisher.publish(target_ref="abc123")
+
+                self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
+                self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
+                self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+                self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_publisher_requires_repo_slug_for_fresh_commit_check_gate(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            (repo / ".refactor-loop/host.env").write_text("", encoding="utf-8")
+            runner = FakeRunner()
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with mock.patch.dict(os.environ, {"GH_REPO_SLUG": ""}, clear=False):
+                with self.assertRaisesRegex(RuntimeError, "GH_REPO_SLUG is required"):
+                    publisher.publish(target_ref="abc123")
+
+            self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
+            self.assertFalse(any(command[:2] == ["gh", "api"] for command in runner.commands))
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_publisher_records_result_and_uses_bump_commit_tag_target(self) -> None:
         with copy_repo_fixture() as tmp:
