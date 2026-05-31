@@ -165,6 +165,17 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("skill-degradation: ok", result.stdout)
 
+    def test_static_checker_does_not_require_reference_md(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            reference = repo / "skills/codex-refactor-loop/REFERENCE.md"
+            if reference.exists():
+                reference.unlink()
+
+            findings = self.checker_module.SkillDriftChecker(repo).run_static()
+
+        self.assertFalse(any(f.path.endswith("REFERENCE.md") for f in findings), [f.as_dict() for f in findings])
+
     def test_checker_detects_missing_source_repo_validation_contract(self) -> None:
         with copy_minimal_repo() as tmp:
             repo = Path(tmp) / "repo"
@@ -181,6 +192,22 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
 
         self.assertTrue(any(f.check == "skill-named-exception" for f in findings))
         self.assertTrue(any("source-repo validation" in f.message for f in findings))
+
+    def test_checker_detects_missing_single_file_reference_contract(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = repo / "skills/codex-refactor-loop/SKILL.md"
+            skill.write_text(
+                skill.read_text(encoding="utf-8")
+                .replace("single controller contract and detailed reference", "split reference contract")
+                .replace("## Detailed reference", "## Removed detailed reference"),
+                encoding="utf-8",
+            )
+
+            findings = self.checker_module.SkillDriftChecker(repo).run_static()
+
+        self.assertTrue(any(f.check == "reference-contract" and "single controller contract" in f.message for f in findings))
+        self.assertTrue(any(f.check == "reference-contract" and "## Detailed reference" in f.message for f in findings))
 
     def test_checker_detects_forbidden_runtime_file(self) -> None:
         with copy_minimal_repo() as tmp:

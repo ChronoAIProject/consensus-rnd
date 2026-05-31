@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Source contract tests for the codex-refactor-loop single-file skill."""
+"""Source contract tests for the codex-refactor-loop single-file contract/reference skill."""
 
 from __future__ import annotations
 
@@ -355,8 +355,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
         self.assertNotIn("first wakeup only", phase0)
         self.assertNotIn("or ScheduleWakeup returned scheduled", phase0)
 
-    def test_detailed_reference_material_is_in_single_skill_file(self) -> None:
+    def test_single_file_reference_architecture_is_documented(self) -> None:
         detailed_anchors = (
+            "controller-contract-details",
+            "host-runtime-details",
+            "daemon-command-bodies",
             "work-unit-contract",
             "batching-heuristics",
             "recovery-playbook",
@@ -365,6 +368,10 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "specialized-state-artifacts",
         )
         self.assertIn("## Detailed reference", self.skill)
+        self.assertIn("single controller contract and detailed reference by maintainer directive", self.skill)
+        self.assertIn("use intra-file anchor links", self.skill)
+        self.assertIn("Controller Contract Index", self.skill)
+        self.assertIn("物理拆 REFERENCE.md 后跨平台加载/维护退化", self.skill)
         for anchor in detailed_anchors:
             with self.subTest(anchor=anchor):
                 self.assertIn(f"(#{anchor})", self.skill)
@@ -404,8 +411,11 @@ class SkillEntrypointContractTests(unittest.TestCase):
         #   Old pattern: downstream install steps without an installer were split across README, SKILL statusline text, and restart helper text, with no one-step walkthrough.
         #   New principle: Downstream install walkthrough centralizes setup, README/SKILL links point at it, and source-regression locks single-file anchors.
         self.assertNotIn("@REFERENCE.md", self.skill)
+        self.assertNotIn("REFERENCE.md#", self.skill)
         self.assertNotRegex(self.skill, r"\]\(/Users/[^)]+REFERENCE\.md")
         self.assertNotRegex(self.skill, r"\(REFERENCE\.md#[^)]+\)")
+        self.assertIn("## Detailed reference", self.skill)
+        self.assertIn("use intra-file anchor links", self.skill)
         self.assertEqual(2, self.skill.count("(#downstream-install-walkthrough)"))
         self.assertRegex(self.skill, r"\(#[^)]+\)")
 
@@ -663,6 +673,16 @@ class SkillEntrypointContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
+
+    def test_audit_prompt_does_not_treat_single_file_skill_reference_as_r02_r03(self) -> None:
+        audit_prompt = read(SKILL_ROOT / "prompts" / "audit.md")
+        for needle in (
+            "不得被机械解释成 `REFERENCE.md` 必须存在",
+            "anchor 不可达",
+            "单文件 `SKILL.md` + intra-file anchors 本身不是 violation",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, audit_prompt)
 
     def test_audit_work_intake_iteration_placeholder_matches_audit_prompt(self) -> None:
         # Refactor (issue-307): keep work-intake rendering contract aligned with

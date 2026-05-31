@@ -106,6 +106,33 @@ class PackageChecksTests(unittest.TestCase):
         self.assertTrue(any(f.check == "skill-named-exception" for f in findings))
         self.assertTrue(any(f.check == "forbidden-surface" and "DegradationCheck" in f.message for f in findings))
 
+    def test_degradation_checker_allows_missing_reference_md(self) -> None:
+        with copy_minimal_degradation_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            reference = repo / "skills/codex-refactor-loop/REFERENCE.md"
+            if reference.exists():
+                reference.unlink()
+
+            findings = degradation.SkillDriftChecker(repo).run_static()
+
+        self.assertEqual(findings, [])
+
+    def test_degradation_checker_detects_missing_single_file_reference_markers(self) -> None:
+        with copy_minimal_degradation_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            skill = repo / "skills/codex-refactor-loop/SKILL.md"
+            skill.write_text(
+                skill.read_text(encoding="utf-8")
+                .replace("single controller contract and detailed reference", "split reference contract")
+                .replace("## Detailed reference", "## Removed detailed reference"),
+                encoding="utf-8",
+            )
+
+            findings = degradation.SkillDriftChecker(repo).run_static()
+
+        self.assertTrue(any(f.check == "reference-contract" and "single controller contract" in f.message for f in findings))
+        self.assertTrue(any(f.check == "reference-contract" and "## Detailed reference" in f.message for f in findings))
+
     def test_degradation_source_preserves_issue66_contract_literals_and_forbidden_boundaries(self) -> None:
         source = DEGRADATION_MODULE.read_text(encoding="utf-8")
         evaluated_markers = "\n".join(
@@ -134,6 +161,9 @@ class PackageChecksTests(unittest.TestCase):
             "no codex dispatch",
             "no standalone daemon creation",
             "no WorkUnit/schema/envelope changes",
+            "single controller contract and detailed reference",
+            "use intra-file anchor links",
+            "## Detailed reference",
             "no auto-" + "clean root garbage",
             "no auto-" + "fix API",
         ):
