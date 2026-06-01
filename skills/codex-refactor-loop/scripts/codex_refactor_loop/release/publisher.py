@@ -91,7 +91,7 @@ class ReleasePublisher:
             commit = self._run(["git", "commit", "-m", self._release_bump_subject(version)])
             self._ensure_success(commit, "git commit")
         release_target_ref = self._current_head_sha()
-        release_push_started_at = self.now()
+        release_push_started_at = None if state.skip_bump_commit else self.now()
         self._safe_push()
         self._ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)
         release_command = ["gh", "release", "create", tag, "--target", release_target_ref, "--generate-notes"]
@@ -230,7 +230,7 @@ class ReleasePublisher:
         push = self._run(["git", "push", "origin", "HEAD"])
         self._ensure_success(push, "git push")
 
-    def _ensure_fresh_release_commit_checks_green(self, release_target_ref: str, *, since: datetime) -> None:
+    def _ensure_fresh_release_commit_checks_green(self, release_target_ref: str, *, since: datetime | None) -> None:
         repo_slug = self._repo_slug()
         projection = ReleaseRequiredChecksProjection(
             runner=self._run_check_command,
