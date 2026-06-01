@@ -979,7 +979,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_runner.py"},
+            "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py"},
@@ -1327,9 +1327,12 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "evidence-bound closed action projection",
             "`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source",
             "不得新增 `ControllerTurnDecision`/controller-turn worker/schema",
-            "不得接受 argv/shell/cmd/commands/env/git/gh/executor/generic command fields",
+            "不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "不得把 `.refactor-loop/host.env` 当 host production SSOT",
             "允许动作仅限 spawn codex",
+            "named helper `dispatch_consensus_implementation`",
+            "named helper `publish_implementation_output`",
+            "named helper `open_release_rollup_pr_from_action`",
             "publish release through #322",
         ):
             with self.subTest(needle=needle):

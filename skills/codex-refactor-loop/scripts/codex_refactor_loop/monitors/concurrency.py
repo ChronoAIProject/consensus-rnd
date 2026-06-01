@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -264,7 +265,10 @@ class ConcurrencyMonitor:
                 continue
             if " -c " in line:
                 continue
-            tokens = line.split()
+            try:
+                tokens = shlex.split(line)
+            except ValueError:
+                continue
             try:
                 spawn_index = tokens.index("spawn-codex")
             except ValueError:
@@ -275,8 +279,11 @@ class ConcurrencyMonitor:
                 continue
             if cd_index + 1 >= len(tokens):
                 continue
+            cd_token = Path(tokens[cd_index + 1]).expanduser()
+            if not cd_token.is_absolute():
+                cd_token = self.repo_root / cd_token
             try:
-                cd_path = Path(tokens[cd_index + 1]).expanduser().resolve()
+                cd_path = cd_token.resolve()
             except OSError:
                 continue
             if not (cd_path == self.repo_root or self.repo_root in cd_path.parents):

@@ -51,16 +51,21 @@ class SpawnSupervisorTests(unittest.TestCase):
         finally:
             prompt.unlink(missing_ok=True)
 
-    def test_unfinished_log_refusal(self) -> None:
+    def test_unfinished_log_is_rotated_before_respawn(self) -> None:
         self.log.write_text("SPAWN: still running\n", encoding="utf-8")
 
-        with self.assertRaisesRegex(RuntimeError, "refusing to reuse unfinished log"):
-            ProcessSupervisor().supervise(
-                [sys.executable, "-c", "print('nope')"],
-                stdin=self.prompt,
-                log=self.log,
-                stall=5,
-            )
+        exit_code = ProcessSupervisor(poll_interval=0.01).supervise(
+            [sys.executable, "-c", "print('respawned')"],
+            stdin=self.prompt,
+            log=self.log,
+            stall=5,
+        )
+
+        self.assertEqual(0, exit_code)
+        self.assertIn("respawned", self.log.read_text(encoding="utf-8"))
+        rotated = list(self.tmp_root.glob("codex.log.unfinished.*"))
+        self.assertEqual(1, len(rotated))
+        self.assertIn("SPAWN: still running", rotated[0].read_text(encoding="utf-8"))
 
     def test_stall_writes_exit_137_and_kills_process_group(self) -> None:
         marker = self.tmp_root / "child.pid"

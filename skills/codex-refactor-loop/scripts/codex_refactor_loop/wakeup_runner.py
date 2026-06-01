@@ -26,7 +26,20 @@ from .wakeup_plan import build_plan
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
 APPLY_AUTHORITY = "wakeup-runner-396-only"
-FORBIDDEN_ACTION_FIELDS = {"argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor"}
+FORBIDDEN_ACTION_FIELDS = {
+    "argv",
+    "args",
+    "shell",
+    "cmd",
+    "command_line",
+    "commands",
+    "env",
+    "git",
+    "gh",
+    "executor",
+    "lifecycle_authority",
+    "lifecycle_owner",
+}
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
@@ -35,7 +48,11 @@ REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_consensus_implementation",
+    "publish_implementation_output",
     "publish_worker_output_from_action",
+    "dispatch_reviewers",
+    "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
@@ -141,6 +158,8 @@ class WakeupRunner:
         forbidden = sorted(FORBIDDEN_ACTION_FIELDS.intersection(action))
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)
+        if "target_ref" in action and action.get("controller_action") != "publish_release_candidate":
+            return "forbidden_fields:target_ref"
         if action.get("runner_authority") != RUNNER_AUTHORITY:
             return "runner_authority_mismatch"
         if action.get("no_generic_command") is not True:
@@ -197,6 +216,14 @@ class WakeupRunner:
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        if controller_action == "dispatch_consensus_implementation":
+            return self._validate_consensus_implementation(action)
+        if controller_action == "publish_implementation_output":
+            return self._validate_publish_implementation(action)
+        if controller_action == "dispatch_reviewers":
+            return self._validate_dispatch_reviewers(action)
+        if controller_action == "open_release_rollup_pr_from_action":
+            return self._validate_release_rollup(action)
         if controller_action == "close_managed_item_from_drop_marker":
             return self._validate_close_managed_drop(action)
         return None
@@ -274,13 +301,141 @@ class WakeupRunner:
             return "release_preflight_denied:" + ",".join(result.reasons)
         return None
 
+    def _validate_consensus_implementation(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "durable_consensus_artifact" not in preconditions:
+            return "consensus_implementation_missing_precondition:durable_consensus_artifact"
+        artifact_error = self._validate_consensus_artifact(action)
+        if artifact_error:
+            return artifact_error
+        for field in ("design_decision_path", "scope_paths", "old_pattern", "new_principle", "cluster_id", "iteration"):
+            if not str(action.get(field) or "").strip():
+                return f"consensus_implementation_missing_field:{field}"
+        return None
+
+    def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
+        raw_artifact = str(action.get("consensus_artifact") or action.get("design_decision_path") or "")
+        if not raw_artifact:
+            return "consensus_artifact_missing"
+        try:
+            artifact = self.ctx.artifact_execution_path(raw_artifact)
+        except LoopContextError:
+            return "consensus_artifact_invalid_path"
+        try:
+            artifact.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
+        except ValueError:
+            return "consensus_artifact_outside_runs"
+        issue = action.get("consensus_issue")
+        round_no = action.get("consensus_round")
+        if not isinstance(issue, int) or not isinstance(round_no, int):
+            return "consensus_artifact_identity_missing"
+        if action.get("target_kind") != "issue" or action.get("target_number") != issue:
+            return "consensus_artifact_target_mismatch"
+        if f"issue{issue}" not in artifact.name or f"r{round_no}" not in artifact.name:
+            return "consensus_artifact_identity_mismatch"
+        try:
+            lines = artifact.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return "consensus_artifact_missing"
+        if not any(line.startswith("META_JUDGE_DONE:consensus") for line in lines[-10:]):
+            return "consensus_artifact_marker_missing"
+        return None
+
+    def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:
+        marker = str(action.get("source_marker") or "")
+        if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+            return "publish_implementation_invalid_marker"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "publish_implementation_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "verified_pr_head",
+            "clean_scoped_diff",
+            "host_checks_green",
+            "single_linked_managed_issue",
+            "no_duplicate_open_pr",
+        ):
+            if required not in preconditions:
+                return f"publish_implementation_missing_precondition:{required}"
+        if action.get("target_kind") != "issue" or not isinstance(action.get("target_number"), int):
+            return "publish_implementation_target_missing"
+        if not self._live_target_has_managed_label("issue", int(action["target_number"])):
+            return "publish_implementation_target_not_managed"
+        duplicate_error = self._validate_no_duplicate_open_pr(action)
+        if duplicate_error:
+            return duplicate_error
+        return self._validate_implementation_worktree(action)
+
+    def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "dispatch_reviewers_target_missing"
+        return None
+
+    def _validate_release_rollup(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "release_rollup_event" not in preconditions:
+            return "release_rollup_missing_precondition:release_rollup_event"
+        event = action.get("event")
+        if not isinstance(event, dict):
+            return "release_rollup_event_missing"
+        if not str(event.get("integration_sha") or "").strip():
+            return "release_rollup_integration_sha_missing"
+        body_file = self.ctx.repo_root / str(action.get("body_file") or "")
+        if not body_file.is_file():
+            return "release_rollup_body_missing"
+        return None
+
+    def _validate_no_duplicate_open_pr(self, action: Mapping[str, Any]) -> str | None:
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _safe_branch_name(head_ref):
+            return "publish_implementation_invalid_head_ref"
+        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number"])
+        if result.returncode != 0:
+            return "publish_implementation_duplicate_pr_unavailable"
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return "publish_implementation_duplicate_pr_invalid_json"
+        if not isinstance(payload, list):
+            return "publish_implementation_duplicate_pr_invalid_json"
+        if payload:
+            return "publish_implementation_duplicate_open_pr"
+        return None
+
+    def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _safe_branch_name(head_ref):
+            return "publish_implementation_invalid_head_ref"
+        worktree = Path(str(action.get("worktree") or ""))
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return "publish_implementation_worktree_missing"
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return "publish_implementation_worktree_outside_controller_owned_root"
+        diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if diff.returncode == 0:
+            return "publish_implementation_empty_scoped_diff"
+        if diff.returncode != 1:
+            return "publish_implementation_diff_unavailable"
+        return None
+
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:
         if controller_action == "spawn_codex_harness_background":
             return self._spawn_codex(action)
         if controller_action == "safe_push":
             return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
+        if controller_action == "dispatch_consensus_implementation":
+            return self.actions.dispatch_consensus_implementation(dict(action))
+        if controller_action == "publish_implementation_output":
+            return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
+        if controller_action == "dispatch_reviewers":
+            return self.actions.dispatch_reviewers(dict(action))
+        if controller_action == "open_release_rollup_pr_from_action":
+            return self.actions.open_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
             return self.actions.close_managed_item_from_drop_marker(dict(action))
         if controller_action == "review_gate":

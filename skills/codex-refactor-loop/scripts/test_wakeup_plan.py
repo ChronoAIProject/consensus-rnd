@@ -477,6 +477,32 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_consensus_artifact(self, issue: int = 20, round_no: int = 5) -> Path:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        artifact = runs / f"phase9-issue{issue}-r{round_no}-judge.md"
+        artifact.write_text(
+            textwrap.dedent(
+                f"""\
+                ---
+                issue: {issue}
+                verdict: consensus
+                ---
+
+                ## PROJECT_RULES clause violated
+                Durable source must be checked before implementation dispatch.
+
+                ## Concrete plan
+                - `skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py`: project durable consensus artifact fields.
+                - `skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py`: revalidate the consensus artifact before dispatch.
+
+                META_JUDGE_DONE:consensus:structural
+                """
+            ),
+            encoding="utf-8",
+        )
+        return artifact
+
     def append_harness_spawn_intent(self, **overrides: object) -> dict[str, object]:
         intent: dict[str, object] = {
             "intent_id": "phase9-router:330:4:judge",
@@ -868,13 +894,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         by_kind = {action["kind"]: action for action in plan["actions"]}
         by_kind["existing-issue"] = [action for action in existing_plan["actions"] if action["kind"] == "existing-issue"][0]
-        for kind in ("completed-marker", "ci-red", "existing-issue"):
+        for kind in ("ci-red", "existing-issue"):
             with self.subTest(kind=kind):
                 self.assertTrue(by_kind[kind]["status_only"])
                 self.assertTrue(by_kind[kind]["no_lifecycle_authority"])
                 self.assertNotIn("runner_authority", by_kind[kind])
                 self.assertNotIn("no_generic_command", by_kind[kind])
                 self.assertTrue(str(by_kind[kind]["controller_action"]).startswith("dispatch_"))
+
+    def test_fix_done_completed_marker_projects_executable_dispatch_reviewers(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan()
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertEqual(action["target"], {"kind": "PR", "number": 77})
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
+            self.assertNotIn(forbidden, action)
 
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
@@ -885,6 +929,100 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("status_only", action)
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
+
+    def test_named_g1_g3_helpers_remain_executable_without_generic_command_fields(self) -> None:
+        artifact = self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:ok")
+        (self.repo / ".refactor-loop/runs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        event = {
+            "integration_branch": "integration",
+            "review_base_branch": "review",
+            "integration_sha": "abc123",
+            "review_base_sha": "def456",
+            "ahead_count": 1,
+            "reason": "integration-ahead-review-base-without-open-rollup-pr",
+        }
+        with (self.repo / ".refactor-loop/.controller-pending-events.log").open("a", encoding="utf-8") as handle:
+            handle.write("DEV_SYNC_PENDING:release-rollup-needed:" + json.dumps(event, sort_keys=True) + "\n")
+
+        plan = self.run_plan(fixture="milestone")
+
+        executable = {
+            action["controller_action"]: action
+            for action in plan["actions"]
+            if action.get("runner_authority") == "wakeup-runner-396"
+        }
+        for helper in (
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "open_release_rollup_pr_from_action",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, executable)
+                self.assertNotIn("status_only", executable[helper])
+                self.assertTrue(executable[helper]["no_generic_command"])
+                for forbidden in ("argv", "shell", "cmd", "commands", "env", "git", "gh", "executor"):
+                    self.assertNotIn(forbidden, executable[helper])
+        consensus_action = executable["dispatch_consensus_implementation"]
+        self.assertEqual(consensus_action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
+        self.assertEqual(consensus_action["design_decision_path"], artifact.relative_to(self.repo).as_posix())
+        self.assertEqual(consensus_action["consensus_issue"], 20)
+        self.assertEqual(consensus_action["consensus_round"], 5)
+        self.assertIn("wakeup_plan.py", consensus_action["scope_paths"])
+        self.assertIn("wakeup_runner.py", consensus_action["scope_paths"])
+        self.assertIn("durable_consensus_artifact", consensus_action["preconditions"])
+
+    def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        plan = self.run_plan()
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:phase9-issue20"))
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("consensus_artifact", action)
+
+    def test_milestone_implementation_issue_projects_latest_durable_consensus_artifact(self) -> None:
+        artifact = self.write_consensus_artifact()
+
+        actions = existing_issue_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=20,
+                    title="implementation issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT),
+                )
+            ],
+            repo_root=self.repo,
+        )
+
+        action = next(item for item in actions if item["kind"] == "consensus-implementation-ready")
+        self.assertEqual(action["controller_action"], "dispatch_consensus_implementation")
+        self.assertEqual(action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 20)
+        self.assertIn("durable_consensus_artifact", action["preconditions"])
+        projected = [item for item in [action] if not item.get("status_only")]
+        self.assertEqual(1, len(projected))
+
+    def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for helper in (
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "dispatch_reviewers",
+            "open_release_rollup_pr_from_action",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, source)
+        self.assertNotIn("HeadlessLifecycleAction", source)
+        self.assertNotIn("headless_actions", source)
 
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")

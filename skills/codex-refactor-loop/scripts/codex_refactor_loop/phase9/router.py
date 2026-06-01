@@ -687,9 +687,9 @@ class Phase9Router:
         return self._source_issue_decisions[issue]
 
     def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
-        command = ["gh", "issue", "view", issue, "--json", "state"]
-        if self.ctx.gh_repo_slug:
-            command.extend(["--repo", self.ctx.gh_repo_slug])
+        if not self.ctx.gh_repo_slug:
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        command = ["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues/{issue}", "--jq", ".state"]
         try:
             result = subprocess.run(
                 command,
@@ -703,11 +703,13 @@ class Phase9Router:
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
         if result.returncode != 0:
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        state: object
         try:
             payload = json.loads(result.stdout)
         except json.JSONDecodeError:
-            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        state = payload.get("state")
+            state = result.stdout.strip()
+        else:
+            state = payload.get("state") if isinstance(payload, dict) else payload
         if not isinstance(state, str) or not state.strip():
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
         normalized = state.strip().upper()
