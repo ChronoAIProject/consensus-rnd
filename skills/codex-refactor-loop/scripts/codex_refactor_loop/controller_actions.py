@@ -106,30 +106,37 @@ class ControllerActions:
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
-    def _current_branch(self) -> str:
-        result = self.git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    def _git_in(self, cwd: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False)
+        if check and result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
+        return result
+
+    def _current_branch(self, worktree: Path | None = None) -> str:
+        result = self._git_in(worktree or self.ctx.repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
         return result.stdout.strip() if result.returncode == 0 else ""
 
-    def safe_push(self, remote: str = "origin", branch: str = "") -> int:
+    def safe_push(self, remote: str = "origin", branch: str = "", worktree: str | Path | None = None) -> int:
         if not self._require_owner_or_return("safe-push", code=3):
             return 3
-        branch = branch or self._current_branch()
+        push_worktree = Path(worktree) if worktree is not None else self.ctx.repo_root
+        branch = branch or self._current_branch(push_worktree)
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
             return 2
-        fetch = self.git(["fetch", remote, branch], check=False)
+        fetch = self._git_in(push_worktree, ["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
-        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
+        behind = self._git_in(push_worktree, ["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
         try:
             behind_count = int((behind.stdout or "0").strip() or "0")
         except ValueError:
             behind_count = 0
         if behind_count > 0:
             print(f"safe_push: local behind {remote}/{branch} by {behind_count} commit(s); rebasing")
-            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
+            pull = self._git_in(push_worktree, ["pull", "--rebase", "--autostash", remote, branch], check=False)
             if pull.stdout:
                 print(pull.stdout, end="")
             if pull.stderr:
@@ -137,7 +144,7 @@ class ControllerActions:
             if pull.returncode != 0:
                 sys.stderr.write(f"safe_push: rebase conflict on {remote}/{branch} - resolve manually then push\n")
                 return 3
-        push = self.git(["push", remote, branch], check=False)
+        push = self._git_in(push_worktree, ["push", remote, branch], check=False)
         if push.stdout:
             print(push.stdout, end="")
         if push.stderr:
@@ -546,7 +553,7 @@ class ControllerActions:
         if clean.returncode != 0:
             sys.stderr.write("publish_worker_output_from_action: dirty scoped diff; worker commit required first\n")
             return 2
-        return self.safe_push(branch=head_ref)
+        return self.safe_push(branch=head_ref, worktree=worktree)
 
     def close_managed_item_from_drop_marker(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("close-managed-drop", code=3):

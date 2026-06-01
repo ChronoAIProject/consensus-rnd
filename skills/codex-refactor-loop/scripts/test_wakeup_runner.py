@@ -37,8 +37,8 @@ class FakeActions:
         self.close_code = close_code
         self.calls: list[tuple[str, object]] = []
 
-    def safe_push(self, remote: str = "origin", branch: str = "") -> int:
-        self.calls.append(("safe_push", {"remote": remote, "branch": branch}))
+    def safe_push(self, remote: str = "origin", branch: str = "", worktree: str | Path | None = None) -> int:
+        self.calls.append(("safe_push", {"remote": remote, "branch": branch, "worktree": str(worktree or "")}))
         return self.safe_push_code
 
     def publish_worker_output_from_action(self, action: dict) -> int:
@@ -337,7 +337,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(self.base_plan(self.worker_output_action()), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls, [("safe_push", {"remote": "origin", "branch": "refactor/iter77-worker"})])
+        self.assertEqual(
+            actions.calls,
+            [
+                (
+                    "safe_push",
+                    {
+                        "remote": "origin",
+                        "branch": "refactor/iter77-worker",
+                        "worktree": str(self.repo / ".worktrees" / "pr77"),
+                    },
+                )
+            ],
+        )
 
     def test_safe_push_helper_nonzero_exit_maps_to_blocked(self) -> None:
         actions = FakeActions(safe_push_code=7)

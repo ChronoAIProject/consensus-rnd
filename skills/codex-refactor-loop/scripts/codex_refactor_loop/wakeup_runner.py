@@ -278,7 +278,7 @@ class WakeupRunner:
         if controller_action == "spawn_codex_harness_background":
             return self._spawn_codex(action)
         if controller_action == "safe_push":
-            return self.actions.safe_push(branch=str(action.get("head_ref") or ""))
+            return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":

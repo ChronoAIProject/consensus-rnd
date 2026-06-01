@@ -878,6 +878,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(kinds[0], "no-gap-violation")
         self.assertLess(kinds.index("no-gap-violation"), kinds.index("existing-issue"))
 
+    def test_no_gap_projection_is_status_only_until_runnable_spawn_contract_exists(self) -> None:
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+
+        action = [item for item in plan["actions"] if item["kind"] == "no-gap-violation"][0]
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["controller_action"], "dispatch_next_step_worker")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+        self.assertNotIn("prompt", action)
+        self.assertNotIn("log", action)
+
     def test_milestone_labeled_items_route_before_ordinary_existing_issue(self) -> None:
         plan = self.run_plan(fixture="milestone")
 
