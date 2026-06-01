@@ -105,18 +105,23 @@ class ProgressReporter:
             elapsed_min = int((time.time() - log.stat().st_ctime) / 60)
         except OSError:
             elapsed_min = 0
-        tail_block = extract_tail(log)
         if finished == "failed":
             status_line = f"❌ 失败; 已跑 {elapsed_min} min"
+            details = f"""异常诊断 tail (non-zero EXIT only):
+
+```
+{extract_tail(log)}
+```"""
             delete_note = "codex 已非零退出;保留此 comment 直到 controller 处理失败。"
         else:
             status_line = f"⏳ 进行中; 已跑 {elapsed_min} min"
+            details = f"""Task id: `{base}`
+Log: `{log.name}`
+Raw log tail is intentionally omitted while the worker is still running."""
             delete_note = "自动更新每 10 分钟;edit-in-place 不堆评论;codex EXIT=0 后此 comment 自动删除。"
         body = f"""## 📊 codex 进展 {base} ({status_line})
 
-```
-{tail_block}
-```
+{details}
 
 > {delete_note}
 🤖 controller progress reporter

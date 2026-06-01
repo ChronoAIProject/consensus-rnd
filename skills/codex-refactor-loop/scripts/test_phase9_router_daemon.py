@@ -230,6 +230,30 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
 
+    def test_phase9_router_ignores_embedded_or_quoted_markers(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue37-r4-{role}.log",
+                f"> SOLVER_DONE:{role}:quoted:summary",
+                f"controller saw SOLVER_DONE:{role}:embedded:summary",
+                f"grep output: SOLVER_DONE:{role}:grep:summary",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_accepts_standalone_marker_and_diff_added_marker_only(self) -> None:
+        self.write_log("phase9-issue38-r4-minimal.log", "+SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue38-r4-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue38-r4-delete.log", "+ SOLVER_DONE:delete:ok:x")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
+
     def test_phase9_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
 

@@ -1205,6 +1205,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("prefix `phase9-triplet-suppression:`", self.skill)
         self.assertIn("reason exactly one of", self.skill)
 
+    def test_structured_consumption_boundary_contract_is_locked(self) -> None:
+        wakeup_plan = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        progress = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py").read_text(
+            encoding="utf-8"
+        )
+        for needle in (
+            '<a id="structured-consumption-boundary"></a>',
+            "final allowlisted standalone marker/verdict lines",
+            "artifact frontmatter",
+            "CLI JSON/action fields",
+            "artifact paths",
+            "EXIT!=0",
+            "stream disconnect/503",
+            "stuck/crash",
+            "missing/invalid structured artifact",
+            "router fallback",
+            "worker self-post failure",
+            "controller must not summarize or transcribe",
+            "Worker self-posts own full solver, judge, reviewer, or fix artifacts",
+            "REVIEW_ARCHITECT_PATH",
+            "REVIEW_TESTS_PATH",
+            "REVIEW_QUALITY_PATH",
+            "FIX_OUTPUT_PATH",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        self.assertIn("DONE_PREFIX_RE.fullmatch", wakeup_plan)
+        self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
+        self.assertIn("MARKER_RE.fullmatch", router)
+        self.assertNotIn("stripped.find(prefix)", router)
+        self.assertIn("Raw log tail is intentionally omitted", progress)
+        self.assertIn("异常诊断 tail (non-zero EXIT only)", progress)
+
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
     # Refactor (iter1/issue-140):

@@ -93,6 +93,28 @@ class ProgressReporterTests(unittest.TestCase):
         self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
         self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
 
+    def test_in_flight_progress_body_omits_raw_log_tail(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue81-r10-minimal.log"
+        log.write_text("secret raw worker prose\nSOLVER_DONE:minimal:echo\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        body = reporter.build_body(log.stem, log, "false")
+
+        self.assertIn("Task id: `phase9-issue81-r10-minimal`", body)
+        self.assertIn("Raw log tail is intentionally omitted", body)
+        self.assertNotIn("secret raw worker prose", body)
+        self.assertNotIn("SOLVER_DONE:minimal:echo", body)
+
+    def test_failed_progress_body_keeps_bounded_tail_as_exception_diagnostic(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
+        log.write_text("important failure diagnostic\nEXIT=17\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        body = reporter.build_body(log.stem, log, "failed")
+
+        self.assertIn("异常诊断 tail (non-zero EXIT only)", body)
+        self.assertIn("important failure diagnostic", body)
+
     def test_orphan_delete_retry_keeps_state_when_delete_fails_and_comment_exists(self) -> None:
         state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
         state_file.write_text(json.dumps({"fix-pr47-r1": {"target": "47", "kind": "pr", "comment_id": 123, "last_md5": "x", "finished": "false"}}), encoding="utf-8")

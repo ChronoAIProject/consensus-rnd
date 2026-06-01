@@ -47,7 +47,7 @@ KNOWN_PREFIXES = (
     "META_JUDGE_DONE:",
     *LIFECYCLE_PREFIXES,
 )
-MARKER_RE = re.compile(r"\b(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+")
+MARKER_RE = re.compile(r"^(?:[A-Z][A-Z0-9_]*_(?:DONE|RESOLVED|BLOCKED)|META_JUDGE_DONE):[^\s`]+$")
 
 
 class Phase9MarkerGrammar:
@@ -320,20 +320,19 @@ class Phase9Router:
         return markers
 
     def _extract_marker(self, line: str) -> str | None:
-        stripped = line.strip().strip("`")
+        stripped = line.strip()
+        if stripped.startswith("+") and not stripped.startswith("+++"):
+            stripped = stripped[1:].strip()
+        stripped = stripped.strip("`")
         if self._is_placeholder_or_echo(stripped):
             return None
         candidate: str | None = None
-        for prefix in KNOWN_PREFIXES:
-            index = stripped.find(prefix)
-            if index == -1:
-                continue
-            candidate = stripped[index:].split()[0].rstrip("`.,);:|\"\\")
-            break
+        if any(stripped.startswith(prefix) for prefix in KNOWN_PREFIXES):
+            candidate = stripped
         if candidate is None:
-            match = MARKER_RE.search(stripped)
+            match = MARKER_RE.fullmatch(stripped)
             if match:
-                candidate = match.group(0).rstrip("`.,);:|\"\\")
+                candidate = match.group(0)
         if candidate is None:
             return None
         return Phase9MarkerGrammar.parse_marker_candidate(candidate)
