@@ -130,7 +130,6 @@ class ControllerActionsTests(unittest.TestCase):
             "role": "implement",
             "detail": "issue-371",
             "log": "/tmp/implement-371.log",
-            "cd": "/repo/.worktrees/iter371-issue371",
             "stall": 5400,
         }
         values.update(overrides)
@@ -164,6 +163,9 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(gh_calls[0][-2], "--body-file")
         self.assertFalse(Path(gh_calls[0][-1]).exists())
         self.assertIn("⟦AI:AUTO-LOOP⟧", captured_body)
+        self.assertNotIn(str(self.tmp), captured_body)
+        self.assertNotIn("/repo/", captured_body)
+        self.assertNotIn("工作目录", captured_body)
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
         self.assertEqual("post-banner", status["action"])

@@ -27,20 +27,18 @@ class BannerPackageTests(unittest.TestCase):
             "role": "implement",
             "detail": "phase9 issue160 parity",
             "log": "/tmp/refactor-loop/implement-160.log",
-            "cd": "/repo/.worktrees/issue160",
             "stall": 180,
         }
         values.update(overrides)
         return BannerRequest(**values)
 
-    def test_build_status_banner_preserves_legacy_body_tokens(self) -> None:
+    def test_build_status_banner_preserves_status_tokens_without_machine_workdir(self) -> None:
         body = banners.build_status_banner(self.request())
 
         self.assertTrue(body.startswith("## 📊 状态卡片 — implement 派出\n"))
         for required in (
             "| 阶段 | **派出 codex(role=`implement`)** |",
             "| codex log | `implement-160.log` |",
-            "| 工作目录 | `/repo/.worktrees/issue160` |",
             "| no-output stall window | 180s(~3 min 无输出窗口) |",
             "| 上下文 | phase9 issue160 parity |",
             "IMPLEMENT_DONE:<cluster>:<status>",
@@ -50,6 +48,9 @@ class BannerPackageTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, body)
+        for forbidden in ("工作目录", "/repo/", "request.cd"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, body)
 
     def test_build_status_banner_uses_none_for_empty_detail_and_all_legacy_roles(self) -> None:
         for role, marker in {
@@ -107,6 +108,16 @@ class BannerPackageTests(unittest.TestCase):
             "git tag",
             "--add-label",
             "--remove-label",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
+    def test_source_regression_status_banner_has_no_raw_cd_surface(self) -> None:
+        source = PACKAGE_BANNERS.read_text(encoding="utf-8")
+        for forbidden in (
+            "request.cd",
+            "| 工作目录 |",
+            "cd: str",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)
