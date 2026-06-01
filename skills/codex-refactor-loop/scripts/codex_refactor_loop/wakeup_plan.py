@@ -702,9 +702,9 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "target_number": _target_number_from_item(infer_item_from_text(line)),
                 "target": _target_from_item(infer_item_from_text(line)),
                 "preconditions": ["active_controller_owner", "source_artifact_contains_evidence"],
-                "controller_action": "spawn_codex_harness_background",
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
+                "controller_action": "dispatch_next_step_worker",
+                "status_only": True,
+                "no_lifecycle_authority": True,
             }
         )
     return actions

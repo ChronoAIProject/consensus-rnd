@@ -587,25 +587,40 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("applied", applied["status"])
         self.assertEqual("reject", applied["reason"])
 
-    def test_publish_worker_output_from_action_delegates_clean_worktree_to_safe_push(self) -> None:
+    def test_publish_worker_output_from_action_pushes_from_validated_worktree(self) -> None:
         worktree = self.tmp / ".worktrees" / "pr77"
         worktree.mkdir(parents=True)
         action = {"head_ref": "refactor/iter77-worker", "worktree": str(worktree)}
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-worker-output", lease_id="lease", expires_at="soon")
-        calls: list[str] = []
+        calls: list[list[str]] = []
 
         def fake_run(args: list[str], **_kwargs: object) -> mock.Mock:
-            self.assertEqual(args, ["git", "-C", str(worktree), "diff", "--quiet"])
-            calls.append("diff")
-            return mock.Mock(returncode=0, stdout="", stderr="")
+            calls.append(args)
+            if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin", "refactor/iter77-worker"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-list", "--count", "HEAD..origin/refactor/iter77-worker"]:
+                return mock.Mock(returncode=0, stdout="0\n", stderr="")
+            if args == ["git", "-C", str(worktree), "push", "origin", "refactor/iter77-worker"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:3] == ["git", "-C", str(self.tmp)]:
+                raise AssertionError("publish-worker-output must not push controller repo HEAD")
+            raise AssertionError(f"unexpected git command: {args!r}")
 
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                with mock.patch.object(self.actions, "safe_push", return_value=0) as safe_push:
-                    self.assertEqual(0, self.actions.publish_worker_output_from_action(action))
+                self.assertEqual(0, self.actions.publish_worker_output_from_action(action))
 
-        self.assertEqual(calls, ["diff"])
-        safe_push.assert_called_once_with(branch="refactor/iter77-worker")
+        self.assertEqual(
+            calls,
+            [
+                ["git", "-C", str(worktree), "diff", "--quiet"],
+                ["git", "-C", str(worktree), "fetch", "origin", "refactor/iter77-worker"],
+                ["git", "-C", str(worktree), "rev-list", "--count", "HEAD..origin/refactor/iter77-worker"],
+                ["git", "-C", str(worktree), "push", "origin", "refactor/iter77-worker"],
+            ],
+        )
 
     def test_publish_worker_output_from_action_rejects_invalid_head_ref_before_git(self) -> None:
         worktree = self.tmp / ".worktrees" / "pr77"
