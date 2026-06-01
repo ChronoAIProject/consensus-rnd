@@ -72,7 +72,11 @@ READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtim
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_consensus_implementation",
+    "publish_implementation_output",
     "publish_worker_output_from_action",
+    "dispatch_reviewers",
+    "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
@@ -81,6 +85,7 @@ EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "unpushed-worker-output",
     "completed-marker",
+    "release-rollup-needed",
     "ci-red",
     "no-gap-violation",
     "existing-issue",
@@ -92,6 +97,8 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_MERGED: "merged",
 }
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
+CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
+CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
 
 
 @dataclass(frozen=True)
@@ -509,8 +516,118 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             head_sha = _reviewed_head_sha_from_log(log_path)
             if head_sha:
                 action["head_sha"] = head_sha
+        if marker.startswith("META_JUDGE_DONE:consensus"):
+            consensus_fields = consensus_implementation_fields(repo_root, log_path, item)
+            if consensus_fields:
+                action.update(consensus_fields)
+                action["preconditions"] = [
+                    *action["preconditions"],
+                    "durable_consensus_artifact",
+                ]
         actions.append(action)
     return actions
+
+
+def consensus_implementation_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
+    match = CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)
+    if match is None:
+        return {}
+    issue, round_no = match.groups()
+    if item and _target_number_from_item(item) != int(issue):
+        return {}
+    artifact = repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue}-r{round_no}-judge.md"
+    if not artifact.is_file():
+        return {}
+    facts = _consensus_artifact_facts(repo_root, artifact)
+    if not _consensus_artifact_has_marker(artifact):
+        return {}
+    if not _consensus_facts_complete(facts):
+        return {}
+    return {
+        "consensus_artifact": artifact.relative_to(repo_root).as_posix(),
+        "design_decision_path": artifact.relative_to(repo_root).as_posix(),
+        "consensus_issue": int(issue),
+        "consensus_round": int(round_no),
+        "cluster_id": f"issue-{issue}",
+        "iteration": issue,
+        "source_ref": f"gh-issue-{issue}",
+        **facts,
+    }
+
+
+def _consensus_artifact_has_marker(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return any(line.startswith("META_JUDGE_DONE:consensus") for line in lines[-10:])
+
+
+def _consensus_artifact_facts(repo_root: Path, path: Path) -> dict[str, str]:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    scope_paths = _extract_scope_paths(text)
+    old_pattern = _extract_section_text(text, "PROJECT_RULES clause violated") or _extract_section_text(text, "Recommended framing")
+    new_principle = _extract_section_text(text, "Concrete plan")
+    verification_hints = _extract_section_text(text, "Tests to add") or _extract_section_text(text, "Concrete plan")
+    if not scope_paths:
+        issue_match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(path.name)
+        if issue_match:
+            solver_paths = [
+                repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md"
+                for role in ("minimal", "structural", "delete")
+            ]
+            scope_paths = _extract_solver_scope_paths(solver_paths)
+    return {
+        "scope_paths": scope_paths,
+        "old_pattern": old_pattern,
+        "new_principle": new_principle,
+        "verification_hints": verification_hints,
+    }
+
+
+def _consensus_facts_complete(facts: dict[str, str]) -> bool:
+    return all(str(facts.get(field) or "").strip() for field in ("scope_paths", "old_pattern", "new_principle"))
+
+
+def _extract_scope_paths(text: str) -> str:
+    bullet_paths: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("- `"):
+            continue
+        match = re.match(r"- `([^`]+)`:", stripped)
+        if match:
+            bullet_paths.append(match.group(1))
+    if bullet_paths:
+        return "\n".join(f"- {path}" for path in bullet_paths)
+    match = re.search(r"(?ims)^scope_paths\s*:\s*(.+?)(?:\n\n|^old_pattern\s*:|^new_principle\s*:|^verification)", text)
+    if match:
+        return match.group(1).strip()
+    return ""
+
+
+def _extract_solver_scope_paths(paths: list[Path]) -> str:
+    values: list[str] = []
+    seen: set[str] = set()
+    for path in paths:
+        if not path.is_file():
+            continue
+        extracted = _extract_scope_paths(path.read_text(encoding="utf-8", errors="replace"))
+        for line in extracted.splitlines():
+            value = line.removeprefix("- ").strip()
+            if value and value not in seen:
+                seen.add(value)
+                values.append(value)
+    return "\n".join(f"- {value}" for value in values)
+
+
+def _extract_section_text(text: str, heading: str) -> str:
+    pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(.+?)(?=^##\s+|\Z)")
+    match = pattern.search(text)
+    return match.group(1).strip() if match else ""
 
 
 def infer_item_from_text(text: str) -> str | None:
@@ -895,6 +1012,61 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     return actions
 
 
+def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
+    pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    if not pending_path.exists():
+        return []
+    try:
+        lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    actions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in reversed(lines[-200:]):
+        marker = "DEV_SYNC_PENDING:release-rollup-needed:"
+        if marker not in line:
+            continue
+        event_json = line.split(marker, 1)[1].strip()
+        if event_json in seen:
+            continue
+        seen.add(event_json)
+        try:
+            event = json.loads(event_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        if not integration_sha:
+            continue
+        actions.append(
+            {
+                "priority": 3,
+                "kind": "release-rollup-needed",
+                "action_id": f"release-rollup-needed:{integration_sha}",
+                "item": "release rollup",
+                "phase": "publish",
+                "actor": "controller",
+                "route": "release-rollup",
+                "event": event,
+                "event_json": event_json,
+                "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+                "title": "Release rollup",
+                "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                "source_marker": line,
+                "target_kind": "release-rollup",
+                "target_number": None,
+                "target": {"kind": "release-rollup", "integration_sha": integration_sha},
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "release_rollup_event"],
+                "controller_action": "open_release_rollup_pr_from_action",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+                "no_lifecycle_authority": True,
+            }
+        )
+    return actions
+
+
 def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
@@ -906,8 +1078,7 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
         milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
         priority = 6 if milestone else 7
         item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
-        actions.append(
-            {
+        action = {
                 "priority": priority,
                 "kind": "existing-issue",
                 "action_id": f"existing-issue:{item.kind}:{item.number}",
@@ -925,9 +1096,51 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                 "controller_action": "dispatch_next_step_worker",
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,
-            }
-        )
+        }
+        if item.kind == "issue" and phase_from_labels(item.labels) == "implementation" and milestone:
+            consensus_fields = latest_consensus_implementation_for_issue(repo_root, item.number) if repo_root else {}
+            if consensus_fields:
+                action.update(
+                    {
+                        "kind": "consensus-implementation-ready",
+                        "action_id": f"consensus-implementation-ready:{item.number}:{consensus_fields['consensus_round']}",
+                        "route": "dispatch-consensus-implementation",
+                        "controller_action": "dispatch_consensus_implementation",
+                        "preconditions": ["active_controller_owner", "live_open_target", "durable_consensus_artifact"],
+                        **consensus_fields,
+                    }
+                )
+        actions.append(action)
     return actions
+
+
+def latest_consensus_implementation_for_issue(repo_root: Path | None, issue: int) -> dict[str, Any]:
+    if repo_root is None:
+        return {}
+    runs_dir = repo_root / ".refactor-loop" / "runs"
+    if not runs_dir.exists():
+        return {}
+    candidates: list[tuple[int, Path]] = []
+    for path in runs_dir.glob(f"phase9-issue{issue}-r*-judge.md"):
+        match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(path.name)
+        if match:
+            candidates.append((int(match.group(2)), path))
+    for round_no, artifact in sorted(candidates, reverse=True):
+        facts = _consensus_artifact_facts(repo_root, artifact)
+        if not _consensus_artifact_has_marker(artifact) or not _consensus_facts_complete(facts):
+            continue
+        rel = artifact.relative_to(repo_root).as_posix()
+        return {
+            "consensus_artifact": rel,
+            "design_decision_path": rel,
+            "consensus_issue": issue,
+            "consensus_round": round_no,
+            "cluster_id": f"issue-{issue}",
+            "iteration": str(issue),
+            "source_ref": f"gh-issue-{issue}",
+            **facts,
+        }
+    return {}
 
 
 def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any | None = None) -> list[dict[str, Any]]:
@@ -1037,7 +1250,7 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
 
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
-        return "publish_worker_output_from_action"
+        return "publish_implementation_output"
     if marker.startswith("REVIEW_DONE"):
         return "review_gate"
     if marker.startswith("FIX_DONE"):
@@ -1046,6 +1259,8 @@ def controller_action_from_marker(marker: str) -> str:
         return "dispatch_ci_watch"
     if marker.startswith("META_RESOLVED:drop:"):
         return "close_managed_item_from_drop_marker"
+    if marker.startswith("META_JUDGE_DONE:consensus"):
+        return "dispatch_consensus_implementation"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
         return "dispatch_design_consensus"
     if marker.startswith("AUDIT_DONE"):
@@ -1087,6 +1302,12 @@ def close_projection_actions(actions: list[dict[str, Any]]) -> list[dict[str, An
 
 def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
     closed = dict(action)
+    if closed.get("controller_action") == "dispatch_consensus_implementation" and not closed.get("consensus_artifact"):
+        closed["status_only"] = True
+        closed["no_lifecycle_authority"] = True
+        closed.pop("runner_authority", None)
+        closed.pop("no_generic_command", None)
+        return closed
     if closed.get("kind") in EXECUTABLE_ACTION_KINDS and not closed.get("status_only"):
         closed.setdefault("runner_authority", RUNNER_AUTHORITY)
         closed.setdefault("preconditions", ["active_controller_owner"])
@@ -1231,6 +1452,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))
+    actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)

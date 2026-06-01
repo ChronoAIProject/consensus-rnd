@@ -61,6 +61,9 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "static checker recognizes Chinese forbidden-context terms in docs"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions.publish_implementation_output.commit", "controller-authored commit messages are intentionally Chinese working-state output"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions.publish_implementation_output.title", "controller-authored PR titles are intentionally Chinese working-state output"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py", "ControllerActions._implementation_pr_body_file", "controller-authored PR bodies are intentionally Chinese working-state output"),
 )
 
 

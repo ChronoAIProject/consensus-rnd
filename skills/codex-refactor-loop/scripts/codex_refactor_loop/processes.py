@@ -31,17 +31,21 @@ class ProcessSupervisor:
             raise ValueError(f"stall must be positive: {stall}")
         log.parent.mkdir(parents=True, exist_ok=True)
         if log.exists() and not _has_exit_marker(log):
-            raise RuntimeError(f"refusing to reuse unfinished log without EXIT=: {log}")
+            _rotate_unfinished_log(log)
         log.write_text(preamble, encoding="utf-8")
 
         with stdin.open("rb") as in_handle, log.open("ab", buffering=0) as log_handle:
-            proc = subprocess.Popen(
-                list(command),
-                stdin=in_handle,
-                stdout=log_handle,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
+            try:
+                proc = subprocess.Popen(
+                    list(command),
+                    stdin=in_handle,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")
+                return 127
             last_size = _log_size(log)
             last_output_at = self.clock()
             stalled = False
@@ -104,6 +108,11 @@ def _log_size(path: Path) -> int:
 def _append(path: Path, text: str) -> None:
     with path.open("a", encoding="utf-8") as handle:
         handle.write(text)
+
+
+def _rotate_unfinished_log(path: Path) -> None:
+    rotated = path.with_name(f"{path.name}.unfinished.{os.getpid()}")
+    path.replace(rotated)
 
 
 def _utc_now() -> str:
