@@ -587,6 +587,105 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("applied", applied["status"])
         self.assertEqual("reject", applied["reason"])
 
+    def test_publish_worker_output_from_action_delegates_clean_worktree_to_safe_push(self) -> None:
+        worktree = self.tmp / ".worktrees" / "pr77"
+        worktree.mkdir(parents=True)
+        action = {"head_ref": "refactor/iter77-worker", "worktree": str(worktree)}
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-worker-output", lease_id="lease", expires_at="soon")
+        calls: list[str] = []
+
+        def fake_run(args: list[str], **_kwargs: object) -> mock.Mock:
+            self.assertEqual(args, ["git", "-C", str(worktree), "diff", "--quiet"])
+            calls.append("diff")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                with mock.patch.object(self.actions, "safe_push", return_value=0) as safe_push:
+                    self.assertEqual(0, self.actions.publish_worker_output_from_action(action))
+
+        self.assertEqual(calls, ["diff"])
+        safe_push.assert_called_once_with(branch="refactor/iter77-worker")
+
+    def test_publish_worker_output_from_action_rejects_invalid_head_ref_before_git(self) -> None:
+        worktree = self.tmp / ".worktrees" / "pr77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-worker-output", lease_id="lease", expires_at="soon")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=AssertionError("git diff should not run")):
+                with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("safe_push should not run")):
+                    self.assertEqual(2, self.actions.publish_worker_output_from_action({"head_ref": "-bad", "worktree": str(worktree)}))
+
+    def test_publish_worker_output_from_action_rejects_non_absolute_or_outside_worktree(self) -> None:
+        outside = self.tmp / "outside"
+        outside.mkdir()
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-worker-output", lease_id="lease", expires_at="soon")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=AssertionError("git diff should not run")):
+                with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("safe_push should not run")):
+                    self.assertEqual(2, self.actions.publish_worker_output_from_action({"head_ref": "refactor/iter77", "worktree": "relative"}))
+                    self.assertEqual(2, self.actions.publish_worker_output_from_action({"head_ref": "refactor/iter77", "worktree": str(outside)}))
+
+    def test_publish_worker_output_from_action_rejects_dirty_worktree_before_safe_push(self) -> None:
+        worktree = self.tmp / ".worktrees" / "pr77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-worker-output", lease_id="lease", expires_at="soon")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", return_value=mock.Mock(returncode=1, stdout="", stderr="dirty")):
+                with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("safe_push should not run")):
+                    self.assertEqual(2, self.actions.publish_worker_output_from_action({"head_ref": "refactor/iter77", "worktree": str(worktree)}))
+
+    def test_publish_worker_output_from_action_non_owner_noops_before_git(self) -> None:
+        worktree = self.tmp / ".worktrees" / "pr77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=False, owner_device="device-b", status="not-owner", action="publish-worker-output", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=AssertionError("git diff should not run")):
+                with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("safe_push should not run")):
+                    self.assertEqual(3, self.actions.publish_worker_output_from_action({"head_ref": "refactor/iter77", "worktree": str(worktree)}))
+
+    def test_close_managed_item_from_drop_marker_closes_issue_and_pr_with_drop_marker(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
+        calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            calls.append(args)
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                self.assertEqual(0, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "issue", "target_number": 53}))
+                self.assertEqual(0, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "PR", "target_number": 77}))
+
+        self.assertEqual(calls[0][:3], ["issue", "close", "53"])
+        self.assertIn("--reason", calls[0])
+        self.assertEqual(calls[1][:3], ["pr", "close", "77"])
+        self.assertIn("--comment", calls[1])
+
+    def test_close_managed_item_from_drop_marker_rejects_invalid_marker_or_target(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not run")):
+                self.assertEqual(2, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:retry-fix:no-action", "target_kind": "issue", "target_number": 53}))
+                self.assertEqual(2, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "issue", "target_number": "01"}))
+
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:invalid-github-target:close-managed-drop:issue:wakeup-runner-action",
+            self.pending_events(),
+        )
+
+    def test_close_managed_item_from_drop_marker_non_owner_noops_before_gh(self) -> None:
+        decision = mock.Mock(allowed=False, owner_device="device-b", status="not-owner", action="close-managed-drop", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not run")):
+                self.assertEqual(3, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "issue", "target_number": 53}))
+
     def test_open_release_rollup_pr_uses_throwaway_head_and_preserves_integration_ref(self) -> None:
         event = {
             "integration_branch": "auto-refact-dev",

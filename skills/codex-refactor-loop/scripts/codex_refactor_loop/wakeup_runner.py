@@ -27,6 +27,14 @@ APPLY_AUTHORITY = "wakeup-runner-396-only"
 FORBIDDEN_ACTION_FIELDS = {"argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor"}
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
+SUPPORTED_CONTROLLER_ACTIONS = {
+    "spawn_codex_harness_background",
+    "safe_push",
+    "publish_worker_output_from_action",
+    "close_managed_item_from_drop_marker",
+    "review_gate",
+    "publish_release_candidate",
+}
 
 
 @dataclass(frozen=True)
@@ -163,10 +171,42 @@ class WakeupRunner:
 
     def _validate_controller_action(self, action: Mapping[str, Any]) -> str | None:
         controller_action = str(action.get("controller_action") or "")
+        if controller_action not in SUPPORTED_CONTROLLER_ACTIONS:
+            return f"unsupported_controller_action:{controller_action or 'missing'}"
+        if controller_action == "safe_push":
+            return self._validate_safe_push(action)
         if controller_action == "review_gate":
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        return None
+
+    def _validate_safe_push(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "safe_push_missing_preconditions"
+        for required in ("verified_pr_head", "clean_scoped_diff"):
+            if required not in preconditions:
+                return f"safe_push_missing_precondition:{required}"
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "safe_push_target_missing"
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _safe_branch_name(head_ref):
+            return "safe_push_invalid_head_ref"
+        live_head = self._pr_head_ref(target)
+        if live_head != head_ref:
+            return f"safe_push_stale_head:{live_head or 'unknown'}"
+        worktree = Path(str(action.get("worktree") or ""))
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return "safe_push_worktree_missing"
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return "safe_push_worktree_outside_controller_owned_root"
+        clean = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if clean.returncode != 0:
+            return "safe_push_dirty_scoped_diff"
         return None
 
     def _validate_review_gate(self, action: Mapping[str, Any]) -> str | None:
@@ -288,6 +328,10 @@ class WakeupRunner:
         result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "headRefOid", "--jq", ".headRefOid"])
         return result.stdout.strip() if result.returncode == 0 else ""
 
+    def _pr_head_ref(self, pr_number: int) -> str:
+        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "headRefName", "--jq", ".headRefName"])
+        return result.stdout.strip() if result.returncode == 0 else ""
+
     def _run_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         full = [str(part) for part in command]
         if full and full[0] == "gh" and self.ctx.gh_repo_slug and "--repo" not in full:
@@ -349,6 +393,10 @@ def _log_has_exit_zero(path: Path) -> bool:
         return any(line == "EXIT=0" for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
     except OSError:
         return False
+
+
+def _safe_branch_name(value: str) -> bool:
+    return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
 
 
 def load_plan_file(path: Path) -> Mapping[str, Any]:

@@ -68,6 +68,14 @@ HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
 RUNNER_AUTHORITY = "wakeup-runner-396"
 PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396"
 READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
+RUNNER_NAMED_HELPER_ACTIONS = {
+    "spawn_codex_harness_background",
+    "safe_push",
+    "publish_worker_output_from_action",
+    "close_managed_item_from_drop_marker",
+    "review_gate",
+    "publish_release_candidate",
+}
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "unpushed-worker-output",
@@ -1073,6 +1081,12 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
             target = closed.get("target") if isinstance(closed.get("target"), dict) else {}
             closed["target_number"] = target.get("number")
         closed.setdefault("controller_action", "dispatch_next_step_worker")
+        if closed.get("controller_action") not in RUNNER_NAMED_HELPER_ACTIONS:
+            closed["status_only"] = True
+            closed["no_lifecycle_authority"] = True
+            closed.pop("runner_authority", None)
+            closed.pop("no_generic_command", None)
+            return closed
         closed["no_generic_command"] = True
     else:
         closed.setdefault("status_only", True)

@@ -726,6 +726,32 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("completed-marker"))
         self.assertLess(kinds.index("unpushed-worker-output"), kinds.index("existing-issue"))
 
+    def test_unimplemented_dispatch_projections_are_status_only(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="ci_red")
+        existing_plan = self.run_plan(fixture="existing")
+
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        by_kind["existing-issue"] = [action for action in existing_plan["actions"] if action["kind"] == "existing-issue"][0]
+        for kind in ("completed-marker", "ci-red", "existing-issue"):
+            with self.subTest(kind=kind):
+                self.assertTrue(by_kind[kind]["status_only"])
+                self.assertTrue(by_kind[kind]["no_lifecycle_authority"])
+                self.assertNotIn("runner_authority", by_kind[kind])
+                self.assertNotIn("no_generic_command", by_kind[kind])
+                self.assertTrue(str(by_kind[kind]["controller_action"]).startswith("dispatch_"))
+
+    def test_runner_named_helper_projection_remains_executable(self) -> None:
+        plan = self.run_plan(fixture="unpushed")
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "unpushed-worker-output")
+        self.assertEqual(action["controller_action"], "safe_push")
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")
 
