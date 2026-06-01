@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
+from . import labels
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .heartbeat import DaemonHeartbeatLease
@@ -196,6 +197,8 @@ class WakeupRunner:
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        if controller_action == "close_managed_item_from_drop_marker":
+            return self._validate_close_managed_drop(action)
         return None
 
     def _validate_spawn_codex(self, action: Mapping[str, Any]) -> str | None:
@@ -233,6 +236,25 @@ class WakeupRunner:
         clean = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
         if clean.returncode != 0:
             return "safe_push_dirty_scoped_diff"
+        return None
+
+    def _validate_close_managed_drop(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "close_managed_drop_missing_preconditions"
+        for required in ("active_controller_owner", "live_open_target", "live_managed_target"):
+            if required not in preconditions:
+                return f"close_managed_drop_missing_precondition:{required}"
+        if not str(action.get("source_marker") or "").startswith("META_RESOLVED:drop:"):
+            return "close_managed_drop_invalid_marker"
+        kind = str(action.get("target_kind") or "").lower()
+        if kind not in {"issue", "pr"}:
+            return "close_managed_drop_invalid_target_kind"
+        number = action.get("target_number")
+        if not isinstance(number, int):
+            return "close_managed_drop_target_missing"
+        if not self._live_target_has_managed_label(kind, number):
+            return "close_managed_drop_target_not_managed"
         return None
 
     def _validate_review_gate(self, action: Mapping[str, Any]) -> str | None:
@@ -482,6 +504,20 @@ class WakeupRunner:
     def _live_target_state(self, kind: str, number: int) -> str:
         result = self.command_runner(["gh", kind, "view", str(number), "--json", "state", "--jq", ".state"])
         return result.stdout.strip() if result.returncode == 0 else ""
+
+    def _live_target_has_managed_label(self, kind: str, number: int) -> bool:
+        result = self.command_runner(["gh", kind, "view", str(number), "--json", "labels,body"])
+        if result.returncode != 0:
+            return False
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return False
+        raw_labels = payload.get("labels")
+        if not isinstance(raw_labels, list):
+            return False
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        return labels.MANAGED in labels.normalize_label_set(names).canonical
 
     def _pr_head_sha(self, pr_number: int) -> str:
         result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "headRefOid", "--jq", ".headRefOid"])

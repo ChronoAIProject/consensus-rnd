@@ -654,6 +654,10 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             calls.append(args)
+            if args[:5] == ["issue", "view", "53", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
@@ -661,10 +665,32 @@ class ControllerActionsTests(unittest.TestCase):
                 self.assertEqual(0, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "issue", "target_number": 53}))
                 self.assertEqual(0, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "PR", "target_number": 77}))
 
-        self.assertEqual(calls[0][:3], ["issue", "close", "53"])
-        self.assertIn("--reason", calls[0])
-        self.assertEqual(calls[1][:3], ["pr", "close", "77"])
-        self.assertIn("--comment", calls[1])
+        self.assertEqual(calls[0], ["issue", "view", "53", "--json", "labels,body"])
+        self.assertEqual(calls[1][:3], ["issue", "close", "53"])
+        self.assertIn("--reason", calls[1])
+        self.assertEqual(calls[2], ["pr", "view", "77", "--json", "labels,body"])
+        self.assertEqual(calls[3][:3], ["pr", "close", "77"])
+        self.assertIn("--comment", calls[3])
+
+    def test_close_managed_item_from_drop_marker_blocks_non_managed_live_target_before_close(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
+        calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            calls.append(args)
+            if args[:5] == ["issue", "view", "53", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                self.assertEqual(2, self.actions.close_managed_item_from_drop_marker({"source_marker": "META_RESOLVED:drop:no-action", "target_kind": "issue", "target_number": 53}))
+
+        self.assertEqual([["issue", "view", "53", "--json", "labels,body"]], calls)
+        self.assertIn(
+            "CONTROLLER_ACTION_BLOCKED:target-not-managed:close-managed-drop:issue:53",
+            self.pending_events(),
+        )
 
     def test_close_managed_item_from_drop_marker_rejects_invalid_marker_or_target(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
@@ -1333,6 +1359,20 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         for name in raw:
             self.assertFalse(any(f"uses {name}" in offender or f"str({name})" in offender for offender in offenders))
         self.assertEqual([], offenders)
+
+    def test_close_managed_drop_source_regression_revalidates_canonical_managed_label(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        method = source[source.index("    def close_managed_item_from_drop_marker") : source.index("    def _live_target_has_managed_label")]
+        helper = source[source.index("    def _live_target_has_managed_label") : source.index("    def render_template")]
+
+        self.assertIn("_live_target_has_managed_label", method)
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:target-not-managed:close-managed-drop", method)
+        self.assertIn('"labels,body"', helper)
+        self.assertIn("labels.normalize_label_set", helper)
+        self.assertIn("labels.MANAGED", helper)
+        self.assertNotIn('"crnd:lifecycle:managed"', method + helper)
+        self.assertLess(method.index("_live_target_has_managed_label"), method.index('"issue", "close"'))
+        self.assertLess(method.index("_live_target_has_managed_label"), method.index('"pr", "close"'))
 
 
 if __name__ == "__main__":

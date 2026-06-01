@@ -564,6 +564,12 @@ class ControllerActions:
         )
         if issue_target is None:
             return 2
+        if not self._live_target_has_managed_label(kind="pr" if kind == "pr" else "issue", target=issue_target):
+            self._append_pending_event(
+                f"CONTROLLER_ACTION_BLOCKED:target-not-managed:close-managed-drop:{'pr' if kind == 'pr' else 'issue'}:{issue_target}"
+            )
+            sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
+            return 2
         comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
@@ -571,6 +577,20 @@ class ControllerActions:
         else:
             result = self.gh(["issue", "close", issue_target, "--reason", "not planned", "--comment", comment], check=False)
         return result.returncode
+
+    def _live_target_has_managed_label(self, *, kind: str, target: str) -> bool:
+        result = self.gh([kind, "view", target, "--json", "labels,body"], check=False)
+        if result.returncode != 0:
+            return False
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return False
+        raw_labels = payload.get("labels")
+        if not isinstance(raw_labels, list):
+            return False
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        return labels.MANAGED in labels.normalize_label_set(names).canonical
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)

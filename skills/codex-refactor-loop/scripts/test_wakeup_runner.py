@@ -15,6 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import labels
 from codex_refactor_loop.wakeup_runner import WakeupRunner, main as wakeup_runner_main
 
 
@@ -83,12 +84,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         plan: dict,
         *,
         gh_state: str | None = "OPEN",
+        gh_labels: list[str] | None = None,
         gh_head_ref: str = "refactor/iter77-worker",
         git_diff_code: int = 0,
         actions=None,
     ) -> list:
         def command_runner(command):
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
+                if "labels,body" in command:
+                    live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]
+                    payload = {"labels": [{"name": name} for name in live_labels], "body": ""}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 if "headRefName" in command:
                     return subprocess.CompletedProcess(command, 0, gh_head_ref + "\n", "")
                 if gh_state is None:
@@ -171,7 +177,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "kind": "completed-marker",
             "action_id": "close-managed-item:53",
             "runner_authority": "wakeup-runner-396",
-            "preconditions": ["active_controller_owner", "live_open_target"],
+            "preconditions": ["active_controller_owner", "live_open_target", "live_managed_target"],
             "source_artifact": ".refactor-loop/.controller-pending-events.log",
             "source_marker": marker,
             "target_kind": "issue",
@@ -457,12 +463,26 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             target_kind="issue",
             target_number=53,
             target={"kind": "issue", "number": 53},
+            preconditions=["active_controller_owner", "live_open_target", "live_managed_target"],
         )
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "close_managed_item_from_drop_marker")
+
+    def test_close_managed_item_from_drop_marker_blocks_non_managed_open_target_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.close_action(action_id="close-managed-item:non-managed")
+
+        results = self.run_result(self.base_plan(action), gh_labels=[], actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "close-managed-item:non-managed",
+            "close_managed_drop_target_not_managed",
+            actions,
+        )
 
     def test_idempotency_ledger_suppresses_duplicate_apply(self) -> None:
         plan = self.base_plan(self.spawn_action())
@@ -478,6 +498,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertNotIn('".refactor-loop/host.env"', source)
         self.assertIn("LoopContext.load", source)
+
+    def test_close_managed_item_source_regression_revalidates_managed_label_before_dispatch(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        method = source[source.index("    def _validate_close_managed_drop") : source.index("    def _validate_review_gate")]
+        self.assertIn('"live_managed_target"', method)
+        self.assertIn('"labels,body"', source)
+        self.assertIn("labels.normalize_label_set", source)
+        self.assertIn("labels.MANAGED", source)
+        self.assertNotIn('"crnd:lifecycle:managed"', method)
+        self.assertLess(source.index("return self._validate_close_managed_drop(action)"), source.index("return self.actions.close_managed_item_from_drop_marker(dict(action))"))
 
     def test_plan_file_is_dry_run_only(self) -> None:
         plan_path = self.repo / "plan.json"
