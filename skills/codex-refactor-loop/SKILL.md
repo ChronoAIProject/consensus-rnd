@@ -28,6 +28,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
+| Structured consumption | Steady-state controller/daemon paths consume only clean-exit status plus final allowlisted standalone marker/verdict lines, artifact frontmatter, CLI JSON/action fields, and artifact paths. Raw log prose is diagnostic-only. | Do not read, understand, quote, relay, or transcribe worker log prose, review reject prose, judge reasoning, or progress raw tails during normal routing. Raw logs are allowed only for `EXIT!=0`, stream disconnect/503, stuck/crash, missing/invalid structured artifact, router fallback, or worker self-post failure diagnostics. | [structured-consumption boundary](#structured-consumption-boundary), [phase routing details](#phase-routing-details) | `wakeup_plan.py`, `phase9/router.py`, `monitors/progress.py` |
 | Phase routing | Markers route immediately to the next actor in the same wakeup. | Sweep `EXIT=0` logs, parse verdict markers only after clean exit, then spawn next work if actionable. | [phase routing details](#phase-routing-details) | logs, prompts |
 | Operational names | Parsed or cross-agent names are operational interfaces with owner-local fact sources. | Keep each parser/generator in its owner surface; do not add a production registry or whole-repo naming lint. | [operational names](#operational-names) | router/progress/concurrency/git/controller actions/labels/cli/stages |
 | Design consensus | Concrete plans require Consensus-rnd Phase design-consensus multi-solver consensus and meta-judge consensus. | Dispatch minimal, structural, delete solvers; meta-judge returns consensus/converge only; router-owned stalled predicate may route qualifying converge to reflector, with legacy stalled markers read-only compatible. | [design-consensus details](#design-consensus-details) | `solver-*.md`, `meta-judge.md` |
@@ -730,6 +731,7 @@ Consensus-rnd Phase review-gate keeps the consensus merge gate local enough for 
 4. Truth table: `reject=0`, `approve=R`, `comment=0` → `MERGE`; `reject=0`, `approve>=1`, `comment>=1`, `approve+comment=R` → `MERGE_WITH_COMMENTS`; `reject=0`, `approve=0`, `comment=R` → `WAIT_EXPLICIT_APPROVAL`; `reject>=1` → `FIX`; missing role, duplicate/unknown verdict, no `EXIT=0`, stale head SHA, CI pending/fail, or non-mergeable PR → `WAIT_OR_REDISPATCH`.
 5. `comment` is terminal advisory evidence: surface it, but do not count it as approval and do not dispatch fix for comments alone.
 6. `FIX` dispatches fix codex; fix completion dispatches reviewers again.
+   Fix prompt rendering binds `REVIEW_ARCHITECT_PATH`, `REVIEW_TESTS_PATH`, `REVIEW_QUALITY_PATH`, and `FIX_OUTPUT_PATH`; the controller passes artifact paths and structured counts/status, not hand-copied reject prose from logs.
 7. After repeated fix failure, dispatch meta-layer reflector before any human label.
 8. Every Consensus-rnd Phase review-gate action posts to the PR for traceability.
 9. Detailed reviewer prompts, retry rules, and anti-spiral safeguards are in [review-gate details](#review-gate-details).
@@ -745,7 +747,8 @@ Consensus-rnd Phase design-consensus is the sole authorization gate for concrete
 5. Qualifying r3+ no-progress `converge` routes to reflector via router-owned stalled predicate, not directly to human; legacy `escalate:stalled` markers are compatibility input only.
 6. Maintainer replies reset the round when they materially change framing.
 7. Any concrete plan bypassing Consensus-rnd Phase design-consensus is invalid.
-8. Full consensus card template and solver rules are in [design-consensus details](#design-consensus-details).
+8. Full consensus artifact posting is worker-owned; controller records completion and next-step structured fields only. Self-post failure is an exceptional diagnostic fallback.
+9. Full consensus card template and solver rules are in [design-consensus details](#design-consensus-details).
 
 ## Status Banners
 
@@ -1257,8 +1260,15 @@ Auto-dispatch semantics:
 codex 常把 prompt 里的 marker 模板原样回显到 log(如 prompt 写 `SOLVER_DONE:<role>:<verdict>` 或 `REVIEW_DONE:<PR>:<role>:<approve|comment|reject>`)。`grep "SOLVER_DONE:"` 会命中 prompt 回显,误把失败 / 未完成 / 部分写入的 codex 判成 done,过早派 judge 或 merge 读到不完整输入。**修正**:
 - readiness / done 判据:只看 `tail -5 <log> | grep -q '^EXIT=0'`。
 - verdict 判据:只有 `EXIT=0` 后才解析 marker。
-- marker grep 排除占位回显——`grep -E "<MARKER>:" | grep -vE "<reason>|<id>|<status>|<category>|<framing>|<role>|<verdict>|round-N"`,取**真实值**那条;真实终止 marker 在 codex 最后输出段(controller 追加的 `EXIT=` 行之前),非 prompt 引用段。
-- codex 输出有时被包进 diff 风格段,marker 行带 `+` 前缀 → **不要用 `^MARKER` 锚定 verdict**(会漏),用不带行首锚的 `grep "MARKER:"` + 排占位;但完成判据仍必须锚定 `^EXIT=0` 且只看 log tail。
+- marker verdict 判据:只接受 `line.strip()` 本身是 allowlisted standalone final marker/verdict token 的行;禁止从前缀文本、引用、代码块示例、prompt echo、embedded prose、grep output 或占位符中截取 marker。
+- diff 兼容仅限 marker 行带单个 `+` 前缀且去掉 `+` 后整行仍是 standalone marker;除此之外不得用宽松 `find(prefix)` 或 body regex 从任意行中搜索 marker。
+
+<a id="structured-consumption-boundary"></a>
+### Controller structured-consumption boundary
+
+Steady-state controller/daemon paths consume only these structured surfaces: clean `EXIT=0` completion state, final allowlisted standalone marker/verdict lines, artifact frontmatter, CLI JSON/action fields, and artifact paths. Artifact paths may be passed through directly to the next worker or comment surface; the controller must not summarize or transcribe the raw prose behind those paths as routing evidence.
+
+Raw log prose, review reject prose, judge reasoning bodies, progress raw tails, and prompt echoes are not normal controller inputs. They may be read or quoted only for exceptional diagnostics: `EXIT!=0`, stream disconnect/503, stuck/crash, missing/invalid structured artifact, router fallback, or worker self-post failure. Worker self-posts own full solver, judge, reviewer, or fix artifacts; the controller records completion, route, counts, verdict token, artifact path, and next step.
 
 **反面(❌ 严禁)**:
 - ❌ 三个 solver log 里都出现 `SOLVER_DONE:` 字面就派 meta-judge。
@@ -2607,14 +2617,14 @@ Every Consensus-rnd Phase design-consensus action posts a 中文 comment to the 
 |---|---|
 | Round N solvers dispatched | 中文: "Consensus-rnd Phase design-consensus round N — minimal/structural/delete codex in flight. all implementation-bearing proposals must agree; only built-in Path A greenfield delete-abstain can be compatible-neutral; otherwise iterate." |
 | Maintainer reply detected mid-Phase-9 | 中文: "Halted in-flight round; resetting with maintainer comment as new constraint. New round dispatched. Old round outputs preserved for solver context." |
-| **Each individual solver completes** | Post FULL solver output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Solver — \`<role>\` (round N)`. Body = verbatim solver output. One comment per solver, three comments per round. |
-| **Meta-judge completes** | Post FULL meta-judge output as its own comment. Header: `## 🤖 Consensus-rnd Phase design-consensus Meta-judge — round N verdict: \`<consensus\|converge>\``. Body = verbatim judge output. |
+| **Each individual solver completes** | Worker self-posts its full artifact/comment for traceability. Controller records clean completion, marker verdict, artifact path, and next-step fields only; if self-post fails, raw output may be referenced as diagnostic fallback. |
+| **Meta-judge completes** | Worker self-posts its full artifact/comment for traceability. Controller records clean completion, marker verdict, artifact path, and next-step fields only; if self-post fails, raw output may be referenced as diagnostic fallback. |
 | Meta-judge → consensus | Same as above + then a follow-up controller comment: "`crnd:triage:resume-requested` label added; implement codex dispatched" |
 | Meta-judge → converge | Same as above + the round-(N+1) "solvers dispatched" comment that includes the convergence question for transparency |
 | Router-derived stalled converge | Same as above + `## 🤖 Controller next-step` comment saying reflector is being dispatched for a no-progress stall |
 | Legacy escalation category emitted | Post meta-judge output + summary "legacy escalation category normalized back into consensus loop"; re-dispatch judge or reflector; do not label human directly |
 
-**Forbidden**: posting a "summary" of solver outputs instead of the FULL outputs. The raw reasoning, evidence, and concrete plans are the audit record; a summary loses too much fidelity. The 3+ comments per round are intentional.
+**Forbidden**: controller relay/transcription of solver or judge raw prose as normal routing evidence. Full raw artifacts remain the audit record through worker self-posts or artifact paths; controller comments use structured completion fields, counts, verdicts, and paths.
 
 Required labels (additions to Consensus-rnd Phase review-gate set):
 - `phase9-solving`: 3 solver codexes in flight

@@ -42,6 +42,7 @@ DONE_PREFIXES = (
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
 )
+DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
@@ -457,15 +458,15 @@ def tail_lines(path: Path, count: int) -> list[str]:
 def marker_from_completed_log(log_path: Path) -> str | None:
     if not is_clean_exit(log_path):
         return None
-    for line in reversed(tail_lines(log_path, 40)):
-        if line == "EXIT=0" or not line.strip():
+    for line in reversed(tail_lines(log_path, 5)):
+        stripped = line.strip()
+        if stripped == "EXIT=0" or not stripped:
             continue
-        for prefix in DONE_PREFIXES:
-            if prefix in line:
-                marker = line[line.find(prefix) :].strip()
-                if "<" in marker and ">" in marker:
-                    continue
-                return marker
+        if "<" in stripped and ">" in stripped:
+            continue
+        if DONE_PREFIX_RE.fullmatch(stripped):
+            return stripped
+        return None
     return None
 
 
@@ -480,7 +481,7 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
             continue
-        target_text = f"{log_path.name} {marker} {' '.join(tail_lines(log_path, 40))}"
+        target_text = f"{log_path.name} {marker}"
         item = infer_item_from_text(target_text)
         action = {
             "priority": 3,

@@ -26,6 +26,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     existing_issue_actions,
     has_dispatchable_action,
+    marker_from_completed_log,
     release_countdown_actions,
     resolve_repo_root,
 )
@@ -636,6 +637,62 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "controller")
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
 
+    def test_completed_marker_requires_standalone_final_marker_line(self) -> None:
+        valid = self.logs / "implement-issue20.log"
+        valid.write_text(
+            "prompt echo IMPLEMENT_DONE:<status>\n"
+            "> IMPLEMENT_DONE:quoted\n"
+            "controller saw IMPLEMENT_DONE:embedded prose\n"
+            "IMPLEMENT_DONE:ok\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        self.assertEqual("IMPLEMENT_DONE:ok", marker_from_completed_log(valid))
+
+        invalid = self.logs / "implement-issue21.log"
+        invalid.write_text(
+            "prompt echo IMPLEMENT_DONE:<status>\n"
+            "> IMPLEMENT_DONE:quoted\n"
+            "controller saw IMPLEMENT_DONE:embedded prose\n"
+            "grep output: IMPLEMENT_DONE:grep\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        self.assertIsNone(marker_from_completed_log(invalid))
+
+        stale_marker = self.logs / "implement-issue22.log"
+        stale_marker.write_text(
+            "IMPLEMENT_DONE:ok\n"
+            "later raw worker prose\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        self.assertIsNone(marker_from_completed_log(stale_marker))
+
+        valid.unlink()
+        invalid.unlink()
+        actions = self.run_plan()["actions"]
+        self.assertFalse([action for action in actions if action["kind"] == "completed-marker"])
+
+    def test_completed_marker_payload_does_not_include_raw_log_tail(self) -> None:
+        (self.logs / "implement-worker.log").write_text(
+            "target issue #999 in raw prose only\n"
+            "raw reviewer prose that must not be relayed\n"
+            "IMPLEMENT_DONE:ok\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        rendered = json.dumps(action, sort_keys=True)
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertIsNone(action["item"])
+        self.assertNotIn("999", rendered)
+        self.assertNotIn("raw reviewer prose", rendered)
+        self.assertNotIn("target issue", rendered)
+
     def test_decompose_consensus_visible_only_as_generic_completed_marker(self) -> None:
         self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
 
@@ -699,8 +756,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("review_gate_actions", action)
 
     def test_meta_resolved_drop_completed_marker_projects_close_helper(self) -> None:
-        (self.logs / "judge-drop.log").write_text(
-            "target issue #53\n"
+        (self.logs / "issue53-judge-drop.log").write_text(
+            "raw prose is diagnostic only\n"
             "META_RESOLVED:drop:no-action\n"
             "EXIT=0\n",
             encoding="utf-8",
@@ -714,7 +771,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
         self.assertIn("clean_exit_source_marker", action["preconditions"])
-        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/judge-drop.log")
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/issue53-judge-drop.log")
         self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 53)

@@ -220,6 +220,33 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(event["marker"], "SOMETHING_DONE:surprise:payload")
         self.assertEqual(self.ledger_entries(), [])
 
+    def test_package_router_ignores_embedded_marker_without_fallback(self) -> None:
+        self.write_log(
+            "phase9-issue160-r1-judge.log",
+            "controller saw META_JUDGE_DONE:converge:round-2:embedded prose",
+            "> META_JUDGE_DONE:converge:round-2:quoted",
+            "grep output: META_JUDGE_DONE:converge:round-2:grep",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
+
+    def test_package_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+        self.write_log(
+            "phase9-issue160-r1-judge.log",
+            "META_JUDGE_DONE:converge:round-2",
+            "later raw judge prose",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
+
     def test_package_router_converge_dispatches_stalled_reflector_when_predicate_holds(self) -> None:
         # Refactor (issue-304): Old: package smoke used a fresh stalled judge
         # marker. New: r3 converge plus unchanged solver history renders the
@@ -406,6 +433,13 @@ class Phase9RouterPackageTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, combined)
         self.assertNotIn("Read the three completed solver logs and emit META_JUDGE_DONE", src)
+
+    def test_router_source_uses_standalone_marker_matching(self) -> None:
+        src = PACKAGE_ROUTER.read_text(encoding="utf-8")
+        self.assertIn("MARKER_RE.fullmatch", src)
+        self.assertIn("stripped.startswith(prefix)", src)
+        self.assertNotIn("stripped.find(prefix)", src)
+        self.assertNotIn("MARKER_RE.search", src)
 
     def test_package_main_once_dispatches_via_absolute_repo_root(self) -> None:
         for role in ("minimal", "structural", "delete"):
