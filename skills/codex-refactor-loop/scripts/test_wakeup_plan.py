@@ -636,11 +636,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "controller")
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
 
-    def test_review_done_completed_marker_remains_policy_free(self) -> None:
-        # Refactor (iter203/issue-203): Old pattern: controller decisions were
-        # split across peek, wakeup-plan, phase9-router, and concurrency. New
-        # principle: keep REVIEW_DONE as a completed marker, without adding
-        # review-gate readiness facts or lifecycle action vocabulary.
+    def test_review_done_completed_marker_is_closed_projection_not_standalone_policy(self) -> None:
         self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:approve")
 
         plan = self.run_plan()
@@ -650,9 +646,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["phase"], "review-gate")
         self.assertEqual(action["actor"], "controller-or-fix-codex")
         self.assertEqual(action["item"], "PR #123")
+        self.assertEqual(action["controller_action"], "review_gate")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
         self.assertNotIn("consensus", action)
         self.assertNotIn("merge_command", action)
-        self.assertNotIn("controller_action", action)
         self.assertNotIn("review-gate-readiness", action)
         self.assertNotIn("review_gate_actions", action)
 
@@ -1203,7 +1201,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(
             plan["authorization"],
-            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396",
         )
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
 
@@ -1445,6 +1443,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(errors[0]["phase"], "bootstrap")
         self.assertEqual(errors[0]["route"], "host-workflow-spec")
         self.assertTrue(errors[0]["no_lifecycle_authority"])
+
+    def test_wakeup_plan_is_closed_action_projection_for_runner(self) -> None:
+        self.append_harness_spawn_intent()
+
+        plan = self.run_plan()
+
+        self.assertEqual(plan["schema"], "wakeup-plan")
+        self.assertEqual(plan["mode"], "closed-action-projection")
+        self.assertTrue(plan["no_lifecycle_authority"])
+        self.assertEqual(plan["apply_authority"], "wakeup-runner-396-only")
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent")
+        for field in (
+            "action_id",
+            "runner_authority",
+            "preconditions",
+            "source_marker",
+            "source_artifact",
+            "target_kind",
+            "target",
+            "controller_action",
+            "no_generic_command",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, action)
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+
+    def test_status_only_actions_cannot_apply(self) -> None:
+        plan = self.run_plan()
+
+        release = [action for action in plan["actions"] if action["kind"] == "release-countdown"][0]
+        self.assertTrue(release["status_only"])
+        self.assertTrue(release["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", release)
+        self.assertNotIn("no_generic_command", release)
 
 
 if __name__ == "__main__":

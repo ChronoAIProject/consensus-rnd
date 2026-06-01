@@ -526,6 +526,52 @@ class ControllerActions:
         config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
+    def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("publish-worker-output", code=3):
+            return 3
+        head_ref = str(action.get("head_ref") or "").strip()
+        worktree = Path(str(action.get("worktree") or ""))
+        if not _safe_branch_name(head_ref):
+            sys.stderr.write("publish_worker_output_from_action: invalid head_ref\n")
+            return 2
+        if not worktree.is_absolute() or not worktree.is_dir():
+            sys.stderr.write("publish_worker_output_from_action: worktree must be an existing absolute path\n")
+            return 2
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            sys.stderr.write("publish_worker_output_from_action: worktree outside controller-owned .worktrees\n")
+            return 2
+        clean = subprocess.run(["git", "-C", str(worktree), "diff", "--quiet"], capture_output=True, text=True, check=False)
+        if clean.returncode != 0:
+            sys.stderr.write("publish_worker_output_from_action: dirty scoped diff; worker commit required first\n")
+            return 2
+        return self.safe_push(branch=head_ref)
+
+    def close_managed_item_from_drop_marker(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("close-managed-drop", code=3):
+            return 3
+        marker = str(action.get("source_marker") or action.get("marker") or "")
+        if not marker.startswith("META_RESOLVED:drop:"):
+            sys.stderr.write("close_managed_item_from_drop_marker: requires clean META_RESOLVED:drop marker\n")
+            return 2
+        kind = str(action.get("target_kind") or "").lower()
+        issue_target = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="pr" if kind == "pr" else "issue",
+            action="close-managed-drop",
+            source="wakeup-runner-action",
+        )
+        if issue_target is None:
+            return 2
+        comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
+        if kind == "pr":
+            pr_target = issue_target
+            result = self.gh(["pr", "close", pr_target, "--comment", comment], check=False)
+        else:
+            result = self.gh(["issue", "close", issue_target, "--reason", "not planned", "--comment", comment], check=False)
+        return result.returncode
+
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
         if env:
@@ -677,3 +723,7 @@ def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):
         raise ValueError(f"safe_worktree cluster must match [A-Za-z0-9._-]+: {cluster!r}")
+
+
+def _safe_branch_name(value: str) -> bool:
+    return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)

@@ -27,6 +27,7 @@ from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
+from .wakeup_runner import main as wakeup_runner_main
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -49,6 +50,26 @@ COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
+    "wakeup-runner": CommandSpec(
+        wakeup_runner_main,
+        "apply the #396 wakeup-plan closed action projection",
+        (
+            "read-state",
+            "read-log",
+            "read-gh",
+            "read-git",
+            "write-artifact",
+            "write-event",
+            "spawn",
+            "git-commit-worker-output",
+            "git-push",
+            "gh-open",
+            "gh-merge",
+            "gh-close-linked",
+            "gh-label-owned",
+            "controller-lifecycle-runner",
+        ),
+    ),
     "pr-checks": CommandSpec(
         pr_checks_main,
         "read PR-head check-runs through the narrow Checks API projection",

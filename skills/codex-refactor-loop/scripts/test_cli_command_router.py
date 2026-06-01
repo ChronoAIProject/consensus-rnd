@@ -24,14 +24,17 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 ALL_AUTHORITY_TOKENS = {
     "delete-log",
     "gh-close",
+    "gh-close-linked",
     "gh-comment",
     "gh-edit",
     "gh-label-closed-reconcile",
     "gh-label",
+    "gh-label-owned",
     "gh-merge",
     "gh-open",
     "gh-reaction",
     "git-fetch",
+    "git-commit-worker-output",
     "git-merge",
     "git-push",
     "git-rebase",
@@ -51,6 +54,7 @@ ALL_AUTHORITY_TOKENS = {
     "write-log",
     "write-source",
     "write-state",
+    "controller-lifecycle-runner",
 }
 
 MUTATION_TOKENS = {
@@ -69,6 +73,7 @@ DAEMON_COMMANDS = {
     "progress-reporter",
     "release-gate",
     "restart-daemons",
+    "wakeup-runner",
 }
 
 DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
@@ -86,6 +91,7 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+    "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
 }
 
 LIFECYCLE_TOKENS = {
@@ -122,6 +128,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "peek",
                 "pr-checks",
                 "wakeup-plan",
+                "wakeup-runner",
                 "restart-daemons",
                 "statusline",
                 "comment-monitor",
@@ -236,6 +243,32 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         for forbidden in ("def start(", "def stop(", "def restart(", "def reload(", "spawn-daemon", "write-state"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, daemon_status)
+
+    def test_wakeup_runner_is_only_396_lifecycle_daemon_command(self) -> None:
+        self.assertIn("wakeup-runner", COMMANDS)
+        self.assertIn("#396", COMMANDS["wakeup-runner"].description)
+        self.assertEqual(
+            (
+                "read-state",
+                "read-log",
+                "read-gh",
+                "read-git",
+                "write-artifact",
+                "write-event",
+                "spawn",
+                "git-commit-worker-output",
+                "git-push",
+                "gh-open",
+                "gh-merge",
+                "gh-close-linked",
+                "gh-label-owned",
+                "controller-lifecycle-runner",
+            ),
+            COMMANDS["wakeup-runner"].authority,
+        )
+        for forbidden in ("merge-pr", "open-pr", "safe-push", "release-publish", "ControllerCommand", "ControllerOrchestrator", "ControllerTurnDecision"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS)
 
     def test_daemon_status_cli_json_and_unknown_target_contract(self) -> None:
         with tempfile.TemporaryDirectory(prefix="daemon-status-cli-") as raw_tmp:

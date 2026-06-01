@@ -33,6 +33,7 @@ OPERATIONS = [
     "restart-daemons",
     "spawn-codex",
     "wakeup-plan",
+    "wakeup-runner",
     "peek",
 ]
 

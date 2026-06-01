@@ -65,6 +65,17 @@ HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
     "executor",
     "target_ref",
 }
+RUNNER_AUTHORITY = "wakeup-runner-396"
+PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396"
+READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
+EXECUTABLE_ACTION_KINDS = {
+    "harness-spawn-intent",
+    "unpushed-worker-output",
+    "completed-marker",
+    "ci-red",
+    "no-gap-violation",
+    "existing-issue",
+}
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
     label_catalog.PHASE_CI_RUNNING: "ci-running",
@@ -185,6 +196,7 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
             {
                 "priority": 2,
                 "kind": "harness-spawn-intent",
+                "action_id": f"harness-spawn-intent:{intent_id}",
                 "item": intent.get("task_id"),
                 "phase": "work-intake",
                 "actor": "controller",
@@ -201,6 +213,14 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
                 "no_lifecycle_authority": True,
                 "reason": intent.get("reason"),
                 "evidence": line,
+                "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                "source_marker": line,
+                "target_kind": "codex",
+                "target_number": None,
+                "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent_id)},
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
             }
         )
     return actions
@@ -454,11 +474,21 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
         action = {
             "priority": 3,
             "kind": "completed-marker",
+            "action_id": f"completed-marker:{log_path.name}:{marker}",
             "item": infer_item_from_text(f"{log_path.name} {marker}"),
             "phase": phase_from_marker(marker),
             "actor": actor_from_marker(marker),
             "marker": marker,
             "evidence": str(log_path.relative_to(repo_root)),
+            "source_artifact": str(log_path.relative_to(repo_root)),
+            "source_marker": marker,
+            "target_kind": _target_kind_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
+            "target_number": _target_number_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
+            "target": _target_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            "controller_action": controller_action_from_marker(marker),
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
         }
         route = route_from_marker(marker)
         if route:
@@ -598,6 +628,8 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
                         "phase": "design-intake",
                         "actor": "controller",
                         "evidence": line,
+                        "status_only": True,
+                        "no_lifecycle_authority": True,
                     }
                 )
     for item in gh_items:
@@ -611,6 +643,8 @@ def maintainer_comment_actions(repo_root: Path, gh_items: list[GhItem]) -> list[
                     "phase": phase_from_labels(item.labels),
                     "actor": "controller",
                     "evidence": "human label present; sweep latest non-AI comments",
+                    "status_only": True,
+                    "no_lifecycle_authority": True,
                 }
             )
     return actions
@@ -632,11 +666,21 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
             {
                 "priority": 5,
                 "kind": "no-gap-violation",
+                "action_id": f"no-gap-violation:{line}",
                 "item": infer_item_from_text(line),
                 "phase": "work-intake",
                 "actor": "controller",
                 "route": "no-gap-repair",
                 "evidence": line,
+                "source_artifact": ".refactor-loop/.concurrency-alert.log",
+                "source_marker": line,
+                "target_kind": _target_kind_from_item(infer_item_from_text(line)),
+                "target_number": _target_number_from_item(infer_item_from_text(line)),
+                "target": _target_from_item(infer_item_from_text(line)),
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence"],
+                "controller_action": "spawn_codex_harness_background",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
             }
         )
     return actions
@@ -760,6 +804,7 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
             {
                 "priority": 3,
                 "kind": "unpushed-worker-output",
+                "action_id": f"unpushed-worker-output:{item.number}:{local.stdout.strip()}",
                 "item": item.item,
                 "phase": "publish",
                 "route": "controller-push-required",
@@ -772,6 +817,14 @@ def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> l
                 "line": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
                 "controller_action": "safe_push",
                 "no_lifecycle_authority": True,
+                "source_artifact": str(worktree),
+                "source_marker": f"UNPUSHED_WORKER_OUTPUT:{item.number}:{ahead_count}",
+                "target_kind": "PR",
+                "target_number": item.number,
+                "target": {"kind": "PR", "number": item.number},
+                "preconditions": ["active_controller_owner", "verified_pr_head", "clean_scoped_diff"],
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
             }
         )
     return actions
@@ -796,12 +849,22 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
             {
                 "priority": 4,
                 "kind": "ci-red",
+                "action_id": f"ci-red:{item.number}:{status.head_sha}",
                 "item": item.item,
                 "phase": "ci-watch",
                 "actor": "remote-ci-fix-codex",
                 "fail_count": fail_count,
                 "head_sha": status.head_sha,
                 "check_names": [check.name for check in status.runs if check.bucket == "fail"],
+                "source_artifact": "github-check-runs",
+                "source_marker": f"ci-red:{item.number}:{status.head_sha}",
+                "target_kind": "PR",
+                "target_number": item.number,
+                "target": {"kind": "PR", "number": item.number},
+                "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+                "controller_action": "dispatch_remote_ci_fix",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
             }
         )
     return actions
@@ -822,11 +885,21 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
             {
                 "priority": priority,
                 "kind": "existing-issue",
+                "action_id": f"existing-issue:{item.kind}:{item.number}",
                 "item": item_name,
                 "phase": phase_from_labels(item.labels),
                 "actor": actor_from_labels(item.labels, item.kind),
                 "milestone": milestone,
                 "title": title,
+                "source_artifact": "github-open-managed-items",
+                "source_marker": f"existing-issue:{item.kind}:{item.number}",
+                "target_kind": "PR" if item.kind == "pr" else "issue",
+                "target_number": item.number,
+                "target": {"kind": "PR" if item.kind == "pr" else "issue", "number": item.number},
+                "preconditions": ["active_controller_owner", "live_open_target"],
+                "controller_action": "dispatch_next_step_worker",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
             }
         )
     return actions
@@ -935,6 +1008,76 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
         "existing-issue",
     }
     return any(action.get("kind") in dispatchable for action in actions)
+
+
+def controller_action_from_marker(marker: str) -> str:
+    if marker.startswith("IMPLEMENT_DONE"):
+        return "publish_worker_output_from_action"
+    if marker.startswith("REVIEW_DONE"):
+        return "review_gate"
+    if marker.startswith("FIX_DONE"):
+        return "dispatch_reviewers"
+    if marker.startswith("TEST_ADD_DONE"):
+        return "dispatch_ci_watch"
+    if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
+        return "dispatch_design_consensus"
+    if marker.startswith("AUDIT_DONE"):
+        return "dispatch_work_intake"
+    if marker.startswith("VERIFY_DONE"):
+        return "dispatch_review_gate"
+    return "dispatch_next_step_worker"
+
+
+def _target_kind_from_item(item: str | None) -> str | None:
+    if not item:
+        return None
+    lowered = item.lower()
+    if lowered.startswith("pr #"):
+        return "PR"
+    if lowered.startswith("issue #"):
+        return "issue"
+    return None
+
+
+def _target_number_from_item(item: str | None) -> int | None:
+    if not item:
+        return None
+    match = re.search(r"#([1-9][0-9]*)", item)
+    return int(match.group(1)) if match else None
+
+
+def _target_from_item(item: str | None) -> dict[str, Any] | None:
+    kind = _target_kind_from_item(item)
+    number = _target_number_from_item(item)
+    if kind is None or number is None:
+        return None
+    return {"kind": kind, "number": number}
+
+
+def close_projection_actions(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_close_projection_action(action) for action in actions]
+
+
+def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
+    closed = dict(action)
+    if closed.get("kind") in EXECUTABLE_ACTION_KINDS and not closed.get("status_only"):
+        closed.setdefault("runner_authority", RUNNER_AUTHORITY)
+        closed.setdefault("preconditions", ["active_controller_owner"])
+        closed.setdefault("source_artifact", closed.get("evidence") or closed.get("source") or closed.get("route") or "wakeup-plan")
+        closed.setdefault("source_marker", closed.get("marker") or closed.get("line") or closed.get("evidence") or closed.get("source_marker"))
+        closed.setdefault("target", _target_from_item(closed.get("item")))
+        if "target_kind" not in closed:
+            target = closed.get("target") if isinstance(closed.get("target"), dict) else {}
+            closed["target_kind"] = target.get("kind")
+        if "target_number" not in closed:
+            target = closed.get("target") if isinstance(closed.get("target"), dict) else {}
+            closed["target_number"] = target.get("number")
+        closed.setdefault("controller_action", "dispatch_next_step_worker")
+        closed["no_generic_command"] = True
+    else:
+        closed.setdefault("status_only", True)
+        closed.setdefault("no_lifecycle_authority", True)
+    return closed
 
 
 def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:
@@ -1089,13 +1232,14 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     return {
         "schema": "wakeup-plan",
         "repo_root": str(repo_root),
-        "authorization": "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script",
-        "mode": "read-only-recommendation",
+        "authorization": PLAN_AUTHORIZATION,
+        "mode": "closed-action-projection",
+        "apply_authority": "wakeup-runner-396-only",
         "no_lifecycle_authority": True,
         "daemon_health": health,
         "concurrency": concurrency,
         "hard_gate": concurrency["hard_gate"],
-        "actions": actions,
+        "actions": close_projection_actions(actions),
         "recommendation": recommendation,
     }
 
