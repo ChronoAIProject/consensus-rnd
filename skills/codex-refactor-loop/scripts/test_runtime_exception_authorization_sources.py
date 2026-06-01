@@ -726,6 +726,40 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, self.skill)
                 self.assertIn(required, observability_entry)
 
+    def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
+        heading = "## Named runtime exception — observability-comment-writers(per #53)"
+        start = self.skill.index(heading)
+        rest = self.skill[start:]
+        next_heading = rest.find("\n## ", len(heading))
+        section = rest if next_heading == -1 else rest[:next_heading]
+
+        for required in (
+            "Progress target/kind facts are owned locally by `monitors/progress.py`",
+            "exact log basenames are the canonical target source",
+            "prompt fallback applies only when the matching prompt file exists",
+            "Comment-monitor controller-post identity is owned locally by `monitors/comment.py`",
+            "final `⟦AI:AUTO-LOOP⟧` sentinel is canonical",
+            "`CONTROLLER_PREFIXES` is only a legacy compatibility skip list",
+            "private `.refactor-loop` paths derived from `LoopContext`, not host env surfaces",
+            "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "label mutation",
+            "issue/PR close/create/merge",
+            "release/tag",
+            "git lifecycle",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, section)
+
+        for forbidden in (
+            "observability_comments.py",
+            "progress-comment-targets",
+            "PROGRESS_REPORTER_INTERVAL",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, section)
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.mirror)
+
 
 if __name__ == "__main__":
     unittest.main()

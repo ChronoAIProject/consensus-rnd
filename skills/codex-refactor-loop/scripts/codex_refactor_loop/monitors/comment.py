@@ -53,8 +53,8 @@ class CommentMonitor:
         if not whitelist:
             raise RuntimeError("FATAL: MAINTAINER_WHITELIST is unset; comment-monitor fails closed")
         self.maintainers = {item for item in whitelist.replace(",", " ").split() if item}
-        self.state_file = state_file or Path(os.environ.get("STATE_FILE", ctx.paths.refactor_loop / "comment-monitor-state.json"))
-        self.interval = int(interval or os.environ.get("COMMENT_MONITOR_INTERVAL") or os.environ.get("INTERVAL", "30"))
+        self.state_file = state_file or ctx.paths.refactor_loop / "comment-monitor-state.json"
+        self.interval = int(interval or os.environ.get("COMMENT_MONITOR_INTERVAL") or "30")
         self.state_file.parent.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")

@@ -53,11 +53,11 @@ class ProgressReporter:
         self.repo = ctx.gh_repo_slug
         if not self.repo:
             raise RuntimeError("FATAL: GH_REPO_SLUG is unset and gh repo view failed")
-        self.interval = int(interval or os.environ.get("INTERVAL", "600"))
-        self.state_dir = Path(os.environ.get("STATE_DIR", str(ctx.paths.refactor_loop)))
-        self.state_file = Path(os.environ.get("STATE_FILE", str(self.state_dir / "codex-progress-state.json")))
-        self.log_dir = Path(os.environ.get("LOG_DIR", str(self.state_dir / "logs")))
-        self.prompts_dir = Path(os.environ.get("PROMPTS_DIR", str(self.state_dir / "prompts")))
+        self.interval = int(interval or 600)
+        self.state_dir = ctx.paths.refactor_loop
+        self.state_file = self.state_dir / "codex-progress-state.json"
+        self.log_dir = self.state_dir / "logs"
+        self.prompts_dir = self.state_dir / "prompts"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")

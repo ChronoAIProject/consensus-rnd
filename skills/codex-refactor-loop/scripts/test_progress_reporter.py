@@ -44,6 +44,33 @@ class ProgressReporterTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             self.assertEqual(expected, exit_status(path))
 
+    def test_generic_env_overrides_do_not_change_default_runtime_paths_or_interval(self) -> None:
+        override_root = self.tmp / "override"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "INTERVAL": "1",
+                "STATE_DIR": str(override_root / "state"),
+                "STATE_FILE": str(override_root / "state.json"),
+                "LOG_DIR": str(override_root / "logs"),
+                "PROMPTS_DIR": str(override_root / "prompts"),
+            },
+        ):
+            reporter = ProgressReporter(self.ctx)
+
+        self.assertEqual(600, reporter.interval)
+        self.assertEqual(self.ctx.paths.refactor_loop, reporter.state_dir)
+        self.assertEqual(self.ctx.paths.refactor_loop / "codex-progress-state.json", reporter.state_file)
+        self.assertEqual(self.ctx.paths.refactor_loop / "logs", reporter.log_dir)
+        self.assertEqual(self.ctx.paths.refactor_loop / "prompts", reporter.prompts_dir)
+        self.assertFalse(override_root.exists())
+
+    def test_explicit_interval_parameter_remains_test_seam(self) -> None:
+        with mock.patch.dict(os.environ, {"INTERVAL": "1"}):
+            reporter = ProgressReporter(self.ctx, interval=7)
+
+        self.assertEqual(7, reporter.interval)
+
     def test_exit_failed_posts_and_keeps_failed_state(self) -> None:
         log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
         log.write_text("important failure\nEXIT=17\n", encoding="utf-8")
@@ -177,6 +204,16 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
         self.assertIn("TEST_NO_LOOP", text)
         executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         self.assertNotIn(r"^phase9-issue([0-9]+).*", executable)
+        for token in (
+            'os.environ.get("INTERVAL"',
+            'os.environ.get("STATE_DIR"',
+            'os.environ.get("STATE_FILE"',
+            'os.environ.get("LOG_DIR"',
+            'os.environ.get("PROMPTS_DIR"',
+            "PROGRESS_REPORTER_INTERVAL",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, executable)
 
 
 if __name__ == "__main__":
