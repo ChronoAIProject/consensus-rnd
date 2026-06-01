@@ -690,7 +690,6 @@ class ControllerActionsTests(unittest.TestCase):
             "linked_issue": 77,
             "head_ref": "refactor/iter77-issue77",
             "worktree": str(worktree),
-            "title": "Implement issue 77",
         }
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
@@ -710,7 +709,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -722,10 +721,13 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_open(title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
             sequence.append("open_pr")
-            self.assertEqual("Implement issue 77", title)
+            self.assertEqual("实现 issue #77", title)
             self.assertEqual("canonical-integration", base)
             self.assertEqual("refactor/iter77-issue77", head)
-            self.assertIn("Closes #77", Path(body_file).read_text(encoding="utf-8"))
+            body = Path(body_file).read_text(encoding="utf-8")
+            self.assertIn("## 🤖 实现 issue #77", body)
+            self.assertIn("Closes #77", body)
+            self.assertTrue(body.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
             return 414, "https://github.com/owner/repo/pull/414"
 
         def fake_dispatch(review_action: Mapping[str, object]) -> int:

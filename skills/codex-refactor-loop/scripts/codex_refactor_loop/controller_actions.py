@@ -629,7 +629,7 @@ class ControllerActions:
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"Implement issue #{issue_target}"], check=False)
+        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
         if commit.returncode != 0:
             if commit.stderr:
                 sys.stderr.write(commit.stderr)
@@ -638,7 +638,7 @@ class ControllerActions:
         if pushed != 0:
             return pushed
         body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        title = str(action.get("title") or f"实现 issue #{issue_target}")
         pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
@@ -875,7 +875,7 @@ class ControllerActions:
         path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"## 🤖 Implement issue #{issue_target}\n\n"
+            f"## 🤖 实现 issue #{issue_target}\n\n"
             f"Closes #{issue_target}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
