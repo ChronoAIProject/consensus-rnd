@@ -271,13 +271,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for needle in (
             "crnd:milestone:release-target",
             "release countdown status",
+            "explicit-target precedence",
             "non-exclusive milestone fact",
-            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger explicit release-target mode by itself",
             "wakeup-plan-only and read-only",
             "status-only, non-dispatchable `release-countdown` action",
+            "does not query the GitHub milestones API",
+            "default goal countdown",
+            "GitHub open milestones",
+            "`due_on` ascending",
+            "no `due_on` sorted after dated milestones",
+            "goal.milestone: null",
             "release-gate scoring source",
             ".version-bump.json",
             "existing release commits projection",
+            'activation: "explicit-target" | "default-goal"',
+            "goal.milestone",
+            "goal.release",
+            "goal.release.passed_signals",
+            "goal.release.total_signals",
+            "goal.release.countdown_to_version",
             "no_lifecycle_authority",
             "targets",
             "from_version",
@@ -287,6 +300,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "red_signals",
             "blocked_reasons",
             'source: "release-gate"',
+            "host.env",
+            "statusline snapshots",
+            "local state are not a goal SSOT",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, milestone)
@@ -304,7 +320,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, milestone)
-        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("Release-countdown status is status-only", wakeup)
         self.assertIn("not dispatchable", wakeup)
 
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:

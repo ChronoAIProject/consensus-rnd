@@ -44,6 +44,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+        state_dir = self.repo / ".refactor-loop" / "state"
+        state_dir.mkdir()
+        (state_dir / "auto-release-signals.json").write_text(json.dumps({"recent_pr_merges": 0}), encoding="utf-8")
+        (self.repo / ".version-bump.json").write_text(
+            json.dumps({"files": [{"path": "package.json", "field": "version"}]}),
+            encoding="utf-8",
+        )
+        (self.repo / "package.json").write_text(json.dumps({"version": "1.2.3-beta.4"}), encoding="utf-8")
         self.write_fresh_heartbeats()
         self.write_fake_gh()
         self.write_fake_git()
@@ -95,30 +103,58 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       esac
                       ;;
                     milestone)
-                      printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     existing)
-                      printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     transition_sort)
-                      printf '[{"number":60,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":61,"title":"positive issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":62,"title":"classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":60,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":61,"title":"positive issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":62,"title":"classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     many_active)
-                      printf '['
-                      for i in 1 2 3 4 5 6; do
-                        [[ "$i" != "1" ]] && printf ','
-                        printf '{"number":%s,"title":"active issue %s","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
-                      done
-                      printf ']\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '['
+                        for i in 1 2 3 4 5 6; do
+                          [[ "$i" != "1" ]] && printf ','
+                          printf '{"number":%s,"title":"active issue %s","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
+                        done
+                        printf ']\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     represented_parent)
-                      printf '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     pr_open_parent)
-                      printf '[{"number":239,"title":"parent issue with open PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":239,"title":"parent issue with open PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     non_action_statuses)
-                      printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     *)
                       printf '[]\n'
@@ -148,31 +184,63 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       esac
                       ;;
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
-                      printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     unpushed_head_dash)
-                      printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     unpushed_head_space)
-                      printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     unpushed_head_control)
-                      printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     ci_red)
-                      printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     represented_parent)
-                      printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     pr_open_parent)
                       printf '[]\n'
                       ;;
                     milestone)
-                      printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     non_action_statuses)
-                      printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     *)
                       printf '[]\n'
@@ -181,6 +249,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$cmd1" == "api" ]]; then
+                  if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" && "$api_path" == repos/owner/repo/milestones* ]]; then
+                    printf 'api milestones\n' >> "$WAKEUP_PLAN_GH_QUERY_LOG"
+                  fi
+                  if [[ "$api_path" == repos/owner/repo/milestones* ]]; then
+                    case "$fixture" in
+                      default_milestones)
+                        printf '[{"number":3,"title":"No due","due_on":null},{"number":2,"title":"Later","due_on":"2026-07-01T00:00:00Z"},{"number":1,"title":"Soon","due_on":"2026-06-15T00:00:00Z"}]\n'
+                        ;;
+                      default_milestone_tie)
+                        printf '[{"number":8,"title":"No due high","due_on":null},{"number":4,"title":"No due low","due_on":null}]\n'
+                        ;;
+                      *)
+                        printf '[]\n'
+                        ;;
+                    esac
+                    exit 0
+                  fi
                   if [[ "$api_flag1" == "--paginate" && "$api_flag2" == "--slurp" ]]; then
                     if [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
                       printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://checks/unit"},{"name":"lint","status":"completed","conclusion":"success","html_url":"https://checks/lint"}]}]\n'
@@ -738,16 +823,41 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(actions[0]["milestone"])
         self.assertFalse(actions[-1]["milestone"])
 
-    def test_release_countdown_ignores_absent_or_current_only_milestone_labels(self) -> None:
-        def scorer(_: Path) -> dict:
-            raise AssertionError("release scorer should not run without crnd:milestone:release-target")
+    def test_release_countdown_default_goal_ignores_current_milestone_as_explicit_target(self) -> None:
+        old_env = os.environ.copy()
+        os.environ.pop("GH_REPO_SLUG", None)
+        os.environ.pop("GH_REPO", None)
+        os.environ.pop("GH_OWNER", None)
+        os.environ.pop("GH_REPO_NAME", None)
+        calls: list[Path] = []
+
+        def scorer(repo_root: Path) -> dict:
+            calls.append(repo_root)
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.4",
+                "stability_score": 0,
+                "ready": False,
+                "signals": {},
+                "blocked_reasons": ["no_commits_since_last_release"],
+            }
 
         no_target = [
             GhItem("issue", 10, "ordinary", (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO)),
             GhItem("issue", 20, "current", (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT)),
         ]
 
-        self.assertEqual(release_countdown_actions(self.repo, no_target, scorer=scorer), [])
+        try:
+            actions = release_countdown_actions(self.repo, no_target, scorer=scorer)
+
+            self.assertEqual(calls, [self.repo])
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["activation"], "default-goal")
+            self.assertEqual(actions[0]["targets"], [])
+            self.assertIsNone(actions[0]["goal"]["milestone"])
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
 
     def test_release_countdown_projects_release_gate_score_without_dispatch_authority(self) -> None:
         calls: list[Path] = []
@@ -788,10 +898,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(len(actions), 1)
         action = actions[0]
         self.assertEqual(action["kind"], "release-countdown")
+        self.assertEqual(action["phase"], "publish")
+        self.assertEqual(action["actor"], "controller")
+        self.assertEqual(action["route"], "release-countdown-status")
+        self.assertEqual(action["activation"], "explicit-target")
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
         self.assertEqual(action["source"], "release-gate")
         self.assertEqual(action["targets"], [{"kind": "issue", "number": 344, "item": "issue #344", "title": "release target"}])
+        self.assertIsNone(action["goal"]["milestone"])
+        self.assertEqual(
+            action["goal"]["release"],
+            {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "countdown_to_version": "1.2.3-beta.5",
+                "stability_score": 75,
+                "ready": False,
+                "passed_signals": 1,
+                "total_signals": 2,
+                "red_signals": ["required_checks_recent_green"],
+                "blocked_reasons": ["required_checks_recent_green", "min_interval"],
+                "source": "release-gate",
+            },
+        )
         self.assertEqual(action["from_version"], "1.2.3-beta.4")
         self.assertEqual(action["to_version"], "1.2.3-beta.5")
         self.assertEqual(action["stability_score"], 75)
@@ -799,6 +929,127 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["red_signals"], ["required_checks_recent_green"])
         self.assertEqual(action["blocked_reasons"], ["required_checks_recent_green", "min_interval"])
         self.assertFalse(has_dispatchable_action(actions))
+
+    def test_release_countdown_explicit_release_target_beats_default_goal_and_skips_milestone_read(self) -> None:
+        def scorer(_: Path) -> dict:
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 100,
+                "ready": True,
+                "signals": {"fresh_heartbeats": {"passed": True}},
+                "blocked_reasons": [],
+            }
+
+        actions = release_countdown_actions(
+            self.repo,
+            [
+                GhItem(
+                    "issue",
+                    344,
+                    "release target",
+                    (
+                        label_catalog.MANAGED,
+                        label_catalog.PHASE_IMPLEMENTING,
+                        label_catalog.HUMAN_AUTO,
+                        label_catalog.MILESTONE_RELEASE_TARGET,
+                    ),
+                )
+            ],
+            scorer=scorer,
+        )
+
+        self.assertEqual(actions[0]["activation"], "explicit-target")
+        self.assertEqual(actions[0]["targets"][0]["number"], 344)
+        self.assertIsNone(actions[0]["goal"]["milestone"])
+        self.assertFalse((self.repo / "gh-query-labels.log").exists())
+
+    def test_release_countdown_default_goal_uses_nearest_due_open_milestone(self) -> None:
+        plan = self.run_plan(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["activation"], "default-goal")
+        self.assertEqual(action["targets"], [])
+        self.assertEqual(action["goal"]["milestone"], {"number": 1, "title": "Soon", "due_on": "2026-06-15T00:00:00Z"})
+        self.assertEqual(action["goal"]["release"]["countdown_to_version"], action["to_version"])
+        self.assertEqual(action["goal"]["release"]["total_signals"], 8)
+        self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
+
+    def test_release_countdown_default_goal_falls_back_to_release_only_without_open_milestone(self) -> None:
+        old_env = os.environ.copy()
+        os.environ.pop("GH_REPO_SLUG", None)
+        os.environ.pop("GH_REPO", None)
+        os.environ.pop("GH_OWNER", None)
+        os.environ.pop("GH_REPO_NAME", None)
+        calls: list[Path] = []
+
+        def scorer(repo_root: Path) -> dict:
+            calls.append(repo_root)
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 50,
+                "ready": False,
+                "signals": {
+                    "fresh_heartbeats": {"passed": True},
+                    "required_checks_recent_green": {"passed": False},
+                },
+                "blocked_reasons": ["required_checks_recent_green"],
+            }
+
+        try:
+            actions = release_countdown_actions(self.repo, [], scorer=scorer)
+
+            self.assertEqual(calls, [self.repo])
+            self.assertEqual(len(actions), 1)
+            self.assertEqual(actions[0]["activation"], "default-goal")
+            self.assertIsNone(actions[0]["goal"]["milestone"])
+            self.assertEqual(actions[0]["goal"]["release"]["passed_signals"], 1)
+            self.assertEqual(actions[0]["goal"]["release"]["total_signals"], 2)
+        finally:
+            os.environ.clear()
+            os.environ.update(old_env)
+
+    def test_release_countdown_default_goal_is_status_only_and_non_dispatchable(self) -> None:
+        actions = release_countdown_actions(
+            self.repo,
+            [],
+            scorer=lambda _: {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.4",
+                "stability_score": 0,
+                "ready": False,
+                "signals": {},
+                "blocked_reasons": ["no_commits_since_last_release"],
+            },
+        )
+
+        self.assertEqual(actions[0]["kind"], "release-countdown")
+        self.assertTrue(actions[0]["status_only"])
+        self.assertTrue(actions[0]["no_lifecycle_authority"])
+        self.assertNotIn("command", actions[0])
+        self.assertNotIn("controller_action", actions[0])
+        self.assertFalse(has_dispatchable_action(actions))
+
+    def test_release_countdown_default_goal_scorer_fallback_runs_once(self) -> None:
+        calls: list[Path] = []
+
+        def scorer(repo_root: Path) -> dict:
+            calls.append(repo_root)
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 25,
+                "ready": False,
+                "signals": {},
+                "blocked_reasons": ["blocked"],
+            }
+
+        release_countdown_actions(self.repo, [], scorer=scorer)
+
+        self.assertEqual(calls, [self.repo])
 
     def test_release_countdown_status_does_not_change_existing_issue_order(self) -> None:
         def scorer(_: Path) -> dict:
@@ -844,7 +1095,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_audit_fallback_only_when_no_actionable_issue_or_pr_exists(self) -> None:
         plan, stdout = self.run_plan_with_stdout(fixture="empty")
 
-        self.assertEqual(plan["actions"], [])
+        self.assertEqual([action["kind"] for action in plan["actions"]], ["release-countdown"])
+        self.assertEqual(plan["actions"][0]["activation"], "default-goal")
+        self.assertIsNone(plan["actions"][0]["goal"]["milestone"])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
         self.assertIn("RECOMMEND:audit", stdout)
 
@@ -895,6 +1148,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             for kind in ("issue", "pr")
             for label in label_catalog.query_labels_for(label_catalog.MANAGED)
         ]
+        expected.append("api milestones")
         self.assertEqual(query_log, expected)
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
@@ -938,7 +1192,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_audit_fallback_when_latest_audit_is_not_none_zero(self) -> None:
         plan = self.run_plan()
 
-        self.assertEqual(plan["actions"], [])
+        self.assertEqual([action["kind"] for action in plan["actions"]], ["release-countdown"])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
 
     def test_wakeup_plan_does_not_require_local_maintainer_directive_directory(self) -> None:
@@ -961,7 +1215,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan()
 
-        self.assertEqual(plan["actions"], [])
+        self.assertEqual([action["kind"] for action in plan["actions"]], ["release-countdown"])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
 
     def test_daemon_health_ignores_solver_text_without_ts_heartbeat(self) -> None:
