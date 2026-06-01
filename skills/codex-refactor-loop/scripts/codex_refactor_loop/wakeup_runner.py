@@ -342,7 +342,30 @@ class WakeupRunner:
         return None
 
     def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:
-        return self._validate_safe_push(action)
+        marker = str(action.get("source_marker") or "")
+        if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+            return "publish_implementation_invalid_marker"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "publish_implementation_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "verified_pr_head",
+            "clean_scoped_diff",
+            "host_checks_green",
+            "single_linked_managed_issue",
+            "no_duplicate_open_pr",
+        ):
+            if required not in preconditions:
+                return f"publish_implementation_missing_precondition:{required}"
+        if action.get("target_kind") != "issue" or not isinstance(action.get("target_number"), int):
+            return "publish_implementation_target_missing"
+        if not self._live_target_has_managed_label("issue", int(action["target_number"])):
+            return "publish_implementation_target_not_managed"
+        duplicate_error = self._validate_no_duplicate_open_pr(action)
+        if duplicate_error:
+            return duplicate_error
+        return self._validate_implementation_worktree(action)
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
@@ -361,6 +384,41 @@ class WakeupRunner:
         body_file = self.ctx.repo_root / str(action.get("body_file") or "")
         if not body_file.is_file():
             return "release_rollup_body_missing"
+        return None
+
+    def _validate_no_duplicate_open_pr(self, action: Mapping[str, Any]) -> str | None:
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _safe_branch_name(head_ref):
+            return "publish_implementation_invalid_head_ref"
+        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number"])
+        if result.returncode != 0:
+            return "publish_implementation_duplicate_pr_unavailable"
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return "publish_implementation_duplicate_pr_invalid_json"
+        if not isinstance(payload, list):
+            return "publish_implementation_duplicate_pr_invalid_json"
+        if payload:
+            return "publish_implementation_duplicate_open_pr"
+        return None
+
+    def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _safe_branch_name(head_ref):
+            return "publish_implementation_invalid_head_ref"
+        worktree = Path(str(action.get("worktree") or ""))
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return "publish_implementation_worktree_missing"
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return "publish_implementation_worktree_outside_controller_owned_root"
+        diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if diff.returncode == 0:
+            return "publish_implementation_empty_scoped_diff"
+        if diff.returncode != 1:
+            return "publish_implementation_diff_unavailable"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:

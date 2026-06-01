@@ -37,6 +37,8 @@ class ControllerActionsTests(unittest.TestCase):
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
             'export INTEGRATION_BRANCH="canonical-integration"\n'
             'export REVIEW_BASE_BRANCH="canonical-review"\n'
+            'export BUILD_CMD="true"\n'
+            'export TEST_CMD="python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p \'test_*.py\'"\n'
             'export HOST_REFACTOR_COMMENT_POLICY="none"\n',
             encoding="utf-8",
         )
@@ -675,6 +677,107 @@ class ControllerActionsTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=AssertionError("git diff should not run")):
                 with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("safe_push should not run")):
                     self.assertEqual(3, self.actions.publish_worker_output_from_action({"head_ref": "refactor/iter77", "worktree": str(worktree)}))
+
+    def test_publish_implementation_output_commits_pushes_opens_pr_then_dispatches_reviewers(self) -> None:
+        worktree = self.tmp / ".worktrees" / "issue77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue77",
+            "worktree": str(worktree),
+            "title": "Implement issue 77",
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args[:2] == ["bash", "-lc"]:
+                sequence.append(f"host:{args[2]}")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
+                sequence.append("git:diff")
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                sequence.append("git:add")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+                sequence.append("git:commit")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        def fake_safe_push(*, branch: str, worktree: Path) -> int:
+            sequence.append("safe_push")
+            self.assertEqual("refactor/iter77-issue77", branch)
+            return 0
+
+        def fake_open(title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
+            sequence.append("open_pr")
+            self.assertEqual("Implement issue 77", title)
+            self.assertEqual("canonical-integration", base)
+            self.assertEqual("refactor/iter77-issue77", head)
+            self.assertIn("Closes #77", Path(body_file).read_text(encoding="utf-8"))
+            return 414, "https://github.com/owner/repo/pull/414"
+
+        def fake_dispatch(review_action: Mapping[str, object]) -> int:
+            sequence.append("dispatch_reviewers")
+            self.assertEqual({"target_kind": "PR", "target_number": 414}, dict(review_action))
+            return 0
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(
+            sequence,
+            [
+                "host:true",
+                "host:python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'",
+                "git:diff",
+                "git:add",
+                "git:commit",
+                "safe_push",
+                "open_pr",
+                "dispatch_reviewers",
+            ],
+        )
+
+    def test_publish_implementation_output_rejects_duplicate_pr_before_commit(self) -> None:
+        worktree = self.tmp / ".worktrees" / "issue77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout=json.dumps([{"number": 414}]), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "head_ref": "refactor/iter77-issue77",
+            "worktree": str(worktree),
+        }
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=AssertionError("commit should not run")):
+                    self.assertEqual(2, self.actions.publish_implementation_output(action))
 
     def test_dispatch_consensus_implementation_renders_prompt_from_durable_artifact_fields(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")

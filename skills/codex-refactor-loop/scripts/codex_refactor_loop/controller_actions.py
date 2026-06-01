@@ -583,7 +583,64 @@ class ControllerActions:
         return self.safe_push(branch=head_ref, worktree=worktree)
 
     def publish_implementation_output(self, action: Mapping[str, object]) -> int:
-        return self.publish_worker_output_from_action(action)
+        if not self._require_owner_or_return("publish-implementation-output", code=3):
+            return 3
+        marker = str(action.get("source_marker") or "")
+        if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+            sys.stderr.write("publish_implementation_output: requires clean IMPLEMENT_DONE:*:ok marker\n")
+            return 2
+        head_ref = str(action.get("head_ref") or "").strip()
+        worktree = Path(str(action.get("worktree") or ""))
+        if not _safe_branch_name(head_ref):
+            sys.stderr.write("publish_implementation_output: invalid head_ref\n")
+            return 2
+        if not worktree.is_absolute() or not worktree.is_dir():
+            sys.stderr.write("publish_implementation_output: worktree must be an existing absolute path\n")
+            return 2
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            sys.stderr.write("publish_implementation_output: worktree outside controller-owned .worktrees\n")
+            return 2
+        issue_target = self._normalize_lifecycle_target_or_block(
+            action.get("linked_issue") or action.get("target_number"),
+            kind="issue",
+            action="publish-implementation-output",
+            source="wakeup-runner-action",
+        )
+        if issue_target is None:
+            return 2
+        if action.get("target_kind") != "issue":
+            sys.stderr.write("publish_implementation_output: target_kind must be issue\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="issue", target=issue_target):
+            sys.stderr.write("publish_implementation_output: linked issue is not managed\n")
+            return 2
+        if self._open_pr_exists_for_head(head_ref):
+            sys.stderr.write("publish_implementation_output: duplicate open PR for head_ref\n")
+            return 2
+        if self._run_host_command("BUILD_CMD", worktree) != 0:
+            return 3
+        if self._run_host_command("TEST_CMD", worktree) != 0:
+            return 3
+        if self._git_in(worktree, ["diff", "--quiet"], check=False).returncode == 0:
+            sys.stderr.write("publish_implementation_output: empty scoped diff\n")
+            return 2
+        add = self._git_in(worktree, ["add", "-A"], check=False)
+        if add.returncode != 0:
+            return add.returncode
+        commit = self._git_in(worktree, ["commit", "-m", f"Implement issue #{issue_target}"], check=False)
+        if commit.returncode != 0:
+            if commit.stderr:
+                sys.stderr.write(commit.stderr)
+            return commit.returncode
+        pushed = self.safe_push(branch=head_ref, worktree=worktree)
+        if pushed != 0:
+            return pushed
+        body_file = self._implementation_pr_body_file(action, issue_target)
+        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -780,6 +837,50 @@ class ControllerActions:
             return False
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
+
+    def _open_pr_exists_for_head(self, head_ref: str) -> bool:
+        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+        if result.returncode != 0:
+            return True
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return True
+        return isinstance(payload, list) and len(payload) > 0
+
+    def _run_host_command(self, name: str, cwd: Path) -> int:
+        command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
+        if not command:
+            sys.stderr.write(f"publish_implementation_output: missing {name}\n")
+            return 2
+        result = subprocess.run(
+            ["bash", "-lc", command],
+            cwd=str(cwd),
+            env=self.ctx.env_for_subprocess(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.stdout:
+            print(result.stdout, end="")
+        if result.stderr:
+            sys.stderr.write(result.stderr)
+        return result.returncode
+
+    def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
+        raw = str(action.get("body_file") or "").strip()
+        if raw:
+            path = Path(raw)
+            return path if path.is_absolute() else self.ctx.repo_root / path
+        path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            f"## 🤖 Implement issue #{issue_target}\n\n"
+            f"Closes #{issue_target}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return path
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)

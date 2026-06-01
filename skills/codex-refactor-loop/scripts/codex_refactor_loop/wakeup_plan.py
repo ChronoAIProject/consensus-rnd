@@ -1499,13 +1499,6 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     }
 
 
-def _log_has_exit_marker(path: Path) -> bool:
-    try:
-        return any(line.startswith("EXIT=") for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
-    except OSError:
-        return False
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Emit a read-only prioritized wakeup plan as JSON.")
     parser.add_argument("--repo-root", help="Host repository root. Defaults to REPO_ROOT or cwd.")

@@ -103,9 +103,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         gh_labels: list[str] | None = None,
         gh_head_ref: str = "refactor/iter77-worker",
         git_diff_code: int = 0,
+        duplicate_prs: list[dict] | None = None,
         actions=None,
     ) -> list:
         def command_runner(command):
+            if command[:4] == ["gh", "pr", "list", "--state"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps(duplicate_prs or []), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "labels,body" in command:
                     live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]
@@ -244,6 +247,38 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "target_number": 77,
             "target": {"kind": "PR", "number": 77},
             "controller_action": "safe_push",
+            "no_generic_command": True,
+            "head_ref": "refactor/iter77-worker",
+            "worktree": str(worktree),
+        }
+        action.update(overrides)
+        return action
+
+    def implementation_output_action(self, **overrides) -> dict:
+        worktree = self.repo / ".worktrees" / "pr77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        log = self.repo / ".refactor-loop/logs/implement-issue77.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "verified_pr_head",
+                "clean_scoped_diff",
+                "host_checks_green",
+                "single_linked_managed_issue",
+                "no_duplicate_open_pr",
+            ],
+            "source_artifact": ".refactor-loop/logs/implement-issue77.log",
+            "source_marker": marker,
+            "target_kind": "issue",
+            "target_number": 77,
+            "target": {"kind": "issue", "number": 77},
+            "controller_action": "publish_implementation_output",
             "no_generic_command": True,
             "head_ref": "refactor/iter77-worker",
             "worktree": str(worktree),
@@ -566,12 +601,77 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         actions = FakeActions()
 
         results = self.run_result(
-            self.base_plan(self.worker_output_action(controller_action="publish_implementation_output")),
+            self.base_plan(self.implementation_output_action()),
+            git_diff_code=1,
             actions=actions,
         )
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_publish_implementation_output_blocks_before_helper_without_g3_preconditions(self) -> None:
+        cases = (
+            (
+                "bad-marker",
+                self.implementation_output_action(
+                    action_id="publish-implementation:bad-marker",
+                    source_marker="IMPLEMENT_DONE:issue-77:partial",
+                ),
+                "source_marker_missing",
+                1,
+                None,
+            ),
+            (
+                "missing-host-checks",
+                self.implementation_output_action(
+                    action_id="publish-implementation:missing-host-checks",
+                    preconditions=[
+                        "active_controller_owner",
+                        "clean_exit_source_marker",
+                        "verified_pr_head",
+                        "clean_scoped_diff",
+                        "single_linked_managed_issue",
+                        "no_duplicate_open_pr",
+                    ],
+                ),
+                "publish_implementation_missing_precondition:host_checks_green",
+                1,
+                None,
+            ),
+            (
+                "not-managed",
+                self.implementation_output_action(action_id="publish-implementation:not-managed"),
+                "publish_implementation_target_not_managed",
+                1,
+                None,
+            ),
+            (
+                "duplicate-pr",
+                self.implementation_output_action(action_id="publish-implementation:duplicate-pr"),
+                "publish_implementation_duplicate_open_pr",
+                1,
+                [{"number": 99}],
+            ),
+            (
+                "empty-diff",
+                self.implementation_output_action(action_id="publish-implementation:empty-diff"),
+                "publish_implementation_empty_scoped_diff",
+                0,
+                None,
+            ),
+        )
+        for name, action, reason, git_diff_code, duplicate_prs in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                gh_labels = [] if name == "not-managed" else None
+                results = self.run_result(
+                    self.base_plan(action),
+                    git_diff_code=git_diff_code,
+                    duplicate_prs=duplicate_prs,
+                    gh_labels=gh_labels,
+                    actions=actions,
+                )
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -602,6 +702,47 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "consensus_implementation_missing_precondition:durable_consensus_artifact",
             actions,
         )
+
+    def test_dispatch_consensus_implementation_blocks_invalid_durable_artifact(self) -> None:
+        outside = self.repo / "outside-consensus.md"
+        outside.write_text("META_JUDGE_DONE:consensus:structural\n", encoding="utf-8")
+        cases = [
+            (
+                "outside-runs",
+                lambda: self.consensus_action(
+                    action_id="consensus:outside-runs",
+                    consensus_artifact="outside-consensus.md",
+                    design_decision_path="outside-consensus.md",
+                ),
+                "consensus_artifact_outside_runs",
+            ),
+            (
+                "target-mismatch",
+                lambda: self.consensus_action(action_id="consensus:target-mismatch", target_number=21),
+                "consensus_artifact_target_mismatch",
+            ),
+            (
+                "identity-mismatch",
+                lambda: self.consensus_action(action_id="consensus:identity-mismatch", consensus_round=6),
+                "consensus_artifact_identity_mismatch",
+            ),
+            (
+                "missing-marker",
+                lambda: self.consensus_action(action_id="consensus:missing-marker"),
+                "consensus_artifact_marker_missing",
+            ),
+        ]
+        for name, action_factory, reason in cases:
+            with self.subTest(name=name):
+                action = action_factory()
+                if name == "missing-marker":
+                    (self.repo / ".refactor-loop/runs/phase9-issue20-r5-judge.md").write_text(
+                        "no consensus marker\n",
+                        encoding="utf-8",
+                    )
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
@@ -647,6 +788,40 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "open_release_rollup_pr_from_action")
+
+    def test_release_rollup_blocks_missing_event_fields_before_helper(self) -> None:
+        body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"
+        cases = (
+            (
+                "missing-precondition",
+                self.release_rollup_action(
+                    action_id="rollup:missing-precondition",
+                    preconditions=["active_controller_owner", "source_artifact_contains_evidence"],
+                ),
+                "release_rollup_missing_precondition:release_rollup_event",
+            ),
+            (
+                "missing-event",
+                self.release_rollup_action(action_id="rollup:missing-event", event=None),
+                "release_rollup_event_missing",
+            ),
+            (
+                "missing-sha",
+                self.release_rollup_action(action_id="rollup:missing-sha", event={"integration_sha": ""}),
+                "release_rollup_integration_sha_missing",
+            ),
+            (
+                "missing-body",
+                self.release_rollup_action(action_id="rollup:missing-body", body_file=".refactor-loop/runs/missing-rollup.md"),
+                "release_rollup_body_missing",
+            ),
+        )
+        self.assertTrue(body.is_file())
+        for name, action, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
