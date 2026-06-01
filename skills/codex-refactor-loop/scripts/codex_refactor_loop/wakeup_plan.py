@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
 import json
 import os
@@ -113,7 +114,7 @@ def load_host_workflow_projection(repo_root: Path) -> tuple[list[dict[str, Any]]
         return [], f"host workflow spec unavailable: {exc}"
     actions = [
         {
-            "priority": 7,
+            "priority": 8,
             "kind": "host-workflow-event",
             "item": event.name,
             "phase": event.stage,
@@ -845,20 +846,40 @@ def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any 
                 "title": item.title,
             }
         )
-    if not targets:
-        return []
+    activation = "explicit-target" if targets else "default-goal"
+    milestone = None if targets else _default_goal_milestone(repo_root)
 
-    score = (scorer or decide_release_artifact)(repo_root)
+    score = _release_countdown_score(repo_root, scorer=scorer)
     signals = score.get("signals") if isinstance(score.get("signals"), dict) else {}
     red_signals = [name for name, signal in signals.items() if isinstance(signal, dict) and not signal.get("passed")]
     blocked = score.get("blocked_reasons")
     blocked_reasons = [str(reason) for reason in blocked] if isinstance(blocked, list) else red_signals
+    release_goal = {
+        "from_version": score.get("from_version"),
+        "to_version": score.get("to_version"),
+        "countdown_to_version": score.get("to_version"),
+        "stability_score": score.get("stability_score"),
+        "ready": bool(score.get("ready")),
+        "passed_signals": sum(1 for signal in signals.values() if isinstance(signal, dict) and signal.get("passed")),
+        "total_signals": len(signals),
+        "red_signals": red_signals,
+        "blocked_reasons": blocked_reasons,
+        "source": "release-gate",
+    }
     return [
         {
-            "priority": 7,
+            "priority": 8,
             "kind": "release-countdown",
+            "phase": "publish",
+            "actor": "controller",
+            "route": "release-countdown-status",
             "status_only": True,
             "no_lifecycle_authority": True,
+            "activation": activation,
+            "goal": {
+                "milestone": milestone,
+                "release": release_goal,
+            },
             "targets": targets,
             "from_version": score.get("from_version"),
             "to_version": score.get("to_version"),
@@ -869,6 +890,40 @@ def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any 
             "source": "release-gate",
         }
     ]
+
+
+def _default_goal_milestone(repo_root: Path) -> dict[str, Any] | None:
+    slug = github_repo_slug()
+    if not slug:
+        return None
+    data = run_json(["gh", "api", f"repos/{slug}/milestones?state=open"], cwd=repo_root)
+    if not isinstance(data, list):
+        return None
+    milestones: list[dict[str, Any]] = []
+    for raw in data:
+        if not isinstance(raw, dict):
+            continue
+        try:
+            number = int(raw["number"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        due_on = raw.get("due_on")
+        milestones.append(
+            {
+                "number": number,
+                "title": str(raw.get("title") or ""),
+                "due_on": due_on if isinstance(due_on, str) and due_on else None,
+            }
+        )
+    if not milestones:
+        return None
+    return min(milestones, key=lambda item: (item["due_on"] is None, item["due_on"] or "", item["number"]))
+
+
+def _release_countdown_score(repo_root: Path, scorer: Any | None = None) -> dict[str, Any]:
+    with contextlib.redirect_stdout(sys.stderr):
+        score = (scorer or decide_release_artifact)(repo_root)
+    return score if isinstance(score, dict) else {}
 
 
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
@@ -1024,7 +1079,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 
     recommendation: str | None = None
-    if not actions:
+    non_status_actions = [action for action in actions if action.get("kind") != "release-countdown"]
+    if not non_status_actions:
         if concurrency["hard_gate"].get("reason") == "single_active_audit_in_flight":
             recommendation = "WAIT:single-active-audit"
         else:
