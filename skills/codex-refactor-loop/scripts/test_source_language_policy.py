@@ -60,6 +60,7 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py", "DOC_FORBIDDEN_CONTEXT", "static checker recognizes Chinese forbidden-context terms in docs"),
 )
 
 
@@ -81,7 +82,7 @@ def source_files(repo_root: Path = REPO_ROOT) -> list[Path]:
     for root in python_source_roots:
         if not root.exists():
             continue
-        files.extend(path for path in root.rglob("*.py") if path.name != "degradation.py")
+        files.extend(root.rglob("*.py"))
     return sorted(files)
 
 
@@ -226,6 +227,19 @@ def is_allowlisted(finding: Finding) -> bool:
 
 
 class SourceLanguagePolicyTests(unittest.TestCase):
+    def test_source_files_includes_degradation_checker(self) -> None:
+        expected = (
+            REPO_ROOT
+            / "skills"
+            / "codex-refactor-loop"
+            / "scripts"
+            / "codex_refactor_loop"
+            / "checks"
+            / "degradation.py"
+        )
+
+        self.assertIn(expected, source_files(REPO_ROOT))
+
     def test_scan_python_source_language_is_clean(self) -> None:
         findings = scan_python_source_language(REPO_ROOT)
         details = "\n".join(f"{f.relative_path}:{f.line}:{f.owner}:{f.reason}:{f.text}" for f in findings[:50])
