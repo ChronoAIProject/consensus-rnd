@@ -287,8 +287,43 @@ class WakeupRunner:
         return None
 
     def _validate_consensus_implementation(self, action: Mapping[str, Any]) -> str | None:
-        if "consensus_artifact_present" not in action.get("preconditions", []):
-            return "consensus_implementation_missing_precondition:consensus_artifact_present"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "durable_consensus_artifact" not in preconditions:
+            return "consensus_implementation_missing_precondition:durable_consensus_artifact"
+        artifact_error = self._validate_consensus_artifact(action)
+        if artifact_error:
+            return artifact_error
+        for field in ("design_decision_path", "scope_paths", "old_pattern", "new_principle", "cluster_id", "iteration"):
+            if not str(action.get(field) or "").strip():
+                return f"consensus_implementation_missing_field:{field}"
+        return None
+
+    def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
+        raw_artifact = str(action.get("consensus_artifact") or action.get("design_decision_path") or "")
+        if not raw_artifact:
+            return "consensus_artifact_missing"
+        try:
+            artifact = self.ctx.artifact_execution_path(raw_artifact)
+        except LoopContextError:
+            return "consensus_artifact_invalid_path"
+        try:
+            artifact.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
+        except ValueError:
+            return "consensus_artifact_outside_runs"
+        issue = action.get("consensus_issue")
+        round_no = action.get("consensus_round")
+        if not isinstance(issue, int) or not isinstance(round_no, int):
+            return "consensus_artifact_identity_missing"
+        if action.get("target_kind") != "issue" or action.get("target_number") != issue:
+            return "consensus_artifact_target_mismatch"
+        if f"issue{issue}" not in artifact.name or f"r{round_no}" not in artifact.name:
+            return "consensus_artifact_identity_mismatch"
+        try:
+            lines = artifact.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return "consensus_artifact_missing"
+        if not any(line.startswith("META_JUDGE_DONE:consensus") for line in lines[-10:]):
+            return "consensus_artifact_marker_missing"
         return None
 
     def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:

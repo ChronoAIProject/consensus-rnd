@@ -596,8 +596,27 @@ class ControllerActions:
         )
         if number is None:
             return 2
-        cluster_id = str(action.get("cluster_id") or f"issue-{number}")
-        iteration = str(action.get("iteration") or number)
+        if action.get("target_kind") != "issue":
+            sys.stderr.write("dispatch_consensus_implementation: target_kind must be issue\n")
+            return 2
+        required_fields = (
+            "consensus_artifact",
+            "design_decision_path",
+            "scope_paths",
+            "old_pattern",
+            "new_principle",
+            "cluster_id",
+            "iteration",
+        )
+        for field in required_fields:
+            if not str(action.get(field) or "").strip():
+                sys.stderr.write(f"dispatch_consensus_implementation: missing {field}\n")
+                return 2
+        if str(action.get("design_decision_path")) != str(action.get("consensus_artifact")):
+            sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
+            return 2
+        cluster_id = str(action["cluster_id"])
+        iteration = str(action["iteration"])
         worktree, branch = self.safe_worktree(iteration, cluster_id, self.integration_branch)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
@@ -611,10 +630,10 @@ class ControllerActions:
                 "WORKTREE_PATH": str(worktree),
                 "BRANCH": branch,
                 "WORK_UNIT_SOURCE_REF": str(action.get("source_ref") or f"gh-issue-{number}"),
-                "DESIGN_DECISION_PATH": str(action.get("design_decision_path") or ""),
-                "OLD_PATTERN": str(action.get("old_pattern") or ""),
-                "NEW_PRINCIPLE": str(action.get("new_principle") or ""),
-                "SCOPE_PATHS": str(action.get("scope_paths") or ""),
+                "DESIGN_DECISION_PATH": str(action["design_decision_path"]),
+                "OLD_PATTERN": str(action["old_pattern"]),
+                "NEW_PRINCIPLE": str(action["new_principle"]),
+                "SCOPE_PATHS": str(action["scope_paths"]),
                 "VERIFICATION_HINTS": str(action.get("verification_hints") or ""),
             },
         )

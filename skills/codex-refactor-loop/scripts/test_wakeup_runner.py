@@ -275,6 +275,42 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def consensus_action(self, **overrides) -> dict:
+        artifact = self.repo / ".refactor-loop/runs/phase9-issue20-r5-judge.md"
+        artifact.write_text(
+            "## PROJECT_RULES clause violated\nold\n\n"
+            "## Concrete plan\n- `skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py`: scope.\n\n"
+            "META_JUDGE_DONE:consensus:structural\n",
+            encoding="utf-8",
+        )
+        marker = "META_JUDGE_DONE:consensus:structural"
+        log = self.repo / ".refactor-loop/logs/phase9-issue20-r5-judge.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:phase9-issue20-r5-judge.log:META_JUDGE_DONE:consensus:structural",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present", "durable_consensus_artifact"],
+            "source_artifact": ".refactor-loop/logs/phase9-issue20-r5-judge.log",
+            "source_marker": marker,
+            "target_kind": "issue",
+            "target_number": 20,
+            "target": {"kind": "issue", "number": 20},
+            "controller_action": "dispatch_consensus_implementation",
+            "no_generic_command": True,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue20-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue20-r5-judge.md",
+            "consensus_issue": 20,
+            "consensus_round": 5,
+            "cluster_id": "issue-20",
+            "iteration": "20",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+        }
+        action.update(overrides)
+        return action
+
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
         results = self.run_result(self.base_plan(self.spawn_action()))
 
@@ -514,6 +550,36 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
+
+    def test_dispatch_consensus_implementation_blocks_precondition_string_only_projection(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(
+            action_id="consensus:string-only",
+            preconditions=["active_controller_owner", "live_open_target", "consensus_artifact_present"],
+            consensus_artifact="",
+            design_decision_path="",
+            scope_paths="",
+            old_pattern="",
+            new_principle="",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "consensus:string-only",
+            "consensus_implementation_missing_precondition:durable_consensus_artifact",
+            actions,
+        )
 
     def test_release_rollup_routes_to_named_helper_after_event_body_validation(self) -> None:
         actions = FakeActions()
