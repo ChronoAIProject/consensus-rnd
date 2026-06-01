@@ -90,7 +90,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         required = (
             "⟦AI:AUTO-LOOP⟧",
             "#status-and-escalation-templates",
-            "Controller = pure orchestration",
+            "Controller execution may be interactive or #396 `wakeup-runner`",
             "#bootstrap-details",
             "Consensus-rnd Phase bootstrap",
             "phase routing",

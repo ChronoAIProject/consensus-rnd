@@ -26,6 +26,7 @@ TARGET_ANCHORS = {
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
     "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
+    "wakeup-runner-396": "## Named runtime exception - wakeup-runner(per #396)",
     "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
@@ -454,6 +455,59 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("#238 是唯一 closed managed item phase-label reconciliation carveout", self.repo_rules)
         self.assertIn("checked-in `closed-label-reconciler`", self.repo_rules)
         self.assertIn("exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`", self.repo_rules)
+
+    def test_wakeup_runner_396_preserves_closed_projection_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "wakeup-runner-396")
+
+        for required in (
+            "#396",
+            "wakeup-runner",
+            "active-controller owner",
+            "`wakeup-plan` evidence-bound closed action projection",
+            'mode: "closed-action-projection"',
+            'apply_authority: "wakeup-runner-396-only"',
+            'runner_authority: "wakeup-runner-396"',
+            "clean `EXIT=0` source marker",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present`",
+            "OPEN/live GitHub state",
+            "release #322 preflight",
+            "helper-specific precondition",
+            "spawn codex",
+            "publish worker output",
+            "dispatch reviewers/fix/remote-ci worker",
+            "apply triage decision",
+            "merge PR under review truth table",
+            "close managed item from drop marker",
+            "publish release through #322",
+            "test_wakeup_runner.py",
+            "test_wakeup_runner_review_gate.py",
+            "test_wakeup_runner_release.py",
+            "test_wakeup_plan.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no arbitrary git/gh command",
+            "workflow tag/release",
+            "prompt-body decision",
+            "standalone authorization from `wakeup-plan`",
+            "argv/shell/cmd/commands/env/git/gh/executor/generic command fields",
+            "`ControllerTurnDecision`",
+            "controller-turn worker",
+            "private schema",
+            "active-active scheduler",
+            "`.refactor-loop/host.env` as host production SSOT",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
+        self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
+        self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
 
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "update-check-231")

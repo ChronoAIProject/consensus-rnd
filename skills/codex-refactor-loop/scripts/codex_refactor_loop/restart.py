@@ -30,6 +30,7 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
     ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
+    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")),
 )
 
 def restart_managed_daemon_names() -> tuple[str, ...]:
