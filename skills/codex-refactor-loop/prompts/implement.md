@@ -31,7 +31,7 @@ ${SCOPE_PATHS}
      Old pattern: ${OLD_PATTERN}
      New principle: ${NEW_PRINCIPLE}
    ```
-   3-5 行内；不是 changelog，是代码自我说明。
+   3-5 行内；不是 changelog，是代码自我说明。The marker identity is exactly `Refactor (iter${ITERATION}/${CLUSTER_ID})`; do not replace it with issue-only identities such as `Refactor (issue1525)`. If `${CLUSTER_ID}` is missing, use `cluster-issue${ISSUE_NUMBER}` and record that fallback in the implementation summary.
    - missing/empty/default/`none`：MUST NOT add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments. Put the rationale in the implementation summary and include exactly: `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`.
 3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型须注释 "refactor helper, no behavior change"。
 4. **测试**：按 `verification_hints` 跑测试，必须通过；测试不足必须补；任何 `sleep/delay` 轮询测试必须改为确定性断言。

@@ -56,10 +56,14 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
         self.assertIn("Old pattern: ${OLD_PATTERN}", implement)
         self.assertIn("New principle: ${NEW_PRINCIPLE}", implement)
         self.assertIn("源码注释必须 English-only", implement)
+        self.assertIn("do not replace it with issue-only identities", implement)
         self.assertIn("缺失任何一处且无合理 not-applicable 说明 → 标记缺陷", verify)
         self.assertIn("HOST_REFACTOR_COMMENT_POLICY=self-doc-comment", quality)
         self.assertIn("must be present and clear", quality)
+        self.assertIn("Non-canonical marker identity is a fixable process defect", quality)
         self.assertIn("Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}=self-doc-comment`", review_fix)
+        self.assertIn("non-canonical marker identity is (A) fixable in-scope", review_fix)
+        self.assertIn("Do not emit `FIX_BLOCKED:human-decision` for deterministic marker normalization", review_fix)
 
     def test_none_policy_forbids_refactor_history_source_comments(self) -> None:
         expected = (
@@ -108,11 +112,20 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
                 "reviewer-architect.md",
                 "reviewer-quality.md",
                 "review-fix.md",
+                "meta-reflector-stalled.md",
             )
         )
         for token in forbidden_unconditional:
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
+
+    def test_deterministic_marker_normalization_routes_to_fix(self) -> None:
+        reflector = read_prompt("meta-reflector-stalled.md")
+
+        self.assertIn("deterministic in-scope text normalization", reflector)
+        self.assertIn("non-canonical refactor marker identity", reflector)
+        self.assertIn("META_RESOLVED:retry-fix:<exact normalization instruction>", reflector)
+        self.assertIn("not human escalation", reflector)
 
     def test_invalid_refactor_comment_policy_fails_closed(self) -> None:
         for name in (
