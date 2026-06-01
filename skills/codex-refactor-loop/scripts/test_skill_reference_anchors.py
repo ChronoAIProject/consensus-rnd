@@ -235,6 +235,38 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+        section = section_after_anchor(self.skill, "large-issue-decomposition")
+        for needle in (
+            "IssueDecompositionPlan",
+            "parent_issue",
+            "source_consensus_artifact",
+            "body_artifact_path",
+            "parent_update",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "parent epic remains open/tracking",
+            "META_JUDGE_DONE:consensus:decompose",
+            "phase9-router-fallback",
+            "completed_marker_actions()",
+            "kind: completed-marker",
+            "peek",
+            "wakeup_plan.py` is not the #403 owner",
+            "must not project a decompose action/status",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "public issue factory",
+            "parent issue close",
+            "reopen",
+            "body edit",
+            "title edit",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
@@ -1172,6 +1204,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("if key in ledger:\n                continue", router)
         self.assertIn("prefix `phase9-triplet-suppression:`", self.skill)
         self.assertIn("reason exactly one of", self.skill)
+
+    def test_structured_consumption_boundary_contract_is_locked(self) -> None:
+        wakeup_plan = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        progress = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py").read_text(
+            encoding="utf-8"
+        )
+        for needle in (
+            '<a id="structured-consumption-boundary"></a>',
+            "final allowlisted standalone marker/verdict lines",
+            "artifact frontmatter",
+            "CLI JSON/action fields",
+            "artifact paths",
+            "EXIT!=0",
+            "stream disconnect/503",
+            "stuck/crash",
+            "missing/invalid structured artifact",
+            "router fallback",
+            "worker self-post failure",
+            "controller must not summarize or transcribe",
+            "Worker self-posts own full solver, judge, reviewer, or fix artifacts",
+            "REVIEW_ARCHITECT_PATH",
+            "REVIEW_TESTS_PATH",
+            "REVIEW_QUALITY_PATH",
+            "FIX_OUTPUT_PATH",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        self.assertIn("DONE_PREFIX_RE.fullmatch", wakeup_plan)
+        self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
+        self.assertIn("MARKER_RE.fullmatch", router)
+        self.assertNotIn("stripped.find(prefix)", router)
+        self.assertIn("Raw log tail is intentionally omitted", progress)
+        self.assertIn("异常诊断 tail (non-zero EXIT only)", progress)
 
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):

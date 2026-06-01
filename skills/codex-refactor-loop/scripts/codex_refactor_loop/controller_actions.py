@@ -18,6 +18,7 @@ from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .issue_decomposition import load_issue_decomposition_plan
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
 from .triage import apply_decision, load_triage_apply_config
@@ -382,6 +383,32 @@ class ControllerActions:
         if created.returncode != 0 or not match:
             raise RuntimeError(f"open_design_issue_with_labels: failed to extract issue num from: {output.strip()}")
         return int(match.group(1)), match.group(0)
+
+    def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
+        self._require_owner_or_raise("apply-issue-decomposition-plan")
+        plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        created: list[tuple[int, str]] = []
+        for child in plan.children:
+            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        parent_target = self._normalize_lifecycle_target_or_raise(
+            plan.parent_issue,
+            kind="issue",
+            action="apply-issue-decomposition-plan",
+            source="plan.parent_issue",
+        )
+        result = self.gh(
+            [
+                "issue",
+                "comment",
+                parent_target,
+                "--body-file",
+                plan.parent_comment_artifact_path,
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
+        return tuple(created)
 
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)

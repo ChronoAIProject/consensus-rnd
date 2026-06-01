@@ -86,6 +86,7 @@ verdict: propose | abstain | escalate
 - Tests to delete: <list of test files no longer needed>
 - LOC delta: -N (deletion-positive number)
 - Philosophy/CLAUDE.md/SPEC/Tier changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
+- If deletion is unsafe because the issue is merely too large, you may propose a bounded `IssueDecompositionPlan` artifact path instead of deletion; do not propose direct GitHub lifecycle calls, public issue factories, or any `wakeup_plan.py` decompose action/projection.
 
 ## Reverse-evidence (why this is safe to delete)
 - No public API breaks (verified by `git grep` on public surface)
@@ -131,6 +132,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - You do NOT write code; you propose a plan.
 - You do NOT delete code in this run; controller decides whether to act on your plan.
 - You do NOT commit / push / open PRs.
+- You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is part of the best deletion/collapse plan.

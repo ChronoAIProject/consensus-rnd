@@ -27,6 +27,7 @@ TARGET_ANCHORS = {
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
     "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
     "wakeup-runner-396": "## Named runtime exception - wakeup-runner(per #396)",
+    "issue-decomposition-403": "## Large issue decomposition(per #403)",
     "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
@@ -161,6 +162,60 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 for field in REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
+
+    def test_issue_403_decomposition_allowlist_excludes_wakeup_plan_public_projection(self) -> None:
+        entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        skill_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
+        claude = self.repo_rules
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        controller_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
+
+        for needle in (
+            "active-controller owner only",
+            "IssueDecompositionPlan",
+            "children:[{slug,title,scope,non_goals,body_artifact_path}]",
+            "parent_update:{comment_artifact_path}",
+            "catalog design issue label bundle",
+            "phase9-router fallback pending events",
+            "generic completed-marker projection",
+            "read-only `peek` pending-events tail",
+            "no daemon/worker issue creation",
+            "no public issue factory",
+            "no public CLI command",
+            "no wakeup-plan decompose projection",
+            "no parent issue close/reopen/body-title edit",
+            "no lifecycle_owner/lifecycle_authority/cmd/argv/shell/gh/git/close fields",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "#403 是唯一大 issue 分解 carveout",
+            "checked-in apply helper",
+            "`wakeup-plan` 不投射 issue-decomposition apply/status action",
+            "父 epic 保持 open/tracking",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn("apply_issue_decomposition_plan", controller_source)
+        for forbidden in (
+            "apply-decomposition",
+            "open-child-issue",
+            "issue-decomposition",
+            "decomposition-plan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(f'"{forbidden}"', cli_source)
+        for forbidden in (
+            "IssueDecompositionPlan",
+            "issue-decomposition",
+            "decomposition-plan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, wakeup_source)
+        self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)

@@ -160,6 +160,21 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("SOMETHING_DONE:surprise:payload", self.pending_events())
         self.assertEqual(self.ledger_entries(), [])
 
+    def test_decompose_consensus_marker_appends_fallback_pending_event_without_harness_intent(self) -> None:
+        self.write_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        self.router.tick()
+
+        pending = self.pending_events()
+        self.assertIn("phase9-router-fallback", pending)
+        self.assertIn("META_JUDGE_DONE:consensus:decompose", pending)
+        self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
+        self.assertNotIn("gh issue create", pending)
+        self.assertNotIn("gh issue edit", pending)
+        self.assertNotIn("gh issue close", pending)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_idempotency_spawns_once_per_dedupe_key(self) -> None:
         self.solver_triplet()
 
@@ -208,6 +223,43 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.write_log(
                 f"phase9-issue37-r4-{role}.log",
                 f"prompt template says SOLVER_DONE:<{role}>:<verdict>:<summary>",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_ignores_embedded_or_quoted_markers(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue37-r4-{role}.log",
+                f"> SOLVER_DONE:{role}:quoted:summary",
+                f"controller saw SOLVER_DONE:{role}:embedded:summary",
+                f"grep output: SOLVER_DONE:{role}:grep:summary",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_accepts_standalone_marker_and_diff_added_marker_only(self) -> None:
+        self.write_log("phase9-issue38-r4-minimal.log", "+SOLVER_DONE:minimal:ok:x")
+        self.write_log("phase9-issue38-r4-structural.log", "SOLVER_DONE:structural:ok:x")
+        self.write_log("phase9-issue38-r4-delete.log", "+ SOLVER_DONE:delete:ok:x")
+
+        self.router.tick()
+
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
+
+    def test_phase9_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue39-r4-{role}.log",
+                f"SOLVER_DONE:{role}:ok:x",
+                "later raw worker prose",
             )
 
         self.router.tick()
