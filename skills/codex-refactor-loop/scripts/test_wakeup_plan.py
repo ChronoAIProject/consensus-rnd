@@ -654,6 +654,39 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("review-gate-readiness", action)
         self.assertNotIn("review_gate_actions", action)
 
+    def test_meta_resolved_drop_completed_marker_projects_close_helper(self) -> None:
+        (self.logs / "judge-drop.log").write_text(
+            "target issue #53\n"
+            "META_RESOLVED:drop:no-action\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/judge-drop.log")
+        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 53)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 53})
+        self.assertNotIn("status_only", action)
+
+    def test_non_drop_meta_resolved_still_routes_design_consensus(self) -> None:
+        self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+
     def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 

@@ -414,6 +414,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--plan-file")
     parser.add_argument("--interval-seconds", type=int, default=60)
     args = parser.parse_args(list(argv) if argv is not None else None)
+    if args.plan_file and not args.dry_run:
+        sys.stderr.write("FATAL: --plan-file is dry-run/test-only and cannot apply side effects\n")
+        return 2
     try:
         ctx = LoopContext.load(repo_root=args.repo_root, read_only=bool(args.dry_run), allow_git_root_fallback=bool(args.dry_run), cwd=os.getcwd())
     except LoopContextError as exc:

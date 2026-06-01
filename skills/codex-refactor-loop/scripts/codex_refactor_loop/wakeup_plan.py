@@ -479,20 +479,22 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
             continue
+        target_text = f"{log_path.name} {marker} {' '.join(tail_lines(log_path, 40))}"
+        item = infer_item_from_text(target_text)
         action = {
             "priority": 3,
             "kind": "completed-marker",
             "action_id": f"completed-marker:{log_path.name}:{marker}",
-            "item": infer_item_from_text(f"{log_path.name} {marker}"),
+            "item": item,
             "phase": phase_from_marker(marker),
             "actor": actor_from_marker(marker),
             "marker": marker,
             "evidence": str(log_path.relative_to(repo_root)),
             "source_artifact": str(log_path.relative_to(repo_root)),
             "source_marker": marker,
-            "target_kind": _target_kind_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
-            "target_number": _target_number_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
-            "target": _target_from_item(infer_item_from_text(f"{log_path.name} {marker}")),
+            "target_kind": _target_kind_from_item(item),
+            "target_number": _target_number_from_item(item),
+            "target": _target_from_item(item),
             "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
             "controller_action": controller_action_from_marker(marker),
             "runner_authority": RUNNER_AUTHORITY,
@@ -1027,6 +1029,8 @@ def controller_action_from_marker(marker: str) -> str:
         return "dispatch_reviewers"
     if marker.startswith("TEST_ADD_DONE"):
         return "dispatch_ci_watch"
+    if marker.startswith("META_RESOLVED:drop:"):
+        return "close_managed_item_from_drop_marker"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
         return "dispatch_design_consensus"
     if marker.startswith("AUDIT_DONE"):

@@ -15,7 +15,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.wakeup_runner import WakeupRunner
+from codex_refactor_loop.wakeup_runner import WakeupRunner, main as wakeup_runner_main
 
 
 class FakeSupervisor:
@@ -269,6 +269,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertNotIn('".refactor-loop/host.env"', source)
         self.assertIn("LoopContext.load", source)
+
+    def test_plan_file_is_dry_run_only(self) -> None:
+        plan_path = self.repo / "plan.json"
+        plan_path.write_text(json.dumps(self.base_plan(self.spawn_action())), encoding="utf-8")
+
+        exit_code = wakeup_runner_main(["--once", "--repo-root", str(self.repo), "--plan-file", str(plan_path)])
+
+        self.assertEqual(exit_code, 2)
 
 
 if __name__ == "__main__":
