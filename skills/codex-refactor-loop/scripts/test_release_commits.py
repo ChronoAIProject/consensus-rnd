@@ -50,6 +50,17 @@ def run_cli(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def write_host_env(repo: Path, review_base: str = "dev", integration: str = "integration") -> None:
+    env_path = repo / ".refactor-loop" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        f"export REPO_ROOT={repo}\n"
+        f"export REVIEW_BASE_BRANCH={review_base}\n"
+        f"export INTEGRATION_BRANCH={integration}\n",
+        encoding="utf-8",
+    )
+
+
 def commit(repo: Path, message: str, body: str = "") -> str:
     target = repo / "file.txt"
     target.write_text(target.read_text(encoding="utf-8") + message + "\n", encoding="utf-8")
@@ -126,6 +137,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_overwrites_fixture_with_git_derived_commits(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             fixture_path = repo / ".refactor-loop/state/release-commits.json"
             fixture_path.parent.mkdir(parents=True, exist_ok=True)
             fixture_path.write_text(
@@ -145,6 +157,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_without_overwriting_fixture(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--target-ref", "missing-ref", "--no-fetch-tags")
@@ -156,6 +169,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_without_latest_release_tag(self) -> None:
         with init_repo(tag_release=False) as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--target-ref", "HEAD", "--no-fetch-tags")
@@ -167,6 +181,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_when_tag_fetch_fails(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--target-ref", "HEAD")
@@ -178,6 +193,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_when_git_log_fails(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--target-ref", "HEAD", "--since-ref", "missing-release-tag", "--no-fetch-tags")
@@ -189,6 +205,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_uses_manifest_version_tag_when_describe_finds_no_tag(self) -> None:
         with init_repo(tag_release=False) as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env(repo)
             (repo / "package.json").write_text(json.dumps({"version": "2.0.0"}), encoding="utf-8")
             (repo / ".version-bump.json").write_text(
                 json.dumps({"files": [{"path": "package.json", "field": "version"}]}),
@@ -222,6 +239,30 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
                 {"sha": feature_sha, "subject": "feat: fallback release", "body": ""},
                 data["commits"],
             )
+
+    def test_release_commits_cli_fails_closed_without_review_base_branch_env(self) -> None:
+        with init_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            fixture_path, fixture = write_stale_release_commits(repo)
+
+            result = run_cli(repo, "release-commits", "--no-fetch-tags")
+
+            self.assertEqual(1, result.returncode)
+            self.assertEqual(fixture, read_json(fixture_path))
+            self.assertIn("missing required host branch env: REVIEW_BASE_BRANCH", result.stderr)
+
+    def test_release_commits_cli_uses_host_review_base_when_target_ref_omitted(self) -> None:
+        with init_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            fix_sha = commit(repo, "fix: host review branch")
+            add_origin_ref(repo, "trunk-review")
+            write_host_env(repo, review_base="trunk-review")
+
+            result = run_cli(repo, "release-commits", "--no-fetch-tags")
+
+            self.assertEqual(0, result.returncode, result.stderr)
+            data = read_json(repo / ".refactor-loop/state/release-commits.json")
+            self.assertEqual(data, {"commits": [{"sha": fix_sha, "subject": "fix: host review branch", "body": ""}]})
 
     def test_release_gate_cli_does_not_rewrite_release_commits_artifact(self) -> None:
         with init_repo() as tmp:
@@ -261,6 +302,9 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
         self.assertIn("run_git", producer_source)
         self.assertIn("write_json", producer_source)
         self.assertIn("latest_release_ref", producer_source)
+        self.assertIn("missing required host branch env: REVIEW_BASE_BRANCH", producer_source)
+        self.assertNotIn("DEFAULT_REVIEW_BASE_BRANCH", producer_source)
+        self.assertNotIn("origin/dev", producer_source)
         self.assertIn('"release-commits": CommandSpec(', cli_source)
         self.assertIn('("read-git", "write-artifact")', cli_source)
         self.assertNotIn("release_gate_with_pre_gate_commits", cli_source)

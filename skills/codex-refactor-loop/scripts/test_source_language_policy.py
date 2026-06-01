@@ -58,6 +58,8 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "status lens renders existing Chinese labels and user-facing state"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/project_rules.py", "CANONICAL_BODY", "project-rules fixed point text is intentionally Chinese host-facing policy"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/project_rules.py", "OLD_CANONICAL_BODY", "legacy project-rules fixed point text is intentionally Chinese host-facing policy"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_label_reconciler.py", "comment", "#238 reconciliation refactor self-documents per review gate policy"),
+    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/closed_phase_labels.py", "comment", "#238 phase helper refactor self-documents per review gate policy"),
 )
 
 

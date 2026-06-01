@@ -33,7 +33,9 @@ class ControllerActionsTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
         (self.tmp / ".refactor-loop" / "state").mkdir(parents=True)
         (self.tmp / ".refactor-loop" / "host.env").write_text(
-            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
+            'export INTEGRATION_BRANCH="canonical-integration"\n'
+            'export REVIEW_BASE_BRANCH="canonical-review"\n',
             encoding="utf-8",
         )
         self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp))
@@ -61,8 +63,17 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
             actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
 
-        self.assertEqual("auto-refact-dev", actions.integration_branch)
-        self.assertEqual("dev", actions.review_base_branch)
+        self.assertEqual("canonical-integration", actions.integration_branch)
+        self.assertEqual("canonical-review", actions.review_base_branch)
+
+    def test_branch_configuration_fails_closed_without_canonical_env(self) -> None:
+        (self.tmp / ".refactor-loop" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "missing required host branch env"):
+                ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
 
     def test_branch_configuration_prefers_host_env_canonical_over_legacy_env(self) -> None:
         (self.tmp / ".refactor-loop" / "host.env").write_text(
@@ -94,7 +105,7 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
             git_calls.append(args)
             if args[:3] == ["ls-remote", "--exit-code", "--heads"]:
-                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/auto-refact-dev\n", stderr="")
+                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/canonical-integration\n", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(actions, "_require_owner_or_raise", return_value=None):
@@ -103,9 +114,9 @@ class ControllerActionsTests(unittest.TestCase):
                 actions.open_release_rollup_pr_from_pending_event(json.dumps({"integration_sha": "abc123"}), str(body))
 
         pr_creates = [call for call in gh_calls if call[:2] == ["pr", "create"]]
-        self.assertEqual("auto-refact-dev", pr_creates[0][pr_creates[0].index("--base") + 1])
-        self.assertEqual("dev", pr_creates[1][pr_creates[1].index("--base") + 1])
-        self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], git_calls)
+        self.assertEqual("canonical-integration", pr_creates[0][pr_creates[0].index("--base") + 1])
+        self.assertEqual("canonical-review", pr_creates[1][pr_creates[1].index("--base") + 1])
+        self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "canonical-integration"], git_calls)
         self.assertFalse(any("legacy-" in " ".join(call) for call in gh_calls + git_calls))
 
     def pending_events(self) -> str:
@@ -1160,6 +1171,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertNotIn("Refactor (issue-300)", merge_contract)
         self.assertNotIn("Old pattern", merge_contract)
         self.assertNotIn("New principle", merge_contract)
+        self.assertNotIn("stale draft PR state", text)
         self.assertIn('"pr", "create", "--draft"', text)
         self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
         self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)

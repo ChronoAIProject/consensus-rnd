@@ -320,10 +320,8 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
         self.assertIn("already-executed", self.record("rejected").read_text(encoding="utf-8"))
 
     def test_expected_branches_ignore_legacy_aliases(self) -> None:
-        self.assertEqual(
-            ("auto-refact-dev", "dev"),
-            self.executor._expected_branches({"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}),
-        )
+        with self.assertRaisesRegex(IntegrationSyncOperationError, "missing required host branch env"):
+            self.executor._expected_branches({"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"})
         self.assertEqual(
             ("canonical-integration", "canonical-review"),
             self.executor._expected_branches(
@@ -335,6 +333,21 @@ class PackagedIntegrationSyncExecutorTests(unittest.TestCase):
                 }
             ),
         )
+
+    def test_rejects_missing_expected_branch_env_before_git_fetch(self) -> None:
+        fake = FakeGit()
+
+        result = self.executor.execute(
+            self.operation(),
+            repo=self.repo,
+            worktree=self.worktree,
+            env={"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"},
+            command_runner=fake,
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("missing required host branch env", self.record("rejected").read_text(encoding="utf-8"))
+        self.assertFalse(fake.commands)
 
 
 class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
@@ -412,6 +425,8 @@ class PackagedIntegrationSyncSourceRegressionTests(unittest.TestCase):
             "REQUIRED_CHECKS",
             'get("INTEGRATION")',
             'get("REVIEW_BASE")',
+            "DEFAULT_INTEGRATION_BRANCH",
+            "DEFAULT_REVIEW_BASE_BRANCH",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, combined)

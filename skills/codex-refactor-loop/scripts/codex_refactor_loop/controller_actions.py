@@ -48,8 +48,20 @@ class ControllerActions:
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         merged_env = {**os.environ, **ctx.host_env}
-        self.integration_branch = merged_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"
-        self.review_base_branch = merged_env.get("REVIEW_BASE_BRANCH") or "dev"
+        self.integration_branch = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
+        self.review_base_branch = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
+        if ctx.host_env and ctx.gh_repo_slug:
+            self._require_branch_config()
+
+    def _require_branch_config(self) -> tuple[str, str]:
+        missing = [
+            name
+            for name, value in (("INTEGRATION_BRANCH", self.integration_branch), ("REVIEW_BASE_BRANCH", self.review_base_branch))
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(f"missing required host branch env: {', '.join(missing)}")
+        return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         full = ["gh", *(str(a) for a in args)]
@@ -294,7 +306,7 @@ class ControllerActions:
 
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
         self._require_owner_or_raise("open-pr")
-        base = base or self.integration_branch
+        base = base or self._require_branch_config()[0]
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
@@ -403,8 +415,9 @@ class ControllerActions:
         if not isinstance(event, dict):
             raise RuntimeError("open_release_rollup_pr_from_pending_event: event must be a JSON object")
 
-        integration_branch = str(event.get("integration_branch") or self.integration_branch).strip()
-        review_base_branch = str(event.get("review_base_branch") or self.review_base_branch).strip()
+        default_integration, default_review_base = self._require_branch_config()
+        integration_branch = str(event.get("integration_branch") or default_integration).strip()
+        review_base_branch = str(event.get("review_base_branch") or default_review_base).strip()
         integration_sha = str(event.get("integration_sha") or "").strip()
         if not integration_branch or not review_base_branch or not integration_sha:
             raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")

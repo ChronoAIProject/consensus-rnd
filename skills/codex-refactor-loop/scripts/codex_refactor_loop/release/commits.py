@@ -13,7 +13,6 @@ from ..state import read_json, write_json
 from .gate import inject_host_env, repo_root_from_env
 
 
-DEFAULT_REVIEW_BASE_BRANCH = "dev"
 RELEASE_COMMITS_RELATIVE_PATH = Path(".refactor-loop/state/release-commits.json")
 
 
@@ -96,10 +95,10 @@ def resolve_target_ref(repo_root: Path, target_ref: str | None, review_base_bran
         if git_ref_exists(repo_root, target_ref):
             return target_ref
         raise RuntimeError(f"target ref does not exist: {target_ref}")
-    return resolve_review_ref(
-        repo_root,
-        review_base_branch or os.environ.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH,
-    )
+    branch = str(review_base_branch or os.environ.get("REVIEW_BASE_BRANCH", "")).strip()
+    if not branch:
+        raise RuntimeError("missing required host branch env: REVIEW_BASE_BRANCH")
+    return resolve_review_ref(repo_root, branch)
 
 
 def resolve_review_ref(repo_root: Path, review_base_branch: str) -> str:
@@ -166,8 +165,7 @@ def parse_git_log(raw: str) -> list[dict[str, str]]:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    default_target = f"origin/{os.environ.get('REVIEW_BASE_BRANCH', DEFAULT_REVIEW_BASE_BRANCH)}"
-    parser.add_argument("--target-ref", default=default_target)
+    parser.add_argument("--target-ref")
     parser.add_argument("--since-ref")
     parser.add_argument("--no-fetch-tags", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -175,13 +173,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         repo_root = repo_root_from_env()
         host_env = inject_host_env(repo_root)
-        target_ref = args.target_ref
-        if argv is not None and "--target-ref" not in argv and host_env.get("REVIEW_BASE_BRANCH"):
-            target_ref = f"origin/{host_env['REVIEW_BASE_BRANCH']}"
+        review_base_branch = str(host_env.get("REVIEW_BASE_BRANCH", "")).strip()
+        if not review_base_branch:
+            raise RuntimeError("missing required host branch env: REVIEW_BASE_BRANCH")
         output = write_release_commits(
             repo_root,
+            review_base_branch=review_base_branch,
             since_ref=args.since_ref,
-            target_ref=target_ref,
+            target_ref=args.target_ref,
             fetch_tags=not args.no_fetch_tags,
         )
         print(f"release commits artifact written: {output.relative_to(repo_root)}")
