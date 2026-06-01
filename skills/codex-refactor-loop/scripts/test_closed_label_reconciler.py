@@ -336,6 +336,107 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
 
+    def test_run_once_fail_softs_missing_canonical_label_and_continues(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        bad_plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=31,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        good_plan = ClosedPhaseLabelPlan(
+            kind="pr",
+            number=32,
+            terminal_phase=labels.PHASE_MERGED,
+            add_labels=(labels.PHASE_MERGED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="merged-pr",
+        )
+        applied: list[int] = []
+        verified: list[int] = []
+
+        def fake_apply(plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
+            applied.append(plan.number)
+            if plan.number == 31:
+                raise RuntimeError("canonical label missing: crnd:phase:closed")
+            return plan
+
+        def fake_verify(plan: ClosedPhaseLabelPlan) -> None:
+            verified.append(plan.number)
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "collect_plans", return_value=(bad_plan, good_plan)):
+                with mock.patch.object(reconciler, "apply_plan", side_effect=fake_apply):
+                    with mock.patch.object(reconciler, "verify_plan", side_effect=fake_verify):
+                        with mock.patch("builtins.print") as print_mock:
+                            self.assertEqual(0, reconciler.run_once())
+
+        self.assertEqual([31, 32], applied)
+        self.assertEqual([32], verified)
+        print_mock.assert_any_call(
+            "closed-label-reconciler failed: issue #31 "
+            f"terminal={labels.PHASE_CLOSED} error=canonical label missing: crnd:phase:closed"
+        )
+        print_mock.assert_any_call(
+            "closed-label-reconciler applied: pr #32 "
+            f"terminal={labels.PHASE_MERGED} add={labels.PHASE_MERGED} "
+            f"remove={labels.PHASE_REVIEWING} reason=merged-pr"
+        )
+
+    def test_run_once_fail_softs_post_edit_invariant_and_continues(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        bad_plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=33,
+            terminal_phase=labels.PHASE_CLOSED,
+            add_labels=(labels.PHASE_CLOSED,),
+            remove_labels=(labels.PHASE_REVIEWING,),
+            reason="closed-no-merged-evidence",
+        )
+        good_plan = ClosedPhaseLabelPlan(
+            kind="issue",
+            number=34,
+            terminal_phase=labels.PHASE_MERGED,
+            add_labels=(labels.PHASE_MERGED,),
+            remove_labels=(labels.PHASE_CLOSED,),
+            reason="linked-merged-pr",
+        )
+        applied: list[int] = []
+        verified: list[int] = []
+
+        def fake_apply(plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
+            applied.append(plan.number)
+            return plan
+
+        def fake_verify(plan: ClosedPhaseLabelPlan) -> None:
+            verified.append(plan.number)
+            if plan.number == 33:
+                raise RuntimeError("post-edit label invariant failed for issue #33: terminal phase missing")
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "collect_plans", return_value=(bad_plan, good_plan)):
+                with mock.patch.object(reconciler, "apply_plan", side_effect=fake_apply):
+                    with mock.patch.object(reconciler, "verify_plan", side_effect=fake_verify):
+                        with mock.patch("builtins.print") as print_mock:
+                            self.assertEqual(0, reconciler.run_once())
+
+        self.assertEqual([33, 34], applied)
+        self.assertEqual([33, 34], verified)
+        print_mock.assert_any_call(
+            "closed-label-reconciler failed: issue #33 "
+            f"terminal={labels.PHASE_CLOSED} "
+            "error=post-edit label invariant failed for issue #33: terminal phase missing"
+        )
+        print_mock.assert_any_call(
+            "closed-label-reconciler applied: issue #34 "
+            f"terminal={labels.PHASE_MERGED} add={labels.PHASE_MERGED} "
+            f"remove={labels.PHASE_CLOSED} reason=linked-merged-pr"
+        )
+
     def test_apply_rechecks_live_closed_state_and_skips_stale_open_item(self) -> None:
         plan = ClosedPhaseLabelPlan(
             kind="issue",

@@ -44,12 +44,18 @@ class ClosedLabelReconciler:
             if self.dry_run:
                 print(_format_plan(plan, dry_run=True))
                 continue
-            live_plan = self.apply_plan(plan)
-            if live_plan is None:
-                print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
+            failure_plan = plan
+            try:
+                live_plan = self.apply_plan(plan)
+                if live_plan is None:
+                    print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
+                    continue
+                failure_plan = live_plan
+                self.verify_plan(live_plan)
+                print(_format_plan(live_plan, dry_run=False))
+            except RuntimeError as exc:
+                print(_format_failure(failure_plan, exc))
                 continue
-            self.verify_plan(live_plan)
-            print(_format_plan(live_plan, dry_run=False))
         if changed == 0:
             print("closed-label-reconciler noop: no closed managed phase-label drift")
         return 0
@@ -177,6 +183,13 @@ def _format_plan(plan: ClosedPhaseLabelPlan, *, dry_run: bool) -> str:
         f"closed-label-reconciler {prefix}: {plan.kind} #{plan.number} "
         f"terminal={plan.terminal_phase} add={','.join(plan.add_labels) or '-'} "
         f"remove={','.join(plan.remove_labels) or '-'} reason={plan.reason}"
+    )
+
+
+def _format_failure(plan: ClosedPhaseLabelPlan, exc: RuntimeError) -> str:
+    return (
+        f"closed-label-reconciler failed: {plan.kind} #{plan.number} "
+        f"terminal={plan.terminal_phase} error={exc}"
     )
 
 
