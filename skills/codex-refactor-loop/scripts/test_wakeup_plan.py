@@ -637,7 +637,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
 
     def test_review_done_completed_marker_is_closed_projection_not_standalone_policy(self) -> None:
-        self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:approve")
+        head_sha = "a" * 40
+        (self.logs / "review-pr123-architect-r1.log").write_text(
+            f"head_sha: {head_sha}\n"
+            "body\n"
+            "REVIEW_DONE:123:architect:approve\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
 
         plan = self.run_plan()
 
@@ -647,6 +654,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["actor"], "controller-or-fix-codex")
         self.assertEqual(action["item"], "PR #123")
         self.assertEqual(action["controller_action"], "review_gate")
+        self.assertEqual(action["head_sha"], head_sha)
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
         self.assertNotIn("consensus", action)

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -54,37 +55,53 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def write_review(self, role: str, verdict: str) -> None:
-        (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r1.md").write_text(
-            f"---\nverdict: {verdict}\n---\n",
+    def write_review(self, role: str, verdict: str, *, head_sha: str = "a" * 40, round_number: int = 1, exit_zero: bool = True) -> None:
+        (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r{round_number}.md").write_text(
+            f"---\nverdict: {verdict}\n---\nhead_sha: {head_sha}\nREVIEW_DONE:12:{role}:{verdict}\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/logs" / f"review-pr12-{role}-r{round_number}.log").write_text(
+            f"head_sha: {head_sha}\nREVIEW_DONE:12:{role}:{verdict}\n" + ("EXIT=0\n" if exit_zero else "EXIT=1\n"),
             encoding="utf-8",
         )
 
-    def action(self) -> dict:
+    def action(self, **overrides) -> dict:
         log = self.repo / ".refactor-loop/logs/review-pr12-architect-r1.log"
-        log.write_text("REVIEW_DONE:12:architect:approve\nEXIT=0\n", encoding="utf-8")
-        return {
+        log.write_text(f"head_sha: {'a' * 40}\nREVIEW_DONE:12:architect:approve\nEXIT=0\n", encoding="utf-8")
+        action = {
             "kind": "completed-marker",
             "action_id": "review:12",
             "runner_authority": "wakeup-runner-396",
             "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target"],
             "source_artifact": ".refactor-loop/logs/review-pr12-architect-r1.log",
             "source_marker": "REVIEW_DONE:12:architect:approve",
+            "head_sha": "a" * 40,
             "target_kind": "PR",
             "target_number": 12,
             "target": {"kind": "PR", "number": 12},
             "controller_action": "review_gate",
             "no_generic_command": True,
         }
+        action.update(overrides)
+        return action
 
-    def run_action(self) -> object:
+    def run_action(self, action: dict | None = None, *, live_head: str = "a" * 40, check_status: str = "completed", check_conclusion: str = "success", mergeable: str = "MERGEABLE") -> object:
         def command_runner(command):
             if command[:3] == ["gh", "pr", "view"] and ".state" in command:
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
             if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
-                return subprocess.CompletedProcess(command, 0, "head-sha\n", "")
+                return subprocess.CompletedProcess(command, 0, live_head + "\n", "")
+            if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": False}), "")
+            if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
+                return subprocess.CompletedProcess(command, 0, json.dumps({"head": {"sha": live_head}}), "")
+            if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
+                payload = {"check_runs": [{"name": "ci", "status": check_status, "conclusion": check_conclusion}]}
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
+        if action is None:
+            action = self.action()
         runner = WakeupRunner(
             self.ctx,
             plan_loader=lambda _repo: {
@@ -92,7 +109,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
                 "mode": "closed-action-projection",
                 "apply_authority": "wakeup-runner-396-only",
                 "no_lifecycle_authority": True,
-                "actions": [self.action()],
+                "actions": [action],
             },
             actions=self.actions,
             supervisor=self.supervisor,
@@ -130,7 +147,88 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         result = self.run_action()
 
         self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "review_gate_missing_reviewers")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_reviewers")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_missing_action_reviewed_head_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+        action = self.action()
+        action.pop("head_sha")
+
+        result = self.run_action(action)
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_action_reviewed_head_sha")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_stale_reviewed_head_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve", head_sha="b" * 40)
+        self.write_review("tests", "approve", head_sha="b" * 40)
+        self.write_review("quality", "comment", head_sha="b" * 40)
+
+        result = self.run_action(self.action(head_sha="b" * 40), live_head="a" * 40)
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:stale_head_sha")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
+        for status, conclusion, reason in (
+            ("queued", "", "ci_pending"),
+            ("completed", "failure", "ci_failed"),
+        ):
+            with self.subTest(reason=reason):
+                self.actions.merged.clear()
+                self.write_review("architect", "approve")
+                self.write_review("tests", "approve")
+                self.write_review("quality", "comment")
+
+                result = self.run_action(self.action(action_id=f"review:12:{reason}"), check_status=status, check_conclusion=conclusion)
+
+                self.assertEqual(result.status, "blocked")
+                self.assertEqual(result.reason, f"WAIT_OR_REDISPATCH:{reason}")
+                self.assertEqual(self.actions.merged, [])
+
+    def test_non_mergeable_pr_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+
+        result = self.run_action(mergeable="CONFLICTING")
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:non_mergeable_pr")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_invalid_reviewer_evidence_waits_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        (self.repo / ".refactor-loop/runs" / "review-pr12-quality-r1.md").write_text(
+            "---\nverdict: banana\n---\nhead_sha: " + "a" * 40 + "\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/logs" / "review-pr12-quality-r1.log").write_text(
+            "head_sha: " + "a" * 40 + "\nREVIEW_DONE:12:quality:banana\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_verdict:quality")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_reviewer_artifact_without_clean_exit_waits_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment", exit_zero=False)
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:missing_exit_zero:quality")
         self.assertEqual(self.actions.merged, [])
 
 

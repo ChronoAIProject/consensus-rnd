@@ -16,6 +16,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .heartbeat import DaemonHeartbeatLease
+from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
@@ -27,6 +28,9 @@ APPLY_AUTHORITY = "wakeup-runner-396-only"
 FORBIDDEN_ACTION_FIELDS = {"argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor"}
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
+REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
+REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
+REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
@@ -41,6 +45,17 @@ SUPPORTED_CONTROLLER_ACTIONS = {
 class RunnerResult:
     action_id: str
     status: str
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class ReviewEvidence:
+    role: str
+    round_number: int
+    verdict: str
+    head_sha: str
+    source: str
+    valid: bool = True
     reason: str = ""
 
 
@@ -210,19 +225,11 @@ class WakeupRunner:
         return None
 
     def _validate_review_gate(self, action: Mapping[str, Any]) -> str | None:
-        target = action.get("target_number")
-        if not isinstance(target, int):
-            return "review_target_missing"
-        gate = self._review_gate(target)
-        if not gate["all_present"]:
-            return "review_gate_missing_reviewers"
-        if gate["reject"] > 0:
+        decision = self._review_gate_decision(action)
+        if decision["decision"] in {"MERGE", "MERGE_WITH_COMMENTS", "FIX"}:
             return None
-        if gate["approve"] < 1:
-            return "review_gate_no_approval"
-        if str(gate.get("head_sha") or "") and str(action.get("head_sha") or gate.get("head_sha")) != gate["head_sha"]:
-            return "review_gate_stale_head"
-        return None
+        reason = str(decision["reason"] or "")
+        return str(decision["decision"]) + (f":{reason}" if reason else "")
 
     def _validate_release(self, action: Mapping[str, Any]) -> str | None:
         candidate_path = str(action.get("candidate_path") or ".refactor-loop/state/release-candidate.json")
@@ -244,10 +251,15 @@ class WakeupRunner:
         if controller_action == "close_managed_item_from_drop_marker":
             return self.actions.close_managed_item_from_drop_marker(dict(action))
         if controller_action == "review_gate":
-            gate = self._review_gate(int(action["target_number"]))
-            if gate["reject"] > 0:
+            decision = self._review_gate_decision(action)
+            if decision["decision"] == "FIX":
                 return self._dispatch_review_fix(int(action["target_number"]))
-            return self.actions.merge_pr(str(action["target_number"]))
+            if decision["decision"] in {"MERGE", "MERGE_WITH_COMMENTS"}:
+                return self.actions.merge_pr(str(action["target_number"]))
+            self._append_pending_event(
+                f"WAKEUP_RUNNER_REVIEW_GATE_WAIT:{action.get('target_number')}:{decision['decision']}:{decision['reason']}"
+            )
+            return 3
         if controller_action == "publish_release_candidate":
             result = self.actions.publish_release_candidate(
                 candidate_path=str(action.get("candidate_path") or ".refactor-loop/state/release-candidate.json"),
@@ -276,40 +288,176 @@ class WakeupRunner:
             stall=5400,
         )
 
+    def _review_gate_decision(self, action: Mapping[str, Any]) -> dict[str, Any]:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "review_target_missing"}
+        gate = self._review_gate(target)
+        if gate["invalid"]:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": f"invalid_reviewer_evidence:{gate['invalid'][0]}", "gate": gate}
+        if not gate["all_present"]:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_reviewers", "gate": gate}
+        action_head = str(action.get("head_sha") or "").strip()
+        reviewed_head = str(gate.get("reviewed_head_sha") or "").strip()
+        live_head = str(gate.get("live_head_sha") or "").strip()
+        if not action_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_action_reviewed_head_sha", "gate": gate}
+        if not reviewed_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_reviewer_head_sha", "gate": gate}
+        if action_head != reviewed_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "reviewed_head_mismatch", "gate": gate}
+        if not live_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
+        if reviewed_head != live_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "stale_head_sha", "gate": gate}
+        ci_error = self._review_gate_ci_error(target, live_head)
+        if ci_error:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": ci_error, "gate": gate}
+        mergeability_error = self._review_gate_mergeability_error(target)
+        if mergeability_error:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}
+        if gate["reject"] > 0:
+            return {"decision": "FIX", "reason": "", "gate": gate}
+        if gate["approve"] < 1:
+            return {"decision": "WAIT_EXPLICIT_APPROVAL", "reason": "no_approval", "gate": gate}
+        decision = "MERGE" if gate["comment"] == 0 else "MERGE_WITH_COMMENTS"
+        return {"decision": decision, "reason": "", "gate": gate}
+
     def _review_gate(self, pr_number: int) -> dict[str, Any]:
-        verdicts: dict[str, str] = {}
-        for role in REQUIRED_REVIEW_ROLES:
-            verdict = self._review_verdict_from_artifact(pr_number, role) or self._review_verdict_from_log(pr_number, role)
-            if verdict:
-                verdicts[role] = verdict
+        evidences = self._latest_review_round(pr_number)
+        verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
+        invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
+        head_values = {evidence.head_sha for evidence in evidences.values() if evidence.valid and evidence.head_sha}
+        if len(head_values) > 1:
+            invalid.append("duplicate_reviewed_head_sha")
+        reviewed_head_sha = next(iter(head_values), "") if len(head_values) == 1 else ""
         return {
             "verdicts": verdicts,
             "all_present": all(role in verdicts for role in REQUIRED_REVIEW_ROLES),
             "approve": sum(1 for verdict in verdicts.values() if verdict == "approve"),
             "reject": sum(1 for verdict in verdicts.values() if verdict == "reject"),
             "comment": sum(1 for verdict in verdicts.values() if verdict == "comment"),
-            "head_sha": self._pr_head_sha(pr_number),
+            "reviewed_head_sha": reviewed_head_sha,
+            "live_head_sha": self._pr_head_sha(pr_number),
+            "invalid": invalid,
         }
 
-    def _review_verdict_from_artifact(self, pr_number: int, role: str) -> str | None:
-        pattern = f"review-pr{pr_number}-{role}-r*.md"
-        candidates = sorted(self.ctx.paths.runs.glob(pattern), key=lambda path: path.stat().st_mtime, reverse=True)
-        for path in candidates:
-            text = path.read_text(encoding="utf-8", errors="replace")
-            match = re.search(r"(?m)^verdict:\s*(approve|comment|reject)\s*$", text)
-            if match:
-                return match.group(1)
+    def _latest_review_round(self, pr_number: int) -> dict[str, ReviewEvidence]:
+        by_round: dict[int, dict[str, ReviewEvidence]] = {}
+        for evidence in self._review_evidences(pr_number):
+            round_bucket = by_round.setdefault(evidence.round_number, {})
+            existing = round_bucket.get(evidence.role)
+            if existing is not None:
+                round_bucket[evidence.role] = ReviewEvidence(
+                    role=evidence.role,
+                    round_number=evidence.round_number,
+                    verdict="",
+                    head_sha="",
+                    source=evidence.source,
+                    valid=False,
+                    reason=f"duplicate_reviewer_evidence:{evidence.role}",
+                )
+                continue
+            round_bucket[evidence.role] = evidence
+        if not by_round:
+            return {}
+        return by_round[max(by_round)]
+
+    def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
+        evidences: list[ReviewEvidence] = []
+        artifact_keys: set[tuple[str, int]] = set()
+        for path in sorted(self.ctx.paths.runs.glob(f"review-pr{pr_number}-*-r*.md")):
+            match = REVIEW_ARTIFACT_RE.match(path.name)
+            if not match or int(match.group(1)) != pr_number:
+                continue
+            role = match.group(2)
+            round_number = int(match.group(3))
+            evidence = self._review_evidence_from_artifact(path, pr_number, role, round_number)
+            evidences.append(evidence)
+            artifact_keys.add((role, round_number))
+        for path in sorted(self.ctx.paths.logs.glob(f"review-pr{pr_number}-*-r*.log")):
+            match = REVIEW_LOG_RE.match(path.name)
+            if not match or int(match.group(1)) != pr_number:
+                continue
+            role = match.group(2)
+            round_number = int(match.group(3))
+            if (role, round_number) in artifact_keys:
+                continue
+            evidences.append(self._review_evidence_from_log(path, pr_number, role, round_number))
+        return evidences
+
+    def _review_evidence_from_artifact(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        companion_log = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        if not _log_has_exit_zero(companion_log):
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+        verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
+        if len(verdict_lines) != 1:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict_count:{role}")
+        verdict = verdict_lines[0]
+        if verdict not in {"approve", "comment", "reject"}:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict:{role}")
+        marker_count = sum(
+            1
+            for line in text.splitlines()
+            if REVIEW_DONE_RE.match(line.strip()) and line.strip().split(":")[1:3] == [str(pr_number), role]
+        )
+        if marker_count > 1:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"duplicate_review_marker:{role}")
+        return ReviewEvidence(role, round_number, verdict, _extract_review_head_sha(text), str(path))
+
+    def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not _log_has_exit_zero(path):
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
+        verdicts: list[str] = []
+        invalid_marker = False
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped.startswith("REVIEW_DONE:"):
+                continue
+            match = REVIEW_DONE_RE.match(stripped)
+            if not match:
+                invalid_marker = True
+                continue
+            if match.group(1) == str(pr_number) and match.group(2) == role:
+                verdicts.append(match.group(3))
+        if invalid_marker:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
+        if len(verdicts) != 1:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
+        return ReviewEvidence(role, round_number, verdicts[0], _extract_review_head_sha(text), str(path))
+
+    def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
+        if not self.ctx.gh_repo_slug:
+            return "missing_gh_repo_slug"
+        status = PrChecksProjection(runner=self.command_runner).check_pr(self.ctx.gh_repo_slug, pr_number)
+        if not status.ok:
+            return f"ci_unavailable:{status.reason or 'unknown'}"
+        if status.head_sha != live_head_sha:
+            return "ci_stale_head_sha"
+        if not status.runs:
+            return "ci_missing_checks"
+        if any(run.bucket == "pending" for run in status.runs):
+            return "ci_pending"
+        if any(run.bucket == "fail" for run in status.runs):
+            return "ci_failed"
         return None
 
-    def _review_verdict_from_log(self, pr_number: int, role: str) -> str | None:
-        candidates = sorted(self.ctx.paths.logs.glob(f"review-pr{pr_number}-{role}*.log"), key=lambda path: path.stat().st_mtime, reverse=True)
-        for path in candidates:
-            if not _log_has_exit_zero(path):
-                continue
-            for line in reversed(path.read_text(encoding="utf-8", errors="replace").splitlines()):
-                match = REVIEW_DONE_RE.match(line.strip())
-                if match and match.group(1) == str(pr_number) and match.group(2) == role:
-                    return match.group(3)
+    def _review_gate_mergeability_error(self, pr_number: int) -> str | None:
+        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "mergeable,isDraft"])
+        if result.returncode != 0:
+            return "mergeability_unavailable"
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return "mergeability_invalid_json"
+        if not isinstance(payload, dict):
+            return "mergeability_invalid_json"
+        if payload.get("isDraft") is True:
+            return "pr_draft"
+        if payload.get("mergeable") != "MERGEABLE":
+            return "non_mergeable_pr"
         return None
 
     def _next_fix_round(self, pr_number: int) -> int:
@@ -397,6 +545,11 @@ def _log_has_exit_zero(path: Path) -> bool:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _extract_review_head_sha(text: str) -> str:
+    match = REVIEW_HEAD_RE.search(text)
+    return match.group(1) if match else ""
 
 
 def load_plan_file(path: Path) -> Mapping[str, Any]:

@@ -90,6 +90,7 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_BLOCKED: "blocked",
     label_catalog.PHASE_MERGED: "merged",
 }
+REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 
 
 @dataclass(frozen=True)
@@ -503,6 +504,10 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
         route = route_from_marker(marker)
         if route:
             action["route"] = route
+        if marker.startswith("REVIEW_DONE"):
+            head_sha = _reviewed_head_sha_from_log(log_path)
+            if head_sha:
+                action["head_sha"] = head_sha
         actions.append(action)
     return actions
 
@@ -515,6 +520,15 @@ def infer_item_from_text(text: str) -> str | None:
     if issue:
         return f"issue #{next(group for group in issue.groups() if group)}"
     return None
+
+
+def _reviewed_head_sha_from_log(log_path: Path) -> str:
+    try:
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    match = REVIEW_HEAD_RE.search(text)
+    return match.group(1) if match else ""
 
 
 def phase_from_marker(marker: str) -> str:
