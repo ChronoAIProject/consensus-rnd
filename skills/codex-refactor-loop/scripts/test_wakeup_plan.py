@@ -660,6 +660,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         self.assertIsNone(marker_from_completed_log(invalid))
 
+        stale_marker = self.logs / "implement-issue22.log"
+        stale_marker.write_text(
+            "IMPLEMENT_DONE:ok\n"
+            "later raw worker prose\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        self.assertIsNone(marker_from_completed_log(stale_marker))
+
+        valid.unlink()
+        invalid.unlink()
+        actions = self.run_plan()["actions"]
+        self.assertFalse([action for action in actions if action["kind"] == "completed-marker"])
+
     def test_completed_marker_payload_does_not_include_raw_log_tail(self) -> None:
         (self.logs / "implement-worker.log").write_text(
             "target issue #999 in raw prose only\n"

@@ -306,18 +306,25 @@ class Phase9Router:
             identity = self._identity_from_path(log_path)
             if identity is None:
                 continue
-            tail = self._read_tail_lines(log_path, self.MARKER_TAIL_LINES)
-            for line in tail:
-                marker = self._extract_marker(line)
-                if marker is None:
+            marker = self._final_marker_from_path(log_path)
+            if marker is None:
+                continue
+            role: str | None = identity.actor
+            if marker.startswith("SOLVER_DONE:"):
+                role = self._role_from_solver_marker(marker)
+                if role not in self._solver_roles():
                     continue
-                role: str | None = identity.actor
-                if marker.startswith("SOLVER_DONE:"):
-                    role = self._role_from_solver_marker(marker)
-                    if role not in self._solver_roles():
-                        continue
-                markers.append(Marker(marker, log_path, identity.issue, identity.round, role))
+            markers.append(Marker(marker, log_path, identity.issue, identity.round, role))
         return markers
+
+    def _final_marker_from_path(self, path: Path) -> str | None:
+        tail = self._read_tail_lines(path, 5)
+        for line in reversed(tail):
+            stripped = line.strip()
+            if stripped == "EXIT=0" or not stripped:
+                continue
+            return self._extract_marker(stripped)
+        return None
 
     def _extract_marker(self, line: str) -> str | None:
         stripped = line.strip()
@@ -573,13 +580,8 @@ class Phase9Router:
     def _collect_markers_from_path(self, path: Path) -> list[str]:
         if not path.exists():
             return []
-        tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
-        markers: list[str] = []
-        for line in tail:
-            marker = self._extract_marker(line)
-            if marker:
-                markers.append(marker)
-        return markers
+        marker = self._final_marker_from_path(path)
+        return [marker] if marker else []
 
     def _solver_verdict_text(self, marker: str) -> str:
         parts = marker.split(":", 3)

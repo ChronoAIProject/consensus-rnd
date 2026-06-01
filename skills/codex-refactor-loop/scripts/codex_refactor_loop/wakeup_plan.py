@@ -458,7 +458,7 @@ def tail_lines(path: Path, count: int) -> list[str]:
 def marker_from_completed_log(log_path: Path) -> str | None:
     if not is_clean_exit(log_path):
         return None
-    for line in reversed(tail_lines(log_path, 40)):
+    for line in reversed(tail_lines(log_path, 5)):
         stripped = line.strip()
         if stripped == "EXIT=0" or not stripped:
             continue
@@ -466,6 +466,7 @@ def marker_from_completed_log(log_path: Path) -> str | None:
             continue
         if DONE_PREFIX_RE.fullmatch(stripped):
             return stripped
+        return None
     return None
 
 

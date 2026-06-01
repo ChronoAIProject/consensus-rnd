@@ -254,6 +254,19 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(len(self.commands), 1)
         self.assertEqual(self.ledger_entries()[0]["key"], "38-4-judge")
 
+    def test_phase9_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue39-r4-{role}.log",
+                f"SOLVER_DONE:{role}:ok:x",
+                "later raw worker prose",
+            )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_solver_triplet_dispatches_meta_judge_once(self) -> None:
         self.solver_triplet(issue=37, round_no=4)
 

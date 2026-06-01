@@ -234,6 +234,19 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(self.ledger_entries(), [])
         self.assertEqual(self.pending_events(), "")
 
+    def test_package_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+        self.write_log(
+            "phase9-issue160-r1-judge.log",
+            "META_JUDGE_DONE:converge:round-2",
+            "later raw judge prose",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
+
     def test_package_router_converge_dispatches_stalled_reflector_when_predicate_holds(self) -> None:
         # Refactor (issue-304): Old: package smoke used a fresh stalled judge
         # marker. New: r3 converge plus unchanged solver history renders the
