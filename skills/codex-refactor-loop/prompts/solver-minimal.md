@@ -66,6 +66,7 @@ verdict: propose | abstain | escalate
 - Tests to add/modify: <list>
 - Governance/ruleset change (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Migration path: <single-step; "no migration needed" is also valid>
+- If the minimum viable answer is to split a too-large issue, propose an `IssueDecompositionPlan` artifact boundary with child body artifacts only; do not propose direct GitHub lifecycle calls, worker issue creation, public issue factory commands, or any `wakeup_plan.py` decompose action/projection.
 
 ## Risks
 - <bullet list of what this framing trades off>
@@ -111,6 +112,7 @@ Refactor (iter6/issue-118):
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
+- You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - You do NOT dispatch other codexes.
 - "Minimal" means smallest code change; it does NOT mean "ignore architectural correctness". If the minimum is still wrong, abstain.

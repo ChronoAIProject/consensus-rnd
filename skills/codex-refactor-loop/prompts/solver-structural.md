@@ -73,6 +73,7 @@ verdict: propose | abstain | escalate
 - Schema/protocol changes (if any): <identifier + compatibility impact + schema/protocol file>
 - Governance/ruleset changes (if any): <exact file/clause + from X to Y + why worth it + why consensus can hold, OR "none">
 - Runtime cost: <latency estimate, allocation estimate>
+- If the structural answer is issue decomposition, use the controller-private `IssueDecompositionPlan` boundary and child body artifacts; forbid solver/judge/worker GitHub lifecycle, public issue factories, and any `wakeup_plan.py` decompose action/projection.
 
 ## Risks
 - <what this framing trades off vs the minimal-change framing>
@@ -113,6 +114,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
+- You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - You propose abstractions only when justified by ≥2 concrete callers OR by an explicit named extension point. "Future-proofing" alone is not justification.
 - Philosophy is evolvable: if the best structural answer changes CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary, produce that as a concrete plan instead of escalating.

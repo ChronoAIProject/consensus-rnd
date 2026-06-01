@@ -40,6 +40,7 @@ ${SCOPE_PATHS}
 7. **Schema/protocol**：如 `${HOST_PROTO_POLICY}` 非空或 diff / `$PROJECT_RULES` 显示改了 schema/protocol 文件，按 host policy 本地重生成/验证并确认编译通过。
 8. **构建命令**：使用 host 配置的 `$BUILD_CMD` / `$TEST_CMD`。它们是 shell command string,必须在已 source `host.env` 的 shell 中用 `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` 或等价 shell invocation 执行。
 9. **Host production SSOT boundary**：不得把 host tools config、branch topology、machine paths、durable ledger authority 或 host artifacts 写回 `.refactor-loop/` 或 `.refactor-loop/host.env`。`.refactor-loop/` 只承载 skill-private runtime/cache/log/state/prompt/run artifacts；生产事实必须走 host-owned config/rules/artifacts。
+10. **IssueDecompositionPlan boundary**：若 consensus 要求 issue decomposition,implement worker 只能落地/验证 controller-private `IssueDecompositionPlan` schema、child body artifact contract、checked-in active-controller apply helper 和文档/测试；不得调用或建议 worker GitHub lifecycle,不得新增 public issue factory,不得让 `wakeup_plan.py` 投射 decompose action/status,不得 close/reopen/edit parent issue。
 
 ## 流程
 
