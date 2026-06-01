@@ -333,9 +333,6 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
-        # Refactor (iter372/issue-372):
-        #   Old pattern: wakeup_plan.py 硬编码检查 .refactor-loop/host.env 存在性,缺失即报 bootstrap-missing,即使 CONSENSUS_RND_HOST_ENV 才是当前 locator。
-        #   New principle: collapse wakeup-plan bootstrap host-env check into LoopContext/HostEnvLocator:删 wakeup_plan.py 内硬编码 host-env 存在性块,pending_bootstrap_actions 接收 ctx/host_env_available;无 host env 时 reason 指向 host-owned 注入文件;保留 legacy 仅 compatibility read;不改 CLAUDE.md/SKILL philosophy。
         env = os.environ.copy()
         env.update(
             {

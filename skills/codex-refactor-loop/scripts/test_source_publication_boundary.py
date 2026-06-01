@@ -16,9 +16,6 @@ class SourcePublicationBoundaryContract(unittest.TestCase):
     # Refactor (iter317/issue-317):
     #   Old pattern: tracked .claude/settings.json 把本地 Claude Code 运行时配置混进发布产物(违反发布产物边界 / 本地运行时不当事实源)
     #   New principle: 删 tracked .claude/settings.json + .gitignore 忽略;独立 test_source_publication_boundary.py git-backed contract test 作唯一 guard;不扩 skill-degradation 权限
-    # Refactor (iter374/issue-374):
-    #   Old pattern: 仓库 track .claude/skills -> ../skills symlink(在 .claude-plugin 之外),形成第二个 Claude 专属 skills 入口,偏离各平台共享 skills/ 靠根 manifest 指向的约定。
-    #   New principle: 删除 tracked .claude/skills 改为 ignored local setup:git rm .claude/skills;.gitignore 改为忽略 .claude/skills(本机 setup 不发布);README 补 1 句本地可手动建 symlink;反转 source-publication-boundary 测试断言 git check-ignore .claude/skills 成功且 git ls-files .claude 不含 skills。根 .claude-plugin manifest 仍为唯一 Claude 入口。不改 CLAUDE.md philosophy。
     def run_git(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             ["git", *args],
