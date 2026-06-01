@@ -236,6 +236,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(len(self.supervisor.calls), 1)
         self.assertEqual(self.supervisor.calls[0]["stdin"], self.repo / ".refactor-loop/prompts/task.md")
 
+    def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
+        actions = FakeActions()
+        action = self.spawn_action(action_id="spawn:target-log-exists")
+        Path(action["log"]).write_text("existing worker\n", encoding="utf-8")
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "spawn:target-log-exists", "target_log_exists", actions)
+
     def test_forbidden_fields_fail_closed(self) -> None:
         results = self.run_result(self.base_plan(self.spawn_action(argv=["gh", "pr", "merge"])))
 

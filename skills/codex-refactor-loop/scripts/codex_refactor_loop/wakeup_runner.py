@@ -188,12 +188,23 @@ class WakeupRunner:
         controller_action = str(action.get("controller_action") or "")
         if controller_action not in SUPPORTED_CONTROLLER_ACTIONS:
             return f"unsupported_controller_action:{controller_action or 'missing'}"
+        if controller_action == "spawn_codex_harness_background":
+            return self._validate_spawn_codex(action)
         if controller_action == "safe_push":
             return self._validate_safe_push(action)
         if controller_action == "review_gate":
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        return None
+
+    def _validate_spawn_codex(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "target_log_absent" not in preconditions:
+            return "spawn_missing_precondition:target_log_absent"
+        log = Path(str(action.get("log") or ""))
+        if log.exists():
+            return "target_log_exists"
         return None
 
     def _validate_safe_push(self, action: Mapping[str, Any]) -> str | None:
