@@ -18,16 +18,9 @@ from typing import Iterable
 from ..context import LoopContext
 
 
-# Refactor (issue160-p3-checks):
-#   Old: scripts/check_skill_degradation.py owned the static issue #66 drift
-#   gate as a top-level script.
-#   New: expose the same read-only checks from codex_refactor_loop.checks while
-#   preserving every marker, required check name, authorization path, and narrow
-#   allowlist literal for future CLI import.
-# Refactor (impl/issue235-delete-downstream-watch): Old pattern: the checker required downstream runtime watch hooks and alert surfaces. New principle: skill-degradation is source-repo CI/release validation only; downstream hosts have no runtime watch surface.
-# Refactor (iter259/issue-259):
-#   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1)
-#   New principle: degradation.py 内加私有 not-source-repo guard:无 source sentinels 时 rc=0 + reason not-source-repo;source repo candidate 仍 fail-closed;不新增 SourceRepoValidationContext,不改 manifest.py
+# Static checks preserve the existing CLI markers, check names, authorization
+# paths, and narrow allowlist literals while staying read-only.
+# Non-source repo roots are accepted as no-op plugin-installed host roots.
 
 CHECK_NAME = "skill-degradation"
 SKILL_RELATIVE = Path("skills/codex-refactor-loop")
@@ -262,9 +255,8 @@ class SkillDriftChecker:
         )
 
     def single_file_reference_contract_present(self) -> list[Finding]:
-        # Refactor (iter319/issue-319):
-        #   Old pattern: CLAUDE.md 把『重型参考必须物理拆 REFERENCE.md』当宪法,audit 据此反复把单文件 SKILL.md 判 R02/R03 违规
-        #   New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的 canonical reference surface;衡量标准从『必须物理拆文件』改为『事实源唯一+owner surface 清楚+anchor 可验证』
+        # The single-file reference contract intentionally allows intra-file
+        # anchors when they are the skill's clearest reference surface.
         return self.require_markers(
             SKILL_RELATIVE / "SKILL.md",
             REQUIRED_DETAILED_REFERENCE_MARKERS,
@@ -275,9 +267,8 @@ class SkillDriftChecker:
         return self.require_markers(CI_WORKFLOW, REQUIRED_CI_MARKERS, "ci-job")
 
     def release_workflow_required_check_present(self) -> list[Finding]:
-        # Refactor (iter217/issue-217):
-        #   Old pattern: release.yml 保留 tag/release mutation,无法可靠读本地 runtime fact,绕过 release-gate decider-only 边界
-        #   New principle: controller-only publication:新增 ReleasePublishPreflight+ReleasePublisher 替代 workflow 发布权;release.yml 降为 read-only preview(contents:read,禁 gh release create)。严格按 plan 'Concrete plan' 逐条改。
+        # Release workflow validation keeps publication authority out of the
+        # read-only workflow preview path.
         findings = self.require_markers(RELEASE_WORKFLOW, REQUIRED_RELEASE_MARKERS, "release-workflow")
         text = self.read(RELEASE_WORKFLOW)
         if "push:" in text:
