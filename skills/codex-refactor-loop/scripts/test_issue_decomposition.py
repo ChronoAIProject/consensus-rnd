@@ -7,7 +7,9 @@ import json
 import shutil
 import tempfile
 import unittest
+import inspect
 from pathlib import Path
+from typing import Any, Callable
 
 import sys
 
@@ -15,6 +17,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import issue_decomposition
 from codex_refactor_loop.issue_decomposition import IssueDecompositionError, load_issue_decomposition_plan
 
 
@@ -70,7 +73,7 @@ class IssueDecompositionTests(unittest.TestCase):
         )
         return path
 
-    def write_plan(self, payload: dict) -> Path:
+    def write_plan(self, payload: Any) -> Path:
         path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
         path.write_text(json.dumps(payload), encoding="utf-8")
         return path
@@ -106,6 +109,12 @@ class IssueDecompositionTests(unittest.TestCase):
             ],
             "parent_update": {"comment_artifact_path": self.write_parent_comment()},
         }
+
+    def assert_invalid_payload(self, mutate: Callable[[dict], None], pattern: str) -> None:
+        payload = self.valid_payload()
+        mutate(payload)
+        with self.assertRaisesRegex(IssueDecompositionError, pattern):
+            load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
 
     def test_valid_plan_requires_parent_at_least_two_children_body_artifacts_parent_link_and_final_sentinel(self) -> None:
         plan = load_issue_decomposition_plan(self.ctx, self.write_plan(self.valid_payload()))
@@ -150,6 +159,177 @@ class IssueDecompositionTests(unittest.TestCase):
         payload["children"] = payload["children"][:1]
         with self.assertRaisesRegex(IssueDecompositionError, "at least two children"):
             load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+    def test_rejects_non_object_plan_and_missing_or_unsupported_exact_schema_fields(self) -> None:
+        with self.assertRaisesRegex(IssueDecompositionError, "must be a JSON object"):
+            load_issue_decomposition_plan(self.ctx, self.write_plan(["not", "an", "object"]))
+
+        for field in ("schema", "parent_issue", "source_consensus_artifact", "children", "parent_update"):
+            with self.subTest(missing_plan_field=field):
+                self.assert_invalid_payload(lambda payload, field=field: payload.pop(field), f"plan missing required fields: {field}")
+
+        self.assert_invalid_payload(lambda payload: payload.__setitem__("extra", "forbidden"), "plan contains unsupported fields: extra")
+        self.assert_invalid_payload(lambda payload: payload.__setitem__("schema", "OtherPlan"), "schema must be IssueDecompositionPlan")
+
+    def test_rejects_invalid_parent_issue_and_missing_source_consensus_artifact(self) -> None:
+        for value in (0, -1, "0", "abc", "", None):
+            with self.subTest(parent_issue=value):
+                self.assert_invalid_payload(
+                    lambda payload, value=value: payload.__setitem__("parent_issue", value),
+                    "parent_issue must be a positive GitHub issue number",
+                )
+
+        self.assert_invalid_payload(
+            lambda payload: payload.__setitem__("source_consensus_artifact", ".refactor-loop/runs/missing-consensus.md"),
+            "source_consensus_artifact artifact not found",
+        )
+
+    def test_rejects_parent_update_shape_fields_path_and_missing_parent_link(self) -> None:
+        self.assert_invalid_payload(lambda payload: payload.__setitem__("parent_update", []), "parent_update must be an object")
+        self.assert_invalid_payload(
+            lambda payload: payload["parent_update"].__setitem__("extra", "forbidden"),
+            "parent_update contains unsupported fields: extra",
+        )
+        self.assert_invalid_payload(
+            lambda payload: payload["parent_update"].pop("comment_artifact_path"),
+            "parent_update missing required fields: comment_artifact_path",
+        )
+        self.assert_invalid_payload(
+            lambda payload: payload["parent_update"].__setitem__("comment_artifact_path", ".refactor-loop/runs/missing-parent-comment.md"),
+            "parent_update.comment_artifact_path artifact not found",
+        )
+        self.assert_invalid_payload(
+            lambda payload: payload["parent_update"].__setitem__("comment_artifact_path", self.write_parent_comment(parent=404)),
+            "parent comment .* missing parent issue link",
+        )
+
+    def test_rejects_child_shape_exact_fields_slug_and_required_text(self) -> None:
+        self.assert_invalid_payload(lambda payload: payload["children"].__setitem__(0, "not-an-object"), r"children\[0\] must be an object")
+        self.assert_invalid_payload(
+            lambda payload: payload["children"][0].__setitem__("extra", "forbidden"),
+            r"children\[0\] contains unsupported fields: extra",
+        )
+        for field in ("slug", "title", "scope", "non_goals", "body_artifact_path"):
+            with self.subTest(missing_child_field=field):
+                self.assert_invalid_payload(
+                    lambda payload, field=field: payload["children"][0].pop(field),
+                    rf"children\[0\] missing required fields: {field}",
+                )
+
+        invalid_slugs = ("FirstChild", "first_child", "-first", "first-", "first--child", "1-first")
+        for slug in invalid_slugs:
+            with self.subTest(slug=slug):
+                self.assert_invalid_payload(
+                    lambda payload, slug=slug: payload["children"][0].__setitem__("slug", slug),
+                    r"children\[0\]\.slug must be kebab-case",
+                )
+        self.assert_invalid_payload(
+            lambda payload: payload["children"][0].__setitem__("slug", ""),
+            r"children\[0\]\.slug must be non-empty text",
+        )
+        self.assert_invalid_payload(
+            lambda payload: payload["children"][1].__setitem__("slug", payload["children"][0]["slug"]),
+            "duplicate child slug: first-child",
+        )
+        for field in ("title", "scope", "non_goals"):
+            with self.subTest(blank_child_text=field):
+                self.assert_invalid_payload(
+                    lambda payload, field=field: payload["children"][0].__setitem__(field, " "),
+                    rf"children\[0\]\.{field} must be non-empty text",
+                )
+        self.assert_invalid_payload(
+            lambda payload: payload["children"][0].__setitem__("body_artifact_path", ".refactor-loop/runs/missing-child.md"),
+            r"children\[0\]\.body_artifact_path artifact not found",
+        )
+
+    def test_rejects_child_body_without_sentinel_or_self_contained_inline_authority(self) -> None:
+        def remove_sentinel(payload: dict) -> None:
+            body_path = self.tmp / payload["children"][0]["body_artifact_path"]
+            body_path.write_text(body_path.read_text(encoding="utf-8").replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8")
+
+        def remove_inline_artifact(payload: dict) -> None:
+            body_path = self.tmp / payload["children"][0]["body_artifact_path"]
+            body_path.write_text(
+                "\n".join(
+                    [
+                        "## child issue",
+                        "",
+                        "Parent issue: #403",
+                        f"Source consensus artifact: {Path(self.consensus).name}",
+                        "Scope: First bounded scope",
+                        "Non-goals: No parent lifecycle mutation",
+                        "",
+                        "⟦AI:AUTO-LOOP⟧",
+                        "",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+        self.assert_invalid_payload(remove_sentinel, "child body invalid: .*missing final sentinel")
+        self.assert_invalid_payload(remove_inline_artifact, "child body invalid: .*authority body must inline raw artifact text")
+
+    def test_rejects_child_body_missing_required_parent_source_scope_or_non_goals_metadata(self) -> None:
+        metadata_cases = (
+            ("Parent issue: #403", "Parent issue: #404", "Parent issue: #403"),
+            (Path(self.consensus).name, "different-consensus.md", Path(self.consensus).name),
+            ("Scope: First bounded scope", "Scope: Wrong scope", "First bounded scope"),
+            ("Non-goals: No parent lifecycle mutation", "Non-goals: Wrong non-goal", "No parent lifecycle mutation"),
+        )
+        for old, new, expected in metadata_cases:
+            with self.subTest(missing_metadata=expected):
+                def mutate(payload: dict, old: str = old, new: str = new) -> None:
+                    body_path = self.tmp / payload["children"][0]["body_artifact_path"]
+                    body_path.write_text(body_path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+
+                self.assert_invalid_payload(mutate, f"missing required self-contained metadata: {expected}")
+
+    def test_source_regression_issue_decomposition_validator_keeps_exact_schema_and_body_guards(self) -> None:
+        self.assertEqual(
+            issue_decomposition.PLAN_FIELDS,
+            {"schema", "parent_issue", "source_consensus_artifact", "children", "parent_update"},
+        )
+        self.assertEqual(
+            issue_decomposition.CHILD_FIELDS,
+            {"slug", "title", "scope", "non_goals", "body_artifact_path"},
+        )
+        self.assertEqual(issue_decomposition.PARENT_UPDATE_FIELDS, {"comment_artifact_path"})
+        self.assertEqual(
+            issue_decomposition.FORBIDDEN_PLAN_FIELDS,
+            {
+                "lifecycle_owner",
+                "lifecycle_authority",
+                "cmd",
+                "argv",
+                "shell",
+                "gh",
+                "git",
+                "close",
+                "assignee",
+                "milestone",
+            },
+        )
+
+        validator_source = inspect.getsource(issue_decomposition.validate_issue_decomposition_plan)
+        for needle in (
+            '_require_exact_fields(raw, PLAN_FIELDS, "plan")',
+            '_require_exact_fields(parent_update, PARENT_UPDATE_FIELDS, "parent_update")',
+            '_require_exact_fields(child_raw, CHILD_FIELDS, f"children[{index}]")',
+            "_validate_parent_comment(ctx, parent_comment_artifact_path, parent_issue)",
+            "_validate_child_body(ctx, body_artifact_path, parent_issue, source_consensus_artifact, scope, non_goals)",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, validator_source)
+
+        child_body_source = inspect.getsource(issue_decomposition._validate_child_body)
+        self.assertIn("validate_self_contained_github_body(text, authority_required=True)", child_body_source)
+        self.assertIn('f"Parent issue: #{parent_issue}"', child_body_source)
+        self.assertIn("consensus_name", child_body_source)
+        self.assertIn("scope, non_goals", child_body_source)
+
+        parent_comment_source = inspect.getsource(issue_decomposition._validate_parent_comment)
+        self.assertIn("validate_self_contained_github_body(text, authority_required=False)", parent_comment_source)
+        self.assertIn('f"Parent issue: #{parent_issue}"', parent_comment_source)
 
 
 if __name__ == "__main__":
