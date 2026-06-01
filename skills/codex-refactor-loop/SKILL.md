@@ -529,6 +529,7 @@ Required visible updates:
 | Stuck timeout | Status explaining timeout and reflector dispatch. |
 | Iteration complete | Rollup PR banner and next audit dispatch. |
 | Skill bug fix | Commit visible on integration branch. |
+| PR review comment fix | Completion includes review-thread closure: fixes driven by PR review comments are incomplete until the original thread is replied to and resolved, or explicitly escalated. |
 
 Status card templates and escalation ASCII diagrams are in [status and escalation templates](#status-and-escalation-templates).
 
