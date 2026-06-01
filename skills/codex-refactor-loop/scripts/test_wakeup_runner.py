@@ -78,14 +78,24 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def run_result(self, plan: dict, *, gh_state: str = "OPEN", gh_head_ref: str = "refactor/iter77-worker", actions=None) -> list:
+    def run_result(
+        self,
+        plan: dict,
+        *,
+        gh_state: str | None = "OPEN",
+        gh_head_ref: str = "refactor/iter77-worker",
+        git_diff_code: int = 0,
+        actions=None,
+    ) -> list:
         def command_runner(command):
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "headRefName" in command:
                     return subprocess.CompletedProcess(command, 0, gh_head_ref + "\n", "")
+                if gh_state is None:
+                    return subprocess.CompletedProcess(command, 1, "", "not found")
                 return subprocess.CompletedProcess(command, 0, gh_state + "\n", "")
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "pr77")]:
-                return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, git_diff_code, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -132,6 +142,71 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def review_gate_action(self, **overrides) -> dict:
+        marker = "REVIEW_GATE_READY:77"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "review-gate",
+            "action_id": "review-gate:77:sha",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "live_open_target"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "controller_action": "review_gate",
+            "no_generic_command": True,
+            "head_sha": "a" * 40,
+        }
+        action.update(overrides)
+        return action
+
+    def close_action(self, **overrides) -> dict:
+        marker = "META_RESOLVED:drop:no-action"
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "close-managed-item:53",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "live_open_target"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "issue",
+            "target_number": 53,
+            "target": {"kind": "issue", "number": 53},
+            "controller_action": "close_managed_item_from_drop_marker",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
+    def assert_blocked_ledger(self, action_id: str, reason: str) -> None:
+        rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertIn(
+            {"action_id": action_id, "status": "blocked", "reason": reason},
+            [{"action_id": row["action_id"], "status": row["status"], "reason": row["reason"]} for row in rows],
+        )
+
+    def assert_blocked_event(self, action_id: str, reason: str) -> None:
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(f"WAKEUP_RUNNER_BLOCKED:{action_id}:{reason}", pending)
+
+    def assert_blocked_before_dispatch(self, results: list, action_id: str, reason: str, actions: FakeActions) -> None:
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, reason)
+        self.assertEqual(actions.calls, [])
+        self.assertEqual(self.supervisor.calls, [])
+        self.assert_blocked_ledger(action_id, reason)
+        self.assert_blocked_event(action_id, reason)
+
     def worker_output_action(self, **overrides) -> dict:
         worktree = self.repo / ".worktrees" / "pr77"
         worktree.mkdir(parents=True, exist_ok=True)
@@ -168,6 +243,32 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].reason, "forbidden_fields:argv")
         self.assertEqual(self.supervisor.calls, [])
 
+    def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
+        actions = FakeActions()
+        plan = self.base_plan(self.spawn_action())
+        plan["schema"] = "wrong-schema"
+
+        results = self.run_result(plan, actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "schema_mismatch")
+        self.assertEqual(actions.calls, [])
+        self.assertEqual(self.supervisor.calls, [])
+        self.assert_blocked_ledger("", "schema_mismatch")
+
+    def test_malformed_action_authorization_blocks_before_dispatch_and_records_event(self) -> None:
+        cases = [
+            ("runner-authority", self.spawn_action(action_id="auth:runner", runner_authority="controller"), "runner_authority_mismatch"),
+            ("generic-command", self.spawn_action(action_id="auth:generic", no_generic_command=False), "missing_no_generic_command"),
+            ("preconditions", self.spawn_action(action_id="auth:preconditions", preconditions=[]), "missing_preconditions"),
+        ]
+
+        for name, action, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_non_owner_noops(self) -> None:
         with mock.patch("codex_refactor_loop.wakeup_runner.require_active_controller") as owner:
             owner.return_value = type("Decision", (), {"allowed": False, "status": "not-owner", "action": "wakeup-runner", "owner_device": "other", "lease_id": "", "expires_at": ""})()
@@ -184,6 +285,22 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "source_marker_missing")
+
+    def test_missing_clean_exit_source_marker_blocks_before_dispatch_and_records_event(self) -> None:
+        source = self.repo / ".refactor-loop/logs/worker.log"
+        marker = "IMPLEMENT_DONE:pr-77:ok"
+        source.write_text(marker + "\n", encoding="utf-8")
+        action = self.spawn_action(
+            action_id="clean-exit:missing",
+            preconditions=["active_controller_owner", "clean_exit_source_marker"],
+            source_artifact=".refactor-loop/logs/worker.log",
+            source_marker=marker,
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "clean-exit:missing", "clean_exit_marker_missing", actions)
 
     def test_unknown_executable_controller_action_fails_closed_without_unapplied_success(self) -> None:
         action = self.spawn_action(controller_action="dispatch_remote_ci_fix", action_id="ci-red:31:sha")
@@ -223,6 +340,89 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "safe_push_stale_head:other/ref")
         self.assertEqual(actions.calls, [])
+
+    def test_closed_or_unavailable_live_target_blocks_before_lifecycle_helpers(self) -> None:
+        cases = [
+            (
+                "safe-push-closed-pr",
+                lambda: self.worker_output_action(action_id="live-target:safe-push-closed"),
+                "CLOSED",
+                "target_not_open:CLOSED",
+            ),
+            (
+                "merge-closed-pr",
+                lambda: self.review_gate_action(action_id="live-target:merge-closed"),
+                "CLOSED",
+                "target_not_open:CLOSED",
+            ),
+            (
+                "close-unavailable-issue",
+                lambda: self.close_action(action_id="live-target:close-unavailable"),
+                None,
+                "target_not_open:unknown",
+            ),
+        ]
+
+        for name, action_factory, gh_state, reason in cases:
+            with self.subTest(name=name):
+                action = action_factory()
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), gh_state=gh_state, actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_safe_push_missing_or_invalid_preconditions_block_at_runner_gate_before_helper(self) -> None:
+        outside = self.repo / "outside-worktree"
+        outside.mkdir()
+        cases = [
+            (
+                "missing-verified-head",
+                self.worker_output_action(
+                    action_id="safe-push:missing-verified-head",
+                    preconditions=["active_controller_owner", "clean_scoped_diff"],
+                ),
+                "safe_push_missing_precondition:verified_pr_head",
+                0,
+            ),
+            (
+                "missing-clean-diff",
+                self.worker_output_action(
+                    action_id="safe-push:missing-clean-diff",
+                    preconditions=["active_controller_owner", "verified_pr_head"],
+                ),
+                "safe_push_missing_precondition:clean_scoped_diff",
+                0,
+            ),
+            (
+                "invalid-head-ref",
+                self.worker_output_action(action_id="safe-push:invalid-head-ref", head_ref="-bad"),
+                "safe_push_invalid_head_ref",
+                0,
+            ),
+            (
+                "missing-worktree",
+                self.worker_output_action(action_id="safe-push:missing-worktree", worktree=str(self.repo / ".worktrees" / "missing")),
+                "safe_push_worktree_missing",
+                0,
+            ),
+            (
+                "outside-worktree",
+                self.worker_output_action(action_id="safe-push:outside-worktree", worktree=str(outside)),
+                "safe_push_worktree_outside_controller_owned_root",
+                0,
+            ),
+            (
+                "dirty-diff",
+                self.worker_output_action(action_id="safe-push:dirty-diff"),
+                "safe_push_dirty_scoped_diff",
+                1,
+            ),
+        ]
+
+        for name, action, reason, git_diff_code in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), git_diff_code=git_diff_code, actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_publish_worker_output_action_routes_to_named_helper(self) -> None:
         actions = FakeActions()
