@@ -18,7 +18,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
 | Host config | Loop runtime facts come only from host-owned `host.env`; skill text remains host-agnostic. | `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before running actors; fail closed if required vars are absent. `.refactor-loop/` is skill-private runtime/cache/log state, not host production SSOT. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
-| GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
+| GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `ControllerActions.post_status_banner`, GitHub labels |
 | Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and six write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
@@ -323,7 +323,7 @@ Fact source and verification: projection logic lives in `closed_phase_labels.py`
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
-Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. Issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate; #53 is not a cross-device write permit. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
 
 ## Named runtime exception — integration sync daemon(per #65)
 Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-release-rollup-65`. It records the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
@@ -808,7 +808,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
 - `scripts/codex_refactor_loop/controller_actions.py` — controller-internal lifecycle primitives; not a public CLI command surface.
-- [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
+- `ControllerActions.post_status_banner` — controller-internal GitHub banner posting helper.
 - [scripts/consensus-rnd-cli check-project-rules](scripts/consensus-rnd-cli check-project-rules) — read-only Consensus-rnd Phase bootstrap fixed-point probe; writes patch artifact only.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
 - [scripts/consensus-rnd-cli restart-daemons](scripts/consensus-rnd-cli restart-daemons) — cron/launchd anti-stop helper for existing daemon wrappers.
@@ -1487,13 +1487,7 @@ routing authority and must not replace the loop-owned phase/human axes.
 
 **两步流程**(per spawn):
 
-1. **先 post banner**(blocking Bash,几秒):
-   ```bash
-   python3 <skill-root>/scripts/consensus-rnd-cli post-banner \
-     --banner-target <issue-or-pr> --banner-kind <issue|pr> \
-     --banner-role <role> --banner-detail "..." \
-     --log <log-path> --cd <worktree> --stall <s>
-   ```
+1. **先 post banner**:controller 在同一 turn 调用 `ControllerActions.post_status_banner(BannerRequest(...))`;该 internal action 先过 #191 active-controller owner gate,再校验 issue/PR target,写 body tempfile,并通过 `self.gh(...)` 发布。
 
 2. **再 spawn codex**(Bash `run_in_background: true`):
    ```bash
@@ -1512,7 +1506,7 @@ routing authority and must not replace the loop-owned phase/human axes.
 **禁止**:
 - ❌ controller 主链路用 `nohup ... &` 或 `Popen + start_new_session` detach codex
 - ❌ 用 blocking Bash 跑 codex(同步等 60 分钟 → conversation 卡死)
-- ❌ 漏 post banner → GitHub 看不到运行状态(per `consensus-rnd-cli post-banner` 强制)
+- ❌ 漏 post banner → GitHub 看不到运行状态(per `ControllerActions.post_status_banner` 强制)
 
 ### Controller 自检(每次 wakeup)
 

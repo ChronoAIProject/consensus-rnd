@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import banners, github_body, project_rules, spawn, statusline
+from . import github_body, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -137,7 +137,6 @@ COMMANDS: dict[str, CommandSpec] = {
         "validate or plan loop-owned GitHub labels",
         ("read-source", "read-gh"),
     ),
-    "post-banner": CommandSpec(banners.main, "post a controller status banner", ("gh-comment",)),
     "check-degradation": CommandSpec(
         degradation_main,
         "run the static skill degradation check",

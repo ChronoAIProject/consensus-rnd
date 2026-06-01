@@ -227,7 +227,7 @@ in `SKILL.md` and the tests.
 - source_round: `r7`
 - source_marker: `META_JUDGE_DONE:consensus`
 - skill_anchor: `#named-runtime-exception--observability-comment-writersper-53`
-- allowed: GitHub issue or PR comments, PR body edit, reactions, and deleting or updating own progress comments only.
+- allowed: GitHub issue or PR comments, PR body edit, reactions, and deleting or updating own progress comments only; issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate, and this mirror is not a cross-device write permit.
 - forbidden: no label mutation, issue close, PR close, issue create, PR create, PR merge, release, tag, or git lifecycle authority.
 - verification: `test_banner_package.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
