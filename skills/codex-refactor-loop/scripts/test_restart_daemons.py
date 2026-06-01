@@ -152,19 +152,22 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             pass
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:
-        self.assertEqual(6, len(DAEMON_COMMANDS))
+        self.assertEqual(7, len(DAEMON_COMMANDS))
         self.assertIn("closed_label_reconciler", DAEMON_NAMES)
+        self.assertIn("wakeup_runner_daemon", DAEMON_NAMES)
         for _name, command in DAEMON_COMMANDS:
             joined = " ".join(command)
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
         self.assertIn(("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")), DAEMON_COMMANDS)
+        self.assertIn(("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")), DAEMON_COMMANDS)
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
 
     def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
         self.assertEqual(tuple(name for name, _command in DAEMON_COMMANDS), restart_managed_daemon_names())
-        self.assertEqual(6, len(restart_managed_daemon_names()))
+        self.assertEqual(7, len(restart_managed_daemon_names()))
         self.assertIn("closed_label_reconciler", restart_managed_daemon_names())
+        self.assertIn("wakeup_runner_daemon", restart_managed_daemon_names())
         patched = (
             ("first", ("python3", "first")),
             ("second", ("python3", "second")),

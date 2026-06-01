@@ -250,7 +250,9 @@ class ReleasePipelineContractTests(unittest.TestCase):
             "def _ensure_fresh_release_commit_checks_green",
             "GH_REPO_SLUG is required for fresh release commit check gate",
             "projection.check_ref(repo_slug, release_target_ref",
+            "release_push_started_at = None if state.skip_bump_commit else self.now()",
             "since=release_push_started_at",
+            "_ensure_fresh_release_commit_checks_green(release_target_ref, since=release_push_started_at)",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.publisher)

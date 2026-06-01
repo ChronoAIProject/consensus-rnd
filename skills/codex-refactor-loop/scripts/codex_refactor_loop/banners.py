@@ -31,7 +31,6 @@ class BannerRequest:
     role: str
     detail: str
     log: str
-    cd: str
     stall: int
 
 
@@ -51,7 +50,6 @@ def build_status_banner(request: BannerRequest) -> str:
 |---|---|
 | 阶段 | **派出 codex(role=`{role}`)** |
 | codex log | `{log_name}` |
-| 工作目录 | `{request.cd}` |
 | no-output stall window | {request.stall}s(~{request.stall // 60} min 无输出窗口) |
 | 上下文 | {request.detail or "(none)"} |
 | 下一步自动会做 | {next_step} |

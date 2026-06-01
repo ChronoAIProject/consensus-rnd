@@ -49,6 +49,35 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertTrue(is_controller_post("## 📊 status", "body"))
         self.assertFalse(is_controller_post("plain maintainer note", "plain maintainer note"))
 
+    def test_generic_env_overrides_do_not_change_default_state_file_or_interval(self) -> None:
+        override_root = self.tmp / "override"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "STATE_FILE": str(override_root / "state.json"),
+                "INTERVAL": "1",
+            },
+        ):
+            monitor = CommentMonitor(self.ctx)
+
+        self.assertEqual(self.ctx.paths.refactor_loop / "comment-monitor-state.json", monitor.state_file)
+        self.assertEqual(30, monitor.interval)
+        self.assertFalse(override_root.exists())
+
+    def test_comment_monitor_interval_registered_env_still_applies(self) -> None:
+        with mock.patch.dict(os.environ, {"COMMENT_MONITOR_INTERVAL": "45", "INTERVAL": "1"}):
+            monitor = CommentMonitor(self.ctx)
+
+        self.assertEqual(45, monitor.interval)
+
+    def test_explicit_state_file_and_interval_parameters_remain_test_seams(self) -> None:
+        state_file = self.tmp / "explicit-state.json"
+        with mock.patch.dict(os.environ, {"COMMENT_MONITOR_INTERVAL": "45", "STATE_FILE": str(self.tmp / "ignored.json")}):
+            monitor = CommentMonitor(self.ctx, state_file=state_file, interval=9)
+
+        self.assertEqual(state_file, monitor.state_file)
+        self.assertEqual(9, monitor.interval)
+
     def test_targets_queries_canonical_and_legacy_managed_labels_for_issues_and_prs(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         responses = {
@@ -329,6 +358,18 @@ class CommentMonitorSourceRegressionTests(unittest.TestCase):
         self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', text)
         self.assertIn('raw.startswith("updated:")', text)
         self.assertIn('return f"updated:>={raw}"', text)
+
+    def test_generic_env_override_surfaces_are_not_consumed(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+        executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        for token in (
+            'os.environ.get("STATE_FILE"',
+            'os.environ.get("INTERVAL"',
+            "PROGRESS_REPORTER_INTERVAL",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, executable)
+        self.assertIn('os.environ.get("COMMENT_MONITOR_INTERVAL")', executable)
 
 
 if __name__ == "__main__":

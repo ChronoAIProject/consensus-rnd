@@ -84,6 +84,7 @@ class FakeRunner:
         self.head_sha = "bumpcommit456"
         self.head_subject = "Release v2.0.0-beta.4"
         self.check_status = "green"
+        self.check_completed_at = "2026-05-30T12:01:00Z"
 
     def __call__(self, cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         command = list(cmd)
@@ -120,7 +121,7 @@ class FakeRunner:
                     "name": name,
                     "status": status,
                     "conclusion": conclusion,
-                    "completed_at": "2026-05-30T12:01:00Z",
+                    "completed_at": self.check_completed_at,
                 }
             )
         if self.check_status == "missing":
@@ -376,6 +377,45 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertIsInstance(payload, dict)
             assert isinstance(payload, dict)
             self.assertEqual(payload["target_ref"], "bumpcommit456")
+
+    def test_already_bumped_reentry_accepts_exact_sha_green_checks_completed_before_rerun_now(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            set_mapped_version(repo, "2.0.0-beta.4")
+            runner = FakeRunner()
+            runner.check_completed_at = "2026-05-30T11:59:00Z"
+            publisher = ReleasePublisher(
+                repo,
+                preflight=FakePreflight(manifest_mismatch_result(repo)),
+                runner=runner,
+                now=lambda: NOW,
+            )
+
+            result = publisher.publish(target_ref="abc123")
+
+            self.assertTrue(result.published)
+            self.assertEqual(result.target_ref, "bumpcommit456")
+            check_command = expected_check_runs_command("bumpcommit456")
+            release_command = expected_reentry_success_commands()[-1]
+            check_index = runner.commands.index(check_command)
+            release_index = runner.commands.index(release_command)
+            self.assertLess(check_index, release_index)
+            self.assertEqual(release_command[4:6], ["--target", "bumpcommit456"])
+            self.assertEqual(runner.commands, expected_reentry_success_commands())
+
+    def test_first_run_still_rejects_checks_older_than_push_started_at(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            runner = FakeRunner()
+            runner.check_completed_at = "2026-05-30T11:59:00Z"
+            publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
+
+            with self.assertRaisesRegex(RuntimeError, "stale_required_checks"):
+                publisher.publish(target_ref="abc123")
+
+            self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
+            self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
+            self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
     def test_already_bumped_reentry_denies_mixed_manifest_mismatch_reasons_without_commands(self) -> None:
         with copy_repo_fixture() as tmp:

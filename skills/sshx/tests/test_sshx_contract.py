@@ -42,6 +42,7 @@ class SshxContractTests(unittest.TestCase):
         text = read(SKILL)
         for anchor in [
             "## Trigger",
+            "## Goal Contract",
             "## InlineConsensusProtocol",
             "## Worker Delegation",
             "## No Context Pollution",
@@ -55,9 +56,50 @@ class SshxContractTests(unittest.TestCase):
         ]:
             self.assertIn(anchor, text)
         self.assertIn(
-            "`intake`\n2. `choose_worker_mode`\n3. `thinking_triplet_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
+            "`intake` (write `GoalArtifact` and normalize the goal)\n2. `choose_worker_mode`\n3. `thinking_triplet_workers`\n4. `meta_judge`\n5. `implementation_worker`\n6. `review_triplet_workers`\n7. `fix_or_done`",
             text,
         )
+
+    def test_sshx_goal_contract_source_regression(self) -> None:
+        text = read(SKILL)
+        self.assertIn("## Goal Contract", text)
+        self.assertIn("`GoalArtifact` is a prompt-level record, not a runtime API", text)
+        self.assertIn("It is written during `intake` before worker mode selection or any worker dispatch", text)
+        for field in [
+            "`raw_user_input`",
+            "`normalized_goal`",
+            "`constraints`",
+            "`success_criteria`",
+            "`iteration_question`",
+        ]:
+            self.assertIn(field, text)
+        self.assertIn("The user's current input is the only source for the goal", text)
+        self.assertIn(
+            "must not discover or infer the goal from `codex-refactor-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface",
+            text,
+        )
+
+    def test_sshx_goal_iteration_behavior_contract(self) -> None:
+        text = read(SKILL)
+        self.assertIn("`intake` (write `GoalArtifact` and normalize the goal)", text)
+        self.assertIn(
+            "Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal` and must not include same-round peer outputs",
+            text,
+        )
+        self.assertIn(
+            "`revise` must name the goal gap and a next iteration question; it must not open an unrelated design search",
+            text,
+        )
+        self.assertIn(
+            "The convergence question must be \"what still differs from `GoalArtifact`?\"",
+            text,
+        )
+        self.assertIn("Do not generalize the convergence pass beyond that goal gap", text)
+        self.assertIn(
+            "ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap",
+            text,
+        )
+        self.assertIn("next_iteration_question:", text)
 
     def test_sshx_worker_modes(self) -> None:
         text = read(SKILL)

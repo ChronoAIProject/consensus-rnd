@@ -106,30 +106,37 @@ class ControllerActions:
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
-    def _current_branch(self) -> str:
-        result = self.git(["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+    def _git_in(self, cwd: Path, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        result = subprocess.run(["git", "-C", str(cwd), *args], capture_output=True, text=True, check=False)
+        if check and result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
+        return result
+
+    def _current_branch(self, worktree: Path | None = None) -> str:
+        result = self._git_in(worktree or self.ctx.repo_root, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
         return result.stdout.strip() if result.returncode == 0 else ""
 
-    def safe_push(self, remote: str = "origin", branch: str = "") -> int:
+    def safe_push(self, remote: str = "origin", branch: str = "", worktree: str | Path | None = None) -> int:
         if not self._require_owner_or_return("safe-push", code=3):
             return 3
-        branch = branch or self._current_branch()
+        push_worktree = Path(worktree) if worktree is not None else self.ctx.repo_root
+        branch = branch or self._current_branch(push_worktree)
         if not branch or branch == "HEAD":
             sys.stderr.write("safe_push: cannot determine branch (HEAD detached?); aborting\n")
             return 2
-        fetch = self.git(["fetch", remote, branch], check=False)
+        fetch = self._git_in(push_worktree, ["fetch", remote, branch], check=False)
         if fetch.stdout:
             print(fetch.stdout, end="")
         if fetch.stderr:
             print("\n".join(fetch.stderr.splitlines()[-3:]))
-        behind = self.git(["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
+        behind = self._git_in(push_worktree, ["rev-list", "--count", f"HEAD..{remote}/{branch}"], check=False)
         try:
             behind_count = int((behind.stdout or "0").strip() or "0")
         except ValueError:
             behind_count = 0
         if behind_count > 0:
             print(f"safe_push: local behind {remote}/{branch} by {behind_count} commit(s); rebasing")
-            pull = self.git(["pull", "--rebase", "--autostash", remote, branch], check=False)
+            pull = self._git_in(push_worktree, ["pull", "--rebase", "--autostash", remote, branch], check=False)
             if pull.stdout:
                 print(pull.stdout, end="")
             if pull.stderr:
@@ -137,7 +144,7 @@ class ControllerActions:
             if pull.returncode != 0:
                 sys.stderr.write(f"safe_push: rebase conflict on {remote}/{branch} - resolve manually then push\n")
                 return 3
-        push = self.git(["push", remote, branch], check=False)
+        push = self._git_in(push_worktree, ["push", remote, branch], check=False)
         if push.stdout:
             print(push.stdout, end="")
         if push.stderr:
@@ -170,7 +177,6 @@ class ControllerActions:
             role=request.role,
             detail=request.detail,
             log=request.log,
-            cd=request.cd,
             stall=request.stall,
         )
         body = build_status_banner(normalized)
@@ -527,6 +533,72 @@ class ControllerActions:
         config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
+    def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("publish-worker-output", code=3):
+            return 3
+        head_ref = str(action.get("head_ref") or "").strip()
+        worktree = Path(str(action.get("worktree") or ""))
+        if not _safe_branch_name(head_ref):
+            sys.stderr.write("publish_worker_output_from_action: invalid head_ref\n")
+            return 2
+        if not worktree.is_absolute() or not worktree.is_dir():
+            sys.stderr.write("publish_worker_output_from_action: worktree must be an existing absolute path\n")
+            return 2
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            sys.stderr.write("publish_worker_output_from_action: worktree outside controller-owned .worktrees\n")
+            return 2
+        clean = subprocess.run(["git", "-C", str(worktree), "diff", "--quiet"], capture_output=True, text=True, check=False)
+        if clean.returncode != 0:
+            sys.stderr.write("publish_worker_output_from_action: dirty scoped diff; worker commit required first\n")
+            return 2
+        return self.safe_push(branch=head_ref, worktree=worktree)
+
+    def close_managed_item_from_drop_marker(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("close-managed-drop", code=3):
+            return 3
+        marker = str(action.get("source_marker") or action.get("marker") or "")
+        if not marker.startswith("META_RESOLVED:drop:"):
+            sys.stderr.write("close_managed_item_from_drop_marker: requires clean META_RESOLVED:drop marker\n")
+            return 2
+        kind = str(action.get("target_kind") or "").lower()
+        issue_target = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="pr" if kind == "pr" else "issue",
+            action="close-managed-drop",
+            source="wakeup-runner-action",
+        )
+        if issue_target is None:
+            return 2
+        if not self._live_target_has_managed_label(kind="pr" if kind == "pr" else "issue", target=issue_target):
+            self._append_pending_event(
+                f"CONTROLLER_ACTION_BLOCKED:target-not-managed:close-managed-drop:{'pr' if kind == 'pr' else 'issue'}:{issue_target}"
+            )
+            sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
+            return 2
+        comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
+        if kind == "pr":
+            pr_target = issue_target
+            result = self.gh(["pr", "close", pr_target, "--comment", comment], check=False)
+        else:
+            result = self.gh(["issue", "close", issue_target, "--reason", "not planned", "--comment", comment], check=False)
+        return result.returncode
+
+    def _live_target_has_managed_label(self, *, kind: str, target: str) -> bool:
+        result = self.gh([kind, "view", target, "--json", "labels,body"], check=False)
+        if result.returncode != 0:
+            return False
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return False
+        raw_labels = payload.get("labels")
+        if not isinstance(raw_labels, list):
+            return False
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        return labels.MANAGED in labels.normalize_label_set(names).canonical
+
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
         if env:
@@ -678,3 +750,7 @@ def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):
         raise ValueError(f"safe_worktree cluster must match [A-Za-z0-9._-]+: {cluster!r}")
+
+
+def _safe_branch_name(value: str) -> bool:
+    return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)

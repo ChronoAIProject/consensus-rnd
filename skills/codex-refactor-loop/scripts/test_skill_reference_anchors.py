@@ -271,13 +271,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for needle in (
             "crnd:milestone:release-target",
             "release countdown status",
+            "explicit-target precedence",
             "non-exclusive milestone fact",
-            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger explicit release-target mode by itself",
             "wakeup-plan-only and read-only",
             "status-only, non-dispatchable `release-countdown` action",
+            "does not query the GitHub milestones API",
+            "default goal countdown",
+            "GitHub open milestones",
+            "`due_on` ascending",
+            "no `due_on` sorted after dated milestones",
+            "goal.milestone: null",
             "release-gate scoring source",
             ".version-bump.json",
             "existing release commits projection",
+            'activation: "explicit-target" | "default-goal"',
+            "goal.milestone",
+            "goal.release",
+            "goal.release.passed_signals",
+            "goal.release.total_signals",
+            "goal.release.countdown_to_version",
             "no_lifecycle_authority",
             "targets",
             "from_version",
@@ -287,6 +300,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "red_signals",
             "blocked_reasons",
             'source: "release-gate"',
+            "host.env",
+            "statusline snapshots",
+            "local state are not a goal SSOT",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, milestone)
@@ -304,7 +320,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, milestone)
-        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("Release-countdown status is status-only", wakeup)
         self.assertIn("not dispatchable", wakeup)
 
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
@@ -931,8 +947,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py"},
-            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py"},
+            "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_runner.py"},
+            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
@@ -1230,6 +1246,47 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn(field, self.skill)
+
+
+class WakeupRunnerContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.skill = read(SKILL_MD)
+        self.claude = read(REPO_ROOT / "CLAUDE.md")
+
+    def test_wakeup_runner_396_anchor_and_claude_carveout_are_locked(self) -> None:
+        available = reference_anchors(self.skill)
+        self.assertIn("named-runtime-exception---wakeup-runnerper-396", available)
+        for needle in (
+            "#396 是唯一 unattended wakeup-runner carveout",
+            "evidence-bound closed action projection",
+            "`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source",
+            "不得新增 `ControllerTurnDecision`/controller-turn worker/schema",
+            "不得接受 argv/shell/cmd/commands/env/git/gh/executor/generic command fields",
+            "不得把 `.refactor-loop/host.env` 当 host production SSOT",
+            "允许动作仅限 spawn codex",
+            "publish release through #322",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.claude)
+
+    def test_wakeup_plan_closed_projection_is_not_standalone_authorization(self) -> None:
+        section = section_after_heading(self.skill, "Wakeup Skeleton")
+        for needle in (
+            'mode: "closed-action-projection"',
+            'no_lifecycle_authority: true',
+            'apply_authority: "wakeup-runner-396-only"',
+            'runner_authority: "wakeup-runner-396"',
+            "status actions remain `status_only: true` and cannot apply",
+            "not standalone authorization source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section + self.skill)
+        self.assertNotIn("ControllerTurnDecision", self.skill.replace("`ControllerTurnDecision`", ""))
+
+    def test_restart_managed_daemon_list_mentions_seventh_daemon(self) -> None:
+        self.assertIn("All seven daemon command bodies", self.skill)
+        self.assertIn("wakeup_runner_daemon", self.skill)
+        self.assertIn("`consensus-rnd-cli wakeup-runner`", self.skill)
 
 
 if __name__ == "__main__":

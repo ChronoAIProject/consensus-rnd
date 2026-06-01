@@ -24,13 +24,29 @@ Use this skill when:
 
 Do not use this skill for routine one-step answers where no separate perspectives would change the outcome.
 
+## Goal Contract
+
+`GoalArtifact` is a prompt-level record, not a runtime API. It is written during `intake` before worker mode selection or any worker dispatch.
+
+`GoalArtifact` has exactly these fields:
+
+- `raw_user_input`
+- `normalized_goal`
+- `constraints`
+- `success_criteria`
+- `iteration_question`
+
+The user's current input is the only source for the goal. `sshx` must not discover or infer the goal from `codex-refactor-loop` milestones, release state, `host.env`, GitHub issues, GitHub pull requests, labels, branches, or any other external lifecycle surface.
+
+`iteration_question` must ask what still differs from `GoalArtifact`, using the normalized goal, constraints, and success criteria as the fixed target. It must not broaden the task into a generic improvement search.
+
 ## InlineConsensusProtocol
 
 `InlineConsensusProtocol` is a prompt-level protocol, not a runtime API.
 
 Run the stages in this exact order:
 
-1. `intake`
+1. `intake` (write `GoalArtifact` and normalize the goal)
 2. `choose_worker_mode`
 3. `thinking_triplet_workers`
 4. `meta_judge`
@@ -48,6 +64,8 @@ Each thinking or review record must include these fields:
 - `verdict`
 
 Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned summaries/verdicts, summarize outcomes, and produce the final report.
+
+Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal` and must not include same-round peer outputs.
 
 ## Worker Delegation
 
@@ -85,6 +103,8 @@ Run three biased perspectives before choosing a plan:
 - `structural`: architecture and contract integrity under future growth.
 - `delete`: whether the feature, abstraction, or work should be removed, collapsed, or avoided.
 
+Every perspective must frame `propose`, `revise`, `reject`, or `abstain` as an answer to the current `GoalArtifact`: what satisfies it, what still differs from it, or why it cannot be satisfied. `revise` must name the goal gap and a next iteration question; it must not open an unrelated design search.
+
 Each perspective returns one of:
 
 - `propose`
@@ -104,6 +124,8 @@ The meta-judge applies this fixed thinking truth table:
 | any attempt to use one perspective as consensus | `reject fake consensus` |
 
 `meta-layer convergence` must produce one concrete plan before implementation. If the bounded pass still cannot produce a concrete plan, stop with options instead of inventing agreement.
+
+The convergence question must be "what still differs from `GoalArtifact`?" expressed against the fixed normalized goal, constraints, and success criteria. Do not generalize the convergence pass beyond that goal gap.
 
 ## Implementation Worker
 
@@ -141,11 +163,11 @@ Advisory comments do not count as approval. A reject blocks done until the issue
 
 ## Fix Or Done
 
-If review exits `fix`, apply the smallest change that addresses the blocking finding and rerun the review triplet. Stop after a bounded number of fix passes and report remaining blockers honestly.
+If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap, and rerun the review triplet. Stop after a bounded number of fix passes and report remaining blockers honestly.
 
 If review exits `done with advisory surfaced`, summarize the final outcome and include any non-blocking advisory feedback.
 
-If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass or ask the user to decide. Do not loop indefinitely.
+If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
 
 ## Boundaries
 
@@ -183,7 +205,11 @@ Use this compact transcript shape when the decision is non-trivial:
 ```text
 intake:
   goal:
-  constraints:
+    raw_user_input:
+    normalized_goal:
+    constraints:
+    success_criteria:
+    iteration_question:
   strict_peer_invisibility_required:
 worker_delegation:
   worker_mode:
@@ -211,6 +237,8 @@ thinking_triplet_workers:
 meta_judge:
   exit:
   concrete_plan:
+  goal_gap:
+  next_iteration_question:
 implementation_worker:
   worker_mode:
   summary:

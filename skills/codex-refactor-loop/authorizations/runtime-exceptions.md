@@ -193,6 +193,20 @@ in `SKILL.md` and the tests.
 - verification: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror documents only the #238 closed managed item terminal phase-label reconciliation carveout and does not grant generic GitHub label/edit or lifecycle authority.
 
+<a id="wakeup-runner-396"></a>
+## wakeup-runner-396
+
+- surface: `consensus-rnd-cli wakeup-runner`
+- source_issue: `#396`
+- source_round: `r3 structural`
+- source_marker: `META_JUDGE_DONE:consensus:structural:wakeup-plan-closed-action-projection-plus-wakeup-runner-396`
+- skill_anchor: `#named-runtime-exception---wakeup-runnerper-396`
+- allowed: active-controller owner only; consume only `wakeup-plan` evidence-bound closed action projection with top-level `mode: "closed-action-projection"`, `no_lifecycle_authority: true`, and `apply_authority: "wakeup-runner-396-only"`; each executable action must carry `runner_authority: "wakeup-runner-396"`, `preconditions`, `source_marker` or `source_artifact`, `target_kind`, `target_number`, `target`, `controller_action`, and `no_generic_command: true`; revalidate clean `EXIT=0` source marker, review truth table `reject==0 && approve>=1 && all required reviewers present`, OPEN/live GitHub state, #191 owner, release #322 preflight, or helper-specific precondition; mechanically call existing controller helpers or #396 narrow helpers for spawn codex, publish worker output, dispatch reviewers/fix/remote-ci worker, apply triage decision, merge PR under review truth table, close managed item from drop marker, and publish release through #322.
+- forbidden: no arbitrary git/gh command, workflow tag/release, label/merge/close outside existing helper or named #396 helper, prompt-body decision, standalone authorization from `wakeup-plan`, argv/shell/cmd/commands/env/git/gh/executor/generic command fields, `ControllerTurnDecision`, controller-turn worker, private schema, active-active scheduler, `.refactor-loop/host.env` as host production SSOT, or generic lifecycle actor.
+- fact_source: `wakeup-plan` closed action projection is the only action projection fact source but not a standalone authorization source; final side-effect permit comes from #191 active-controller owner plus source marker/artifact, review truth table, live GitHub state, release #322 preflight, or helper-specific validator.
+- verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
+
 <a id="update-check-231"></a>
 ## update-check-231
 
