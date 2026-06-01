@@ -28,6 +28,8 @@ PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "code
 
 
 class Phase9RouterDaemonTests(unittest.TestCase):
+    TEST_GH_REPO_SLUG = "example/consensus-rnd"
+
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
@@ -45,11 +47,19 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 return Phase9SourceIssueDecision(True, normalized, "phase9-source-open")
             return Phase9SourceIssueDecision(False, normalized, "phase9-source-not-open")
 
-        self.router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        self.router = self.new_router()
         self.router._read_source_issue_decision = fake_source_issue_decision  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def loop_context(self) -> LoopContext:
+        return LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": self.TEST_GH_REPO_SLUG})
+
+    def new_router(self, *, command_runner=None) -> Phase9Router:
+        if command_runner is None:
+            command_runner = self.commands.append
+        return Phase9Router(ctx=self.loop_context(), command_runner=command_runner)
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name
@@ -285,7 +295,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_default_runner_appends_parseable_spawn_intent_event(self) -> None:
         self.solver_triplet(issue=330, round_no=4)
-        default_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo))
+        default_router = Phase9Router(ctx=self.loop_context())
 
         with mock.patch.object(
             Phase9Router,
@@ -334,7 +344,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router._log_path("284", 1, "judge").write_text("reserved by controller fallback\n", encoding="utf-8")
 
         self.router.tick()
-        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        fresh_router = self.new_router()
         fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
         fresh_router.tick()
 
@@ -359,7 +369,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.write_log("meta-judge-issue284-r1.log", "reserved by legacy judge log")
 
         self.router.tick()
-        fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+        fresh_router = self.new_router()
         fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
         fresh_router.tick()
 
@@ -386,7 +396,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=mock.Mock(stdout=ps_output)):
             self.router.tick()
-            fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+            fresh_router = self.new_router()
             fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
             fresh_router.tick()
 
@@ -457,7 +467,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.solver_triplet(issue=37, round_no=4)
 
                 self.router.tick()
-                fresh_router = Phase9Router(ctx=LoopContext.load(repo_root=self.repo), command_runner=self.commands.append)
+                fresh_router = self.new_router()
                 fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
                 fresh_router.tick()
 
@@ -775,7 +785,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         )
         self.write_log("phase9-issue203-r1-judge.log", "META_RESOLVED:old")
 
-        fresh_router = Phase9Router(self.repo, command_runner=self.commands.append)
+        fresh_router = self.new_router()
         fresh_router.tick()
 
         self.assertEqual(self.pending_events().count("META_RESOLVED:old"), 1)
@@ -1403,7 +1413,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         first_events = self.pending_events()
         self.assertEqual(first_events.count("META_RESOLVED:re-design:scope-too-broad"), 1)
 
-        fresh_router = Phase9Router(self.repo, command_runner=self.commands.append)
+        fresh_router = self.new_router()
         fresh_router.tick()
 
         second_events = self.pending_events()
