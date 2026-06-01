@@ -10,13 +10,28 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 PROMPTS_DIR = SKILL_ROOT / "prompts"
+SKILL_MD = SKILL_ROOT / "SKILL.md"
 
 
 def read_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def read_skill() -> str:
+    return SKILL_MD.read_text(encoding="utf-8")
+
+
 class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
+    def test_github_state_contract_requires_pr_review_thread_closure(self) -> None:
+        skill = read_skill()
+
+        self.assertIn("## GitHub State Contract", skill)
+        self.assertIn("| PR review comment fix |", skill)
+        self.assertIn("Completion includes review-thread closure", skill)
+        self.assertIn("fixes driven by PR review comments are incomplete", skill)
+        self.assertIn("original thread is replied to and resolved", skill)
+        self.assertIn("or explicitly escalated", skill)
+
     def test_default_policy_is_none_and_external_rationale(self) -> None:
         implement = read_prompt("implement.md")
         verify = read_prompt("verify.md")
