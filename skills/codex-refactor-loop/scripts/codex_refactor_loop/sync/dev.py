@@ -25,8 +25,6 @@ from .operations import IntegrationSyncOperation, write_operation_artifact
 
 
 DEFAULT_INTERVAL_SECONDS = 600
-DEFAULT_INTEGRATION_BRANCH = "auto-refact-dev"
-DEFAULT_REVIEW_BASE_BRANCH = "dev"
 DEFAULT_RELEASE_ROLLUP_COOLDOWN_SECONDS = 21600
 DEFAULT_RELEASE_ROLLUP_MIN_COMMITS = 1
 
@@ -40,12 +38,20 @@ def run(cmd: list[str], cwd: Path | None = None, check: bool = False) -> subproc
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=check)
 
 
+def _required_branch_env(merged_env: dict[str, str]) -> tuple[str, str]:
+    integration = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
+    review_base = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
+    missing = [name for name, value in (("INTEGRATION_BRANCH", integration), ("REVIEW_BASE_BRANCH", review_base)) if not value]
+    if missing:
+        raise LoopContextError(f"missing required host branch env: {', '.join(missing)}")
+    return integration, review_base
+
+
 def load_dev_sync_config(env: dict[str, str] | None = None, cwd: Path | str | None = None) -> "DevSyncConfig":
     source_env = dict(os.environ if env is None else env)
     ctx = LoopContext.load(env=source_env, cwd=cwd or os.getcwd())
     merged_env = {**source_env, **ctx.host_env}
-    integration = merged_env.get("INTEGRATION_BRANCH") or DEFAULT_INTEGRATION_BRANCH
-    review_base = merged_env.get("REVIEW_BASE_BRANCH") or DEFAULT_REVIEW_BASE_BRANCH
+    integration, review_base = _required_branch_env(merged_env)
     worktree = ctx.repo_root / ".worktrees" / "dev-sync"
     interval = int(source_env.get("INTERVAL", str(DEFAULT_INTERVAL_SECONDS)))
     release_rollup_min_commits = int(source_env.get("RELEASE_ROLLUP_MIN_COMMITS", str(DEFAULT_RELEASE_ROLLUP_MIN_COMMITS)))

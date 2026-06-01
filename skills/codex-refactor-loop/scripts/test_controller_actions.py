@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import ast
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -19,6 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels
+from codex_refactor_loop.banners import BannerRequest
 from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
@@ -31,7 +33,9 @@ class ControllerActionsTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
         (self.tmp / ".refactor-loop" / "state").mkdir(parents=True)
         (self.tmp / ".refactor-loop" / "host.env").write_text(
-            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
+            'export INTEGRATION_BRANCH="canonical-integration"\n'
+            'export REVIEW_BASE_BRANCH="canonical-review"\n',
             encoding="utf-8",
         )
         self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp))
@@ -59,8 +63,17 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
             actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
 
-        self.assertEqual("auto-refact-dev", actions.integration_branch)
-        self.assertEqual("dev", actions.review_base_branch)
+        self.assertEqual("canonical-integration", actions.integration_branch)
+        self.assertEqual("canonical-review", actions.review_base_branch)
+
+    def test_branch_configuration_fails_closed_without_canonical_env(self) -> None:
+        (self.tmp / ".refactor-loop" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "missing required host branch env"):
+                ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
 
     def test_branch_configuration_prefers_host_env_canonical_over_legacy_env(self) -> None:
         (self.tmp / ".refactor-loop" / "host.env").write_text(
@@ -92,7 +105,7 @@ class ControllerActionsTests(unittest.TestCase):
         def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
             git_calls.append(args)
             if args[:3] == ["ls-remote", "--exit-code", "--heads"]:
-                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/auto-refact-dev\n", stderr="")
+                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/canonical-integration\n", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(actions, "_require_owner_or_raise", return_value=None):
@@ -101,14 +114,127 @@ class ControllerActionsTests(unittest.TestCase):
                 actions.open_release_rollup_pr_from_pending_event(json.dumps({"integration_sha": "abc123"}), str(body))
 
         pr_creates = [call for call in gh_calls if call[:2] == ["pr", "create"]]
-        self.assertEqual("auto-refact-dev", pr_creates[0][pr_creates[0].index("--base") + 1])
-        self.assertEqual("dev", pr_creates[1][pr_creates[1].index("--base") + 1])
-        self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "auto-refact-dev"], git_calls)
+        self.assertEqual("canonical-integration", pr_creates[0][pr_creates[0].index("--base") + 1])
+        self.assertEqual("canonical-review", pr_creates[1][pr_creates[1].index("--base") + 1])
+        self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "canonical-integration"], git_calls)
         self.assertFalse(any("legacy-" in " ".join(call) for call in gh_calls + git_calls))
 
     def pending_events(self) -> str:
         path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def banner_request(self, **overrides: object) -> BannerRequest:
+        values = {
+            "target": "77",
+            "kind": "pr",
+            "role": "implement",
+            "detail": "issue-371",
+            "log": "/tmp/implement-371.log",
+            "cd": "/repo/.worktrees/iter371-issue371",
+            "stall": 5400,
+        }
+        values.update(overrides)
+        return BannerRequest(**values)
+
+    def test_post_status_banner_owner_posts_after_active_controller_gate(self) -> None:
+        gh_calls: list[list[str]] = []
+        captured_body = ""
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            nonlocal captured_body
+            gh_calls.append(args)
+            body_path = Path(args[-1])
+            captured_body = body_path.read_text(encoding="utf-8")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77#issuecomment-1\n", stderr="")
+
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                url = self.actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(url, "https://github.com/owner/repo/pull/77#issuecomment-1")
+        self.assertEqual(gh_calls[0][:3], ["pr", "comment", "77"])
+        self.assertEqual(gh_calls[0][-2], "--body-file")
+        self.assertFalse(Path(gh_calls[0][-1]).exists())
+        self.assertIn("⟦AI:AUTO-LOOP⟧", captured_body)
+        status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("owner", status["active_controller"])
+        self.assertEqual("post-banner", status["action"])
+
+    def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
+        cases = (
+            ("stderr", "permission denied\n", "", "permission denied"),
+            ("stdout", "", "api unavailable\n", "api unavailable"),
+        )
+        for label, stderr, stdout, expected in cases:
+            with self.subTest(label=label):
+                gh_calls: list[list[str]] = []
+                body_path: Path | None = None
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    nonlocal body_path
+                    gh_calls.append(args)
+                    body_path = Path(args[-1])
+                    self.assertTrue(body_path.exists())
+                    return mock.Mock(returncode=1, stdout=stdout, stderr=stderr)
+
+                decision = mock.Mock(
+                    allowed=True,
+                    owner_device="device-a",
+                    status="owner",
+                    action="post-banner",
+                    lease_id="lease-1",
+                    expires_at="2026-06-01T00:00:00Z",
+                )
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with self.assertRaisesRegex(RuntimeError, f"post_status_banner: {re.escape(expected)}"):
+                            self.actions.post_status_banner(self.banner_request())
+
+                self.assertEqual(1, len(gh_calls))
+                self.assertIsNotNone(body_path)
+                assert body_path is not None
+                self.assertFalse(body_path.exists())
+
+    def test_post_status_banner_non_owner_does_not_call_gh_or_create_tempfile(self) -> None:
+        decision = mock.Mock(
+            allowed=False,
+            owner_device="device-a",
+            status="not-owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile", side_effect=AssertionError("tempfile should not be created")):
+                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner action=post-banner"):
+                        self.actions.post_status_banner(self.banner_request())
+
+        status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("noop:not-owner", status["active_controller"])
+        self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
+
+    def test_post_status_banner_invalid_target_blocks_before_tempfile_or_gh(self) -> None:
+        invalid_targets = ("", "0", "01", "https://github.com/owner/repo/pull/77", "refactor/branch")
+        for target in invalid_targets:
+            with self.subTest(target=target):
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                with mock.patch("codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile", side_effect=AssertionError("tempfile should not be created")):
+                    with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
+                        with self.assertRaisesRegex(RuntimeError, "post-banner: invalid pr target from argument"):
+                            self.actions.post_status_banner(self.banner_request(target=target))
+                self.assertIn(
+                    "CONTROLLER_ACTION_BLOCKED:invalid-github-target:post-banner:pr:argument",
+                    self.pending_events(),
+                )
 
     # Refactor (iter276/issue-276): Old pattern: controller lifecycle targets
     # accepted empty or non-canonical GitHub ids before gh calls. New principle:
@@ -986,6 +1112,24 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
 
+    def test_status_banner_action_is_owner_gated_and_uses_gh_comment_command(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        method = text[text.index("def post_status_banner") : text.index("    def safe_sync_main")]
+        for needle in (
+            "def post_status_banner(self, request: BannerRequest) -> str:",
+            'self._require_owner_or_raise("post-banner")',
+            "_normalize_lifecycle_target_or_raise(",
+            "build_status_banner(normalized)",
+            "tempfile.NamedTemporaryFile",
+            "gh_comment_command(normalized, Path(tmp))",
+            "self.gh(",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        self.assertLess(method.index('self._require_owner_or_raise("post-banner")'), method.index("_normalize_lifecycle_target_or_raise("))
+        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index("tempfile.NamedTemporaryFile"))
+        self.assertLess(method.index("tempfile.NamedTemporaryFile"), method.index("self.gh("))
+
     def test_no_legacy_branch_alias_reads(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         for forbidden in (
@@ -1023,9 +1167,11 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
 
     def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
-        self.assertNotIn("Refactor (issue-300)", text)
-        self.assertNotIn("Old pattern", text)
-        self.assertNotIn("New principle", text)
+        merge_contract = text[text.index("    def _ensure_pr_ready_for_merge") : text.index("    def open_pr_with_label")]
+        self.assertNotIn("Refactor (issue-300)", merge_contract)
+        self.assertNotIn("Old pattern", merge_contract)
+        self.assertNotIn("New principle", merge_contract)
+        self.assertNotIn("stale draft PR state", text)
         self.assertIn('"pr", "create", "--draft"', text)
         self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
         self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)

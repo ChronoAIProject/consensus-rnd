@@ -585,6 +585,13 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("forwards every non-empty line", self.skill)
         self.assertIn("filtering only `tail -F` file headers", self.skill)
 
+    def test_status_banner_surface_is_controller_owned_action(self) -> None:
+        self.assertIn("`ControllerActions.post_status_banner`, GitHub labels", self.skill)
+        self.assertIn("`ControllerActions.post_status_banner` — controller-internal GitHub banner posting helper.", self.skill)
+        self.assertIn("ControllerActions.post_status_banner(BannerRequest(...))", self.skill)
+        self.assertIn("#191 active-controller owner gate", self.skill)
+        self.assertNotIn("consensus-rnd-cli post-banner", self.skill)
+
     def test_skill_rejects_unconditional_daemon_not_wake_source(self) -> None:
         self.assertIn(
             "daemon alone is not a wake source; daemon event files become a wake source only through a mounted Monitor bridge",

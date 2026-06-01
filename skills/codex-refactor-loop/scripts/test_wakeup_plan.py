@@ -325,6 +325,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             json_text = json_text.split("\nHARD_GATE:", 1)[0]
         return json.loads(json_text), result.stdout
 
+    def run_plan_with_env(
+        self,
+        env_updates: dict[str, str],
+        *,
+        fixture: str = "empty",
+        ps_count: int = 5,
+        active_audit: bool = False,
+    ) -> tuple[dict, str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}",
+                "CODEX_FLOOR": "5",
+                "GH_REPO_SLUG": "owner/repo",
+                "WAKEUP_PLAN_GH_FIXTURE": fixture,
+                "WAKEUP_PLAN_PS_COUNT": str(ps_count),
+                "WAKEUP_PLAN_ACTIVE_AUDIT": "1" if active_audit else "0",
+                "WAKEUP_PLAN_REPO_ROOT": str(self.repo.resolve()),
+                "WAKEUP_PLAN_GIT_LOG": str(self.repo / "git-commands.log"),
+                "WAKEUP_PLAN_GH_QUERY_LOG": str(self.repo / "gh-query-labels.log"),
+            }
+        )
+        env.update(env_updates)
+        result = subprocess.run(
+            ["python3", str(WAKEUP_PLAN), "wakeup-plan", "--repo-root", str(self.repo)],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        json_text = result.stdout
+        if "\nHARD_GATE:" in json_text:
+            json_text = json_text.split("\nHARD_GATE:", 1)[0]
+        return json.loads(json_text), result.stdout
+
     def write_dispatch(self, priority: str, task_id: str) -> Path:
         priority_dir = self.repo / ".refactor-loop" / "dispatch-queue" / priority
         priority_dir.mkdir(parents=True, exist_ok=True)
@@ -564,6 +601,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("def read_host_env", wakeup_source)
         self.assertNotIn("Path.cwd().resolve()", wakeup_source)
         self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
+
+    def test_wakeup_plan_bootstrap_uses_explicit_host_env_locator_not_legacy_path(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").unlink()
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True)
+        host_env.write_text(
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
+            encoding="utf-8",
+        )
+
+        plan, _stdout = self.run_plan_with_env({"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+
+        self.assertNotIn(
+            "bootstrap",
+            [action["kind"] for action in plan["actions"] if action.get("reason", "").startswith("missing")],
+        )
+        self.assertNotIn("bootstrap-missing", json.dumps(plan))
+        self.assertNotIn(".refactor-loop/host.env", json.dumps(plan))
+
+    def test_wakeup_plan_source_has_no_legacy_host_env_bootstrap_authority(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertNotIn("missing .refactor-loop/host.env", source)
+        self.assertNotIn('repo_root / ".refactor-loop" / "host.env"', source)
+        self.assertIn("ctx.host_env", source)
 
     def test_unpushed_worker_output_routes_before_completed_marker_ci_and_existing_issue(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")

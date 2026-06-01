@@ -550,6 +550,32 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual("canonical-review", config.review_base)
         self.assertEqual((self.repo / ".worktrees" / "dev-sync").resolve(), config.worktree.resolve())
 
+    def test_load_dev_sync_config_fails_closed_without_canonical_branch_env(self) -> None:
+        (self.repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "host.env").write_text(f"export REPO_ROOT={self.repo}\n", encoding="utf-8")
+
+        with self.assertRaisesRegex(Exception, "missing required host branch env"):
+            load_dev_sync_config(
+                env={
+                    "REPO_ROOT": str(self.repo),
+                    "INTEGRATION": "legacy-integration",
+                    "REVIEW_BASE": "legacy-review",
+                },
+                cwd=self.repo,
+            )
+
+    def test_load_dev_sync_config_strips_and_rejects_empty_branch_env(self) -> None:
+        (self.repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            f"export REPO_ROOT={self.repo}\n"
+            'export INTEGRATION_BRANCH=" "\n'
+            'export REVIEW_BASE_BRANCH="canonical-review"\n',
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(Exception, "INTEGRATION_BRANCH"):
+            load_dev_sync_config(env={"REPO_ROOT": str(self.repo)}, cwd=self.repo)
+
 
 class SyncDevSourceRegressionTests(unittest.TestCase):
     def test_module_is_import_safe_without_repo_root(self) -> None:
@@ -571,9 +597,22 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
 
     def test_dev_sync_source_does_not_read_legacy_branch_or_worktree_aliases(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
-        for forbidden in ('get("INTEGRATION")', 'get("REVIEW_BASE")', 'get("WORKTREE"'):
+        for forbidden in (
+            'get("INTEGRATION")',
+            'get("REVIEW_BASE")',
+            'get("WORKTREE"',
+            "DEFAULT_INTEGRATION_BRANCH",
+            "DEFAULT_REVIEW_BASE_BRANCH",
+        ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, src)
+
+    def test_dev_sync_source_requires_host_branch_env_fail_closed(self) -> None:
+        src = SYNC_DEV.read_text(encoding="utf-8")
+        self.assertIn('merged_env.get("INTEGRATION_BRANCH", "")', src)
+        self.assertIn('merged_env.get("REVIEW_BASE_BRANCH", "")', src)
+        self.assertIn("missing required host branch env", src)
+        self.assertIn("LoopContextError", src)
 
     def test_narrow_allowlist_contract_is_visible_in_module_source(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")
@@ -585,9 +624,6 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
         self.assertNotIn("DEV_SYNC_REQUEST:", src)
-        self.assertNotIn("Refactor (", src)
-        self.assertNotIn("Old pattern", src)
-        self.assertNotIn("New principle", src)
 
     def test_sync_source_regression_uses_durable_display_paths(self) -> None:
         src = SYNC_DEV.read_text(encoding="utf-8")

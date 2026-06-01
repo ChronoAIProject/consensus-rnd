@@ -127,7 +127,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "comment-monitor",
                 "progress-reporter",
                 "phase9-router",
-                "post-banner",
                 "release-commits",
                 "release-gate",
                 "release-required-checks",
@@ -323,6 +322,13 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         }:
             with self.subTest(command=command):
                 self.assertNotIn(command, COMMANDS)
+
+    def test_post_banner_is_not_public_cli_surface(self) -> None:
+        self.assertNotIn("post-banner", COMMANDS)
+        for name, spec in COMMANDS.items():
+            with self.subTest(command=name):
+                if "banner" in name:
+                    self.assertNotIn("gh-comment", spec.authority)
 
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)

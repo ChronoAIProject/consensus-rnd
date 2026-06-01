@@ -15,6 +15,7 @@ from typing import Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
+from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
@@ -47,8 +48,20 @@ class ControllerActions:
     def __init__(self, ctx: LoopContext) -> None:
         self.ctx = ctx
         merged_env = {**os.environ, **ctx.host_env}
-        self.integration_branch = merged_env.get("INTEGRATION_BRANCH") or "auto-refact-dev"
-        self.review_base_branch = merged_env.get("REVIEW_BASE_BRANCH") or "dev"
+        self.integration_branch = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
+        self.review_base_branch = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
+        if ctx.host_env and ctx.gh_repo_slug:
+            self._require_branch_config()
+
+    def _require_branch_config(self) -> tuple[str, str]:
+        missing = [
+            name
+            for name, value in (("INTEGRATION_BRANCH", self.integration_branch), ("REVIEW_BASE_BRANCH", self.review_base_branch))
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(f"missing required host branch env: {', '.join(missing)}")
+        return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         full = ["gh", *(str(a) for a in args)]
@@ -142,6 +155,35 @@ class ControllerActions:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
         publisher = ReleasePublisher(self.ctx.repo_root)
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
+
+    def post_status_banner(self, request: BannerRequest) -> str:
+        self._require_owner_or_raise("post-banner")
+        target = self._normalize_lifecycle_target_or_raise(
+            request.target,
+            kind=request.kind,
+            action="post-banner",
+            source="argument",
+        )
+        normalized = BannerRequest(
+            target=target,
+            kind=request.kind,
+            role=request.role,
+            detail=request.detail,
+            log=request.log,
+            cd=request.cd,
+            stall=request.stall,
+        )
+        body = build_status_banner(normalized)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+            handle.write(body)
+            tmp = handle.name
+        try:
+            result = self.gh(gh_comment_command(normalized, Path(tmp))[1:], check=False)
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"post_status_banner: {result.stderr.strip() or result.stdout.strip()}")
+        return result.stdout.strip()
 
     def safe_sync_main(self, remote: str = "origin", branch: str = "") -> int:
         if not self._require_owner_or_return("safe-sync-main", code=3):
@@ -264,7 +306,7 @@ class ControllerActions:
 
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
         self._require_owner_or_raise("open-pr")
-        base = base or self.integration_branch
+        base = base or self._require_branch_config()[0]
         if not head:
             raise RuntimeError("open_pr_with_label: head branch required (avoid gh fallback to current branch = base)")
         self._validate_pr_body_file(body_file)
@@ -373,8 +415,9 @@ class ControllerActions:
         if not isinstance(event, dict):
             raise RuntimeError("open_release_rollup_pr_from_pending_event: event must be a JSON object")
 
-        integration_branch = str(event.get("integration_branch") or self.integration_branch).strip()
-        review_base_branch = str(event.get("review_base_branch") or self.review_base_branch).strip()
+        default_integration, default_review_base = self._require_branch_config()
+        integration_branch = str(event.get("integration_branch") or default_integration).strip()
+        review_base_branch = str(event.get("review_base_branch") or default_review_base).strip()
         integration_sha = str(event.get("integration_sha") or "").strip()
         if not integration_branch or not review_base_branch or not integration_sha:
             raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")

@@ -18,7 +18,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
 | Host config | Loop runtime facts come only from host-owned `host.env`; skill text remains host-agnostic. | `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before running actors; fail closed if required vars are absent. `.refactor-loop/` is skill-private runtime/cache/log state, not host production SSOT. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
-| GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `consensus-rnd-cli post-banner`, GitHub labels |
+| GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `ControllerActions.post_status_banner`, GitHub labels |
 | Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and six write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller = pure orchestration. It routes, posts, labels, spawns, commits, pushes, merges; codex workers change code. Narrow Consensus-rnd Phase design-consensus allowlist dispatch is the named daemon exception. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
@@ -94,8 +94,8 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$GH_REPO_NAME` | compatibility | LoopContext | optional repo-name fallback | noop when `$GH_REPO_SLUG` is present; used only with `$GH_OWNER` compatibility construction | LoopContext | `test_loop_context.py` |
 | `$BUILD_CMD` | required | LoopContext | host shell command string | fail closed for build-required work; callers must execute with `bash -lc "$BUILD_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
 | `$TEST_CMD` | required | LoopContext | host shell command string | fail closed for test-required work; callers must execute with `bash -lc "$TEST_CMD"` after sourcing host.env | prompt templates | `test_skill_entrypoint_contract.py` |
-| `$INTEGRATION_BRANCH` | defaulted | sync helpers | `auto-refact-dev` | default to `auto-refact-dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
-| `$REVIEW_BASE_BRANCH` | defaulted | sync helpers | `dev` | default to `dev`; release checks fail closed when branch evidence is empty | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$INTEGRATION_BRANCH` | required | sync helpers | host integration branch name | fail closed when missing or empty; never infer host branch topology or default to a product branch | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
+| `$REVIEW_BASE_BRANCH` | required | sync helpers | host review-base branch name | fail closed when missing or empty; never infer host branch topology or default to a product branch | sync helpers, release-gate | `test_sync_dev.py`, `test_auto_release_gate.py` |
 | `$PROJECT_RULES` | defaulted | LoopContext | `CLAUDE.md` | default to `CLAUDE.md` as host-owned read-only prompt/bootstrap evidence; non-current fixed points produce a patch artifact and fail closed | LoopContext, prompt templates | `test_ensure_project_rules_fixed_points.py` |
 | `$RELEASE_AUTO_ENABLE` | defaulted | release-gate | `false` | false or empty exits 0 with noop reason and writes no release decision artifact | release-gate | `test_auto_release_gate.py`, `test_release_gate_module.py` |
 | `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS` | defaulted | release required-check projection | host-owned comma-separated exact check-run names, e.g. `ci,lint,typecheck` | comma-separated exact GitHub check-run names; empty has no effect for non-release hosts, but `RELEASE_AUTO_ENABLE=true` with empty/missing fails closed with `missing_host_required_release_checks` | release-gate, ReleasePublishPreflight, ReleasePublisher | `test_required_release_checks.py`, `test_auto_release_gate.py`, `test_release_publish_preflight.py` |
@@ -323,7 +323,7 @@ Fact source and verification: projection logic lives in `closed_phase_labels.py`
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
 
 ## Named runtime exception — observability-comment-writers(per #53)
-Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#observability-comment-writers-53`. **Narrow allowlist**: GitHub issue/PR comments, PR body edit, reactions, and deleting/updating own progress comments only. Issue/PR target writes still require the #191 `ActiveControllerLease` / `require_active_controller(...)` gate; #53 is not a cross-device write permit. **Forbidden**: label mutation, issue/PR close/create/merge, release/tag, and git lifecycle. Triage accept/reject writes manual issue triage decision artifacts for controller apply instead of mutating labels/body directly.
 
 ## Named runtime exception — integration sync daemon(per #65)
 Authorization mirror: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-release-rollup-65`. It records the existing-review-base pending-event boundary. **Narrow allowlist**: release-rollup detection and existing-format pending-event emission only; event facts include `integration_branch`, `review_base_branch`, `integration_sha`, `review_base_sha`, `ahead_count`, `detected_at`, and `reason`.
@@ -808,7 +808,7 @@ Operational details live in [language policy details](#language-policy-details);
 - [scripts/consensus-rnd-cli spawn-codex](scripts/consensus-rnd-cli spawn-codex) — codex supervisor.
 - [scripts/consensus-rnd-cli peek](scripts/consensus-rnd-cli peek) — controller wakeup summary.
 - `scripts/codex_refactor_loop/controller_actions.py` — controller-internal lifecycle primitives; not a public CLI command surface.
-- [scripts/consensus-rnd-cli post-banner](scripts/consensus-rnd-cli post-banner) — GitHub banner posting helper.
+- `ControllerActions.post_status_banner` — controller-internal GitHub banner posting helper.
 - [scripts/consensus-rnd-cli check-project-rules](scripts/consensus-rnd-cli check-project-rules) — read-only Consensus-rnd Phase bootstrap fixed-point probe; writes patch artifact only.
 - [scripts/consensus-rnd-cli concurrency](scripts/consensus-rnd-cli concurrency) — no-gap sentinel daemon.
 - [scripts/consensus-rnd-cli restart-daemons](scripts/consensus-rnd-cli restart-daemons) — cron/launchd anti-stop helper for existing daemon wrappers.
@@ -1487,13 +1487,7 @@ routing authority and must not replace the loop-owned phase/human axes.
 
 **两步流程**(per spawn):
 
-1. **先 post banner**(blocking Bash,几秒):
-   ```bash
-   python3 <skill-root>/scripts/consensus-rnd-cli post-banner \
-     --banner-target <issue-or-pr> --banner-kind <issue|pr> \
-     --banner-role <role> --banner-detail "..." \
-     --log <log-path> --cd <worktree> --stall <s>
-   ```
+1. **先 post banner**:controller 在同一 turn 调用 `ControllerActions.post_status_banner(BannerRequest(...))`;该 internal action 先过 #191 active-controller owner gate,再校验 issue/PR target,写 body tempfile,并通过 `self.gh(...)` 发布。
 
 2. **再 spawn codex**(Bash `run_in_background: true`):
    ```bash
@@ -1512,7 +1506,7 @@ routing authority and must not replace the loop-owned phase/human axes.
 **禁止**:
 - ❌ controller 主链路用 `nohup ... &` 或 `Popen + start_new_session` detach codex
 - ❌ 用 blocking Bash 跑 codex(同步等 60 分钟 → conversation 卡死)
-- ❌ 漏 post banner → GitHub 看不到运行状态(per `consensus-rnd-cli post-banner` 强制)
+- ❌ 漏 post banner → GitHub 看不到运行状态(per `ControllerActions.post_status_banner` 强制)
 
 ### Controller 自检(每次 wakeup)
 
@@ -1581,17 +1575,17 @@ There is no root `.refactor-loop/state.json` bootstrap schema. Work-unit recover
 GitHub labels/comments, clean `EXIT=0` log tails, prompt artifacts, git topology, and named
 producer-owned state artifacts.
 
-**Default integration branch**: `auto-refact-dev`. This is the long-lived branch where all auto-refactor cluster PRs land before rolling up to `dev`. On a fresh loop:
+**Integration branch setup**: `$INTEGRATION_BRANCH` and `$REVIEW_BASE_BRANCH` are required host.env facts. The integration branch is the long-lived branch where all auto-refactor cluster PRs land before rolling up to the review base. On a fresh loop:
 
 ```bash
-# Idempotent setup — safe to re-run
+test -n "${INTEGRATION_BRANCH:-}" && test -n "${REVIEW_BASE_BRANCH:-}"
 git fetch origin
-git checkout -B auto-refact-dev origin/auto-refact-dev 2>/dev/null \
-  || git checkout -b auto-refact-dev origin/dev
-git push -u origin auto-refact-dev 2>/dev/null || true
+git checkout -B "$INTEGRATION_BRANCH" "origin/$INTEGRATION_BRANCH" 2>/dev/null \
+  || git checkout -b "$INTEGRATION_BRANCH" "origin/$REVIEW_BASE_BRANCH"
+git push -u origin "$INTEGRATION_BRANCH" 2>/dev/null || true
 ```
 
-Override only when the user explicitly names a different integration branch (e.g., to test a new audit prompt without polluting the canonical one). Existing loops on a different branch can keep their name; the default applies only to **new** Consensus-rnd Phase bootstrap runs.
+Do not infer branch names from this skill. Existing loops keep their host.env branch names; missing or empty branch variables fail closed before bootstrap, sync, PR creation, release-commit projection, or release-gate branch checks.
 
 **`pr_mode` choice (set in Consensus-rnd Phase bootstrap; do not change mid-loop)**:
 
@@ -1783,10 +1777,10 @@ git pull --ff-only origin auto-refact-dev
 bash -lc "$BUILD_CMD"
 ```
 
-若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 auto-refact-dev,不开 PR):
+若 trunk build 错 → 立即派 **hotfix codex**(直接 push 到 `$INTEGRATION_BRANCH`,不开 PR):
 - 在 `$REPO_ROOT/.worktrees/hotfix-trunk` worktree 跑 codex 修
 - 用 `.refactor-loop/prompts/hotfix-trunk-*.md` 模板(参考 iterN hotfix 模板)
-- IMPLEMENT_DONE marker + controller commit/push 到 auto-refact-dev 直接
+- IMPLEMENT_DONE marker + controller commit/push 到 `$INTEGRATION_BRANCH` 直接
 
 结构性教训:两个独立 PR 各自 CI 绿仍可能在顺序 merge 后引入 trunk build break,典型原因是一个 PR 重命名 API、另一个 PR 仍引用旧名。每次 merge 后必须在 trunk 重新跑 `$BUILD_CMD`,失败则立即派 hotfix codex。
 
@@ -2767,9 +2761,9 @@ NEEDED=$(( FLOOR - ACTIVE ))
 
 Policy:controller must sync with remote promptly before deriving GitHub and branch state.
 
-- After EVERY skill edit that affects controller behavior, `git commit && git push origin auto-refact-dev` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
+- After EVERY skill edit that affects controller behavior, `git commit && git push origin "$INTEGRATION_BRANCH"` IMMEDIATELY — do not batch multiple skill changes for a single push, do not defer to "end of turn".
 - After EVERY cluster PR commit (fix codex round output): `git push origin <branch>` IMMEDIATELY — the reviewer / CI / maintainer all need to see latest state, not yesterday's local state.
-- Consensus-rnd Phase integration-sync sync (auto-refact-dev ← origin/dev) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
+- Consensus-rnd Phase integration-sync sync (`$INTEGRATION_BRANCH` ← `origin/$REVIEW_BASE_BRANCH`) runs FIRST on every controller wakeup; never assume "I just synced" — verify with `git fetch && git rev-list --count`.
 - Consensus-rnd Phase ci-watch CI watch reads `consensus-rnd-cli pr-checks`
   (PR-head Checks API projection, always remote), never a local cached value.
 - Consensus-rnd Phase design-intake/8/9 reviewer/judge outputs MUST be posted to GitHub as PR/issue comments within the same controller turn they complete; do not let them sit local-only across multiple turns.

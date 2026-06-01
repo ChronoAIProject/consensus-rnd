@@ -9,6 +9,7 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
+README = REPO_ROOT / "README.md"
 
 
 class SourcePublicationBoundaryContract(unittest.TestCase):
@@ -32,14 +33,29 @@ class SourcePublicationBoundaryContract(unittest.TestCase):
         self.assertEqual(0, ignored.returncode, ignored.stderr)
         self.assertEqual(".claude/settings.json", ignored.stdout.strip())
 
-    def test_tracked_claude_surface_is_only_skill_link(self) -> None:
+    def test_claude_skills_link_is_not_tracked_and_is_ignored(self) -> None:
+        tracked = self.run_git("ls-files", "--error-unmatch", ".claude/skills")
+        self.assertNotEqual(0, tracked.returncode, tracked.stdout)
+
+        ignored = self.run_git("check-ignore", ".claude/skills")
+        self.assertEqual(0, ignored.returncode, ignored.stderr)
+        self.assertEqual(".claude/skills", ignored.stdout.strip())
+
+    def test_no_tracked_claude_skill_surface_remains(self) -> None:
         tracked = self.run_git("ls-files", ".claude")
         self.assertEqual(0, tracked.returncode, tracked.stderr)
         tracked_paths = set(tracked.stdout.splitlines())
 
-        self.assertEqual({".claude/skills"}, tracked_paths)
+        self.assertNotIn(".claude/skills", tracked_paths)
         self.assertNotIn(".claude/settings.json", tracked_paths)
         self.assertNotIn(".claude/settings.local.json", tracked_paths)
+
+    def test_readme_documents_local_claude_symlink_as_unpublished_setup(self) -> None:
+        readme = README.read_text(encoding="utf-8")
+
+        self.assertIn("`.claude/skills -> ../skills`", readme)
+        self.assertIn("ignored", readme)
+        self.assertIn("not a published Claude entrypoint", readme)
 
     def test_publication_boundary_contract_is_release_gated(self) -> None:
         workflow = (REPO_ROOT / ".github/workflows/consensus-rnd-ci.yml").read_text(encoding="utf-8")

@@ -532,10 +532,10 @@ def actor_from_marker(marker: str) -> str:
     return "controller"
 
 
-def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[dict[str, Any]]:
+def pending_bootstrap_actions(ctx: LoopContext, health: dict[str, Any]) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
-    host_env = repo_root / ".refactor-loop" / "host.env"
-    if not host_env.exists():
+    repo_root = ctx.repo_root
+    if not ctx.host_env:
         actions.append(
             {
                 "priority": 1,
@@ -543,7 +543,7 @@ def pending_bootstrap_actions(repo_root: Path, health: dict[str, Any]) -> list[d
                 "item": None,
                 "phase": "bootstrap",
                 "actor": "controller",
-                "reason": "missing .refactor-loop/host.env",
+                "reason": "missing host-owned consensus-rnd host.env; set CONSENSUS_RND_HOST_ENV to the runtime injection file",
             }
         )
     if health["recommendation"]:
@@ -995,7 +995,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     )
 
     actions: list[dict[str, Any]] = []
-    actions.extend(pending_bootstrap_actions(repo_root, health))
+    actions.extend(pending_bootstrap_actions(ctx, health))
     actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
