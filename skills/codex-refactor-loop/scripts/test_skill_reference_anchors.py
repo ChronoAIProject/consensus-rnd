@@ -1327,7 +1327,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "evidence-bound closed action projection",
             "`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source",
             "不得新增 `ControllerTurnDecision`/controller-turn worker/schema",
-            "不得接受 argv/shell/cmd/commands/env/git/gh/executor/generic command fields",
+            "不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "不得把 `.refactor-loop/host.env` 当 host production SSOT",
             "允许动作仅限 spawn codex",
             "named helper `dispatch_consensus_implementation`",

@@ -894,13 +894,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         by_kind = {action["kind"]: action for action in plan["actions"]}
         by_kind["existing-issue"] = [action for action in existing_plan["actions"] if action["kind"] == "existing-issue"][0]
-        for kind in ("completed-marker", "ci-red", "existing-issue"):
+        for kind in ("ci-red", "existing-issue"):
             with self.subTest(kind=kind):
                 self.assertTrue(by_kind[kind]["status_only"])
                 self.assertTrue(by_kind[kind]["no_lifecycle_authority"])
                 self.assertNotIn("runner_authority", by_kind[kind])
                 self.assertNotIn("no_generic_command", by_kind[kind])
                 self.assertTrue(str(by_kind[kind]["controller_action"]).startswith("dispatch_"))
+
+    def test_fix_done_completed_marker_projects_executable_dispatch_reviewers(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan()
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertEqual(action["target"], {"kind": "PR", "number": 77})
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
+            self.assertNotIn(forbidden, action)
 
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
@@ -998,6 +1016,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for helper in (
             "dispatch_consensus_implementation",
             "publish_implementation_output",
+            "dispatch_reviewers",
             "open_release_rollup_pr_from_action",
         ):
             with self.subTest(helper=helper):

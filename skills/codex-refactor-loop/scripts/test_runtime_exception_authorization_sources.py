@@ -551,7 +551,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "workflow tag/release",
             "prompt-body decision",
             "standalone authorization from `wakeup-plan`",
-            "argv/shell/cmd/commands/env/git/gh/executor/generic command fields",
+            "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "`ControllerTurnDecision`",
             "controller-turn worker",
             "private schema",

@@ -275,6 +275,26 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def reviewer_dispatch_action(self, **overrides) -> dict:
+        marker = "FIX_DONE:414:round-2:applied-1:rejected-0:blocked-0"
+        log = self.repo / ".refactor-loop/logs/fix-pr77-r3.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:fix-pr77-r3.log:FIX_DONE:414:round-2:applied-1:rejected-0:blocked-0",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            "source_artifact": ".refactor-loop/logs/fix-pr77-r3.log",
+            "source_marker": marker,
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "controller_action": "dispatch_reviewers",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
     def consensus_action(self, **overrides) -> dict:
         artifact = self.repo / ".refactor-loop/runs/phase9-issue20-r5-judge.md"
         artifact.write_text(
@@ -328,11 +348,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assert_blocked_before_dispatch(results, "spawn:target-log-exists", "target_log_exists", actions)
 
     def test_forbidden_fields_fail_closed(self) -> None:
-        results = self.run_result(self.base_plan(self.spawn_action(argv=["gh", "pr", "merge"])))
+        for field in ("argv", "command_line", "lifecycle_authority", "lifecycle_owner", "target_ref"):
+            with self.subTest(field=field):
+                results = self.run_result(self.base_plan(self.spawn_action(action_id=f"forbidden:{field}", **{field: "forbidden"})))
 
-        self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(results[0].reason, "forbidden_fields:argv")
-        self.assertEqual(self.supervisor.calls, [])
+                self.assertEqual(results[0].status, "blocked")
+                self.assertEqual(results[0].reason, f"forbidden_fields:{field}")
+                self.assertEqual(self.supervisor.calls, [])
 
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
@@ -581,6 +603,43 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             actions,
         )
 
+    def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.reviewer_dispatch_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
+
+    def test_dispatch_reviewers_blocks_missing_or_non_pr_target_before_helper(self) -> None:
+        cases = (
+            (
+                "missing-target",
+                self.reviewer_dispatch_action(
+                    action_id="dispatch-reviewers:missing-target",
+                    target_kind=None,
+                    target_number=None,
+                    target=None,
+                ),
+                "dispatch_reviewers_target_missing",
+            ),
+            (
+                "issue-target",
+                self.reviewer_dispatch_action(
+                    action_id="dispatch-reviewers:issue-target",
+                    target_kind="issue",
+                    target_number=77,
+                    target={"kind": "issue", "number": 77},
+                ),
+                "dispatch_reviewers_target_missing",
+            ),
+        )
+        for name, action, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_release_rollup_routes_to_named_helper_after_event_body_validation(self) -> None:
         actions = FakeActions()
 
@@ -594,10 +653,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         for helper in (
             "dispatch_consensus_implementation",
             "publish_implementation_output",
+            "dispatch_reviewers",
             "open_release_rollup_pr_from_action",
         ):
             with self.subTest(helper=helper):
                 self.assertIn(helper, source)
+        for forbidden in ("command_line", "lifecycle_authority", "lifecycle_owner"):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
 

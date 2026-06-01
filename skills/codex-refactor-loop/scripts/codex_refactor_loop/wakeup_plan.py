@@ -75,6 +75,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
+    "dispatch_reviewers",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",

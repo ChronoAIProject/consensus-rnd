@@ -26,7 +26,20 @@ from .wakeup_plan import build_plan
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
 APPLY_AUTHORITY = "wakeup-runner-396-only"
-FORBIDDEN_ACTION_FIELDS = {"argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor"}
+FORBIDDEN_ACTION_FIELDS = {
+    "argv",
+    "args",
+    "shell",
+    "cmd",
+    "command_line",
+    "commands",
+    "env",
+    "git",
+    "gh",
+    "executor",
+    "lifecycle_authority",
+    "lifecycle_owner",
+}
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$")
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
@@ -145,6 +158,8 @@ class WakeupRunner:
         forbidden = sorted(FORBIDDEN_ACTION_FIELDS.intersection(action))
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)
+        if "target_ref" in action and action.get("controller_action") != "publish_release_candidate":
+            return "forbidden_fields:target_ref"
         if action.get("runner_authority") != RUNNER_AUTHORITY:
             return "runner_authority_mismatch"
         if action.get("no_generic_command") is not True:
