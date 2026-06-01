@@ -170,7 +170,6 @@ class ControllerActions:
             role=request.role,
             detail=request.detail,
             log=request.log,
-            cd=request.cd,
             stall=request.stall,
         )
         body = build_status_banner(normalized)
