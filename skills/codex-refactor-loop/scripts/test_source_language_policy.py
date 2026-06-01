@@ -245,7 +245,7 @@ class SourceLanguagePolicyTests(unittest.TestCase):
 
             comment_results = comment_findings(source_path, repo_root)
             string_results = string_findings(source_path, repo_root)
-            scan_results = scan_python_source_language(repo_root)
+            scan_results = scan_python_source_language(repo_root, refactor_comment_policy=REFACTOR_POLICY_NONE)
 
         expected_path = ".github/scripts/prohibited_sample.py"
         comment_reasons = {(finding.relative_path, finding.line, finding.reason) for finding in comment_results}
