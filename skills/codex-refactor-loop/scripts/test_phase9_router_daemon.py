@@ -488,7 +488,6 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     def test_phase9_router_issue_state_reader_fails_closed_on_bad_gh_results(self) -> None:
         cases = (
             mock.Mock(returncode=1, stdout="", stderr="missing"),
-            mock.Mock(returncode=0, stdout="{not-json", stderr=""),
             mock.Mock(returncode=0, stdout=json.dumps({}), stderr=""),
             mock.Mock(returncode=0, stdout=json.dumps({"state": ""}), stderr=""),
         )
@@ -499,6 +498,22 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.assertFalse(decision.allowed)
                 self.assertIsNone(decision.state)
                 self.assertEqual(decision.reason, "phase9-source-state-unavailable")
+
+    def test_phase9_router_issue_state_reader_uses_rest_api_not_graphql_view(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append(list(command))
+            return mock.Mock(returncode=0, stdout="open\n", stderr="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            decision = self.original_source_issue_reader(self.router, "37")
+
+        self.assertTrue(decision.allowed)
+        self.assertEqual(decision.state, "OPEN")
+        self.assertEqual(calls[0][:2], ["gh", "api"])
+        self.assertRegex(calls[0][2], r"^repos/[^/]+/[^/]+/issues/37$")
+        self.assertNotIn("view", calls[0])
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)
@@ -1450,9 +1465,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
         for required in (
             "gh",
+            "api",
+            "repos/",
             "issue",
-            "view",
-            "--json",
+            "--jq",
             "state",
             "OPEN",
             "phase9-source-not-open",
@@ -1463,6 +1479,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
                 self.assertIn(required, src)
         self.assertNotIn('"state,labels"', src)
         self.assertNotIn('"labels"', src)
+        self.assertNotIn('"view"', src[src.index("def _read_source_issue_decision") : src.index("def _append_source_issue_fallback_event")])
         for forbidden in (
             "gh issue close",
             "gh issue edit",

@@ -89,6 +89,17 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
 
+    def test_controller_actions_source_locks_named_wakeup_runner_helpers(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        for helper in (
+            "def dispatch_consensus_implementation",
+            "def publish_implementation_output",
+            "def open_release_rollup_pr_from_action",
+            "HARNESS_SPAWN_INTENT",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, source)
+
     def test_pr_open_helpers_do_not_use_legacy_branch_alias_values(self) -> None:
         body = self.tmp / "body.md"
         body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")

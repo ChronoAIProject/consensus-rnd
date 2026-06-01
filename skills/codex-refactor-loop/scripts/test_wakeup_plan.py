@@ -886,6 +886,56 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
 
+    def test_named_g1_g3_helpers_remain_executable_without_generic_command_fields(self) -> None:
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:ok")
+        (self.repo / ".refactor-loop/runs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").write_text(
+            "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        event = {
+            "integration_branch": "integration",
+            "review_base_branch": "review",
+            "integration_sha": "abc123",
+            "review_base_sha": "def456",
+            "ahead_count": 1,
+            "reason": "integration-ahead-review-base-without-open-rollup-pr",
+        }
+        with (self.repo / ".refactor-loop/.controller-pending-events.log").open("a", encoding="utf-8") as handle:
+            handle.write("DEV_SYNC_PENDING:release-rollup-needed:" + json.dumps(event, sort_keys=True) + "\n")
+
+        plan = self.run_plan(fixture="milestone")
+
+        executable = {
+            action["controller_action"]: action
+            for action in plan["actions"]
+            if action.get("runner_authority") == "wakeup-runner-396"
+        }
+        for helper in (
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "open_release_rollup_pr_from_action",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, executable)
+                self.assertNotIn("status_only", executable[helper])
+                self.assertTrue(executable[helper]["no_generic_command"])
+                for forbidden in ("argv", "shell", "cmd", "commands", "env", "git", "gh", "executor"):
+                    self.assertNotIn(forbidden, executable[helper])
+
+    def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for helper in (
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "open_release_rollup_pr_from_action",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, source)
+        self.assertNotIn("HeadlessLifecycleAction", source)
+        self.assertNotIn("headless_actions", source)
+
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")
 

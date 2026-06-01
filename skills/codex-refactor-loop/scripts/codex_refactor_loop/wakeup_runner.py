@@ -35,7 +35,11 @@ REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_consensus_implementation",
+    "publish_implementation_output",
     "publish_worker_output_from_action",
+    "dispatch_reviewers",
+    "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
@@ -197,6 +201,14 @@ class WakeupRunner:
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        if controller_action == "dispatch_consensus_implementation":
+            return self._validate_consensus_implementation(action)
+        if controller_action == "publish_implementation_output":
+            return self._validate_publish_implementation(action)
+        if controller_action == "dispatch_reviewers":
+            return self._validate_dispatch_reviewers(action)
+        if controller_action == "open_release_rollup_pr_from_action":
+            return self._validate_release_rollup(action)
         if controller_action == "close_managed_item_from_drop_marker":
             return self._validate_close_managed_drop(action)
         return None
@@ -274,13 +286,48 @@ class WakeupRunner:
             return "release_preflight_denied:" + ",".join(result.reasons)
         return None
 
+    def _validate_consensus_implementation(self, action: Mapping[str, Any]) -> str | None:
+        if "consensus_artifact_present" not in action.get("preconditions", []):
+            return "consensus_implementation_missing_precondition:consensus_artifact_present"
+        return None
+
+    def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:
+        return self._validate_safe_push(action)
+
+    def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "dispatch_reviewers_target_missing"
+        return None
+
+    def _validate_release_rollup(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "release_rollup_event" not in preconditions:
+            return "release_rollup_missing_precondition:release_rollup_event"
+        event = action.get("event")
+        if not isinstance(event, dict):
+            return "release_rollup_event_missing"
+        if not str(event.get("integration_sha") or "").strip():
+            return "release_rollup_integration_sha_missing"
+        body_file = self.ctx.repo_root / str(action.get("body_file") or "")
+        if not body_file.is_file():
+            return "release_rollup_body_missing"
+        return None
+
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:
         if controller_action == "spawn_codex_harness_background":
             return self._spawn_codex(action)
         if controller_action == "safe_push":
             return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
+        if controller_action == "dispatch_consensus_implementation":
+            return self.actions.dispatch_consensus_implementation(dict(action))
+        if controller_action == "publish_implementation_output":
+            return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
+        if controller_action == "dispatch_reviewers":
+            return self.actions.dispatch_reviewers(dict(action))
+        if controller_action == "open_release_rollup_pr_from_action":
+            return self.actions.open_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
             return self.actions.close_managed_item_from_drop_marker(dict(action))
         if controller_action == "review_gate":

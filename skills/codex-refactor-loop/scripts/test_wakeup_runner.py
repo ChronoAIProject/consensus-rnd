@@ -45,6 +45,22 @@ class FakeActions:
         self.calls.append(("publish_worker_output_from_action", dict(action)))
         return self.publish_code
 
+    def publish_implementation_output(self, action: dict) -> int:
+        self.calls.append(("publish_implementation_output", dict(action)))
+        return self.publish_code
+
+    def dispatch_consensus_implementation(self, action: dict) -> int:
+        self.calls.append(("dispatch_consensus_implementation", dict(action)))
+        return 0
+
+    def dispatch_reviewers(self, action: dict) -> int:
+        self.calls.append(("dispatch_reviewers", dict(action)))
+        return 0
+
+    def open_release_rollup_pr_from_action(self, action: dict) -> int:
+        self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
+        return 0
+
     def close_managed_item_from_drop_marker(self, action: dict) -> int:
         self.calls.append(("close_managed_item_from_drop_marker", dict(action)))
         return self.close_code
@@ -231,6 +247,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
             "head_ref": "refactor/iter77-worker",
             "worktree": str(worktree),
+        }
+        action.update(overrides)
+        return action
+
+    def release_rollup_action(self, **overrides) -> dict:
+        body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"
+        body.write_text("## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        marker = 'DEV_SYNC_PENDING:release-rollup-needed:{"integration_sha":"abc123"}'
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "release-rollup-needed",
+            "action_id": "release-rollup-needed:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "release_rollup_event"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "release-rollup",
+            "target_number": None,
+            "target": {"kind": "release-rollup", "integration_sha": "abc123"},
+            "controller_action": "open_release_rollup_pr_from_action",
+            "no_generic_command": True,
+            "event": {"integration_sha": "abc123"},
+            "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
         }
         action.update(overrides)
         return action
@@ -463,6 +503,37 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_worker_output_from_action")
+
+    def test_publish_implementation_output_routes_to_named_helper(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.base_plan(self.worker_output_action(controller_action="publish_implementation_output")),
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_release_rollup_routes_to_named_helper_after_event_body_validation(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.release_rollup_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "open_release_rollup_pr_from_action")
+
+    def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        for helper in (
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "open_release_rollup_pr_from_action",
+        ):
+            with self.subTest(helper=helper):
+                self.assertIn(helper, source)
+        self.assertNotIn("HeadlessLifecycleAction", source)
+        self.assertNotIn("headless_actions", source)
 
     def test_close_managed_item_from_drop_marker_routes_to_named_helper(self) -> None:
         actions = FakeActions()

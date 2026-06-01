@@ -764,6 +764,24 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
             self.assertIn(str(self.repo), line)
             self.assertNotIn(" -c ", line)
 
+    def test_relative_cd_in_process_table_counts_against_repo_root(self) -> None:
+        import io
+        fake_ps = (
+            "bash consensus-rnd-cli spawn-codex --cd . --prompt .refactor-loop/prompts/a.md --log .refactor-loop/logs/a.log\n"
+            "bash consensus-rnd-cli spawn-codex --cd .worktrees/task --prompt .refactor-loop/prompts/b.md --log .refactor-loop/logs/b.log\n"
+            "bash consensus-rnd-cli spawn-codex --cd ../outside --prompt /tmp/c.md --log /tmp/c.log\n"
+        )
+        captured = io.StringIO()
+        with mock.patch.object(
+            self.module.subprocess,
+            "run",
+            return_value=mock.Mock(stdout=fake_ps, returncode=0),
+        ), mock.patch.object(sys, "stdout", captured):
+            exit_code = self.module.main(["--count-only"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(captured.getvalue().strip(), "2")
+
     # Refactor (cli-readonly-fallback): Old pattern: --count-only / --list-codex /
     # --once raised RuntimeError at module load when REPO_ROOT was unset, even
     # though SKILL.md mandates them as canonical CLI for controllers (which

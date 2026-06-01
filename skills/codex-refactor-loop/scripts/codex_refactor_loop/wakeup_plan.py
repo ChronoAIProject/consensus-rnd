@@ -72,7 +72,10 @@ READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtim
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_consensus_implementation",
+    "publish_implementation_output",
     "publish_worker_output_from_action",
+    "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
@@ -81,6 +84,7 @@ EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "unpushed-worker-output",
     "completed-marker",
+    "release-rollup-needed",
     "ci-red",
     "no-gap-violation",
     "existing-issue",
@@ -895,6 +899,61 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
     return actions
 
 
+def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
+    pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    if not pending_path.exists():
+        return []
+    try:
+        lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    actions: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for line in reversed(lines[-200:]):
+        marker = "DEV_SYNC_PENDING:release-rollup-needed:"
+        if marker not in line:
+            continue
+        event_json = line.split(marker, 1)[1].strip()
+        if event_json in seen:
+            continue
+        seen.add(event_json)
+        try:
+            event = json.loads(event_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        if not integration_sha:
+            continue
+        actions.append(
+            {
+                "priority": 3,
+                "kind": "release-rollup-needed",
+                "action_id": f"release-rollup-needed:{integration_sha}",
+                "item": "release rollup",
+                "phase": "publish",
+                "actor": "controller",
+                "route": "release-rollup",
+                "event": event,
+                "event_json": event_json,
+                "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+                "title": "Release rollup",
+                "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                "source_marker": line,
+                "target_kind": "release-rollup",
+                "target_number": None,
+                "target": {"kind": "release-rollup", "integration_sha": integration_sha},
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "release_rollup_event"],
+                "controller_action": "open_release_rollup_pr_from_action",
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+                "no_lifecycle_authority": True,
+            }
+        )
+    return actions
+
+
 def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
@@ -906,8 +965,7 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
         milestone = label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(item.labels).canonical
         priority = 6 if milestone else 7
         item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
-        actions.append(
-            {
+        action = {
                 "priority": priority,
                 "kind": "existing-issue",
                 "action_id": f"existing-issue:{item.kind}:{item.number}",
@@ -925,8 +983,18 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                 "controller_action": "dispatch_next_step_worker",
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,
-            }
-        )
+        }
+        if item.kind == "issue" and phase_from_labels(item.labels) == "implementation" and milestone:
+            action.update(
+                {
+                    "kind": "consensus-implementation-ready",
+                    "action_id": f"consensus-implementation-ready:{item.number}",
+                    "route": "dispatch-consensus-implementation",
+                    "controller_action": "dispatch_consensus_implementation",
+                    "preconditions": ["active_controller_owner", "live_open_target", "consensus_artifact_present"],
+                }
+            )
+        actions.append(action)
     return actions
 
 
@@ -1037,7 +1105,7 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
 
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
-        return "publish_worker_output_from_action"
+        return "publish_implementation_output"
     if marker.startswith("REVIEW_DONE"):
         return "review_gate"
     if marker.startswith("FIX_DONE"):
@@ -1046,6 +1114,8 @@ def controller_action_from_marker(marker: str) -> str:
         return "dispatch_ci_watch"
     if marker.startswith("META_RESOLVED:drop:"):
         return "close_managed_item_from_drop_marker"
+    if marker.startswith("META_JUDGE_DONE:consensus"):
+        return "dispatch_consensus_implementation"
     if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
         return "dispatch_design_consensus"
     if marker.startswith("AUDIT_DONE"):
@@ -1231,6 +1301,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))
+    actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)
@@ -1275,6 +1346,13 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         "actions": close_projection_actions(actions),
         "recommendation": recommendation,
     }
+
+
+def _log_has_exit_marker(path: Path) -> bool:
+    try:
+        return any(line.startswith("EXIT=") for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
+    except OSError:
+        return False
 
 
 def main(argv: list[str] | None = None) -> int:
