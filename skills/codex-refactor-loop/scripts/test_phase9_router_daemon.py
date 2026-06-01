@@ -160,6 +160,21 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("SOMETHING_DONE:surprise:payload", self.pending_events())
         self.assertEqual(self.ledger_entries(), [])
 
+    def test_decompose_consensus_marker_appends_fallback_pending_event_without_harness_intent(self) -> None:
+        self.write_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        self.router.tick()
+
+        pending = self.pending_events()
+        self.assertIn("phase9-router-fallback", pending)
+        self.assertIn("META_JUDGE_DONE:consensus:decompose", pending)
+        self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
+        self.assertNotIn("gh issue create", pending)
+        self.assertNotIn("gh issue edit", pending)
+        self.assertNotIn("gh issue close", pending)
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_idempotency_spawns_once_per_dedupe_key(self) -> None:
         self.solver_triplet()
 

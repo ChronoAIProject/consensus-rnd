@@ -636,6 +636,42 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["actions"][0]["actor"], "controller")
         self.assertIn("IMPLEMENT_DONE:real", plan["actions"][0]["marker"])
 
+    def test_decompose_consensus_visible_only_as_generic_completed_marker(self) -> None:
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["phase"], "design-consensus")
+        self.assertEqual(action["actor"], "design-consensus-router-or-controller")
+        self.assertEqual(action["marker"], "META_JUDGE_DONE:consensus:decompose:real")
+        self.assertNotEqual(action.get("controller_action"), "apply_issue_decomposition_plan")
+        self.assertNotIn("IssueDecompositionPlan", json.dumps(action))
+        self.assertNotIn("issue-decomposition", json.dumps(action))
+        self.assertNotIn("decomposition-plan", json.dumps(action))
+
+    def test_issue_decomposition_does_not_extend_wakeup_plan_public_projection(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        plan = self.run_plan()
+        rendered = json.dumps(plan, sort_keys=True)
+
+        self.assertEqual(plan["mode"], "closed-action-projection")
+        self.assertTrue(plan["no_lifecycle_authority"])
+        for token in (
+            "IssueDecompositionPlan",
+            "issue-decomposition",
+            "decomposition-plan",
+            "apply_issue_decomposition_plan",
+            "gh issue create",
+            "gh issue edit",
+            "gh issue close",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, source)
+                self.assertNotIn(token, rendered)
+        self.assertNotIn("suggested_command", rendered)
+
     def test_review_done_completed_marker_is_closed_projection_not_standalone_policy(self) -> None:
         head_sha = "a" * 40
         (self.logs / "review-pr123-architect-r1.log").write_text(

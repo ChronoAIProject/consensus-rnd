@@ -207,6 +207,20 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
+<a id="issue-decomposition-403"></a>
+## issue-decomposition-403
+
+- surface: `IssueDecompositionPlan active-controller apply helper`
+- source_issue: `#403`
+- source_round: `r6 structural`
+- source_marker: `META_JUDGE_DONE:consensus:structural:wakeup_plan.py零行为改动-IssueDecompositionPlan发现链路用pending-event-completed-marker-peek`
+- skill_anchor: `#large-issue-decomposition`
+- allowed: active-controller owner only; consume a validated controller-private `IssueDecompositionPlan` with exactly `{schema, parent_issue, source_consensus_artifact, children:[{slug,title,scope,non_goals,body_artifact_path}], parent_update:{comment_artifact_path}}`; create `crnd:lifecycle:managed` child design issues with the catalog design issue label bundle; post one tracking comment to the parent issue.
+- forbidden: no daemon/worker issue creation, no public issue factory, no public CLI command, no wakeup-plan decompose projection, no prompt-body decision, no arbitrary git/gh command, no parent issue close/reopen/body-title edit, no assignee, no milestone, no label lifecycle beyond child design issue catalog labels, no lifecycle_owner/lifecycle_authority/cmd/argv/shell/gh/git/close fields, no absolute or escaping artifact paths, and no generic lifecycle actor.
+- fact_source: design-consensus/meta-reflector consensus artifact plus checked-in `IssueDecompositionPlan` JSON/Markdown body artifacts validated by `issue_decomposition.py`; discovery uses phase9-router fallback pending events, generic completed-marker projection, and read-only `peek` pending-events tail.
+- verification: `test_issue_decomposition.py`, `test_controller_actions.py`, `test_phase9_router_daemon.py`, `test_wakeup_plan.py`, `test_skill_reference_anchors.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This grants only the #403 active-controller checked-in apply helper; it adds no daemon owner, public CLI, wakeup-plan action projection, issue factory, or parent lifecycle mutation.
+
 <a id="update-check-231"></a>
 ## update-check-231
 

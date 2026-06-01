@@ -235,6 +235,38 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+        section = section_after_anchor(self.skill, "large-issue-decomposition")
+        for needle in (
+            "IssueDecompositionPlan",
+            "parent_issue",
+            "source_consensus_artifact",
+            "body_artifact_path",
+            "parent_update",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "parent epic remains open/tracking",
+            "META_JUDGE_DONE:consensus:decompose",
+            "phase9-router-fallback",
+            "completed_marker_actions()",
+            "kind: completed-marker",
+            "peek",
+            "wakeup_plan.py` is not the #403 owner",
+            "must not project a decompose action/status",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "public issue factory",
+            "parent issue close",
+            "reopen",
+            "body edit",
+            "title edit",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
