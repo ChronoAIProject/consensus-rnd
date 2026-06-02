@@ -87,8 +87,6 @@ EXECUTABLE_ACTION_KINDS = {
     "completed-marker",
     "release-rollup-needed",
     "ci-red",
-    "no-gap-violation",
-    "existing-issue",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -820,7 +818,6 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "target_number": _target_number_from_item(infer_item_from_text(line)),
                 "target": _target_from_item(infer_item_from_text(line)),
                 "preconditions": ["active_controller_owner", "source_artifact_contains_evidence"],
-                "controller_action": "dispatch_next_step_worker",
                 "status_only": True,
                 "no_lifecycle_authority": True,
             }
@@ -1079,23 +1076,23 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
         priority = 6 if milestone else 7
         item_name = f"{'PR' if item.kind == 'pr' else item.kind} #{item.number}"
         action = {
-                "priority": priority,
-                "kind": "existing-issue",
-                "action_id": f"existing-issue:{item.kind}:{item.number}",
-                "item": item_name,
-                "phase": phase_from_labels(item.labels),
-                "actor": actor_from_labels(item.labels, item.kind),
-                "milestone": milestone,
-                "title": title,
-                "source_artifact": "github-open-managed-items",
-                "source_marker": f"existing-issue:{item.kind}:{item.number}",
-                "target_kind": "PR" if item.kind == "pr" else "issue",
-                "target_number": item.number,
-                "target": {"kind": "PR" if item.kind == "pr" else "issue", "number": item.number},
-                "preconditions": ["active_controller_owner", "live_open_target"],
-                "controller_action": "dispatch_next_step_worker",
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
+            "priority": priority,
+            "kind": "existing-issue",
+            "action_id": f"existing-issue:{item.kind}:{item.number}",
+            "item": item_name,
+            "phase": phase_from_labels(item.labels),
+            "actor": actor_from_labels(item.labels, item.kind),
+            "milestone": milestone,
+            "title": title,
+            "source_artifact": "github-open-managed-items",
+            "source_marker": f"existing-issue:{item.kind}:{item.number}",
+            "target_kind": "PR" if item.kind == "pr" else "issue",
+            "target_number": item.number,
+            "target": {"kind": "PR" if item.kind == "pr" else "issue", "number": item.number},
+            "preconditions": ["active_controller_owner", "live_open_target"],
+            "route": "design-consensus-status" if phase_from_labels(item.labels) == "design-consensus" else "existing-managed-item-status",
+            "status_only": True,
+            "no_lifecycle_authority": True,
         }
         if item.kind == "issue" and phase_from_labels(item.labels) == "implementation" and milestone:
             consensus_fields = latest_consensus_implementation_for_issue(repo_root, item.number) if repo_root else {}
@@ -1107,9 +1104,12 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                         "route": "dispatch-consensus-implementation",
                         "controller_action": "dispatch_consensus_implementation",
                         "preconditions": ["active_controller_owner", "live_open_target", "durable_consensus_artifact"],
+                        "runner_authority": RUNNER_AUTHORITY,
+                        "no_generic_command": True,
                         **consensus_fields,
                     }
                 )
+                action.pop("status_only", None)
         actions.append(action)
     return actions
 
@@ -1165,18 +1165,20 @@ def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any 
     red_signals = [name for name, signal in signals.items() if isinstance(signal, dict) and not signal.get("passed")]
     blocked = score.get("blocked_reasons")
     blocked_reasons = [str(reason) for reason in blocked] if isinstance(blocked, list) else red_signals
-    release_goal = {
-        "from_version": score.get("from_version"),
-        "to_version": score.get("to_version"),
-        "countdown_to_version": score.get("to_version"),
-        "stability_score": score.get("stability_score"),
-        "ready": bool(score.get("ready")),
-        "passed_signals": sum(1 for signal in signals.values() if isinstance(signal, dict) and signal.get("passed")),
-        "total_signals": len(signals),
-        "red_signals": red_signals,
-        "blocked_reasons": blocked_reasons,
-        "source": "release-gate",
-    }
+    release_goal = None
+    if score:
+        release_goal = {
+            "from_version": score.get("from_version"),
+            "to_version": score.get("to_version"),
+            "countdown_to_version": score.get("to_version"),
+            "stability_score": score.get("stability_score"),
+            "ready": bool(score.get("ready")),
+            "passed_signals": sum(1 for signal in signals.values() if isinstance(signal, dict) and signal.get("passed")),
+            "total_signals": len(signals),
+            "red_signals": red_signals,
+            "blocked_reasons": blocked_reasons,
+            "source": "release-gate",
+        }
     return [
         {
             "priority": 8,
@@ -1232,20 +1234,24 @@ def _default_goal_milestone(repo_root: Path) -> dict[str, Any] | None:
 
 
 def _release_countdown_score(repo_root: Path, scorer: Any | None = None) -> dict[str, Any]:
-    with contextlib.redirect_stdout(sys.stderr):
-        score = (scorer or decide_release_artifact)(repo_root)
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            score = (scorer or decide_release_artifact)(repo_root)
+    except (KeyError, RuntimeError, ValueError) as exc:
+        print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
+        return {}
     return score if isinstance(score, dict) else {}
 
 
 def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
-    dispatchable = {
-        "maintainer-comment",
-        "completed-marker",
-        "ci-red",
-        "no-gap-violation",
-        "existing-issue",
-    }
-    return any(action.get("kind") in dispatchable for action in actions)
+    return any(
+        not action.get("status_only")
+        and (
+            action.get("kind") in EXECUTABLE_ACTION_KINDS
+            or action.get("controller_action") in RUNNER_NAMED_HELPER_ACTIONS
+        )
+        for action in close_projection_actions(actions)
+    )
 
 
 def controller_action_from_marker(marker: str) -> str:
@@ -1320,7 +1326,6 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         if "target_number" not in closed:
             target = closed.get("target") if isinstance(closed.get("target"), dict) else {}
             closed["target_number"] = target.get("number")
-        closed.setdefault("controller_action", "dispatch_next_step_worker")
         if closed.get("controller_action") not in RUNNER_NAMED_HELPER_ACTIONS:
             closed["status_only"] = True
             closed["no_lifecycle_authority"] = True

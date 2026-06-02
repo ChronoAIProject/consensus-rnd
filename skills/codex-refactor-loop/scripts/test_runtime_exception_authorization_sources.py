@@ -691,9 +691,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
-            "`gh issue view <N> --json state`",
+            "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
+            "`gh api repos/<slug>/issues/<N> --jq .state`",
+            "DesignConsensusIssueIntake",
+            "four built-in phase9 direct routes",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/in-flight for one solver role suppresses only that role",
             "state-only",
-            "`read-gh`",
             "source-OPEN gate",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
@@ -701,12 +705,15 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
             "test_phase9_router_open_state_gate.py",
+            "test_wakeup_plan.py",
+            "test_wakeup_runner.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
+        self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",
             "gh issue edit",

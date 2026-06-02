@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Narrow design-consensus deterministic router daemon.
 
-This daemon owns only three design-consensus direct-dispatch routes:
-solver triplet -> meta-judge, converge -> next solver triplet, and valid
-stalled -> reflector. Every other marker is forwarded to the existing
-controller pending-event file without spawning.
+This daemon owns only four design-consensus direct-dispatch routes:
+design-consensus issue intake -> r1 solver triplet, solver triplet ->
+meta-judge, converge -> next solver triplet, and valid stalled -> reflector.
+Every other marker is forwarded to the existing controller pending-event file
+without spawning.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from ..context import LoopContext
 from ..heartbeat import DaemonHeartbeatLease
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
+from .. import labels as label_catalog
 
 
 ROLES = ("minimal", "structural", "delete")
@@ -139,6 +141,13 @@ class MetaJudgePromptContext:
     @property
     def convergence_round_plus_one(self) -> int:
         return self.round + 1
+
+
+@dataclass(frozen=True)
+class DesignConsensusIssue:
+    number: str
+    title: str
+    labels: tuple[str, ...]
 
 
 class MetaJudgePromptRenderer:
@@ -265,6 +274,7 @@ class Phase9Router:
         self._source_issue_decisions = {}
         ledger = self._read_ledger()
         markers = self._collect_markers()
+        self._dispatch_design_issue_intake(ledger)
         self._dispatch_solver_triplets(markers, ledger)
         self._dispatch_meta_judge_routes(markers, ledger)
         self._append_fallbacks(markers, ledger)
@@ -451,6 +461,98 @@ class Phase9Router:
                     extra=self._solver_triplet_ledger_fields(issue, round_no, role_markers.values(), prompt),
                 )
                 ledger.add(key)
+
+    def _dispatch_design_issue_intake(self, ledger: set[str]) -> None:
+        for item in self._open_design_consensus_issues():
+            issue = item.number
+            if not self._require_open_source_issue(
+                issue,
+                1,
+                "design_consensus_issue_intake",
+                "DesignConsensusIssueIntake",
+                self.pending_events_path,
+            ):
+                continue
+            for role in self._solver_roles():
+                key = self._key(issue, 1, role)
+                log_path = self._log_path(issue, 1, role)
+                if key in ledger or self._solver_intake_suppressed(issue, 1, role, log_path):
+                    continue
+                prompt = self._write_prompt(
+                    issue,
+                    1,
+                    role,
+                    self._solver_prompt(issue, 1, role, "DesignConsensusIssueIntake"),
+                )
+                if self._spawn(prompt, log_path, route="design_consensus_issue_intake", reason="phase9-router design issue intake"):
+                    self._append_ledger(
+                        key,
+                        "DesignConsensusIssueIntake",
+                        log_path,
+                        extra=self._design_issue_intake_ledger_fields(issue, role, item, prompt),
+                    )
+                    ledger.add(key)
+
+    def _open_design_consensus_issues(self) -> list[DesignConsensusIssue]:
+        if not self.ctx.gh_repo_slug:
+            return []
+        command = [
+            "gh",
+            "issue",
+            "list",
+            "--repo",
+            self.ctx.gh_repo_slug,
+            "--state",
+            "open",
+            "--label",
+            label_catalog.MANAGED,
+            "--json",
+            "number,title,labels",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        try:
+            rows = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(rows, list):
+            return []
+        issues: list[DesignConsensusIssue] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                number = str(int(row["number"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            labels = tuple(
+                label.get("name", "")
+                for label in row.get("labels", [])
+                if isinstance(label, dict) and isinstance(label.get("name"), str)
+            )
+            normalized = label_catalog.normalize_label_set(labels)
+            if label_catalog.MANAGED not in normalized.canonical:
+                continue
+            if normalized.phase != label_catalog.PHASE_DESIGN_SOLVING:
+                continue
+            if label_catalog.HUMAN_MAINTAINER_DECISION in normalized.canonical:
+                continue
+            issues.append(DesignConsensusIssue(number=number, title=str(row.get("title") or ""), labels=labels))
+        return issues
+
+    def _solver_intake_suppressed(self, issue: str, round_no: int, role: str, log_path: Path) -> bool:
+        return self._equivalent_actor_log_exists(issue, round_no, role) or self._spawn_codex_in_flight(log_path)
 
     def _dispatch_meta_judge_routes(self, markers: list[Marker], ledger: set[str]) -> None:
         for marker in markers:
@@ -818,13 +920,20 @@ class Phase9Router:
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
-    def _spawn(self, prompt: Path, log_path: Path) -> bool:
+    def _spawn(
+        self,
+        prompt: Path,
+        log_path: Path,
+        *,
+        route: str = "design-consensus-direct",
+        reason: str = "phase9-router direct route",
+    ) -> bool:
         if self.dry_run:
             return False
         intent = {
             "intent_id": self._intent_id_for_log(log_path),
             "source": "phase9-router",
-            "route": "design-consensus-direct",
+            "route": route,
             "task_id": log_path.stem,
             "priority": "p1",
             "command": "spawn-codex",
@@ -833,7 +942,7 @@ class Phase9Router:
             "prompt": self._artifact_path(prompt),
             "log": self._artifact_path(log_path),
             "stall": 3600,
-            "reason": "phase9-router direct route",
+            "reason": reason,
             "queued_at": self._now(),
             "run_in_background_required": True,
             "no_lifecycle_authority": True,
@@ -1059,6 +1168,26 @@ class Phase9Router:
                 "solver_roles": sorted(self._solver_roles()),
             },
             "independence_check": "pass",
+        }
+
+    def _design_issue_intake_ledger_fields(
+        self,
+        issue: str,
+        role: str,
+        item: DesignConsensusIssue,
+        prompt: Path,
+    ) -> dict[str, object]:
+        return {
+            "route": "design_consensus_issue_intake",
+            "issue": issue,
+            "round": 1,
+            "target_actor": role,
+            "source_issue": f"gh-issue-{issue}",
+            "source_labels": sorted(label_catalog.normalize_label_set(item.labels).canonical),
+            "source_title": item.title,
+            "solver_prompt_path": self._artifact_path(prompt),
+            "solver_roles": sorted(self._solver_roles()),
+            "source_open_gate": "pass",
         }
 
     def _peer_solver_reference_violation(self, issue: str, round_no: int) -> dict[str, str] | None:

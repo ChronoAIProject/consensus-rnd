@@ -836,6 +836,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         for forbidden in ("command_line", "lifecycle_authority", "lifecycle_owner"):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, source)
+        self.assertNotIn("dispatch_next_step_worker", source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
 
