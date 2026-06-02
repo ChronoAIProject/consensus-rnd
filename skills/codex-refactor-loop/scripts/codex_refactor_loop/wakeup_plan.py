@@ -81,6 +81,7 @@ READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtim
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_design_consensus",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
@@ -1426,6 +1427,12 @@ def close_projection_actions(actions: list[dict[str, Any]]) -> list[dict[str, An
 def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
     closed = dict(action)
     if closed.get("controller_action") == "dispatch_consensus_implementation" and not closed.get("consensus_artifact"):
+        closed["status_only"] = True
+        closed["no_lifecycle_authority"] = True
+        closed.pop("runner_authority", None)
+        closed.pop("no_generic_command", None)
+        return closed
+    if closed.get("controller_action") == "dispatch_design_consensus" and str(closed.get("source_marker") or "").startswith("META_RESOLVED:"):
         closed["status_only"] = True
         closed["no_lifecycle_authority"] = True
         closed.pop("runner_authority", None)

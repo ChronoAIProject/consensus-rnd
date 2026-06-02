@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading as real_threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -14,9 +15,13 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+REAL_CONDITION = real_threading.Condition
+REAL_EVENT = real_threading.Event
+REAL_THREAD = real_threading.Thread
+
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
-from codex_refactor_loop.wakeup_runner import WakeupRunner, main as wakeup_runner_main
+from codex_refactor_loop.wakeup_runner import WakeupRunner, _run_once_with_periodic_heartbeat, main as wakeup_runner_main
 
 
 class FakeSupervisor:
@@ -74,6 +79,102 @@ class FakeActions:
 
     def publish_release_candidate(self, *, candidate_path: str, target_ref: str):
         raise AssertionError("release publish should not be dispatched")
+
+
+class FakeHeartbeatLease:
+    heartbeat_interval = 7
+
+    def __init__(self) -> None:
+        self.beats = 0
+        self.coordinator: HeartbeatCoordinator | None = None
+
+    def beat(self) -> None:
+        self.beats += 1
+        if self.coordinator is not None:
+            self.coordinator.record_beat()
+
+
+class HeartbeatCoordinator:
+    def __init__(self) -> None:
+        self.condition = REAL_CONDITION()
+        self.run_once_entered = False
+        self.beat_during_run_once = False
+        self.stop_requested = False
+        self.waiting_for_stop = False
+
+    def enter_run_once(self) -> None:
+        with self.condition:
+            self.run_once_entered = True
+            self.condition.notify_all()
+
+    def record_beat(self) -> None:
+        with self.condition:
+            if self.run_once_entered and not self.stop_requested:
+                self.beat_during_run_once = True
+            self.condition.notify_all()
+
+    def wait_for_heartbeat_while_run_once_is_pending(self) -> bool:
+        with self.condition:
+            return self.condition.wait_for(lambda: self.beat_during_run_once, timeout=1.0)
+
+    def request_stop(self) -> None:
+        with self.condition:
+            self.stop_requested = True
+            self.condition.notify_all()
+
+
+class ScriptedEvent:
+    instances: list["ScriptedEvent"] = []
+    coordinator: HeartbeatCoordinator | None = None
+
+    def __init__(self) -> None:
+        self.wait_timeouts: list[float] = []
+        self.set_called = False
+        ScriptedEvent.instances.append(self)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.wait_timeouts.append(float(timeout or 0))
+        if ScriptedEvent.coordinator is None:
+            return True
+        coordinator = ScriptedEvent.coordinator
+        with coordinator.condition:
+            if not coordinator.run_once_entered:
+                coordinator.condition.wait_for(lambda: coordinator.run_once_entered or coordinator.stop_requested, timeout=1.0)
+            if coordinator.stop_requested:
+                return True
+            if not coordinator.beat_during_run_once:
+                return False
+            coordinator.waiting_for_stop = True
+            coordinator.condition.notify_all()
+            coordinator.condition.wait_for(lambda: coordinator.stop_requested, timeout=1.0)
+            return True
+
+    def set(self) -> None:
+        self.set_called = True
+        if ScriptedEvent.coordinator is not None:
+            ScriptedEvent.coordinator.request_stop()
+
+
+class InlineThread:
+    instances: list["InlineThread"] = []
+
+    def __init__(self, *, target, name: str, daemon: bool) -> None:
+        self.target = target
+        self.name = name
+        self.daemon = daemon
+        self.started = False
+        with mock.patch("threading.Event", REAL_EVENT):
+            self.thread = REAL_THREAD(target=self.target, name=name, daemon=daemon)
+        self.join_timeouts: list[float] = []
+        InlineThread.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+        self.thread.start()
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(float(timeout or 0))
+        self.thread.join(timeout=timeout)
 
 
 class WakeupRunnerBehaviorTests(unittest.TestCase):
@@ -403,12 +504,61 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def dispatch_design_consensus_action(self, **overrides) -> dict:
+        issue = int(overrides.pop("issue", 453))
+        round_number = int(overrides.pop("round_number", 1))
+        source_marker = str(overrides.pop("source_marker", "SOLVER_DONE:minimal:ready"))
+        for role in ("minimal", "structural", "delete"):
+            marker = source_marker if role == "minimal" else f"SOLVER_DONE:{role}:ready"
+            (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-{role}.log").write_text(
+                f"{marker}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        source_artifact = f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-minimal.log"
+        action = {
+            "kind": "completed-marker",
+            "action_id": f"completed-marker:phase9-issue{issue}-r{round_number}-minimal.log:{source_marker}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target"],
+            "source_artifact": source_artifact,
+            "source_marker": source_marker,
+            "target_kind": "issue",
+            "target_number": issue,
+            "target": {"kind": "issue", "number": issue},
+            "controller_action": "dispatch_design_consensus",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
         results = self.run_result(self.base_plan(self.spawn_action()))
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(len(self.supervisor.calls), 1)
         self.assertEqual(self.supervisor.calls[0]["stdin"], self.repo / ".refactor-loop/prompts/task.md")
+
+    def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
+        results = self.run_result(self.base_plan(self.dispatch_design_consensus_action()))
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(len(self.supervisor.calls), 1)
+        self.assertEqual(
+            Path(self.supervisor.calls[0]["stdin"]).resolve(),
+            (self.repo / ".refactor-loop/prompts/phase9/phase9-issue453-r1-judge.md").resolve(),
+        )
+        self.assertEqual(
+            Path(self.supervisor.calls[0]["log"]).resolve(),
+            (self.repo / ".refactor-loop/logs/phase9-issue453-r1-judge.log").resolve(),
+        )
+
+    def test_dispatch_design_consensus_closed_target_blocks_before_spawn(self) -> None:
+        actions = FakeActions()
+        action = self.dispatch_design_consensus_action(action_id="design-consensus:closed")
+
+        results = self.run_result(self.base_plan(action), gh_state="CLOSED", actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "design-consensus:closed", "target_not_open:CLOSED", actions)
 
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()
@@ -947,6 +1097,64 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
+    def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:
+        ScriptedEvent.instances = []
+        ScriptedEvent.coordinator = HeartbeatCoordinator()
+        InlineThread.instances = []
+        lease = FakeHeartbeatLease()
+        lease.coordinator = ScriptedEvent.coordinator
+        expected = [object()]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
+            "codex_refactor_loop.wakeup_runner.threading.Thread",
+            InlineThread,
+        ):
+
+            def run_once():
+                ScriptedEvent.coordinator.enter_run_once()
+                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
+                return expected
+
+            result = _run_once_with_periodic_heartbeat(run_once, lease)
+
+        self.assertIs(result, expected)
+        self.assertGreaterEqual(lease.beats, 1)
+        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
+        self.assertGreaterEqual(ScriptedEvent.instances[0].wait_timeouts.count(7.0), 1)
+        self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertTrue(InlineThread.instances[0].started)
+        self.assertTrue(InlineThread.instances[0].daemon)
+        self.assertEqual(InlineThread.instances[0].name, "wakeup-runner-heartbeat-renewer")
+        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+        ScriptedEvent.coordinator = None
+
+    def test_daemon_run_once_periodic_heartbeat_propagates_exception_and_stops_thread(self) -> None:
+        ScriptedEvent.instances = []
+        ScriptedEvent.coordinator = HeartbeatCoordinator()
+        InlineThread.instances = []
+        lease = FakeHeartbeatLease()
+        lease.coordinator = ScriptedEvent.coordinator
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
+            "codex_refactor_loop.wakeup_runner.threading.Thread",
+            InlineThread,
+        ):
+
+            def run_once():
+                ScriptedEvent.coordinator.enter_run_once()
+                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
+                raise RuntimeError("boom")
+
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                _run_once_with_periodic_heartbeat(run_once, lease)
+
+        self.assertGreaterEqual(lease.beats, 1)
+        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
+        self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertTrue(InlineThread.instances[0].started)
+        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+        ScriptedEvent.coordinator = None
+
     def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         for helper in (
@@ -963,6 +1171,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("dispatch_next_step_worker", source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        helper_start = source.index("def _run_once_with_periodic_heartbeat(")
+        helper_end = source.index("\ndef load_plan_file", helper_start)
+        helper = source[helper_start:helper_end]
+        daemon_branch = source[source.index("    if args.daemon:") : source.index("    results = runner.run_once()")]
+
+        for needle in (
+            "def _run_once_with_periodic_heartbeat(",
+            "threading.Event()",
+            "threading.Thread(",
+            "daemon=True",
+            "lease.heartbeat_interval",
+            "lease.beat()",
+            "return run_once()",
+            "finally:",
+            "stop.set()",
+            "renewer.join(timeout=1.0)",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, helper)
+        self.assertIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
+        self.assertIn("lease.sleep_with_lease(interval)", daemon_branch)
+        self.assertNotIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", source[source.index("    results = runner.run_once()") :])
 
     def test_close_managed_item_from_drop_marker_routes_to_named_helper(self) -> None:
         actions = FakeActions()
