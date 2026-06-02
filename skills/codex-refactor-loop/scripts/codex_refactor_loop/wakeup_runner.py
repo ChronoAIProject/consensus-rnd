@@ -18,6 +18,7 @@ from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
+from .phase9.router import Marker, Phase9Router, Phase9SourceIssueDecision
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor
 from .release.publish_preflight import ReleasePublishPreflight
@@ -56,6 +57,7 @@ TARGET_TEXT_PATTERNS = (
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
+    "dispatch_design_consensus",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
@@ -248,6 +250,8 @@ class WakeupRunner:
             return self._validate_release(action)
         if controller_action == "dispatch_consensus_implementation":
             return self._validate_consensus_implementation(action)
+        if controller_action == "dispatch_design_consensus":
+            return self._validate_design_consensus(action)
         if controller_action == "publish_implementation_output":
             return self._validate_publish_implementation(action)
         if controller_action == "dispatch_reviewers":
@@ -371,6 +375,20 @@ class WakeupRunner:
             return "consensus_artifact_marker_missing"
         return None
 
+    def _validate_design_consensus(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "design_consensus_missing_preconditions"
+        for required in ("active_controller_owner", "clean_exit_source_marker"):
+            if required not in preconditions:
+                return f"design_consensus_missing_precondition:{required}"
+        if "live_open_target" not in preconditions and "live_open_target_if_present" not in preconditions:
+            return "design_consensus_missing_precondition:live_open_target"
+        marker_error = self._design_consensus_marker(action)
+        if isinstance(marker_error, str):
+            return marker_error
+        return None
+
     def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:
         marker = str(action.get("source_marker") or "")
         if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
@@ -458,6 +476,8 @@ class WakeupRunner:
             return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
         if controller_action == "dispatch_consensus_implementation":
             return self.actions.dispatch_consensus_implementation(dict(action))
+        if controller_action == "dispatch_design_consensus":
+            return self._dispatch_design_consensus(action)
         if controller_action == "publish_implementation_output":
             return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
@@ -499,6 +519,73 @@ class WakeupRunner:
         if not prompt.is_file():
             return 2
         return self.supervisor.supervise(["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(cd), "-"], stdin=prompt, log=log, stall=stall)
+
+    def _dispatch_design_consensus(self, action: Mapping[str, Any]) -> int:
+        marker = self._design_consensus_marker(action)
+        if isinstance(marker, str):
+            return 2
+        intents: list[dict[str, object]] = []
+        router = Phase9Router(ctx=self.ctx, command_runner=lambda intent: intents.append(dict(intent)))
+        router._source_issue_decisions[str(marker.issue)] = Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")
+        ledger = router._read_ledger()
+        if marker.marker.startswith("SOLVER_DONE:"):
+            triplet_markers = [
+                candidate
+                for candidate in router._collect_markers()
+                if candidate.issue == marker.issue and candidate.round == marker.round
+            ]
+            router._dispatch_solver_triplets(triplet_markers, ledger)
+        elif marker.marker.startswith("META_JUDGE_DONE:converge:round-") or marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
+            router._dispatch_meta_judge_routes([marker], ledger)
+        elif marker.marker.startswith("META_RESOLVED:"):
+            router._append_fallbacks([marker], ledger)
+        else:
+            return 2
+        for intent in intents:
+            spawn_action = {
+                "action_id": f"design-consensus-spawn:{intent.get('intent_id', '')}",
+                "runner_authority": RUNNER_AUTHORITY,
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+                "source_artifact": str(action.get("source_artifact") or ""),
+                "source_marker": str(action.get("source_marker") or ""),
+                "target_kind": "codex",
+                "target_number": None,
+                "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent.get("intent_id") or "")},
+                "controller_action": "spawn_codex_harness_background",
+                "no_generic_command": True,
+                "cd": str(intent.get("cd") or self.ctx.repo_root),
+                "prompt": str(self.ctx.artifact_execution_path(str(intent.get("prompt") or ""))),
+                "log": str(self.ctx.artifact_execution_path(str(intent.get("log") or ""))),
+                "stall": int(intent.get("stall") or 5400),
+            }
+            error = self._validate_spawn_codex(spawn_action)
+            if error:
+                self._append_pending_event(f"WAKEUP_RUNNER_BLOCKED:{spawn_action['action_id']}:{error}")
+                return 3
+            exit_code = self._spawn_codex(spawn_action)
+            if exit_code != 0:
+                return exit_code
+        return 0 if intents else 3
+
+    def _design_consensus_marker(self, action: Mapping[str, Any]) -> Marker | str:
+        source_artifact = str(action.get("source_artifact") or "")
+        try:
+            log_path = self.ctx.artifact_execution_path(source_artifact)
+        except LoopContextError:
+            return "design_consensus_source_artifact_invalid"
+        identity = Phase9Router(ctx=self.ctx)._identity_from_path(log_path)
+        if identity is None:
+            return "design_consensus_source_identity_invalid"
+        marker = str(action.get("source_marker") or action.get("marker") or "").strip()
+        if not marker:
+            return "design_consensus_marker_missing"
+        if marker.startswith("SOLVER_DONE:"):
+            role = marker.split(":", 3)[1] if len(marker.split(":", 3)) >= 2 else identity.actor
+        else:
+            role = identity.actor
+        if role not in {"minimal", "structural", "delete", "judge", "reflector"}:
+            return "design_consensus_role_invalid"
+        return Marker(marker=marker, log_path=log_path, issue=identity.issue, round=identity.round, role=role)
 
     def _dispatch_review_fix(self, pr_number: int) -> int:
         round_number = self._next_fix_round(pr_number)

@@ -528,6 +528,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "release #322 preflight",
             "helper-specific precondition",
             "spawn codex",
+            "named helper `dispatch_design_consensus` through phase9-router deterministic routes",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
             "named helper `open_release_rollup_pr_from_action`",

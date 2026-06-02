@@ -403,12 +403,61 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def dispatch_design_consensus_action(self, **overrides) -> dict:
+        issue = int(overrides.pop("issue", 453))
+        round_number = int(overrides.pop("round_number", 1))
+        source_marker = str(overrides.pop("source_marker", "SOLVER_DONE:minimal:ready"))
+        for role in ("minimal", "structural", "delete"):
+            marker = source_marker if role == "minimal" else f"SOLVER_DONE:{role}:ready"
+            (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-{role}.log").write_text(
+                f"{marker}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        source_artifact = f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-minimal.log"
+        action = {
+            "kind": "completed-marker",
+            "action_id": f"completed-marker:phase9-issue{issue}-r{round_number}-minimal.log:{source_marker}",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target"],
+            "source_artifact": source_artifact,
+            "source_marker": source_marker,
+            "target_kind": "issue",
+            "target_number": issue,
+            "target": {"kind": "issue", "number": issue},
+            "controller_action": "dispatch_design_consensus",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
         results = self.run_result(self.base_plan(self.spawn_action()))
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(len(self.supervisor.calls), 1)
         self.assertEqual(self.supervisor.calls[0]["stdin"], self.repo / ".refactor-loop/prompts/task.md")
+
+    def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
+        results = self.run_result(self.base_plan(self.dispatch_design_consensus_action()))
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(len(self.supervisor.calls), 1)
+        self.assertEqual(
+            Path(self.supervisor.calls[0]["stdin"]).resolve(),
+            (self.repo / ".refactor-loop/prompts/phase9/phase9-issue453-r1-judge.md").resolve(),
+        )
+        self.assertEqual(
+            Path(self.supervisor.calls[0]["log"]).resolve(),
+            (self.repo / ".refactor-loop/logs/phase9-issue453-r1-judge.log").resolve(),
+        )
+
+    def test_dispatch_design_consensus_closed_target_blocks_before_spawn(self) -> None:
+        actions = FakeActions()
+        action = self.dispatch_design_consensus_action(action_id="design-consensus:closed")
+
+        results = self.run_result(self.base_plan(action), gh_state="CLOSED", actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "design-consensus:closed", "target_not_open:CLOSED", actions)
 
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()
