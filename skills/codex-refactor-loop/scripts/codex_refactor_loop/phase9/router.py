@@ -512,10 +512,6 @@ class Phase9Router:
                     continue
                 terminal_decision = self._solver_dispatch_terminal_decision(
                     issue,
-                    1,
-                    "design_consensus_issue_intake",
-                    "DesignConsensusIssueIntake",
-                    self.pending_events_path,
                     item.labels,
                 )
                 if not terminal_decision.allowed:
@@ -622,10 +618,6 @@ class Phase9Router:
                         continue
                     terminal_decision = self._solver_dispatch_terminal_decision(
                         marker.issue,
-                        target_round,
-                        "converge_to_next_solvers",
-                        marker.marker,
-                        marker.log_path,
                     )
                     if not terminal_decision.allowed:
                         self._append_terminal_fallback_event(
@@ -919,13 +911,8 @@ class Phase9Router:
     def _solver_dispatch_terminal_decision(
         self,
         issue: str,
-        round_no: int,
-        route: str,
-        marker: str,
-        log_path: Path,
         issue_labels: Iterable[str] | None = None,
     ) -> Phase9TerminalDecision:
-        del round_no, route, marker, log_path
         label_source = self._terminal_source_from_labels(issue_labels)
         if label_source is not None:
             return Phase9TerminalDecision(False, "phase9-already-consensus", label_source)
@@ -972,7 +959,7 @@ class Phase9Router:
             "api",
             f"repos/{self.ctx.gh_repo_slug}/issues/{issue}",
             "--jq",
-            "{state:.state,labels:[.labels[].name]}",
+            "[.labels[].name]",
         ]
         try:
             result = subprocess.run(
@@ -992,6 +979,8 @@ class Phase9Router:
         except json.JSONDecodeError:
             return None
         if not isinstance(payload, dict):
+            if isinstance(payload, list):
+                return self._terminal_source_from_labels(label for label in payload if isinstance(label, str))
             return None
         labels = payload.get("labels")
         if isinstance(labels, list):
