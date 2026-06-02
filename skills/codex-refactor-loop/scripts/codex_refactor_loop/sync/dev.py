@@ -442,6 +442,11 @@ class IntegrationSyncDaemon:
             return 0
 
     def has_open_release_rollup_pr(self) -> bool:
+        def ambiguous(reason: str) -> bool:
+            self.append_pending_event("release-rollup-open-pr-query-ambiguous", reason)
+            self.log(f"skip release-rollup detector: open PR query ambiguous: {reason}")
+            return True
+
         result = self.run(
             [
                 "gh",
@@ -459,13 +464,13 @@ class IntegrationSyncDaemon:
             cwd=self.main_repo,
         )
         if result.returncode != 0:
-            self.log("skip release-rollup detector: open PR query failed")
-            return True
+            return ambiguous("gh-list-failed")
+        if result.stderr.strip():
+            return ambiguous("gh-stderr")
         try:
             rows = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            self.log("skip release-rollup detector: open PR query returned invalid JSON")
-            return True
+            return ambiguous("gh-json-decode-failed")
         integration_sha = self.remote_branch_sha(self.worktree, self.integration)
         if not integration_sha:
             return True
