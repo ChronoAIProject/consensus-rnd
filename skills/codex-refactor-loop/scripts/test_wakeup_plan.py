@@ -99,6 +99,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    consensus_issue_330)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":330,"title":"consensus target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:consensus-reached"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_issue_331)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":331,"title":"different open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
@@ -730,6 +737,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(self.harness_spawn_actions(plan), [])
 
+    def test_harness_spawn_intent_suppresses_terminal_design_solver_target(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="terminal-design-target",
+            route="design_consensus_issue_intake",
+            task_id="phase9-issue330-r1-minimal",
+            log=".refactor-loop/logs/phase9-issue330-r1-minimal.log",
+        )
+
+        plan = self.run_plan(fixture="consensus_issue_330")
+
+        self.assertEqual(self.harness_spawn_actions(plan), [])
+
     def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
         self.append_harness_spawn_intent(
             intent_id="empty-read-model-target",
@@ -1008,6 +1027,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
+    def test_solver_triplet_completed_marker_suppressed_for_terminal_design_target(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_completed_log(f"phase9-issue330-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
+
+        plan = self.run_plan(fixture="consensus_issue_330")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("dispatch_design_consensus", rendered)
+        self.assertFalse(
+            [
+                action
+                for action in plan["actions"]
+                if action.get("source_artifact", "").startswith(".refactor-loop/logs/phase9-issue330-r1-")
+            ]
+        )
+
     def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
@@ -1235,6 +1270,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertIn(helper, source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        for token in (
+            "DESIGN_CONSENSUS_TERMINAL_PHASES",
+            "PHASE_CONSENSUS_REACHED",
+            "PHASE_IMPLEMENTING",
+            "PHASE_MERGED",
+            "PHASE_CLOSED",
+            "suppress_terminal_design_consensus_actions",
+            "_terminal_design_consensus_targets",
+            "_is_design_consensus_solver_dispatch_intent",
+            "dispatch_design_consensus",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+        for forbidden in ("gh issue edit", "gh issue close", "gh pr merge", "git push", "git commit"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")
