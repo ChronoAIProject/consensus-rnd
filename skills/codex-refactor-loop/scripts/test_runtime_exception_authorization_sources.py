@@ -524,7 +524,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             'apply_authority: "wakeup-runner-396-only"',
             'runner_authority: "wakeup-runner-396"',
             "clean `EXIT=0` source marker",
-            "review truth table `reject==0 && approve>=1 && all required reviewers present`",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "missing/stale per-reviewer head SHA",
+            "`wakeup-plan` action `head_sha` is not reviewer-head authority",
             "OPEN/live GitHub state",
             "release #322 preflight",
             "helper-specific precondition",
@@ -547,6 +549,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
                 self.assertIn(required, self.skill)
+
+        self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
+        self.assertIn("all required reviewer heads equal live PR head", entry)
+        self.assertIn("all required reviewer heads equal live PR head", self.skill)
 
         for forbidden in (
             "no arbitrary git/gh command",

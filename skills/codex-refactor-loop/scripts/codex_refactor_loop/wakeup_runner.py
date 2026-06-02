@@ -88,6 +88,52 @@ class ReviewEvidence:
     reason: str = ""
 
 
+@dataclass(frozen=True)
+class ReviewGateSnapshot:
+    verdicts_by_role: dict[str, str]
+    heads_by_role: dict[str, str]
+    live_head_sha: str
+    invalid: list[str]
+
+    @property
+    def all_present(self) -> bool:
+        return all(role in self.verdicts_by_role for role in REQUIRED_REVIEW_ROLES)
+
+    @property
+    def approve(self) -> int:
+        return sum(1 for verdict in self.verdicts_by_role.values() if verdict == "approve")
+
+    @property
+    def reject(self) -> int:
+        return sum(1 for verdict in self.verdicts_by_role.values() if verdict == "reject")
+
+    @property
+    def comment(self) -> int:
+        return sum(1 for verdict in self.verdicts_by_role.values() if verdict == "comment")
+
+    @property
+    def reviewed_head_sha(self) -> str:
+        if not self.live_head_sha:
+            return ""
+        for role in REQUIRED_REVIEW_ROLES:
+            if self.heads_by_role.get(role) != self.live_head_sha:
+                return ""
+        return self.live_head_sha
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "verdicts": self.verdicts_by_role,
+            "heads_by_role": self.heads_by_role,
+            "all_present": self.all_present,
+            "approve": self.approve,
+            "reject": self.reject,
+            "comment": self.comment,
+            "reviewed_head_sha": self.reviewed_head_sha,
+            "live_head_sha": self.live_head_sha,
+            "invalid": self.invalid,
+        }
+
+
 class WakeupRunner:
     def __init__(
         self,
@@ -608,18 +654,13 @@ class WakeupRunner:
         if not gate["all_present"]:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_reviewers", "gate": gate}
         action_head = str(action.get("head_sha") or "").strip()
-        reviewed_head = str(gate.get("reviewed_head_sha") or "").strip()
         live_head = str(gate.get("live_head_sha") or "").strip()
         if not action_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_action_reviewed_head_sha", "gate": gate}
-        if not reviewed_head:
-            return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_reviewer_head_sha", "gate": gate}
-        if action_head != reviewed_head:
-            return {"decision": "WAIT_OR_REDISPATCH", "reason": "reviewed_head_mismatch", "gate": gate}
         if not live_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
-        if reviewed_head != live_head:
-            return {"decision": "WAIT_OR_REDISPATCH", "reason": "stale_head_sha", "gate": gate}
+        if action_head != live_head:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": "action_head_mismatch", "gate": gate}
         ci_error = self._review_gate_ci_error(target, live_head)
         if ci_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": ci_error, "gate": gate}
@@ -637,20 +678,22 @@ class WakeupRunner:
         evidences = self._latest_review_round(pr_number)
         verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
         invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
-        head_values = {evidence.head_sha for evidence in evidences.values() if evidence.valid and evidence.head_sha}
-        if len(head_values) > 1:
-            invalid.append("duplicate_reviewed_head_sha")
-        reviewed_head_sha = next(iter(head_values), "") if len(head_values) == 1 else ""
-        return {
-            "verdicts": verdicts,
-            "all_present": all(role in verdicts for role in REQUIRED_REVIEW_ROLES),
-            "approve": sum(1 for verdict in verdicts.values() if verdict == "approve"),
-            "reject": sum(1 for verdict in verdicts.values() if verdict == "reject"),
-            "comment": sum(1 for verdict in verdicts.values() if verdict == "comment"),
-            "reviewed_head_sha": reviewed_head_sha,
-            "live_head_sha": self._pr_head_sha(pr_number),
-            "invalid": invalid,
-        }
+        heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
+        live_head = self._pr_head_sha(pr_number)
+        for role in REQUIRED_REVIEW_ROLES:
+            if role not in verdicts:
+                continue
+            role_head = heads.get(role, "")
+            if not role_head:
+                invalid.append(f"missing_reviewed_head_sha:{role}")
+            elif live_head and role_head != live_head:
+                invalid.append(f"stale_reviewed_head_sha:{role}")
+        return ReviewGateSnapshot(
+            verdicts_by_role=verdicts,
+            heads_by_role=heads,
+            live_head_sha=live_head,
+            invalid=invalid,
+        ).as_dict()
 
     def _latest_review_round(self, pr_number: int) -> dict[str, ReviewEvidence]:
         by_round: dict[int, dict[str, ReviewEvidence]] = {}

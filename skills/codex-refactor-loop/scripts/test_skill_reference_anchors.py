@@ -1362,6 +1362,20 @@ class WakeupRunnerContractTests(unittest.TestCase):
                 self.assertIn(needle, section + self.skill)
         self.assertNotIn("ControllerTurnDecision", self.skill.replace("`ControllerTurnDecision`", ""))
 
+    def test_review_gate_requires_per_reviewer_live_head_binding(self) -> None:
+        review_gate = section_after_heading(self.skill, "Consensus-rnd Phase review-gate — Multi-codex PR review with consensus merge")
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        combined = "\n".join((review_gate, wakeup_runner))
+        for needle in (
+            "missing/stale per-reviewer head SHA",
+            "every required reviewer head SHA equals the live PR head",
+            "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_restart_managed_daemon_list_mentions_seventh_daemon(self) -> None:
         self.assertIn("All seven daemon command bodies", self.skill)
         self.assertIn("wakeup_runner_daemon", self.skill)
