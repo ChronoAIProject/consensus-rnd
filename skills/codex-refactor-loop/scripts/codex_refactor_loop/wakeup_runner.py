@@ -45,6 +45,13 @@ REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
+TARGET_TEXT_PATTERNS = (
+    (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
+    (re.compile(r"(?i)\bissue\s*#([1-9][0-9]*)\b"), "issue"),
+    (re.compile(r"\bphase9-" + r"issue([1-9][0-9]*)-r[1-9][0-9]*-[A-Za-z][A-Za-z0-9_-]*\b"), "issue"),
+    (re.compile(r"\breview-pr([1-9][0-9]*)-[A-Za-z][A-Za-z0-9_-]*-r[1-9][0-9]*\b"), "PR"),
+    (re.compile(r"\bfix-pr([1-9][0-9]*)(?:-r|-round-)"), "PR"),
+)
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
@@ -194,15 +201,34 @@ class WakeupRunner:
         return None
 
     def _validate_target(self, action: Mapping[str, Any]) -> str | None:
-        kind = action.get("target_kind")
-        number = action.get("target_number")
-        if kind in {"PR", "issue"}:
-            if not isinstance(number, int):
+        target = self._github_target(action)
+        if target is not None:
+            kind, number = target
+            if number <= 0:
                 return "target_number_missing"
-            live = self._live_target_state(str(kind).lower(), number)
+            live = self._live_target_state(kind.lower(), number)
             if live not in {"OPEN", "open"}:
                 return f"target_not_open:{live or 'unknown'}"
         return None
+
+    def _github_target(self, action: Mapping[str, Any]) -> tuple[str, int] | None:
+        kind = action.get("target_kind")
+        number = action.get("target_number")
+        if kind in {"PR", "issue"} and isinstance(number, int):
+            return str(kind), number
+        target = action.get("target")
+        if isinstance(target, Mapping):
+            target_kind = target.get("kind")
+            target_number = target.get("number")
+            if target_kind in {"PR", "issue"} and isinstance(target_number, int):
+                return str(target_kind), target_number
+        text_parts = []
+        for field in ("item", "action_id", "source_marker", "source_artifact", "prompt", "log"):
+            value = action.get(field)
+            if isinstance(value, str) and value:
+                text_parts.append(value)
+        target_from_text = _target_from_text(" ".join(text_parts))
+        return target_from_text
 
     def _validate_controller_action(self, action: Mapping[str, Any]) -> str | None:
         controller_action = str(action.get("controller_action") or "")
@@ -657,6 +683,19 @@ class WakeupRunner:
         return (max(rounds) if rounds else 0) + 1
 
     def _live_target_state(self, kind: str, number: int) -> str:
+        if self.ctx.gh_repo_slug:
+            endpoint = "pulls" if kind == "pr" else "issues"
+            result = self.command_runner(["gh", "api", f"repos/{self.ctx.gh_repo_slug}/{endpoint}/{number}"])
+            if result.returncode == 0:
+                try:
+                    payload = json.loads(result.stdout or "{}")
+                except json.JSONDecodeError:
+                    return ""
+                if isinstance(payload, dict):
+                    if kind == "pr" and payload.get("merged") is True:
+                        return "MERGED"
+                    state = str(payload.get("state") or "").strip()
+                    return state.upper() if state else ""
         result = self.command_runner(["gh", kind, "view", str(number), "--json", "state", "--jq", ".state"])
         return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -696,7 +735,10 @@ class WakeupRunner:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("action_id") == action_id and row.get("status") in {"applied", "dry-run"}:
+            if row.get("action_id") == action_id and (
+                row.get("status") in {"applied", "dry-run"}
+                or (row.get("status") == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")))
+            ):
                 return True
         return False
 
@@ -752,6 +794,18 @@ def _safe_branch_name(value: str) -> bool:
 def _extract_review_head_sha(text: str) -> str:
     match = REVIEW_HEAD_RE.search(text)
     return match.group(1) if match else ""
+
+
+def _target_from_text(text: str) -> tuple[str, int] | None:
+    for pattern, kind in TARGET_TEXT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return kind, int(match.group(1))
+    return None
+
+
+def _terminal_blocked_reason(reason: str) -> bool:
+    return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
 
 
 def load_plan_file(path: Path) -> Mapping[str, Any]:

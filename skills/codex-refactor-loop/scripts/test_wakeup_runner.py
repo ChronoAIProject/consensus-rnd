@@ -107,6 +107,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         actions=None,
     ) -> list:
         def command_runner(command):
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if "/pulls/" in endpoint or "/issues/" in endpoint:
+                    if gh_state is None:
+                        return subprocess.CompletedProcess(command, 1, "", "not found")
+                    payload = {"state": str(gh_state).lower()}
+                    if gh_state == "MERGED":
+                        payload = {"state": "closed", "merged": True}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
             if command[:4] == ["gh", "pr", "list", "--state"]:
                 return subprocess.CompletedProcess(command, 0, json.dumps(duplicate_prs or []), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
@@ -366,6 +376,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def design_consensus_spawn_action(self, **overrides) -> dict:
+        prompt = self.repo / ".refactor-loop/prompts/phase9/phase9-issue104-r2-judge.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("design consensus\n", encoding="utf-8")
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        marker = "HARNESS_SPAWN_INTENT phase9-issue104-r2-judge"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "harness-spawn-intent",
+            "action_id": "harness-spawn-intent:phase9-router:104:2:judge",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "codex",
+            "target_number": None,
+            "target": {"kind": "codex", "task_id": "phase9-issue104-r2-judge"},
+            "controller_action": "spawn_codex_harness_background",
+            "no_generic_command": True,
+            "cd": str(self.repo),
+            "prompt": str(prompt),
+            "log": str(self.repo / ".refactor-loop/logs/phase9-issue104-r2-judge.log"),
+            "stall": 30,
+        }
+        action.update(overrides)
+        return action
+
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
         results = self.run_result(self.base_plan(self.spawn_action()))
 
@@ -529,6 +566,48 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 actions = FakeActions()
                 results = self.run_result(self.base_plan(action), gh_state=gh_state, actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_closed_pr_review_and_fix_dispatch_skip_terminal_before_spawn(self) -> None:
+        cases = (
+            ("review-dispatch", self.reviewer_dispatch_action(action_id="stale-review:423"), "CLOSED"),
+            ("fix-dispatch", self.review_gate_action(action_id="stale-fix:423"), "MERGED"),
+        )
+        for name, action, gh_state in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), gh_state=gh_state, actions=actions)
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], f"target_not_open:{gh_state}", actions)
+
+    def test_closed_issue_design_consensus_spawn_skips_terminal_before_supervisor(self) -> None:
+        actions = FakeActions()
+        action = self.design_consensus_spawn_action()
+
+        results = self.run_result(self.base_plan(action), gh_state="CLOSED", actions=actions)
+
+        self.assert_blocked_before_dispatch(results, action["action_id"], "target_not_open:CLOSED", actions)
+
+    def test_open_issue_design_consensus_spawn_still_applies(self) -> None:
+        action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:2:judge-open")
+
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(len(self.supervisor.calls), 1)
+
+    def test_terminal_closed_target_block_suppresses_next_tick_retry(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(action_id="stale-review:423:dedupe")
+        plan = self.base_plan(action)
+
+        first = self.run_result(plan, gh_state="CLOSED", actions=actions)
+        second = self.run_result(plan, gh_state="CLOSED", actions=actions)
+
+        self.assertEqual(first[0].status, "blocked")
+        self.assertEqual(first[0].reason, "target_not_open:CLOSED")
+        self.assertEqual(second[0].status, "skipped")
+        self.assertEqual(second[0].reason, "duplicate")
+        self.assertEqual(actions.calls, [])
 
     def test_safe_push_missing_or_invalid_preconditions_block_at_runner_gate_before_helper(self) -> None:
         outside = self.repo / "outside-worktree"
