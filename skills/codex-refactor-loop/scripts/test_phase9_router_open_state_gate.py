@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.phase9.router import Phase9Router
 
 
@@ -79,6 +80,43 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         self.assertEqual("phase9-source-not-open", decision.reason)
         run.assert_called_once()
         self.assert_state_only_read(run.call_args.args[0], issue="245", repo_slug="owner/repo")
+
+    def test_design_issue_intake_uses_open_managed_list_without_lifecycle_commands(self) -> None:
+        rows = [
+            {
+                "number": 416,
+                "title": "design issue",
+                "labels": [
+                    {"name": label_catalog.MANAGED},
+                    {"name": label_catalog.PHASE_DESIGN_SOLVING},
+                    {"name": label_catalog.HUMAN_AUTO},
+                ],
+            }
+        ]
+        result = mock.Mock(returncode=0, stdout=json.dumps(rows), stderr="")
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
+            issues = self.router(gh_repo_slug="owner/repo")._open_design_consensus_issues()
+
+        self.assertEqual([issue.number for issue in issues], ["416"])
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command,
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                "owner/repo",
+                "--state",
+                "open",
+                "--label",
+                "crnd:lifecycle:managed",
+                "--json",
+                "number,title,labels",
+            ],
+        )
+        forbidden = {"close", "comment", "create", "delete", "edit", "merge", "pr", "release", "reopen"}
+        self.assertFalse(set(command) & forbidden)
 
 
 if __name__ == "__main__":

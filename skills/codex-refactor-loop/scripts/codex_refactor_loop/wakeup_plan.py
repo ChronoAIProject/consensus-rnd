@@ -87,8 +87,6 @@ EXECUTABLE_ACTION_KINDS = {
     "completed-marker",
     "release-rollup-needed",
     "ci-red",
-    "no-gap-violation",
-    "existing-issue",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",
@@ -820,7 +818,6 @@ def no_gap_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "target_number": _target_number_from_item(infer_item_from_text(line)),
                 "target": _target_from_item(infer_item_from_text(line)),
                 "preconditions": ["active_controller_owner", "source_artifact_contains_evidence"],
-                "controller_action": "dispatch_next_step_worker",
                 "status_only": True,
                 "no_lifecycle_authority": True,
             }
@@ -1093,9 +1090,9 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                 "target_number": item.number,
                 "target": {"kind": "PR" if item.kind == "pr" else "issue", "number": item.number},
                 "preconditions": ["active_controller_owner", "live_open_target"],
-                "controller_action": "dispatch_next_step_worker",
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
+                "route": "design-consensus-status" if phase_from_labels(item.labels) == "design-consensus" else "existing-managed-item-status",
+                "status_only": True,
+                "no_lifecycle_authority": True,
         }
         if item.kind == "issue" and phase_from_labels(item.labels) == "implementation" and milestone:
             consensus_fields = latest_consensus_implementation_for_issue(repo_root, item.number) if repo_root else {}
@@ -1107,9 +1104,12 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                         "route": "dispatch-consensus-implementation",
                         "controller_action": "dispatch_consensus_implementation",
                         "preconditions": ["active_controller_owner", "live_open_target", "durable_consensus_artifact"],
+                        "runner_authority": RUNNER_AUTHORITY,
+                        "no_generic_command": True,
                         **consensus_fields,
                     }
                 )
+                action.pop("status_only", None)
         actions.append(action)
     return actions
 
@@ -1320,7 +1320,6 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         if "target_number" not in closed:
             target = closed.get("target") if isinstance(closed.get("target"), dict) else {}
             closed["target_number"] = target.get("number")
-        closed.setdefault("controller_action", "dispatch_next_step_worker")
         if closed.get("controller_action") not in RUNNER_NAMED_HELPER_ACTIONS:
             closed["status_only"] = True
             closed["no_lifecycle_authority"] = True
