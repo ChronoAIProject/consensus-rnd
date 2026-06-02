@@ -792,7 +792,13 @@ class ControllerActions:
             "run_in_background_required": True,
             "no_lifecycle_authority": True,
         }
-        self._append_pending_event(f"HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}")
+        self._append_pending_event(
+            f"{self._now()} HARNESS_SPAWN_INTENT {json.dumps(intent, ensure_ascii=False, sort_keys=True)}"
+        )
+
+    @staticmethod
+    def _now() -> str:
+        return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def close_managed_item_from_drop_marker(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("close-managed-drop", code=3):
