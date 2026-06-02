@@ -1169,11 +1169,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         def fake_run(command, **kwargs):
             if command[:2] == ["gh", "api"]:
-                return mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps({"state": "OPEN", "labels": ["crnd:lifecycle:managed", "crnd:phase:implementing"]}),
-                    stderr="",
-                )
+                jq_arg = command[command.index("--jq") + 1]
+                if jq_arg == ".state":
+                    return mock.Mock(returncode=0, stdout=json.dumps("OPEN"), stderr="")
+                if jq_arg == "[.labels[].name]":
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=json.dumps(["crnd:lifecycle:managed", "crnd:phase:implementing"]),
+                        stderr="",
+                    )
+                self.fail(f"unexpected gh api jq query: {jq_arg}")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
