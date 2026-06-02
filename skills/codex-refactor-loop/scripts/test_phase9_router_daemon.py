@@ -161,6 +161,45 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
 
+    def test_phase9_router_skips_harness_bookkeeping_after_exit_zero(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            path = self.write_log(f"phase9-issue449-r2-{role}.log", f"SOLVER_DONE:{role}:same:summary")
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write("DONE_AT=2026-06-02T12:00:00Z\n")
+        judge = self.write_log("phase9-issue450-r3-judge.log", "META_JUDGE_DONE:converge:round-3:continue")
+        with judge.open("a", encoding="utf-8") as handle:
+            handle.write("DONE_AT=2026-06-02T12:00:00Z\n")
+
+        self.router.tick()
+
+        logs = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue449-r2-judge.log", logs)
+        self.assertIn("phase9-issue450-r4-minimal.log", logs)
+        self.assertIn("phase9-issue450-r4-structural.log", logs)
+        self.assertIn("phase9-issue450-r4-delete.log", logs)
+        self.assertIn("449-2-judge", [entry["key"] for entry in self.ledger_entries()])
+        self.assertIn("450-4-minimal", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_accepts_sentinel_marker_before_completion_summary(self) -> None:
+        judge = self.repo / ".refactor-loop" / "logs" / "phase9-issue451-r3-judge.log"
+        judge.write_text(
+            "diff context\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+            "META_JUDGE_DONE:converge:round-3:continue\n"
+            "tokens used\n"
+            "1,234\n"
+            "completion summary\n"
+            "EXIT=0\n"
+            "DONE_AT=2026-06-02T12:00:00Z\n",
+            encoding="utf-8",
+        )
+
+        self.router.tick()
+
+        logs = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue451-r4-minimal.log", logs)
+        self.assertIn("451-4-minimal", [entry["key"] for entry in self.ledger_entries()])
+
     def test_phase9_router_unknown_marker_fallback_appends_event_only(self) -> None:
         self.write_log("phase9-issue37-r4-judge.log", "SOMETHING_DONE:surprise:payload")
 

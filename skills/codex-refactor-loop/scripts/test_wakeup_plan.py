@@ -851,6 +851,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         actions = self.run_plan()["actions"]
         self.assertFalse([action for action in actions if action["kind"] == "completed-marker"])
 
+    def test_completed_marker_accepts_sentinel_marker_before_completion_summary(self) -> None:
+        log = self.logs / "phase9-issue449-r2-judge.log"
+        log.write_text(
+            "diff context\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+            "`META_JUDGE_DONE:consensus:minimal:delete .refactor-loop host.env runtime fallback`\n"
+            "tokens used\n"
+            "1,234\n"
+            "completion summary\n"
+            "EXIT=0\n"
+            "DONE_AT=2026-06-02T12:00:00Z\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            "META_JUDGE_DONE:consensus:minimal:delete .refactor-loop host.env runtime fallback",
+            marker_from_completed_log(log),
+        )
+
     def test_completed_marker_payload_does_not_include_raw_log_tail(self) -> None:
         (self.logs / "implement-worker.log").write_text(
             "target issue #999 in raw prose only\n"
@@ -1128,6 +1147,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("wakeup_plan.py", consensus_action["scope_paths"])
         self.assertIn("wakeup_runner.py", consensus_action["scope_paths"])
         self.assertIn("durable_consensus_artifact", consensus_action["preconditions"])
+
+    def test_consensus_marker_after_exit_zero_with_harness_done_at_projects_implementation(self) -> None:
+        artifact = self.write_consensus_artifact(issue=449, round_no=2)
+        self.write_completed_log("phase9-issue449-r2-judge.log", "META_JUDGE_DONE:consensus:minimal")
+        with (self.logs / "phase9-issue449-r2-judge.log").open("a", encoding="utf-8") as handle:
+            handle.write("DONE_AT=2026-06-02T12:00:00Z\n")
+
+        plan = self.run_plan()
+
+        action = next(
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual(action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
+        self.assertEqual(action["consensus_issue"], 449)
+        self.assertEqual(action["consensus_round"], 2)
+        self.assertIn("durable_consensus_artifact", action["preconditions"])
 
     def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")

@@ -332,12 +332,27 @@ class Phase9Router:
         return markers
 
     def _final_marker_from_path(self, path: Path) -> str | None:
-        tail = self._read_tail_lines(path, 5)
-        for line in reversed(tail):
+        tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
+        try:
+            exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
+        except ValueError:
+            return None
+        before_exit = tail[:exit_index]
+        for line in reversed(before_exit):
             stripped = line.strip()
-            if stripped == "EXIT=0" or not stripped:
+            if not stripped:
                 continue
-            return self._extract_marker(stripped)
+            marker = self._extract_marker(stripped)
+            if marker is not None:
+                return marker
+            break
+        for index, line in enumerate(before_exit):
+            if "⟦AI:AUTO-LOOP⟧" not in line:
+                continue
+            for candidate in before_exit[index + 1 : index + 4]:
+                marker = self._extract_marker(candidate.strip())
+                if marker is not None:
+                    return marker
         return None
 
     def _extract_marker(self, line: str) -> str | None:
@@ -356,6 +371,8 @@ class Phase9Router:
                 candidate = match.group(0)
         if candidate is None:
             return None
+        if any(candidate.startswith(prefix) for prefix in LIFECYCLE_PREFIXES):
+            return candidate
         return Phase9MarkerGrammar.parse_marker_candidate(candidate)
 
     def _is_placeholder_or_echo(self, text: str) -> bool:
