@@ -16,6 +16,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
+from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor
@@ -105,6 +106,9 @@ class WakeupRunner:
         self.pending_events_path = ctx.paths.pending_events
 
     def run_once(self) -> list[RunnerResult]:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            log_graphql_backoff("wakeup-runner")
+            return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
         write_active_controller_status(self.ctx, owner)
         if not owner.allowed:
@@ -484,6 +488,10 @@ class WakeupRunner:
         return 0
 
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action.get('action_id', '')}:graphql-headroom-low")
+            log_graphql_backoff("wakeup-runner")
+            return 3
         cd = Path(str(action.get("cd") or self.ctx.repo_root))
         prompt = Path(str(action.get("prompt") or ""))
         log = Path(str(action.get("log") or ""))

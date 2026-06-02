@@ -17,6 +17,7 @@ from typing import Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 
 
@@ -71,6 +72,9 @@ class ProgressReporter:
             self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            log_graphql_backoff("progress-reporter")
+            return
         for log in sorted(self.log_dir.glob("*.log")):
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):

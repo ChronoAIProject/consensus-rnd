@@ -17,6 +17,7 @@ from typing import Any, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
@@ -498,6 +499,10 @@ class ConcurrencyMonitor:
 
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
         if actual >= floor:
+            return actual
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            self.write_pending_event("DISPATCH_BACKOFF:graphql-headroom-low")
+            log_graphql_backoff("concurrency-monitor")
             return actual
         max_dispatches = floor - actual
         for _ in range(max_dispatches):
