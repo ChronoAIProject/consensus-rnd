@@ -163,6 +163,28 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:missing_action_reviewed_head_sha")
         self.assertEqual(self.actions.merged, [])
 
+    def test_missing_required_reviewer_head_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve", head_sha="")
+        self.write_review("quality", "comment")
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:missing_reviewed_head_sha:tests")
+        self.assertEqual(self.actions.merged, [])
+
+    def test_stale_required_reviewer_head_fails_closed_without_merge(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve", head_sha="b" * 40)
+        self.write_review("quality", "comment")
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:tests")
+        self.assertEqual(self.actions.merged, [])
+
     def test_stale_reviewed_head_fails_closed_without_merge(self) -> None:
         self.write_review("architect", "approve", head_sha="b" * 40)
         self.write_review("tests", "approve", head_sha="b" * 40)
@@ -171,7 +193,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         result = self.run_action(self.action(head_sha="b" * 40), live_head="a" * 40)
 
         self.assertEqual(result.status, "blocked")
-        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:stale_head_sha")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:architect")
         self.assertEqual(self.actions.merged, [])
 
     def test_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
