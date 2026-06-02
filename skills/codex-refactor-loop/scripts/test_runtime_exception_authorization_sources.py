@@ -695,7 +695,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`gh api repos/<slug>/issues/<N> --jq .state`",
             "DesignConsensusIssueIntake",
             "four built-in phase9 direct routes",
-            "r1 solver triplet",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/in-flight for one solver role suppresses only that role",
             "state-only",
             "source-OPEN gate",
             "phase9-source-not-open",
@@ -712,6 +713,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
+        self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",
             "gh issue edit",
