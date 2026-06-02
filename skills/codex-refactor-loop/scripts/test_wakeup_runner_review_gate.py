@@ -94,7 +94,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": False}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
-                return subprocess.CompletedProcess(command, 0, json.dumps({"head": {"sha": live_head}}), "")
+                return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": live_head}}), "")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
                 payload = {"check_runs": [{"name": "ci", "status": check_status, "conclusion": check_conclusion}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
