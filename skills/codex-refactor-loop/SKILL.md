@@ -22,9 +22,6 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and seven write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller execution may be interactive or #396 `wakeup-runner`; all reasoning remains in codex workers / consensus gates. `phase9-router` handles only deterministic design-consensus routes; `wakeup-runner` consumes only `wakeup-plan` evidence-bound closed action projection and existing controller helpers. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes and `consensus-rnd-cli wakeup-runner` mechanically apply only closed projection actions. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
-<!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
-  New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
--->
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
 | Work unit state | The work-unit contract is stable; do not rename, migrate, or wrap it. Root `.refactor-loop/state.json` is not a contract surface. | Use GitHub labels/comments, clean `EXIT=0` logs, prompt artifacts, git topology, and named specialized state artifacts; export `WORK_UNIT_ID=$CLUSTER_ID` for audit-backed units. | [work-unit contract](#work-unit-contract), [specialized state artifacts](#specialized-state-artifacts) | `.refactor-loop/state/*.json`, daemon-owned state files |
@@ -1028,12 +1025,6 @@ Recovery rules:
 5. Post what happened and what the controller will do next.
 
 ## GitHub Posting Contract
-
-<!--
-Refactor (iter6/issue-118):
-  Old pattern: skill docs maintained a posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
--->
 
 Posting rules:
 
@@ -2208,12 +2199,6 @@ The controller's only inline composition allowed for GitHub:
 - Programmatic label edits + merge actions.
 
 EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation rationale、design issue body、cross-post 通知、PR description 包括 rollup PR)由**正在跑的那个 codex 自己 post**,**不需要专门的 writer-codex 中介**:
-
-<!--
-Refactor (iter6/issue-118):
-  Old pattern: skill docs maintained a posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
--->
 
 - A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
 - `SKILL.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。

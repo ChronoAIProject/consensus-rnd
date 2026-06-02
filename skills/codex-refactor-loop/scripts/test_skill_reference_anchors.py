@@ -86,9 +86,6 @@ def _section_after_first_heading(markdown: str) -> str:
 
 
 class SkillReferenceAnchorTests(unittest.TestCase):
-    # Refactor (iter1/issue-139):
-    #   Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
-    #   New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
     def setUp(self) -> None:
         self.skill = read(SKILL_MD)
         self.readme = read(README_MD)
@@ -173,6 +170,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
     def test_no_absolute_reference_links_in_entrypoint(self) -> None:
         self.assertNotRegex(self.skill, r"/Users/[^)\s]+")
         self.assertNotRegex(self.skill, r"REFERENCE\.md#/[^\s)]+")
+
+    def test_checked_in_skill_and_prompts_do_not_cite_run_artifacts_as_authority(self) -> None:
+        authority_citation = re.compile(
+            r"(?i)(consensus|implement plan|design decision|详见|按|严格按)[^\n]{0,160}"
+            r"\.refactor-loop/runs/phase9-issue[0-9]+-r[0-9]+-[A-Za-z-]+\.md"
+        )
+        paths = [SKILL_MD, *sorted((SKILL_ROOT / "prompts").glob("*.md"))]
+        for path in paths:
+            with self.subTest(path=path.relative_to(REPO_ROOT).as_posix()):
+                self.assertNotRegex(read(path), authority_citation)
 
     def test_skill_documents_main_path_and_fallback_producer_near_top(self) -> None:
         top = "\n".join(self.skill.splitlines()[:200])

@@ -1,11 +1,5 @@
 # 任务：对 design issue 的新评论做实质性技术回复（中文）
 
-<!--
-Refactor (iter1/issue-126):
-  Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
-  New principle: 按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus 逐条:删除 prompt 硬编码 host 文本,复用现有 host.env surface;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
--->
-
 issue: ${ISSUE_URL}
 cluster: ${CLUSTER_ID}
 new comment by: ${COMMENT_AUTHOR}
