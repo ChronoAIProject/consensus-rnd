@@ -991,7 +991,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
-            "COMMANDS": {"cli.py", "restart.py"},
+            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():
