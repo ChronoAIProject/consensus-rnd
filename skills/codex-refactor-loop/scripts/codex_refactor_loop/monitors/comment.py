@@ -14,6 +14,7 @@ from typing import Iterable, Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 
@@ -67,6 +68,9 @@ class CommentMonitor:
             self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            log_graphql_backoff("comment-monitor")
+            return
         self._poll_once()
 
     def _poll_once(self) -> None:

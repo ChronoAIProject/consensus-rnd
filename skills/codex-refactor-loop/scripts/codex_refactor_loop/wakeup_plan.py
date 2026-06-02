@@ -81,6 +81,18 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "review_gate",
     "publish_release_candidate",
 }
+
+
+def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
+    cd = Path(text).expanduser()
+    if not cd.is_absolute():
+        cd = ctx.repo_root / cd
+    resolved = cd.resolve()
+    try:
+        resolved.relative_to(ctx.repo_root.resolve())
+    except ValueError as exc:
+        raise ValueError(f"cd escapes REPO_ROOT: {text!r}") from exc
+    return resolved
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "unpushed-worker-output",
@@ -199,7 +211,7 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
             actions.append(_invalid_harness_spawn_intent(invalid_reason, line, intent_id=intent_id))
             continue
         try:
-            cd = ctx.artifact_execution_path(str(intent["cd"]))
+            cd = _contained_execution_cd(ctx, str(intent["cd"]))
             prompt = ctx.artifact_execution_path(str(intent["prompt"]))
             log_path = ctx.artifact_execution_path(str(intent["log"]))
         except Exception as exc:
