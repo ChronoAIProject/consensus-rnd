@@ -8,9 +8,6 @@ from typing import Mapping, Sequence
 from . import labels as label_catalog
 
 
-TERMINAL_PHASES = frozenset({label_catalog.PHASE_MERGED, label_catalog.PHASE_CLOSED})
-
-
 @dataclass(frozen=True)
 class ClosedPhaseLabelPlan:
     """Read-only terminal phase-label plan for closed managed items."""
@@ -44,13 +41,18 @@ def plan_closed_phase_labels(
         return None
 
     terminal = _terminal_phase(kind=kind, merged=merged, linked_merged=linked_merged, projection=projection)
-    current_phases = set(projection.labels_for_group("phase"))
-    remove = set(current_phases - {terminal})
-    remove.update(projection.cleanup_only)
-    if label_catalog.STUCK in projection.canonical:
-        remove.add(label_catalog.STUCK)
-    remove.update(_legacy_phase_and_cleanup_labels(labels))
-    add = () if terminal in current_phases else (terminal,)
+    terminal_present = False
+    remove = set()
+    for label in labels:
+        label_projection = label_catalog.normalize_label_set([label])
+        phase_labels = set(label_projection.labels_for_group("phase"))
+        if terminal in phase_labels:
+            terminal_present = True
+        if label_projection.cleanup_only or label_catalog.STUCK in label_projection.canonical:
+            remove.add(label)
+        elif phase_labels and terminal not in phase_labels:
+            remove.add(label)
+    add = () if terminal_present else (terminal,)
     return ClosedPhaseLabelPlan(
         kind=kind,
         number=number,
@@ -100,18 +102,6 @@ def _reason(*, kind: str, merged: bool, linked_merged: bool, terminal: str) -> s
     if terminal == label_catalog.PHASE_MERGED:
         return "existing-merged-evidence"
     return "closed-no-merged-evidence"
-
-
-def _legacy_phase_and_cleanup_labels(labels: Sequence[str]) -> set[str]:
-    remove: set[str] = set()
-    for label in labels:
-        projection = label_catalog.normalize_label_set([label])
-        if projection.cleanup_only:
-            remove.add(label)
-        phase_labels = projection.labels_for_group("phase")
-        if phase_labels and label not in TERMINAL_PHASES:
-            remove.add(label)
-    return remove
 
 
 def plan_from_gh_item(kind: str, item: Mapping[str, object], *, linked_merged: bool = False) -> ClosedPhaseLabelPlan | None:
