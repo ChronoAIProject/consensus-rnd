@@ -89,6 +89,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$cmd1 $cmd2" == "issue list" ]]; then
                   case "$fixture" in
+                    gh_failure)
+                      exit 42
+                      ;;
+                    open_issue_330)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":330,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_331)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":331,"title":"different open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     managed_dual_read)
                       case "$label" in
                         crnd:lifecycle:managed)
@@ -167,6 +184,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$cmd1 $cmd2" == "pr list" ]]; then
                   case "$fixture" in
+                    gh_failure)
+                      exit 42
+                      ;;
                     managed_dual_read)
                       case "$label" in
                         crnd:lifecycle:managed)
@@ -544,10 +564,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
         self.assertEqual(action["reason"], expected_reason)
 
+    def harness_spawn_actions(self, plan: dict) -> list[dict]:
+        return [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
+
     def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
         self.append_harness_spawn_intent()
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_330")
 
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "harness-spawn-intent")
@@ -564,7 +587,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_harness_spawn_intent_accepts_absolute_repo_contained_cd(self) -> None:
         self.append_harness_spawn_intent(cd=str(self.repo.resolve()))
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_330")
 
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "harness-spawn-intent")
@@ -660,12 +683,93 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             f"--log {self.repo.resolve()}/.refactor-loop/logs/in-flight.log"
         )
         try:
-            plan = self.run_plan()
+            plan = self.run_plan(fixture="open_issue_330")
         finally:
             os.environ.pop("WAKEUP_PLAN_PS_EXTRA", None)
 
         actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
         self.assertEqual([action["intent_id"] for action in actions], ["duplicate"])
+
+    def test_harness_spawn_intent_suppresses_terminal_closed_blocked_marker(self) -> None:
+        self.append_harness_spawn_intent(intent_id="closed-intent")
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write("2026-05-31T00:00:01Z WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:closed-intent:target_not_open:CLOSED\n")
+
+        plan = self.run_plan()
+
+        self.assertEqual(self.harness_spawn_actions(plan), [])
+
+    def test_harness_spawn_intent_suppresses_terminal_merged_blocked_marker(self) -> None:
+        self.append_harness_spawn_intent(intent_id="merged-intent")
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write("2026-05-31T00:00:01Z WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:merged-intent:target_not_open:MERGED\n")
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        self.assertEqual(self.harness_spawn_actions(plan), [])
+
+    def test_harness_spawn_intent_keeps_retryable_blocked_reason(self) -> None:
+        self.append_harness_spawn_intent(intent_id="retryable-intent")
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write("2026-05-31T00:00:01Z WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:retryable-intent:target_not_open:unknown\n")
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["retryable-intent"])
+
+    def test_harness_spawn_intent_suppresses_when_open_managed_read_model_excludes_target(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="closed-read-model-target",
+            task_id="issue #330",
+        )
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        self.assertEqual(self.harness_spawn_actions(plan), [])
+
+    def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="empty-read-model-target",
+            task_id="issue #330",
+        )
+
+        plan = self.run_plan()
+
+        self.assertEqual(self.harness_spawn_actions(plan), [])
+
+    def test_harness_spawn_intent_keeps_open_read_model_target(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="open-read-model-target",
+            task_id="issue #330",
+        )
+
+        plan = self.run_plan(fixture="open_issue_330")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["open-read-model-target"])
+
+    def test_harness_spawn_intent_keeps_target_when_read_model_load_fails(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="read-model-failed-target",
+            task_id="issue #330",
+        )
+
+        plan = self.run_plan(fixture="gh_failure")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["read-model-failed-target"])
+
+    def test_harness_spawn_intent_keeps_unresolved_target(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="unresolved-target",
+            task_id="custom-worker",
+            reason="spawn worker for opaque target",
+        )
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["unresolved-target"])
 
     def test_wakeup_plan_uses_concurrency_monitor_for_spawn_intent_in_flight_detection(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
@@ -673,6 +777,33 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
         self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
         self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
+
+    def test_harness_spawn_intent_target_extraction_owner_contract_is_anchored(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn(
+            "`scripts/codex_refactor_loop/wakeup_plan.py` | read-only stale-target extraction for `HARNESS_SPAWN_INTENT` fields `task_id`, `intent_id`, `source`, `route`, and `reason`",
+            skill,
+        )
+        self.assertIn("`PR #<N>`, `issue #<N>`, `phase9-issue<N>-r<R>-<role>`, `review-pr<N>-<role>-r<R>`, and `fix-pr<N>-(r|round-)<R>`", skill)
+        self.assertIn("role charset `[A-Za-z][A-Za-z0-9_-]*`", skill)
+        self.assertIn("no canonical write authority", skill)
+        self.assertIn("legacy free-text read only for stale closed/merged target suppression", skill)
+        self.assertIn("unresolved targets fail open", skill)
+        self.assertIn("test_wakeup_plan.py", skill)
+        for token in (
+            "HARNESS_SPAWN_TARGET_TEXT_PATTERNS",
+            r"(?i)\bPR\s*#([1-9][0-9]*)\b",
+            r"(?i)\bissue\s*#([1-9][0-9]*)\b",
+            "phase9-",
+            "review-",
+            "fix-",
+            '("task_id", "intent_id", "source", "route", "reason")',
+            'TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, wakeup_source)
 
     def test_completed_marker_routes_before_ci_red(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")
@@ -1771,7 +1902,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_harness_spawn_intent_bypasses_single_audit_wait(self) -> None:
         self.append_harness_spawn_intent()
 
-        plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
+        plan, stdout = self.run_plan_with_stdout(fixture="open_issue_330", ps_count=0, active_audit=True)
 
         self.assertEqual(plan["actions"][0]["kind"], "harness-spawn-intent")
         self.assertTrue(has_dispatchable_action(plan["actions"]))
@@ -1895,7 +2026,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_is_closed_action_projection_for_runner(self) -> None:
         self.append_harness_spawn_intent()
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_330")
 
         self.assertEqual(plan["schema"], "wakeup-plan")
         self.assertEqual(plan["mode"], "closed-action-projection")
