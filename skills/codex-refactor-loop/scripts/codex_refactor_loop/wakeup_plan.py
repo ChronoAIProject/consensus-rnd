@@ -66,6 +66,14 @@ HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
     "executor",
     "target_ref",
 }
+HARNESS_SPAWN_TARGET_TEXT_PATTERNS = (
+    (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
+    (re.compile(r"(?i)\bissue\s*#([1-9][0-9]*)\b"), "issue"),
+    (re.compile(r"\bphase9-" + r"issue([1-9][0-9]*)-r[1-9][0-9]*-[A-Za-z][A-Za-z0-9_-]*\b"), "issue"),
+    (re.compile(r"\b" + "review-" + r"pr([1-9][0-9]*)-[A-Za-z][A-Za-z0-9_-]*-r[1-9][0-9]*\b"), "PR"),
+    (re.compile(r"\b" + "fix-" + r"pr([1-9][0-9]*)(?:-r|-round-)"), "PR"),
+)
+TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS = {"target_not_open:CLOSED", "target_not_open:MERGED"}
 RUNNER_AUTHORITY = "wakeup-runner-396"
 PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#wakeup-runner-396"
 READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-wakeup-plan-script"
@@ -177,7 +185,13 @@ def _canonical_in_flight_for_log(log_path: Path, monitor: Any | None) -> bool:
     return any(target in line for line in lines)
 
 
-def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any | None = None) -> list[dict[str, Any]]:
+def harness_spawn_intent_actions(
+    repo_root: Path,
+    ctx: LoopContext,
+    monitor: Any | None = None,
+    gh_items: list[GhItem] | None = None,
+    gh_items_loaded: bool = False,
+) -> list[dict[str, Any]]:
     pending_path = ctx.paths.pending_events
     if not pending_path.exists():
         return []
@@ -187,6 +201,8 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
         return []
     actions: list[dict[str, Any]] = []
     seen: set[str] = set()
+    terminal_blocked_intent_ids = _terminal_blocked_harness_spawn_intent_ids(lines)
+    open_targets = _open_managed_targets(gh_items or []) if gh_items_loaded else set()
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
             continue
@@ -218,6 +234,8 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
         if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
+            continue
+        if _suppress_harness_spawn_intent(intent, line, terminal_blocked_intent_ids, open_targets, gh_items_loaded):
             continue
         actions.append(
             {
@@ -251,6 +269,57 @@ def harness_spawn_intent_actions(repo_root: Path, ctx: LoopContext, monitor: Any
             }
         )
     return actions
+
+
+def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
+    ids: set[str] = set()
+    prefix = "WAKEUP_RUNNER_BLOCKED:harness-spawn-intent:"
+    for line in lines:
+        if prefix not in line:
+            continue
+        tail = line.split(prefix, 1)[1].strip()
+        for reason in TERMINAL_HARNESS_SPAWN_INTENT_BLOCKED_REASONS:
+            suffix = f":{reason}"
+            if tail.endswith(suffix):
+                intent_id = tail[: -len(suffix)]
+                if intent_id:
+                    ids.add(intent_id)
+                break
+    return ids
+
+
+def _open_managed_targets(items: list[GhItem]) -> set[tuple[str, int]]:
+    return {(item.kind, item.number) for item in items if item.kind in {"PR", "issue"}}
+
+
+def _suppress_harness_spawn_intent(
+    intent: dict[str, Any],
+    line: str,
+    terminal_blocked_intent_ids: set[str],
+    open_targets: set[tuple[str, int]],
+    gh_items_loaded: bool,
+) -> bool:
+    intent_id = str(intent.get("intent_id") or "")
+    if intent_id in terminal_blocked_intent_ids:
+        return True
+    target = _harness_spawn_intent_target(intent, line)
+    if gh_items_loaded and open_targets and target is not None and target not in open_targets:
+        return True
+    return False
+
+
+def _harness_spawn_intent_target(intent: dict[str, Any], line: str) -> tuple[str, int] | None:
+    text_parts = []
+    for field in ("task_id", "intent_id", "source", "route", "reason"):
+        value = intent.get(field)
+        if isinstance(value, str) and value:
+            text_parts.append(value)
+    text = " ".join(text_parts)
+    for pattern, kind in HARNESS_SPAWN_TARGET_TEXT_PATTERNS:
+        match = pattern.search(text)
+        if match:
+            return kind, int(match.group(1))
+    return None
 
 
 def _harness_spawn_intent_invalid_reason(intent: dict[str, Any]) -> str | None:
@@ -856,8 +925,14 @@ def github_repo_slug() -> str | None:
 
 
 def load_github_items(repo_root: Path) -> list[GhItem]:
+    items, _loaded_ok = load_github_items_with_status(repo_root)
+    return items
+
+
+def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     slug = github_repo_slug()
     items: list[GhItem] = []
+    loaded_ok = True
     for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
         rows: list[dict[str, Any]] = []
         json_fields = "number,title,labels,headRefName,body" if kind == "PR" else "number,title,labels"
@@ -866,6 +941,8 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
             data = run_json(command, cwd=repo_root)
             if isinstance(data, list):
                 rows.extend(item for item in data if isinstance(item, dict))
+            else:
+                loaded_ok = False
         seen: set[int] = set()
         for raw in rows:
             try:
@@ -890,7 +967,7 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
                     body=str(raw.get("body") or "") if kind == "PR" else "",
                 )
             )
-    return items
+    return items, loaded_ok
 
 
 def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -1451,7 +1528,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     os.environ.update(ctx.env_for_subprocess())
 
     health = daemon_health(repo_root)
-    gh_items = load_github_items(repo_root)
+    gh_items, gh_items_loaded = load_github_items_with_status(repo_root)
     audit_none_fixed_point = latest_controller_validated_audit_none(repo_root)
     concurrency_module = import_concurrency_monitor(repo_root)
     monitor = build_concurrency_monitor(repo_root, concurrency_module)
@@ -1465,7 +1542,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
 
     actions: list[dict[str, Any]] = []
     actions.extend(pending_bootstrap_actions(ctx, health))
-    actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor))
+    actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor, gh_items, gh_items_loaded))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(completed_marker_actions(repo_root))
