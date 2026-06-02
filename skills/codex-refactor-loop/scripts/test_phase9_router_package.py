@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
     Phase9SourceIssueDecision,
@@ -145,6 +146,10 @@ class Phase9RouterPackageTests(unittest.TestCase):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
+        for command in self.commands:
+            self.assertEqual(command["cd"], str(self.repo.resolve()))
+            self.assertNotEqual(command["cd"], ".")
+            self.assertTrue(Path(str(command["cd"])).is_absolute())
         self.assertEqual(
             sorted(command["log"] for command in self.commands),
             [
@@ -157,6 +162,44 @@ class Phase9RouterPackageTests(unittest.TestCase):
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["410-1-delete", "410-1-minimal", "410-1-structural"],
         )
+
+    def test_design_issue_intake_absolute_cd_matches_concurrency_floor_scope(self) -> None:
+        rows = [
+            {
+                "number": 430,
+                "title": "intake floor scope",
+                "labels": [
+                    {"name": "crnd:lifecycle:managed"},
+                    {"name": "crnd:phase:design-solving"},
+                    {"name": "crnd:human:auto"},
+                ],
+            }
+        ]
+        self.router = Phase9Router(
+            ctx=LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": "owner/repo"}),
+            command_runner=self.commands.append,
+        )
+        self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        command = self.commands[0]
+        self.assertEqual(command["cd"], str(self.repo.resolve()))
+        self.assertNotEqual(command["cd"], ".")
+        fake_ps = (
+            f"python3 consensus-rnd-cli spawn-codex --cd {command['cd']} "
+            f"--prompt {self.repo.resolve()}/{command['prompt']} "
+            f"--log {self.repo.resolve()}/{command['log']}\n"
+        )
+        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo))
+        with mock.patch.object(monitor, "run", return_value=mock.Mock(stdout=fake_ps, returncode=0)):
+            self.assertEqual(monitor.count_in_flight_codex(), 1)
 
     # Refactor (impl/issue191-single-active-controller): Old pattern: every
     # device-local phase9 router could write prompts, ledgers, and fallback
