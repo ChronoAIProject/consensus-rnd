@@ -579,6 +579,51 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
                 self.assert_blocked_before_dispatch(results, action["action_id"], f"target_not_open:{gh_state}", actions)
 
+    def test_closed_pr_nested_target_mapping_blocks_before_dispatch(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            action_id="nested-target:review-pr423",
+            target_kind=None,
+            target_number=None,
+            target={"kind": "PR", "number": 423},
+        )
+
+        results = self.run_result(self.base_plan(action), gh_state="CLOSED", actions=actions)
+
+        self.assert_blocked_before_dispatch(results, action["action_id"], "target_not_open:CLOSED", actions)
+
+    def test_closed_pr_review_and_fix_text_targets_block_before_dispatch(self) -> None:
+        cases = (
+            (
+                "review-pr-text",
+                self.reviewer_dispatch_action(
+                    action_id="completed-marker:review-pr423-architect-r1.log:REVIEW_DONE",
+                    target_kind=None,
+                    target_number=None,
+                    target=None,
+                ),
+                "CLOSED",
+                "target_not_open:CLOSED",
+            ),
+            (
+                "fix-pr-text",
+                self.review_gate_action(
+                    action_id="completed-marker:fix-pr423-round-1.log:FIX_DONE",
+                    target_kind=None,
+                    target_number=None,
+                    target=None,
+                ),
+                "MERGED",
+                "target_not_open:MERGED",
+            ),
+        )
+        for name, action, gh_state, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                results = self.run_result(self.base_plan(action), gh_state=gh_state, actions=actions)
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_closed_issue_design_consensus_spawn_skips_terminal_before_supervisor(self) -> None:
         actions = FakeActions()
         action = self.design_consensus_spawn_action()
