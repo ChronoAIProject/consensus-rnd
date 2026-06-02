@@ -71,15 +71,32 @@ class ClosedLabelReconciler:
         seen: set[tuple[str, int]] = set()
         for kind, state in (("issue", "closed"), ("pr", "closed"), ("pr", "merged")):
             for item in self._list_managed(kind, state):
-                plan = plan_from_gh_item(kind, item, linked_merged=self._issue_has_merged_pr(item) if kind == "issue" else False)
+                plan = plan_from_gh_item(kind, item)
                 if plan is None:
                     continue
                 key = (plan.kind, plan.number)
                 if key in seen:
                     continue
                 seen.add(key)
+                if self._has_human_label_drift(item, plan):
+                    continue
+                if kind == "issue":
+                    plan = plan_from_gh_item(kind, item, linked_merged=self._issue_has_merged_pr(item))
+                    if plan is None:
+                        continue
                 plans.append(plan)
         return tuple(plans)
+
+    def _has_human_label_drift(self, item: Mapping[str, object], plan: ClosedPhaseLabelPlan) -> bool:
+        projection = label_catalog.normalize_label_set(_label_names(item))
+        humans = projection.labels_for_group("human")
+        if len(humans) == 1:
+            return False
+        print(
+            f"closed-label-reconciler warn: {plan.kind} #{plan.number} "
+            f"expected exactly one canonical human label, got {len(humans)}; skipping phase reconciliation"
+        )
+        return True
 
     def apply_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
         live_plan = self._live_plan(plan)

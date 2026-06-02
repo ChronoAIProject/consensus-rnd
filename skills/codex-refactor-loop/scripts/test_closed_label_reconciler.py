@@ -361,6 +361,89 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
 
+    def test_closed_managed_item_without_human_label_warns_skips_and_continues(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
+        missing_human_row = {
+            "number": 31,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_REVIEWING},
+                {"name": labels.STUCK},
+            ],
+            "title": "old closed issue without human label",
+        }
+        normal_row = {
+            "number": 32,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_REVIEWING},
+                {"name": labels.HUMAN_AUTO},
+            ],
+            "title": "normal closed issue",
+        }
+        gh_json_responses = {
+            ("issue", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row, normal_row],
+            ("issue", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row, normal_row],
+            ("pr", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--label", labels.MANAGED, "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--label", "auto-loop", "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("pr", "list", "--state", "merged", "--search", "in:body Closes #32", "--limit", "1", "--json", "number,mergedAt"): [],
+            ("issue", "view", "32", "--json", "number,state,labels"): {
+                "number": 32,
+                "state": "CLOSED",
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_CLOSED},
+                    {"name": labels.HUMAN_AUTO},
+                ],
+            },
+        }
+        edit_commands: list[tuple[str, ...]] = []
+        view_counts: dict[tuple[str, ...], int] = {}
+
+        def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
+            command = tuple(args)
+            if command == ("issue", "view", "32", "--json", "number,state,labels"):
+                count = view_counts.get(command, 0)
+                view_counts[command] = count + 1
+                item = normal_row if count == 0 else gh_json_responses[command]
+                return CompletedProcess(["gh", *command], 0, json.dumps(item), "")
+            if command in gh_json_responses:
+                return CompletedProcess(["gh", *command], 0, json.dumps(gh_json_responses[command]), "")
+            if len(command) >= 2 and command[1] == "list":
+                return CompletedProcess(["gh", *command], 0, "[]", "")
+            edit_commands.append(command)
+            return CompletedProcess(["gh", *command], 0, "", "")
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
+            with mock.patch.object(reconciler, "_gh", side_effect=fake_gh):
+                with mock.patch("builtins.print") as print_mock:
+                    self.assertEqual(0, reconciler.run_once())
+
+        print_mock.assert_any_call(
+            "closed-label-reconciler warn: issue #31 "
+            "expected exactly one canonical human label, got 0; skipping phase reconciliation"
+        )
+        self.assertEqual(
+            [
+                (
+                    "issue",
+                    "edit",
+                    "32",
+                    "--add-label",
+                    labels.PHASE_CLOSED,
+                    "--remove-label",
+                    labels.PHASE_REVIEWING,
+                )
+            ],
+            edit_commands,
+        )
+        self.assertNotIn(("issue", "view", "31", "--json", "number,state,labels"), view_counts)
+
     def test_apply_rechecks_live_closed_state_and_skips_stale_open_item(self) -> None:
         plan = ClosedPhaseLabelPlan(
             kind="issue",
