@@ -7,12 +7,17 @@ import json
 import subprocess
 import sys
 import tempfile
+import threading as real_threading
 import unittest
 from pathlib import Path
 from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+
+REAL_CONDITION = real_threading.Condition
+REAL_EVENT = real_threading.Event
+REAL_THREAD = real_threading.Thread
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
@@ -81,26 +86,73 @@ class FakeHeartbeatLease:
 
     def __init__(self) -> None:
         self.beats = 0
+        self.coordinator: HeartbeatCoordinator | None = None
 
     def beat(self) -> None:
         self.beats += 1
+        if self.coordinator is not None:
+            self.coordinator.record_beat()
+
+
+class HeartbeatCoordinator:
+    def __init__(self) -> None:
+        self.condition = REAL_CONDITION()
+        self.run_once_entered = False
+        self.beat_during_run_once = False
+        self.stop_requested = False
+        self.waiting_for_stop = False
+
+    def enter_run_once(self) -> None:
+        with self.condition:
+            self.run_once_entered = True
+            self.condition.notify_all()
+
+    def record_beat(self) -> None:
+        with self.condition:
+            if self.run_once_entered and not self.stop_requested:
+                self.beat_during_run_once = True
+            self.condition.notify_all()
+
+    def wait_for_heartbeat_while_run_once_is_pending(self) -> bool:
+        with self.condition:
+            return self.condition.wait_for(lambda: self.beat_during_run_once, timeout=1.0)
+
+    def request_stop(self) -> None:
+        with self.condition:
+            self.stop_requested = True
+            self.condition.notify_all()
 
 
 class ScriptedEvent:
     instances: list["ScriptedEvent"] = []
+    coordinator: HeartbeatCoordinator | None = None
 
     def __init__(self) -> None:
-        self.wait_results: list[bool] = []
         self.wait_timeouts: list[float] = []
         self.set_called = False
         ScriptedEvent.instances.append(self)
 
     def wait(self, timeout: float | None = None) -> bool:
         self.wait_timeouts.append(float(timeout or 0))
-        return self.wait_results.pop(0) if self.wait_results else True
+        if ScriptedEvent.coordinator is None:
+            return True
+        coordinator = ScriptedEvent.coordinator
+        with coordinator.condition:
+            if not coordinator.run_once_entered:
+                coordinator.condition.wait_for(lambda: coordinator.run_once_entered or coordinator.stop_requested, timeout=1.0)
+            if coordinator.stop_requested:
+                return True
+            if not coordinator.beat_during_run_once:
+                return False
+            coordinator.waiting_for_stop = True
+            coordinator.condition.notify_all()
+            coordinator.condition.wait_for(lambda: coordinator.stop_requested, timeout=1.0)
+            return True
 
     def set(self) -> None:
         self.set_called = True
+        if ScriptedEvent.coordinator is not None:
+            ScriptedEvent.coordinator.request_stop()
 
 
 class InlineThread:
@@ -111,14 +163,18 @@ class InlineThread:
         self.name = name
         self.daemon = daemon
         self.started = False
+        with mock.patch("threading.Event", REAL_EVENT):
+            self.thread = REAL_THREAD(target=self.target, name=name, daemon=daemon)
         self.join_timeouts: list[float] = []
         InlineThread.instances.append(self)
 
     def start(self) -> None:
         self.started = True
+        self.thread.start()
 
     def join(self, timeout: float | None = None) -> None:
         self.join_timeouts.append(float(timeout or 0))
+        self.thread.join(timeout=timeout)
 
 
 class WakeupRunnerBehaviorTests(unittest.TestCase):
@@ -1043,8 +1099,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:
         ScriptedEvent.instances = []
+        ScriptedEvent.coordinator = HeartbeatCoordinator()
         InlineThread.instances = []
         lease = FakeHeartbeatLease()
+        lease.coordinator = ScriptedEvent.coordinator
         expected = [object()]
 
         with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
@@ -1053,24 +1111,29 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         ):
 
             def run_once():
-                ScriptedEvent.instances[0].wait_results = [False, False, True]
-                InlineThread.instances[0].target()
+                ScriptedEvent.coordinator.enter_run_once()
+                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
                 return expected
 
             result = _run_once_with_periodic_heartbeat(run_once, lease)
 
         self.assertIs(result, expected)
-        self.assertEqual(lease.beats, 2)
-        self.assertEqual(ScriptedEvent.instances[0].wait_timeouts, [7.0, 7.0, 7.0])
+        self.assertGreaterEqual(lease.beats, 1)
+        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
+        self.assertGreaterEqual(ScriptedEvent.instances[0].wait_timeouts.count(7.0), 1)
         self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertTrue(InlineThread.instances[0].started)
         self.assertTrue(InlineThread.instances[0].daemon)
         self.assertEqual(InlineThread.instances[0].name, "wakeup-runner-heartbeat-renewer")
         self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+        ScriptedEvent.coordinator = None
 
     def test_daemon_run_once_periodic_heartbeat_propagates_exception_and_stops_thread(self) -> None:
         ScriptedEvent.instances = []
+        ScriptedEvent.coordinator = HeartbeatCoordinator()
         InlineThread.instances = []
         lease = FakeHeartbeatLease()
+        lease.coordinator = ScriptedEvent.coordinator
 
         with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
             "codex_refactor_loop.wakeup_runner.threading.Thread",
@@ -1078,16 +1141,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         ):
 
             def run_once():
-                ScriptedEvent.instances[0].wait_results = [False, True]
-                InlineThread.instances[0].target()
+                ScriptedEvent.coordinator.enter_run_once()
+                self.assertTrue(ScriptedEvent.coordinator.wait_for_heartbeat_while_run_once_is_pending())
                 raise RuntimeError("boom")
 
             with self.assertRaisesRegex(RuntimeError, "boom"):
                 _run_once_with_periodic_heartbeat(run_once, lease)
 
-        self.assertEqual(lease.beats, 1)
+        self.assertGreaterEqual(lease.beats, 1)
+        self.assertTrue(ScriptedEvent.coordinator.beat_during_run_once)
         self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertTrue(InlineThread.instances[0].started)
         self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+        ScriptedEvent.coordinator = None
 
     def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
