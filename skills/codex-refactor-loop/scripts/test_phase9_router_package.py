@@ -238,7 +238,8 @@ class Phase9RouterPackageTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Consensus-rnd Phase design-consensus minimal solver", prompt)
-        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
+        router_header = prompt.split("## Issue source snapshot", 1)[0]
+        self.assertNotRegex(router_header, re.compile(r"\bPhase\s+[0-9]\b"))
 
     def test_package_router_converge_current_round_dispatches_adjacent_next_round(self) -> None:
         self.write_log(
@@ -276,14 +277,16 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
             "WORK_UNIT_SOURCE_REF=gh-issue-114",
             "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-minimal.md",
-            "gh issue view 114",
-            "issue body/comments are the scope spec when no local audit artifact is provided",
+            "Use the router-injected issue source snapshot as the scope spec",
+            "## Issue source snapshot",
+            "source: gh-issue-114",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
-        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
-        self.assertNotIn("cluster spec", prompt)
+        router_header = prompt.split("## Issue source snapshot", 1)[0]
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", router_header)
+        self.assertNotIn("cluster spec", router_header)
 
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")

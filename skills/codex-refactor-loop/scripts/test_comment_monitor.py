@@ -172,65 +172,58 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertTrue(monitor.seen("99"))
 
-    def test_updated_at_unchanged_skips_comments_graphql_query(self) -> None:
+    def test_updated_at_unchanged_skips_comments_rest_query(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         state_path = self.tmp / ".refactor-loop" / "comment-monitor-state.json"
         state_path.write_text(json.dumps({"_item_updated": {"42": "2026-05-30T00:00:00Z"}}), encoding="utf-8")
-        counts = {"comments": 0}
+        calls: list[str] = []
 
-        def fake_graphql(query, variables):
-            del variables
-            if "comments(last: 20)" in query:
-                counts["comments"] += 1
-                return mock.Mock(returncode=0, stdout=json.dumps(self._comments_payload([])), stderr="")
-            return mock.Mock(returncode=0, stdout=json.dumps(self._search_payload("42", "2026-05-30T00:00:00Z")), stderr="")
+        def fake_gh_api(args, *, check=True):
+            del check
+            calls.append(args[0])
+            if args[0].endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql):
+        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
             monitor.tick()
 
-        self.assertEqual(counts["comments"], 0)
+        self.assertFalse(any(call.endswith("/comments?per_page=20") for call in calls))
 
     def test_updated_at_forward_fetches_once_and_only_processes_new_comments(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         state_path = self.tmp / ".refactor-loop" / "comment-monitor-state.json"
         state_path.write_text(json.dumps({"100": "seen", "_item_updated": {"42": "2026-05-30T00:00:00Z"}}), encoding="utf-8")
-        counts = {"comments": 0}
+        calls: list[str] = []
         reactions: list[str] = []
-
-        def fake_graphql(query, variables):
-            del variables
-            if "comments(last: 20)" in query:
-                counts["comments"] += 1
-                return mock.Mock(
-                    returncode=0,
-                    stdout=json.dumps(
-                        self._comments_payload(
-                            [
-                                {"databaseId": 100, "author": {"login": "maintainer"}, "body": "old", "createdAt": "2026-05-30T00:00:00Z"},
-                                {"databaseId": 101, "author": {"login": "maintainer"}, "body": "new", "createdAt": "2026-05-30T00:01:00Z"},
-                            ]
-                        )
-                    ),
-                    stderr="",
-                )
-            return mock.Mock(returncode=0, stdout=json.dumps(self._search_payload("42", "2026-05-30T00:02:00Z")), stderr="")
 
         def fake_gh_api(args, *, check=True):
             del check
+            calls.append(args[0])
+            if args[0].endswith("/comments?per_page=20"):
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {"id": 100, "user": {"login": "maintainer"}, "body": "old", "created_at": "2026-05-30T00:00:00Z"},
+                            {"id": 101, "user": {"login": "maintainer"}, "body": "new", "created_at": "2026-05-30T00:01:00Z"},
+                        ]
+                    ),
+                    stderr="",
+                )
             if "reactions" in args[0]:
                 reactions.append(args[0])
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            return mock.Mock(returncode=1, stdout="", stderr="unexpected")
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:02:00Z")]), stderr="")
 
         with (
-            mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql),
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
             mock.patch.object(monitor, "post_banner") as post_banner,
         ):
             monitor.tick()
 
         state = json.loads(state_path.read_text(encoding="utf-8"))
-        self.assertEqual(counts["comments"], 1)
+        self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
         self.assertEqual(reactions, ["repos/owner/repo/issues/comments/101/reactions"])
         post_banner.assert_called_once()
         self.assertEqual(state["100"], "seen")
@@ -239,55 +232,55 @@ class CommentMonitorTests(unittest.TestCase):
 
     def test_first_seen_item_fetches_comments_once(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
-        counts = {"comments": 0}
+        calls: list[str] = []
 
-        def fake_graphql(query, variables):
-            del variables
-            if "comments(last: 20)" in query:
-                counts["comments"] += 1
-                return mock.Mock(returncode=0, stdout=json.dumps(self._comments_payload([])), stderr="")
-            return mock.Mock(returncode=0, stdout=json.dumps(self._search_payload("42", "2026-05-30T00:00:00Z")), stderr="")
+        def fake_gh_api(args, *, check=True):
+            del check
+            calls.append(args[0])
+            if args[0].endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql):
+        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
             monitor.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
-        self.assertEqual(counts["comments"], 1)
+        self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
         self.assertEqual(state["_item_updated"]["42"], "2026-05-30T00:00:00Z")
 
     def test_last_updated_at_persists_and_reload_skips_unchanged_item(self) -> None:
-        counts = {"comments": 0}
+        calls: list[str] = []
 
-        def fake_graphql(query, variables):
-            del variables
-            if "comments(last: 20)" in query:
-                counts["comments"] += 1
-                return mock.Mock(returncode=0, stdout=json.dumps(self._comments_payload([])), stderr="")
-            return mock.Mock(returncode=0, stdout=json.dumps(self._search_payload("42", "2026-05-30T00:00:00Z")), stderr="")
+        def fake_gh_api(args, *, check=True):
+            del check
+            calls.append(args[0])
+            if args[0].endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
         first = CommentMonitor(self.ctx, interval=1)
-        with mock.patch.object(first, "_gh_graphql", side_effect=fake_graphql):
+        with mock.patch.object(first, "gh_api", side_effect=fake_gh_api):
             first.tick()
-        self.assertEqual(counts["comments"], 1)
+        self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
 
         second = CommentMonitor(self.ctx, interval=1)
-        with mock.patch.object(second, "_gh_graphql", side_effect=fake_graphql):
+        with mock.patch.object(second, "gh_api", side_effect=fake_gh_api):
             second.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
-        self.assertEqual(counts["comments"], 1)
+        self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
         self.assertEqual(state["_item_updated"]["42"], "2026-05-30T00:00:00Z")
 
     def test_failed_comments_query_does_not_advance_last_updated_at(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
 
-        def fake_graphql(query, variables):
-            del variables
-            if "comments(last: 20)" in query:
+        def fake_gh_api(args, *, check=True):
+            del check
+            if args[0].endswith("/comments?per_page=20"):
                 return mock.Mock(returncode=1, stdout="", stderr="rate limited")
-            return mock.Mock(returncode=0, stdout=json.dumps(self._search_payload("42", "2026-05-30T00:00:00Z")), stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql):
+        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
             monitor.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
@@ -297,47 +290,33 @@ class CommentMonitorTests(unittest.TestCase):
         monitor = CommentMonitor(self.ctx, interval=1)
         captured: list[str] = []
 
-        def fake_graphql(query, variables):
-            del query
-            captured.append(variables["searchQuery"])
-            return mock.Mock(returncode=0, stdout=json.dumps({"data": {"search": {"nodes": []}}}), stderr="")
+        def fake_gh_api(args, *, check=True):
+            del check
+            captured.append(args[0])
+            return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-04-30T00:00:00Z")]), stderr="")
 
         with (
             mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "2026-05-01"}),
-            mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql),
+            mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
         ):
             monitor.tick()
 
         self.assertTrue(captured)
-        self.assertTrue(all("updated:>=2026-05-01" in query for query in captured))
-        self.assertTrue(all('label:"' in query for query in captured))
+        self.assertTrue(all("/issues?state=open&labels=" in query for query in captured))
+        self.assertEqual(monitor._last_updated_at(), {})
 
         captured.clear()
         with (
             mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "updated:>=2026-05-02"}),
-            mock.patch.object(monitor, "_gh_graphql", side_effect=fake_graphql),
+            mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
         ):
             monitor.tick()
 
         self.assertTrue(captured)
-        self.assertTrue(all("updated:>=2026-05-02" in query for query in captured))
+        self.assertEqual(monitor._last_updated_at(), {})
 
-    def _search_payload(self, number: str, updated_at: str) -> dict[str, object]:
-        return {
-            "data": {
-                "search": {
-                    "nodes": [
-                        {
-                            "number": int(number),
-                            "updatedAt": updated_at,
-                        }
-                    ]
-                }
-            }
-        }
-
-    def _comments_payload(self, nodes: list[dict[str, object]]) -> dict[str, object]:
-        return {"data": {"repository": {"issueOrPullRequest": {"comments": {"nodes": nodes}}}}}
+    def _active_item(self, number: str, updated_at: str) -> dict[str, object]:
+        return {"number": int(number), "updated_at": updated_at}
 
 
 class CommentMonitorSourceRegressionTests(unittest.TestCase):
@@ -351,13 +330,16 @@ class CommentMonitorSourceRegressionTests(unittest.TestCase):
         text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
         self.assertIn("last_updated_at", text)
         self.assertIn("updated_at > previous", text)
-        self.assertIn("comments(last: 20)", text)
+        self.assertIn("/comments?per_page=20", text)
+        self.assertNotIn("def _gh_graphql", text)
+        self.assertNotIn('"graphql"', text.lower())
 
     def test_comment_monitor_lookback_surface_is_locked(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
         self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', text)
         self.assertIn('raw.startswith("updated:")', text)
         self.assertIn('return f"updated:>={raw}"', text)
+        self.assertIn("def _lookback_minimum_updated_at", text)
 
     def test_generic_env_override_surfaces_are_not_consumed(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")

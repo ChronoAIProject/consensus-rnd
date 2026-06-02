@@ -695,19 +695,24 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
 
-    def test_phase9_router_open_state_gate_authorizes_only_state_read(self) -> None:
-        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's new source issue state read was absent from the mechanical runtime-exception mirror. New: source-regression locks the exact state-only read and lifecycle denials in both mirror and SKILL.
+    def test_phase9_router_open_state_gate_authorizes_only_prompt_source_reads(self) -> None:
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
             "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
+            "`gh api repos/<slug>/issues/<N>`",
+            "`gh api repos/<slug>/issues/<N>/comments?per_page=20`",
+            "issue state/title/body",
+            "bounded recent comments",
+            "router-injected issue source snapshots",
+            "router-local prompt-source projection",
+            "not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority",
             "`gh api repos/<slug>/issues/<N> --jq .state`",
             "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
             "four built-in phase9 direct routes",
             "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
             "existing evidence/log/in-flight for one solver role suppresses only that role",
-            "state-only",
             "source-OPEN gate",
             "labels-only live read",
             "clean consensus judge log",

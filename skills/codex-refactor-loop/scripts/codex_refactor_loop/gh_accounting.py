@@ -146,7 +146,8 @@ def resolve_real_gh(argv0: str, env: Mapping[str, str] | None = None) -> str | N
         if not part:
             continue
         try:
-            if Path(part).resolve() == shim_dir:
+            path_dir = Path(part).resolve()
+            if path_dir == shim_dir or _is_ghwrap_shim_dir(path_dir):
                 continue
         except OSError:
             pass
@@ -155,6 +156,17 @@ def resolve_real_gh(argv0: str, env: Mapping[str, str] | None = None) -> str | N
     if found and Path(found).resolve() != Path(argv0).resolve():
         return found
     return None
+
+
+def _is_ghwrap_shim_dir(path_dir: Path) -> bool:
+    candidate = path_dir / "gh"
+    if path_dir.name != "ghwrap" or not candidate.exists():
+        return False
+    try:
+        head = candidate.read_text(encoding="utf-8", errors="replace")[:2048]
+    except OSError:
+        return False
+    return "gh_accounting" in head and "run_real_gh" in head
 
 
 def run_real_gh(argv: Sequence[str], *, argv0: str) -> int:

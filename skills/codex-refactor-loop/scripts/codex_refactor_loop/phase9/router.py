@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable, Literal, cast
+from typing import Any, Callable, Iterable, Literal, cast
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
@@ -117,6 +117,19 @@ class Phase9SourceIssueDecision:
     allowed: bool
     state: str | None
     reason: Literal["phase9-source-open", "phase9-source-not-open", "phase9-source-state-unavailable"]
+
+
+@dataclass(frozen=True)
+class IssueSourceSnapshot:
+    number: str
+    title: str
+    body: str
+    comments: tuple[dict[str, str], ...]
+    read_at: str
+    source: str
+    truncated: bool
+    unavailable_reason: str | None = None
+    comments_loaded: bool = False
 
 
 @dataclass(frozen=True)
@@ -270,6 +283,7 @@ class Phase9Router:
         self.command_runner = command_runner or self._default_runner
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
+        self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
 
     def tick(self) -> None:
@@ -284,6 +298,7 @@ class Phase9Router:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
         self._source_issue_decisions = {}
+        self._issue_source_snapshots = {}
         self._terminal_decisions = {}
         ledger = self._read_ledger()
         markers = self._collect_markers()
@@ -562,6 +577,7 @@ class Phase9Router:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.ctx.env_for_subprocess(),
                 timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -850,9 +866,153 @@ class Phase9Router:
         return self._source_issue_decisions[issue]
 
     def _read_source_issue_decision(self, issue: str) -> Phase9SourceIssueDecision:
-        if not self.ctx.gh_repo_slug:
+        snapshot = self._read_issue_metadata_snapshot(issue)
+        if snapshot.source == "unavailable":
             return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        command = ["gh", "api", f"repos/{self.ctx.gh_repo_slug}/issues/{issue}", "--jq", ".state"]
+        state = snapshot.source
+        if not isinstance(state, str) or not state.strip():
+            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
+        normalized = state.strip().upper()
+        if normalized == "OPEN":
+            return Phase9SourceIssueDecision(True, normalized, "phase9-source-open")
+        return Phase9SourceIssueDecision(False, normalized, "phase9-source-not-open")
+
+    def _issue_source_snapshot_markdown(self, issue: str) -> str:
+        snapshot = self._read_issue_source_snapshot(issue)
+        lines = [
+            "## Issue source snapshot",
+            "",
+            f"source: gh-issue-{snapshot.number}",
+            f"read_at: {snapshot.read_at}",
+            f"state: {snapshot.source}",
+            f"truncated: {str(snapshot.truncated).lower()}",
+            "",
+        ]
+        if snapshot.unavailable_reason:
+            lines.extend(
+                [
+                    "Snapshot unavailable.",
+                    f"unavailable_reason: {snapshot.unavailable_reason}",
+                    f"Fallback only: run `gh issue view {snapshot.number}` if the injected snapshot is unavailable.",
+                ]
+            )
+            return "\n".join(lines)
+        lines.extend(
+            [
+                f"# Issue #{snapshot.number}: {snapshot.title or '(untitled)'}",
+                "",
+                "## Body",
+                "",
+                snapshot.body or "(empty)",
+                "",
+                "## Recent comments",
+                "",
+            ]
+        )
+        if snapshot.comments:
+            for comment in snapshot.comments:
+                author = comment.get("author") or "unknown"
+                created_at = comment.get("created_at") or "unknown"
+                body = comment.get("body") or ""
+                lines.extend([f"### {created_at} by {author}", "", body or "(empty)", ""])
+        else:
+            lines.append("(none)")
+        return "\n".join(lines).rstrip()
+
+    def _read_issue_source_snapshot(self, issue: str) -> IssueSourceSnapshot:
+        snapshot = self._read_issue_metadata_snapshot(issue)
+        if snapshot.unavailable_reason is not None or snapshot.comments_loaded:
+            return snapshot
+        comments_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}/comments?per_page=20")
+        if not isinstance(comments_result, list):
+            snapshot = IssueSourceSnapshot(
+                number=snapshot.number,
+                title=snapshot.title,
+                body=snapshot.body,
+                comments=(),
+                read_at=snapshot.read_at,
+                source=snapshot.source,
+                truncated=snapshot.truncated,
+                unavailable_reason="comments-read-failed",
+                comments_loaded=True,
+            )
+            self._issue_source_snapshots[issue] = snapshot
+            return snapshot
+        comments: list[dict[str, str]] = []
+        comments_truncated = False
+        for raw_comment in comments_result[-20:]:
+            if not isinstance(raw_comment, dict):
+                continue
+            comment_body, truncated = self._bounded_text(str(raw_comment.get("body") or ""), 4_000)
+            comments_truncated = comments_truncated or truncated
+            user = raw_comment.get("user") if isinstance(raw_comment.get("user"), dict) else {}
+            comments.append(
+                {
+                    "id": str(raw_comment.get("id") or ""),
+                    "author": str(user.get("login") or ""),
+                    "created_at": str(raw_comment.get("created_at") or ""),
+                    "body": comment_body,
+                }
+            )
+        snapshot = IssueSourceSnapshot(
+            number=snapshot.number,
+            title=snapshot.title,
+            body=snapshot.body,
+            comments=tuple(comments),
+            read_at=snapshot.read_at,
+            source=snapshot.source,
+            truncated=snapshot.truncated or comments_truncated or len(comments_result) > 20,
+            comments_loaded=True,
+        )
+        self._issue_source_snapshots[issue] = snapshot
+        return snapshot
+
+    def _read_issue_metadata_snapshot(self, issue: str) -> IssueSourceSnapshot:
+        if issue not in self._issue_source_snapshots:
+            self._issue_source_snapshots[issue] = self._load_issue_source_snapshot(issue)
+        return self._issue_source_snapshots[issue]
+
+    def _load_issue_source_snapshot(self, issue: str) -> IssueSourceSnapshot:
+        read_at = self._now()
+        if not self.ctx.gh_repo_slug:
+            return self._unavailable_issue_source_snapshot(issue, read_at, "missing-gh-repo-slug")
+        issue_result = self._gh_api_json(f"repos/{self.ctx.gh_repo_slug}/issues/{issue}")
+        if not isinstance(issue_result, dict):
+            return self._unavailable_issue_source_snapshot(issue, read_at, "issue-read-failed")
+        title = str(issue_result.get("title") or "")
+        body, body_truncated = self._bounded_text(str(issue_result.get("body") or ""), 20_000)
+        state = str(issue_result.get("state") or "")
+        return IssueSourceSnapshot(
+            number=str(issue),
+            title=title,
+            body=body,
+            comments=(),
+            read_at=read_at,
+            source=state,
+            truncated=body_truncated,
+        )
+
+    def _unavailable_issue_source_snapshot(
+        self,
+        issue: str,
+        read_at: str,
+        reason: str,
+        *,
+        source: str = "unavailable",
+    ) -> IssueSourceSnapshot:
+        return IssueSourceSnapshot(
+            number=str(issue),
+            title="",
+            body="",
+            comments=(),
+            read_at=read_at,
+            source=source or "unavailable",
+            truncated=False,
+            unavailable_reason=reason,
+        )
+
+    def _gh_api_json(self, path: str) -> Any:
+        command = ["gh", "api", path]
         try:
             result = subprocess.run(
                 command,
@@ -860,25 +1020,22 @@ class Phase9Router:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.ctx.env_for_subprocess(),
                 timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
-            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        if result.returncode != 0:
-            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        state: object
+            return None
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
         try:
-            payload = json.loads(result.stdout)
+            return json.loads(result.stdout)
         except json.JSONDecodeError:
-            state = result.stdout.strip()
-        else:
-            state = payload.get("state") if isinstance(payload, dict) else payload
-        if not isinstance(state, str) or not state.strip():
-            return Phase9SourceIssueDecision(False, None, "phase9-source-state-unavailable")
-        normalized = state.strip().upper()
-        if normalized == "OPEN":
-            return Phase9SourceIssueDecision(True, normalized, "phase9-source-open")
-        return Phase9SourceIssueDecision(False, normalized, "phase9-source-not-open")
+            return None
+
+    def _bounded_text(self, text: str, limit: int) -> tuple[str, bool]:
+        if len(text) <= limit:
+            return text, False
+        return text[:limit] + "\n[truncated]", True
 
     def _append_source_issue_fallback_event(
         self,
@@ -968,6 +1125,7 @@ class Phase9Router:
                 capture_output=True,
                 text=True,
                 check=False,
+                env=self.ctx.env_for_subprocess(),
                 timeout=15,
             )
         except (OSError, subprocess.TimeoutExpired):
@@ -1160,6 +1318,7 @@ class Phase9Router:
                 template_path=self._skill_artifact_path(template_path),
             )
             return None
+        prompt = self._issue_snapshot_preferred_text(issue, prompt)
         bindings = "\n".join(
             (
                 f"ISSUE_NUMBER={context.issue}",
@@ -1179,6 +1338,7 @@ class Phase9Router:
         return (
             f"# {format_stage('design-consensus')} meta-judge\n\n"
             f"## Router template bindings\n\n{bindings}\n\n"
+            f"{self._issue_source_snapshot_markdown(issue)}\n\n"
             f"## Validated transition projection\n\n{self._transition_projection_summary(context.transition_assessment)}\n\n"
             f"## Full meta-judge template\n\n{prompt}"
             + "\n\n## Router dispatch evidence\n\n"
@@ -1226,12 +1386,26 @@ class Phase9Router:
         return (
             f"# {format_stage('design-consensus')} {role} solver\n\n"
             f"{self._solver_work_unit_header(issue, round_no, role)}\n\n"
+            f"{self._issue_source_snapshot_markdown(issue)}\n\n"
             f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
         )
 
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
         transition_lines = "\n".join(projection_lines(self._transition_assessment(issue)))
+        snapshot = self._read_issue_source_snapshot(issue)
+        scope_spec_instruction = (
+            "Use the router-injected issue source snapshot as the scope spec when no local audit artifact is provided. "
+        )
+        if snapshot.unavailable_reason:
+            source_instruction = scope_spec_instruction + (
+                "The router-injected issue source snapshot is unavailable. "
+                f"Read `gh issue view {issue}` as fallback; do not fabricate audit artifacts."
+            )
+        else:
+            source_instruction = scope_spec_instruction + (
+                "Do not fabricate audit artifacts."
+            )
         return (
             f"Issue: #{issue}\n"
             f"Round: {round_no}\n"
@@ -1243,10 +1417,23 @@ class Phase9Router:
             f"WORK_UNIT_SOURCE_REF=gh-issue-{issue}\n"
             f"{transition_lines}\n"
             f"SOLVER_OUTPUT_PATH={output_path}\n"
-            f"Read `gh issue view {issue}` for the issue body/comments. "
-            "The issue body/comments are the scope spec when no local audit artifact is provided; "
-            "do not fabricate audit artifacts."
+            f"{source_instruction}"
         )
+
+    def _issue_snapshot_preferred_text(self, issue: str, text: str) -> str:
+        if self._read_issue_source_snapshot(issue).unavailable_reason:
+            return text
+        replacements = (
+            (f"`gh issue view {issue}` — original cluster spec + maintainer comments", "router-injected issue source snapshot — original cluster spec + maintainer comments"),
+            (f"`gh issue view {issue}` issue body/comments", "router-injected issue source snapshot"),
+            (f"`gh issue view {issue}`", "router-injected issue source snapshot"),
+            (f"gh issue view {issue} issue body/comments", "router-injected issue source snapshot"),
+            (f"gh issue view {issue}", "router-injected issue source snapshot"),
+        )
+        rendered = text
+        for old, new in replacements:
+            rendered = rendered.replace(old, new)
+        return rendered
 
     def _transition_assessment(self, issue: str) -> TransitionAssessment:
         return TransitionAssessmentReader.load_for_work_unit(

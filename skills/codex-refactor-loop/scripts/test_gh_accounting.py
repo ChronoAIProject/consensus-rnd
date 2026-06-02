@@ -190,6 +190,37 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertIn("fake stderr:fail now", result.stderr)
         self.assertFalse(self.usage.exists())
 
+    def test_shim_skips_other_ghwrap_dirs_when_resolving_real_gh(self) -> None:
+        other_scripts = self.tmp / "other" / "skills" / "codex-refactor-loop" / "scripts"
+        other_shim_dir = other_scripts / "ghwrap"
+        other_shim_dir.mkdir(parents=True)
+        other_shim = other_shim_dir / "gh"
+        shutil.copy2(SHIM, other_shim)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{SHIM.parent}{os.pathsep}{other_shim_dir}{os.pathsep}{self.realbin}{os.pathsep}{env.get('PATH', '')}",
+                "REPO_ROOT": str(self.repo),
+                "CRND_GH_SOURCE": "daemon:phase9-router",
+                "CRND_GH_USAGE_PATH": str(self.usage),
+            }
+        )
+
+        result = subprocess.run(
+            [str(SHIM), "api", "repos/owner/repo/issues/191"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=5,
+        )
+
+        self.assertEqual(0, result.returncode)
+        self.assertIn("fake stdout:api repos/owner/repo/issues/191", result.stdout)
+        self.assertEqual(1, len(self.read_records()))
+
     def test_retention_bounds_jsonl_artifact(self) -> None:
         for index in range(3):
             result = self.run_shim(["api", f"repos/owner/repo/issues/{index}"], extra_env={"CRND_GH_USAGE_MAX_LINES": "2"})

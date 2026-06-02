@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.phase9.router import (
+    IssueSourceSnapshot,
     Marker,
     Phase9Router,
     Phase9SourceIssueDecision,
@@ -729,7 +730,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         def fake_run(command, **kwargs):
             calls.append(list(command))
-            return mock.Mock(returncode=0, stdout="open\n", stderr="")
+            if str(command[2]).endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
+            return mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "Issue title", "body": ""}), stderr="")
 
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             decision = self.original_source_issue_reader(self.router, "37")
@@ -739,6 +742,106 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(calls[0][:2], ["gh", "api"])
         self.assertRegex(calls[0][2], r"^repos/[^/]+/[^/]+/issues/37$")
         self.assertNotIn("view", calls[0])
+        self.assertEqual(len(calls), 1)
+
+    def test_phase9_router_issue_source_snapshot_reuses_one_rest_read_per_route(self) -> None:
+        calls: list[str] = []
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.solver_triplet(issue=427, round_no=4)
+
+        def fake_run(command, **kwargs):
+            calls.append(command[2])
+            if command[2].endswith("/comments?per_page=20"):
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "id": 10,
+                                "user": {"login": "maintainer"},
+                                "body": "recent comment",
+                                "created_at": "2026-06-01T00:00:00Z",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            return mock.Mock(
+                returncode=0,
+                stdout=json.dumps({"state": "open", "title": "Snapshot title", "body": "Snapshot body"}),
+                stderr="",
+            )
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            self.router.tick()
+
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/427/comments?per_page=20"), 1)
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue427-r4-judge.md").read_text(encoding="utf-8")
+        self.assertIn("## Issue source snapshot", prompt)
+        self.assertIn("# Issue #427: Snapshot title", prompt)
+        self.assertIn("Snapshot body", prompt)
+        self.assertIn("recent comment", prompt)
+        self.assertNotIn("gh issue view 427", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_comments_read_failure_injects_unavailable_snapshot_only(self) -> None:
+        calls: list[str] = []
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.solver_triplet(issue=429, round_no=4)
+
+        def fake_run(command, **kwargs):
+            calls.append(command[2])
+            if command[2].endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=1, stdout="", stderr="comments rate limited")
+            return mock.Mock(
+                returncode=0,
+                stdout=json.dumps({"state": "open", "title": "Snapshot title", "body": "Snapshot body"}),
+                stderr="",
+            )
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            self.router.tick()
+
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429/comments?per_page=20"), 1)
+        self.assertEqual(len(self.commands), 1)
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue429-r4-judge.md").read_text(encoding="utf-8")
+        self.assertIn("Snapshot unavailable.", prompt)
+        self.assertIn("unavailable_reason: comments-read-failed", prompt)
+        self.assertIn("Fallback only: run `gh issue view 429` if the injected snapshot is unavailable.", prompt)
+        self.assertNotIn("# Issue #429: Snapshot title", prompt)
+        self.assertNotIn("Snapshot body", prompt)
+        self.assertNotIn("## Recent comments", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+
+    def test_phase9_router_unavailable_issue_source_snapshot_injects_fallback_only(self) -> None:
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.write_log("phase9-issue428-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=1, stdout="", stderr="rate limited"),
+        ):
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertFalse((self.repo / ".refactor-loop/prompts/phase9/phase9-issue428-r2-minimal.md").exists())
+
+        self.source_issue_states.clear()
+        self.router = self.new_router()
+        self.router._read_source_issue_decision = lambda issue: Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")  # type: ignore[method-assign]
+        self.router._issue_source_snapshots["428"] = self.router._unavailable_issue_source_snapshot(
+            "428",
+            "2026-06-01T00:00:00Z",
+            "issue-read-failed",
+        )
+        self.router.tick()
+
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue428-r2-minimal.md").read_text(encoding="utf-8")
+        self.assertIn("Snapshot unavailable.", prompt)
+        self.assertIn("unavailable_reason: issue-read-failed", prompt)
+        self.assertIn("Fallback only: run `gh issue view 428` if the injected snapshot is unavailable.", prompt)
 
     def test_phase9_router_triplet_dispatch_writes_row_level_ledger_provenance(self) -> None:
         self.solver_triplet(issue=167, round_no=6)
@@ -848,6 +951,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_judge_prompt_references_dispatch_ledger_evidence(self) -> None:
         self.write_transition_assessment(169)
+        self.router._load_issue_source_snapshot = lambda issue: IssueSourceSnapshot(  # type: ignore[method-assign]
+            number="169",
+            title="Issue 169",
+            body="Body 169",
+            comments=(),
+            read_at="2026-06-01T00:00:00Z",
+            source="open",
+            truncated=False,
+            comments_loaded=True,
+        )
         self.solver_triplet(issue=169, round_no=8)
 
         self.router.tick()
@@ -870,7 +983,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "convergence_round: 8",
             "Round number this fires: 9",
             "Write `.refactor-loop/runs/phase9-issue169-r8-judge.md`",
-            "gh issue view 169",
+            "## Issue source snapshot",
+            "source: gh-issue-169",
+            "router-injected issue source snapshot — original cluster spec + maintainer comments",
             "TRANSITION_TYPE=positive-discovery",
             "TRANSITION_CONFIDENCE=0.75",
             "TRANSITION_EVIDENCE_REFS=.refactor-loop/runs/issue-169.md",
@@ -883,6 +998,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
         self.assertNotIn("phase9-evidence", prompt)
         self.assertNotIn("Dispatch ledger:", prompt)
+        self.assertNotIn("gh issue view 169", prompt)
         self.assertNotIn(str(self.repo), prompt)
 
     def test_phase9_router_judge_prompt_scopes_solver_paths_and_ignores_stale_other_issue_artifacts(self) -> None:
@@ -1218,6 +1334,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_solver_prompt_for_issue_driven_converge_has_source_header(self) -> None:
         self.write_transition_assessment(114)
+        self.router._load_issue_source_snapshot = lambda issue: IssueSourceSnapshot(  # type: ignore[method-assign]
+            number="114",
+            title="Issue 114",
+            body="Body 114",
+            comments=(),
+            read_at="2026-06-01T00:00:00Z",
+            source="open",
+            truncated=False,
+            comments_loaded=True,
+        )
         self.write_log("phase9-issue114-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
 
         self.router.tick()
@@ -1239,15 +1365,17 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "TRANSITION_CONFIDENCE=0.75",
             "TRANSITION_EVIDENCE_REFS=.refactor-loop/runs/issue-114.md",
             "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-structural.md",
-            "gh issue view 114",
-            "issue body/comments are the scope spec when no local audit artifact is provided",
-            "do not fabricate audit artifacts",
+            "Use the router-injected issue source snapshot as the scope spec",
+            "## Issue source snapshot",
+            "source: gh-issue-114",
+            "Do not fabricate audit artifacts",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
         self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
         self.assertNotIn("cluster spec", prompt)
+        self.assertNotIn("gh issue view 114", prompt)
 
     def test_solver_prompt_for_missing_transition_assessment_uses_unknown_projection(self) -> None:
         self.write_log("phase9-issue115-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
@@ -1737,12 +1865,14 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             "api",
             "repos/",
             "issue",
-            "--jq",
             "state",
             "OPEN",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
             "phase9-router-fallback",
+            "IssueSourceSnapshot",
+            "def _issue_source_snapshot_markdown",
+            "def _read_issue_source_snapshot",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, src)
