@@ -35,6 +35,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.ctx = LoopContext.load(repo_root=self.repo)
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -117,6 +118,45 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertIn("phase9-issue160-r3-judge.log", joined)
         self.assertEqual(self.commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
+
+    def test_package_router_design_issue_intake_dispatches_r1_triplet(self) -> None:
+        rows = [
+            {
+                "number": 410,
+                "title": "package intake",
+                "labels": [
+                    {"name": "crnd:lifecycle:managed"},
+                    {"name": "crnd:phase:design-solving"},
+                    {"name": "crnd:human:auto"},
+                ],
+            }
+        ]
+        self.router = Phase9Router(
+            ctx=LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": "owner/repo"}),
+            command_runner=self.commands.append,
+        )
+        self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        self.assertEqual(
+            sorted(command["log"] for command in self.commands),
+            [
+                ".refactor-loop/logs/phase9-issue410-r1-delete.log",
+                ".refactor-loop/logs/phase9-issue410-r1-minimal.log",
+                ".refactor-loop/logs/phase9-issue410-r1-structural.log",
+            ],
+        )
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["410-1-delete", "410-1-minimal", "410-1-structural"],
+        )
 
     # Refactor (impl/issue191-single-active-controller): Old pattern: every
     # device-local phase9 router could write prompts, ledgers, and fallback
@@ -208,6 +248,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
         fresh_router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         fresh_router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        fresh_router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
         fresh_router.tick()
 
         self.assertEqual(self.commands, [])
@@ -450,7 +491,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
             Phase9Router,
             "_read_source_issue_decision",
             return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
-        ):
+        ), mock.patch.object(Phase9Router, "_open_design_consensus_issues", return_value=[]):
             exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
 
         self.assertEqual(exit_code, 0)

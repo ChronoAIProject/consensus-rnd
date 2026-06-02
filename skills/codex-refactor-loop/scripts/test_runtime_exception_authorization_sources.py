@@ -691,9 +691,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
-            "`gh issue view <N> --json state`",
+            "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
+            "`gh api repos/<slug>/issues/<N> --jq .state`",
+            "DesignConsensusIssueIntake",
+            "four built-in phase9 direct routes",
+            "r1 solver triplet",
             "state-only",
-            "`read-gh`",
             "source-OPEN gate",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
@@ -701,6 +704,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
             "test_phase9_router_open_state_gate.py",
+            "test_wakeup_plan.py",
+            "test_wakeup_runner.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
         ):

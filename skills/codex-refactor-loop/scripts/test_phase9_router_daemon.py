@@ -324,6 +324,140 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(ledger[0]["key"], "330-4-judge")
         self.assertEqual(ledger[0]["dispatch_state"], "harness-intent")
 
+    def test_phase9_router_design_issue_intake_dispatches_r1_solver_triplet(self) -> None:
+        issue = {
+            "number": 416,
+            "title": "seed design consensus",
+            "labels": [
+                {"name": "crnd:lifecycle:managed"},
+                {"name": "crnd:phase:design-solving"},
+                {"name": "crnd:human:auto"},
+            ],
+        }
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
+        ):
+            self.router.tick()
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        logs = sorted(command["log"] for command in self.commands)
+        self.assertEqual(
+            logs,
+            [
+                ".refactor-loop/logs/phase9-issue416-r1-delete.log",
+                ".refactor-loop/logs/phase9-issue416-r1-minimal.log",
+                ".refactor-loop/logs/phase9-issue416-r1-structural.log",
+            ],
+        )
+        for command in self.commands:
+            self.assertEqual(command["command"], "spawn-codex")
+            self.assertEqual(command["controller_action"], "spawn_codex_harness_background")
+            self.assertEqual(command["route"], "design_consensus_issue_intake")
+            self.assertEqual(command["cd"], ".")
+            self.assertTrue(command["run_in_background_required"])
+            self.assertTrue(command["no_lifecycle_authority"])
+            self.assertNotIn("argv", command)
+            self.assertNotIn("shell", command)
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["416-1-delete", "416-1-minimal", "416-1-structural"],
+        )
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue416-r1-minimal.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("WORK_UNIT_SOURCE_REF=gh-issue-416", prompt)
+        self.assertIn("Convergence marker: DesignConsensusIssueIntake", prompt)
+        self.assertEqual(self.pending_events(), "")
+
+    def test_phase9_router_design_issue_intake_suppresses_existing_and_in_flight_r1(self) -> None:
+        issue = {
+            "number": 417,
+            "title": "partially seeded",
+            "labels": [
+                {"name": "crnd:lifecycle:managed"},
+                {"name": "crnd:phase:design-solving"},
+                {"name": "crnd:human:auto"},
+            ],
+        }
+        self.router._log_path("417", 1, "minimal").write_text("already seeded\n", encoding="utf-8")
+        self.write_ledger_key("417-1-structural")
+        delete_log = self.router._log_path("417", 1, "delete")
+        ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 3600\n"
+
+        def fake_run(command, **kwargs):
+            if command[:2] == ["gh", "issue"]:
+                return mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr="")
+            return mock.Mock(returncode=0, stdout=ps_output, stderr="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["417-1-structural"])
+
+    def test_phase9_router_design_issue_intake_suppresses_legacy_r1_solver_evidence(self) -> None:
+        issue = {
+            "number": 417,
+            "title": "legacy seeded",
+            "labels": [
+                {"name": "crnd:lifecycle:managed"},
+                {"name": "crnd:phase:design-solving"},
+                {"name": "crnd:human:auto"},
+            ],
+        }
+        legacy_minimal = self.repo / ".refactor-loop" / "logs" / "solver-issue417-r1-minimal.log"
+        legacy_minimal.write_text("legacy minimal already seeded\n", encoding="utf-8")
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(
+            sorted(command["log"] for command in self.commands),
+            [
+                ".refactor-loop/logs/phase9-issue417-r1-delete.log",
+                ".refactor-loop/logs/phase9-issue417-r1-structural.log",
+            ],
+        )
+        self.assertFalse((self.repo / ".refactor-loop/prompts/phase9/phase9-issue417-r1-minimal.md").exists())
+        self.assertFalse(self.router._log_path("417", 1, "minimal").exists())
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["417-1-delete", "417-1-structural"],
+        )
+
+    def test_phase9_router_design_issue_intake_ignores_non_design_or_human_items(self) -> None:
+        rows = [
+            {
+                "number": 418,
+                "title": "implementing",
+                "labels": [{"name": "crnd:lifecycle:managed"}, {"name": "crnd:phase:implementing"}],
+            },
+            {
+                "number": 419,
+                "title": "human",
+                "labels": [
+                    {"name": "crnd:lifecycle:managed"},
+                    {"name": "crnd:phase:design-solving"},
+                    {"name": "crnd:human:maintainer-decision"},
+                ],
+            },
+        ]
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+
     def test_phase9_router_legacy_r1_solver_triplet_dispatches_canonical_judge(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(
@@ -1487,9 +1621,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, src)
-        self.assertNotIn('"state,labels"', src)
-        self.assertNotIn('"labels"', src)
-        self.assertNotIn('"view"', src[src.index("def _read_source_issue_decision") : src.index("def _append_source_issue_fallback_event")])
+        state_reader = src[src.index("def _read_source_issue_decision") : src.index("def _append_source_issue_fallback_event")]
+        self.assertNotIn('"state,labels"', state_reader)
+        self.assertNotIn('"labels"', state_reader)
+        self.assertNotIn('"view"', state_reader)
         for forbidden in (
             "gh issue close",
             "gh issue edit",
@@ -1533,7 +1668,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             Phase9Router,
             "_read_source_issue_decision",
             return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
-        ):
+        ), mock.patch.object(Phase9Router, "_open_design_consensus_issues", return_value=[]):
             exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
 
         self.assertEqual(exit_code, 0)

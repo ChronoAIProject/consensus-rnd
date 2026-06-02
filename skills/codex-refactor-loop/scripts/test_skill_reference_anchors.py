@@ -717,7 +717,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
-        self.assertIn("`gh issue view <N> --json state`", self.skill)
+        self.assertIn("DesignConsensusIssueIntake", self.skill)
+        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
+        self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
+        self.assertIn("wakeup-plan design-consensus issue evidence is status-only", self.skill)
         self.assertIn("state-only", self.skill)
         self.assertIn("phase9-source-not-open", self.skill)
         self.assertIn("phase9-source-state-unavailable", self.skill)
@@ -1081,6 +1085,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "HostWorkflowSpec is not a phase9 direct-spawn-intent authority",
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
+            "DesignConsensusIssueIntake",
+            "queue r1 minimal/structural/delete solver `HARNESS_SPAWN_INTENT`",
             "SOLVER_DONE:<minimal|structural|delete>:*",
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
