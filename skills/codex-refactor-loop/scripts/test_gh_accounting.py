@@ -124,6 +124,38 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual(0, result.returncode)
         self.assertIn("fake stdout:pr list", result.stdout)
 
+    def test_import_failure_fallback_delegates_to_real_gh(self) -> None:
+        isolated_scripts = self.tmp / "isolated" / "scripts"
+        isolated_shim_dir = isolated_scripts / "ghwrap"
+        isolated_shim_dir.mkdir(parents=True)
+        isolated_shim = isolated_shim_dir / "gh"
+        shutil.copy2(SHIM, isolated_shim)
+
+        env = os.environ.copy()
+        env.update(
+            {
+                "PATH": f"{isolated_shim_dir}{os.pathsep}{self.realbin}{os.pathsep}{env.get('PATH', '')}",
+                "REPO_ROOT": str(self.repo),
+                "CRND_GH_SOURCE": "controller",
+                "CRND_GH_USAGE_PATH": str(self.usage),
+            }
+        )
+        env.pop("PYTHONPATH", None)
+
+        result = subprocess.run(
+            [str(isolated_shim), "fail", "now"],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(23, result.returncode)
+        self.assertIn("fake stdout:fail now", result.stdout)
+        self.assertIn("fake stderr:fail now", result.stderr)
+        self.assertFalse(self.usage.exists())
+
     def test_retention_bounds_jsonl_artifact(self) -> None:
         for index in range(3):
             result = self.run_shim(["api", f"repos/owner/repo/issues/{index}"], extra_env={"CRND_GH_USAGE_MAX_LINES": "2"})
