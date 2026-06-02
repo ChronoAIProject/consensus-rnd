@@ -235,7 +235,7 @@ def harness_spawn_intent_actions(
             continue
         if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
             continue
-        if _suppress_harness_spawn_intent(intent, line, terminal_blocked_intent_ids, open_targets, gh_items_loaded):
+        if _suppress_harness_spawn_intent(intent, terminal_blocked_intent_ids, open_targets, gh_items_loaded):
             continue
         actions.append(
             {
@@ -294,7 +294,6 @@ def _open_managed_targets(items: list[GhItem]) -> set[tuple[str, int]]:
 
 def _suppress_harness_spawn_intent(
     intent: dict[str, Any],
-    line: str,
     terminal_blocked_intent_ids: set[str],
     open_targets: set[tuple[str, int]],
     gh_items_loaded: bool,
@@ -302,13 +301,13 @@ def _suppress_harness_spawn_intent(
     intent_id = str(intent.get("intent_id") or "")
     if intent_id in terminal_blocked_intent_ids:
         return True
-    target = _harness_spawn_intent_target(intent, line)
-    if gh_items_loaded and open_targets and target is not None and target not in open_targets:
+    target = _harness_spawn_intent_target(intent)
+    if gh_items_loaded and target is not None and target not in open_targets:
         return True
     return False
 
 
-def _harness_spawn_intent_target(intent: dict[str, Any], line: str) -> tuple[str, int] | None:
+def _harness_spawn_intent_target(intent: dict[str, Any]) -> tuple[str, int] | None:
     text_parts = []
     for field in ("task_id", "intent_id", "source", "route", "reason"):
         value = intent.get(field)
