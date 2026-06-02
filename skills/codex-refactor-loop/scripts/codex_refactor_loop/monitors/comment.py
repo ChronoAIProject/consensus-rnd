@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import argparse
+import re
 import subprocess
 import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
+from urllib.parse import quote
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
@@ -85,36 +87,20 @@ class CommentMonitor:
 
     def _search_active(self) -> dict[str, str]:
         active: dict[str, str] = {}
+        lookback = _lookback_minimum_updated_at()
         for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            search_query = f'repo:{self.repo} is:open label:"{query_label}" {_lookback_search_fragment()}'.strip()
-            data = self._graphql_json(
-                """
-                query($searchQuery: String!) {
-                  search(query: $searchQuery, type: ISSUE, first: 100) {
-                    nodes {
-                      ... on Issue {
-                        number
-                        updatedAt
-                      }
-                      ... on PullRequest {
-                        number
-                        updatedAt
-                      }
-                    }
-                  }
-                }
-                """,
-                {"searchQuery": search_query},
-            )
-            nodes = (((data.get("data") or {}).get("search") or {}).get("nodes") or []) if isinstance(data, dict) else []
-            if not isinstance(nodes, list):
+            endpoint = f"repos/{self.repo}/issues?state=open&labels={quote(query_label, safe='')}&per_page=100"
+            rows = self._gh_api_json(endpoint)
+            if not isinstance(rows, list):
                 continue
-            for node in nodes:
-                if not isinstance(node, dict):
+            for row in rows:
+                if not isinstance(row, dict):
                     continue
-                number = str(node.get("number") or "")
-                updated_at = str(node.get("updatedAt") or "")
+                number = str(row.get("number") or "")
+                updated_at = str(row.get("updated_at") or "")
                 if not number or not updated_at:
+                    continue
+                if lookback and updated_at < lookback:
                     continue
                 if number not in active or updated_at > active[number]:
                     active[number] = updated_at
@@ -136,59 +122,20 @@ class CommentMonitor:
         return self._comments_with_status(number)[1]
 
     def _comments_with_status(self, number: str) -> tuple[bool, list[dict[str, object]]]:
-        result = self._gh_graphql(
-            """
-            query($owner: String!, $name: String!, $number: Int!) {
-              repository(owner: $owner, name: $name) {
-                issueOrPullRequest(number: $number) {
-                  ... on Issue {
-                    comments(last: 20) {
-                      nodes {
-                        databaseId
-                        author { login }
-                        body
-                        createdAt
-                      }
-                    }
-                  }
-                  ... on PullRequest {
-                    comments(last: 20) {
-                      nodes {
-                        databaseId
-                        author { login }
-                        body
-                        createdAt
-                      }
-                    }
-                  }
-                }
-              }
-            }
-            """,
-            {"number": int(number)},
-        )
-        if result.returncode != 0 or not result.stdout.strip():
-            return False, []
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return False, []
-        if not isinstance(data, dict):
-            return False, []
-        item = (((data.get("data") or {}).get("repository") or {}).get("issueOrPullRequest") or {}) if isinstance(data, dict) else {}
-        nodes = (((item.get("comments") or {}).get("nodes") or []) if isinstance(item, dict) else [])
+        nodes = self._gh_api_json(f"repos/{self.repo}/issues/{number}/comments?per_page=20")
         if not isinstance(nodes, list):
             return False, []
         comments = []
         for node in nodes:
             if not isinstance(node, dict):
                 continue
+            user = node.get("user") if isinstance(node.get("user"), dict) else {}
             comments.append(
                 {
-                    "id": node.get("databaseId"),
-                    "author": ((node.get("author") or {}).get("login") if isinstance(node.get("author"), dict) else ""),
+                    "id": node.get("id"),
+                    "author": user.get("login") or "",
                     "body": node.get("body") or "",
-                    "created_at": node.get("createdAt") or "",
+                    "created_at": node.get("created_at") or "",
                 }
             )
         return True, comments
@@ -298,22 +245,14 @@ class CommentMonitor:
     def gh_api(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return _run(["gh", "api", *args], self.ctx.repo_root, check=check)
 
-    def _graphql_json(self, query: str, variables: Mapping[str, object]) -> dict[str, object]:
-        result = self._gh_graphql(query, variables)
+    def _gh_api_json(self, endpoint: str) -> object:
+        result = self.gh_api([endpoint], check=False)
         if result.returncode != 0 or not result.stdout.strip():
-            return {}
+            return None
         try:
-            data = json.loads(result.stdout)
+            return json.loads(result.stdout)
         except json.JSONDecodeError:
-            return {}
-        return data if isinstance(data, dict) else {}
-
-    def _gh_graphql(self, query: str, variables: Mapping[str, object]) -> subprocess.CompletedProcess[str]:
-        owner, name = self.repo.split("/", 1)
-        args: list[str] = ["graphql", "-f", f"query={query}", "-F", f"owner={owner}", "-F", f"name={name}"]
-        for key, value in variables.items():
-            args.extend(["-F", f"{key}={value}"])
-        return self.gh_api(args, check=False)
+            return None
 
 
 def is_controller_post(first_line: str, body: str) -> bool:
@@ -362,6 +301,18 @@ def _lookback_search_fragment() -> str:
     if raw.startswith("updated:"):
         return raw
     return f"updated:>={raw}"
+
+
+def _lookback_minimum_updated_at() -> str:
+    fragment = _lookback_search_fragment()
+    if not fragment.startswith("updated:>="):
+        return ""
+    value = fragment.removeprefix("updated:>=").strip()
+    if not value:
+        return ""
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        return f"{value}T00:00:00Z"
+    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:
