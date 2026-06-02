@@ -74,6 +74,26 @@ class ProjectRulesFixedPointTests(unittest.TestCase):
         self.assertIn("+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。", patch)
         self.assertEqual(before, self.rules.read_bytes())
 
+    def test_generated_patch_is_git_apply_compatible_and_preserves_sentinel_hash(self) -> None:
+        report = ProjectRulesFixedPointProbe(str(self.tmp)).inspect()
+        artifact = ProjectRulesPatchArtifact(self.tmp).write(report)
+        patch = artifact.read_text(encoding="utf-8")
+
+        self.assertTrue(patch.endswith("\n"))
+        subprocess.run(["git", "apply", "--check", str(artifact)], cwd=self.tmp, check=True)
+        subprocess.run(["git", "apply", str(artifact)], cwd=self.tmp, check=True)
+
+        applied = self.rules.read_text(encoding="utf-8")
+        start = START_RE.search(applied)
+        self.assertIsNotNone(start)
+        assert start is not None
+        end_index = applied.find(END_MARKER, start.end())
+        self.assertGreaterEqual(end_index, 0)
+        enclosed = applied[start.end() + 1:end_index]
+        self.assertEqual(CANONICAL_BODY, enclosed)
+        self.assertEqual(start.group(1), sha256_text(enclosed))
+        self.assertEqual(CANONICAL_HASH, start.group(1))
+
     def test_probe_known_old_block_writes_replacement_patch_without_overwrite(self) -> None:
         old_text = f"# Host rules\n\n{self._managed_block(OLD_CANONICAL_BODY)}"
         self.rules.write_text(old_text, encoding="utf-8")
