@@ -42,6 +42,9 @@ class FakeGit:
         review_base_sha: str = "review-base-sha",
         gh_rows: list[dict] | None = None,
         open_gh_rows: list[dict] | None = None,
+        open_gh_returncode: int = 0,
+        open_gh_stderr: str = "",
+        open_gh_stdout: str | None = None,
         merge_base_adopted: bool = False,
         old_head_is_ancestor: bool = True,
         replay_count: int = 0,
@@ -60,6 +63,9 @@ class FakeGit:
         self.review_base_sha = review_base_sha
         self.gh_rows = gh_rows or []
         self.open_gh_rows = open_gh_rows or []
+        self.open_gh_returncode = open_gh_returncode
+        self.open_gh_stderr = open_gh_stderr
+        self.open_gh_stdout = open_gh_stdout
         self.merge_base_adopted = merge_base_adopted
         self.old_head_is_ancestor = old_head_is_ancestor
         self.replay_count = replay_count
@@ -117,8 +123,12 @@ class FakeGit:
             returncode = 1
             stdout = ""
         elif cmd[:3] == ["gh", "pr", "list"]:
-            rows = self.open_gh_rows if "--state" in cmd and cmd[cmd.index("--state") + 1] == "open" else self.gh_rows
-            stdout = json.dumps(rows)
+            is_open_query = "--state" in cmd and cmd[cmd.index("--state") + 1] == "open"
+            if is_open_query:
+                returncode = self.open_gh_returncode
+                stdout = self.open_gh_stdout if self.open_gh_stdout is not None else json.dumps(self.open_gh_rows)
+                return subprocess.CompletedProcess(cmd, returncode, stdout, self.open_gh_stderr)
+            stdout = json.dumps(self.gh_rows)
         elif cmd[:3] == ["ps", "-eo", "command="]:
             stdout = ""
         return subprocess.CompletedProcess(cmd, returncode, stdout, "")
@@ -412,6 +422,57 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
         self.assertEqual([], self.operation_jsons())
 
+    def test_release_rollup_open_pr_query_nonzero_appends_ambiguous_event_and_suppresses_rollup(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="head-sha",
+            review_base_sha="base-sha",
+            open_gh_returncode=1,
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(
+            ["DEV_SYNC_PENDING:release-rollup-open-pr-query-ambiguous:gh-list-failed"],
+            self.pending_events(),
+        )
+        self.assertFalse(any(line.startswith("DEV_SYNC_PENDING:release-rollup-needed:") for line in self.pending_events()))
+        self.assertEqual([], self.operation_jsons())
+
+    def test_release_rollup_open_pr_query_stderr_appends_ambiguous_event_and_suppresses_rollup(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="head-sha",
+            review_base_sha="base-sha",
+            open_gh_stderr="warning: partial results\n",
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(
+            ["DEV_SYNC_PENDING:release-rollup-open-pr-query-ambiguous:gh-stderr"],
+            self.pending_events(),
+        )
+        self.assertFalse(any(line.startswith("DEV_SYNC_PENDING:release-rollup-needed:") for line in self.pending_events()))
+        self.assertEqual([], self.operation_jsons())
+
+    def test_release_rollup_open_pr_query_invalid_json_appends_ambiguous_event_and_suppresses_rollup(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="head-sha",
+            review_base_sha="base-sha",
+            open_gh_stdout="{not-json",
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(
+            ["DEV_SYNC_PENDING:release-rollup-open-pr-query-ambiguous:gh-json-decode-failed"],
+            self.pending_events(),
+        )
+        self.assertFalse(any(line.startswith("DEV_SYNC_PENDING:release-rollup-needed:") for line in self.pending_events()))
+        self.assertEqual([], self.operation_jsons())
+
     def test_missing_integration_branch_appends_alert_event_and_stops(self) -> None:
         fake = FakeGit(integration_ref_exists=False)
         self.daemon(fake).tick()
@@ -620,6 +681,10 @@ class SyncDevSourceRegressionTests(unittest.TestCase):
         self.assertIn("write_operation_artifact", src)
         self.assertIn("def execute_sync_operation", src)
         self.assertIn("DEV_SYNC_PENDING:release-rollup-needed:", src)
+        self.assertIn("release-rollup-open-pr-query-ambiguous", src)
+        self.assertIn("def has_open_release_rollup_pr", src)
+        self.assertIn("return ambiguous(\"gh-json-decode-failed\")", src)
+        self.assertIn("return True", src)
         self.assertIn('["git", "ls-remote", "--exit-code", "--heads", "origin", branch]', src)
         self.assertIn('append_pending_event("missing-integration-branch", self.integration)', src)
         self.assertIn('head_name.startswith("rollup/")', src)
