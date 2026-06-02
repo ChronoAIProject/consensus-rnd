@@ -79,8 +79,8 @@ class ProgressReporterTests(unittest.TestCase):
         def fake_run(command, cwd, *, check):
             del cwd, check
             text = " ".join(command)
-            if "pr view 47" in text:
-                return mock.Mock(returncode=0, stdout="{}", stderr="")
+            if "api repos/owner/repo/issues/47" in text:
+                return mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")
             if "pr comment 47" in text:
                 return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/47#issuecomment-24680\n", stderr="")
             return mock.Mock(returncode=1, stdout="", stderr="")
@@ -164,16 +164,49 @@ class ProgressReporterTests(unittest.TestCase):
 
         def fake_gh(args, check=True):
             gh_calls.append(list(args))
-            if args[:2] == ["pr", "view"]:
-                return mock.Mock(returncode=1, stdout="", stderr="not pr")
             return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/191#issuecomment-55\n", stderr="")
 
         with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
-            with mock.patch.object(reporter, "gh", side_effect=fake_gh):
-                reporter.post_or_update(log.stem, log)
+            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({}), stderr="")):
+                with mock.patch.object(reporter, "gh", side_effect=fake_gh):
+                    reporter.post_or_update(log.stem, log)
 
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertIn(log.stem, reporter._state())
+
+    def test_parse_kind_uses_rest_issue_pull_request_projection(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+        calls: list[list[str]] = []
+
+        def fake_gh_api(args, check=True):
+            del check
+            calls.append(list(args))
+            if args == ["repos/owner/repo/issues/47"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"number": 47, "pull_request": {"url": "x"}}), stderr="")
+            if args == ["repos/owner/repo/issues/48"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"number": 48}), stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="")
+
+        with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
+            self.assertEqual("pr", reporter.parse_kind("47"))
+            self.assertEqual("issue", reporter.parse_kind("48"))
+            self.assertEqual("issue", reporter.parse_kind("49"))
+
+        self.assertEqual(
+            calls,
+            [
+                ["repos/owner/repo/issues/47"],
+                ["repos/owner/repo/issues/48"],
+                ["repos/owner/repo/issues/49"],
+            ],
+        )
+
+    def test_parse_kind_does_not_use_pr_view(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+
+        with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh pr view must not be called")):
+            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")):
+                self.assertEqual("pr", reporter.parse_kind("47"))
 
     def test_parse_target_accepts_exact_owner_local_log_names(self) -> None:
         reporter = ProgressReporter(self.ctx)
@@ -236,6 +269,8 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertNotIn(token, executable)
+        self.assertIn('f"repos/{self.repo}/issues/{target}"', text)
+        self.assertNotIn('["pr", "view"', text)
 
 
 if __name__ == "__main__":

@@ -94,7 +94,16 @@ class ProgressReporter:
         return ""
 
     def parse_kind(self, target: str) -> str:
-        return "pr" if self.gh(["pr", "view", target, "--json", "number"], check=False).returncode == 0 else "issue"
+        result = self.gh_api([f"repos/{self.repo}/issues/{target}"], check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return "issue"
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return "issue"
+        if isinstance(payload, dict) and isinstance(payload.get("pull_request"), dict):
+            return "pr"
+        return "issue"
 
     def is_zombie(self, log: Path) -> bool:
         if exit_status(log) == "exit_ok":

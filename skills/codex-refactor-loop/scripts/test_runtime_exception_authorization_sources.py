@@ -36,6 +36,7 @@ TARGET_ANCHORS = {
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
+    "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -523,7 +524,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             'apply_authority: "wakeup-runner-396-only"',
             'runner_authority: "wakeup-runner-396"',
             "clean `EXIT=0` source marker",
-            "review truth table `reject==0 && approve>=1 && all required reviewers present`",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "missing/stale per-reviewer head SHA",
+            "`wakeup-plan` action `head_sha` is not reviewer-head authority",
             "OPEN/live GitHub state",
             "release #322 preflight",
             "helper-specific precondition",
@@ -546,6 +549,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
                 self.assertIn(required, self.skill)
+
+        self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
+        self.assertIn("all required reviewer heads equal live PR head", entry)
+        self.assertIn("all required reviewer heads equal live PR head", self.skill)
 
         for forbidden in (
             "no arbitrary git/gh command",
@@ -688,21 +695,37 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
 
-    def test_phase9_router_open_state_gate_authorizes_only_state_read(self) -> None:
-        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's new source issue state read was absent from the mechanical runtime-exception mirror. New: source-regression locks the exact state-only read and lifecycle denials in both mirror and SKILL.
+    def test_phase9_router_open_state_gate_authorizes_only_prompt_source_reads(self) -> None:
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
             "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
+            "`gh api repos/<slug>/issues/<N>`",
+            "`gh api repos/<slug>/issues/<N>/comments?per_page=20`",
+            "issue state/title/body",
+            "bounded recent comments",
+            "router-injected issue source snapshots",
+            "router-local prompt-source projection",
+            "not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority",
             "`gh api repos/<slug>/issues/<N> --jq .state`",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
             "four built-in phase9 direct routes",
             "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
             "existing evidence/log/in-flight for one solver role suppresses only that role",
-            "state-only",
             "source-OPEN gate",
+            "labels-only live read",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
             "HARNESS_SPAWN_INTENT",
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
@@ -733,6 +756,50 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
                 self.assertIn(forbidden, self.skill)
+        self.assertIn("terminal design-consensus suppression must not write spawn intent or dispatch ledger", entry)
+        self.assertIn("without writing spawn intent or dispatch ledger", self.skill)
+
+    def test_phase9_router_terminal_design_gate_matches_implementation(self) -> None:
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+        router = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
+        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        combined_authority = "\n".join((entry, self.skill))
+
+        for token in (
+            "Phase9TerminalDecision",
+            "_solver_dispatch_terminal_decision",
+            "_terminal_consensus_judge_source",
+            "_live_terminal_issue_source",
+            "_append_terminal_fallback_event",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "META_JUDGE_DONE:consensus:",
+            "PHASE_CONSENSUS_REACHED",
+            "PHASE_IMPLEMENTING",
+            "PHASE_MERGED",
+            "PHASE_CLOSED",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+        self.assertIn('"[.labels[].name]"', router)
+        self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
+        self.assertIn("suppress_terminal_design_consensus_actions", wakeup_plan)
+        self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
+        for token in (
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
+        ):
+            with self.subTest(authority_token=token):
+                self.assertIn(token, combined_authority)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
         # Refactor (iter193/issue-193):
