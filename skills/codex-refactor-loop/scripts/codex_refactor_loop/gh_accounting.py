@@ -19,10 +19,6 @@ SCHEMA_VERSION = 1
 DEFAULT_ARTIFACT_RELATIVE = Path(".refactor-loop") / "state" / "gh-usage.jsonl"
 DEFAULT_RETENTION_LINES = 20_000
 DEFAULT_WINDOW_MINUTES = 60
-LIFECYCLE_AUTHORITY_BOUNDARY = (
-    "observability-only: no issue/PR/label lifecycle, no merge/close, no tag/release, "
-    "no dispatch or controller authority"
-)
 GRAPHQL_COMMANDS = {
     "issue",
     "pr",
@@ -365,10 +361,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--json", action="store_true", help="emit machine-readable aggregate JSON")
     parser.add_argument("--window-minutes", type=int, default=DEFAULT_WINDOW_MINUTES)
     parser.add_argument("--limit", type=int, default=12)
-    parser.add_argument("--path")
     args = parser.parse_args(argv)
-    path = Path(args.path).expanduser() if args.path else default_usage_path()
-    summary = aggregate_records(load_records(path), window_minutes=args.window_minutes)
+    summary = aggregate_records(load_records(default_usage_path()), window_minutes=args.window_minutes)
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
     else:

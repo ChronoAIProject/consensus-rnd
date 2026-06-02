@@ -278,6 +278,40 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(1, payload["total"]["by_pool"]["graphql"])
 
+    def test_cli_rejects_undocumented_path_argument(self) -> None:
+        outside = self.tmp / "outside" / "gh-usage.jsonl"
+        outside.parent.mkdir()
+        outside.write_text(
+            json.dumps(
+                {
+                    "schema": 1,
+                    "ts": "2026-06-03T00:00:00Z",
+                    "source": "outside",
+                    "subcommand": "pr list",
+                    "pool": "graphql",
+                    "exit_code": 0,
+                    "count": 99,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        env = os.environ.copy()
+        env.update({"REPO_ROOT": str(self.repo), "CRND_GH_USAGE_PATH": str(self.usage)})
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), "gh-stats", "--json", "--path", str(outside)],
+            cwd=self.repo,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("unrecognized arguments: --path", result.stderr)
+        self.assertNotIn("outside", result.stdout)
+
     def test_controller_router_accounts_handler_gh_calls_as_controller(self) -> None:
         def handler(_args: list[str] | None) -> int:
             return subprocess.run(["gh", "issue", "view", "457"], check=False).returncode
@@ -411,10 +445,6 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
         for token in (
-            "LIFECYCLE_AUTHORITY_BOUNDARY",
-            "observability-only: no issue/PR/label lifecycle",
-            "no merge/close",
-            "no tag/release",
             "DEFAULT_ARTIFACT_RELATIVE = Path(\".refactor-loop\") / \"state\" / \"gh-usage.jsonl\"",
             "CRND_GH_USAGE_PATH",
             "_repo_contained_path",
@@ -452,8 +482,11 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
 
     def test_gh_stats_command_declares_read_state_only(self) -> None:
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
+        module = (SCRIPT_DIR / "codex_refactor_loop" / "gh_accounting.py").read_text(encoding="utf-8")
         self.assertIn('"gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",))', cli)
         self.assertNotIn('"gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-gh",))', cli)
+        self.assertIn("load_records(default_usage_path())", module)
+        self.assertNotIn('parser.add_argument("--path")', module)
 
     def test_runtime_surface_bounds_are_documented(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
