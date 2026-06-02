@@ -29,6 +29,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     has_dispatchable_action,
     marker_from_completed_log,
     release_countdown_actions,
+    restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
 )
 
@@ -1127,6 +1128,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("no_generic_command", action)
         self.assertNotIn("prompt", action)
         self.assertNotIn("log", action)
+        self.assertFalse(has_dispatchable_action([action]))
+
+        hard_gate = {
+            "active": False,
+            "reason": "single_active_audit_in_flight",
+            "blocked_deficit": 4,
+            "dispatch_required": 0,
+        }
+        concurrency = {"deficit": 4, "hard_gate": hard_gate}
+        restore_hard_gate_for_dispatchable_actions(concurrency, [action])
+
+        self.assertFalse(hard_gate["active"])
+        self.assertEqual(hard_gate["reason"], "single_active_audit_in_flight")
+        self.assertEqual(hard_gate["blocked_deficit"], 4)
+        self.assertEqual(hard_gate["dispatch_required"], 0)
 
     def test_existing_design_issue_projection_is_status_only_until_router_intent_exists(self) -> None:
         action = existing_issue_actions(
@@ -1151,6 +1167,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(projected["status_only"])
         self.assertNotIn("runner_authority", projected)
         self.assertNotIn("no_generic_command", projected)
+        self.assertFalse(has_dispatchable_action([action]))
+
+        hard_gate = {
+            "active": False,
+            "reason": "single_active_audit_in_flight",
+            "blocked_deficit": 4,
+            "dispatch_required": 0,
+        }
+        concurrency = {"deficit": 4, "hard_gate": hard_gate}
+        restore_hard_gate_for_dispatchable_actions(concurrency, [action])
+
+        self.assertFalse(hard_gate["active"])
+        self.assertEqual(hard_gate["reason"], "single_active_audit_in_flight")
+        self.assertEqual(hard_gate["blocked_deficit"], 4)
+        self.assertEqual(hard_gate["dispatch_required"], 0)
 
     def test_wakeup_plan_source_does_not_make_dispatch_next_step_worker_executable(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
@@ -1674,6 +1705,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan, stdout = self.run_plan_with_stdout(fixture="existing", ps_count=0, active_audit=True)
 
         self.assertEqual(plan["actions"][0]["kind"], "existing-issue")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
+        self.assertEqual(plan["hard_gate"]["reason"], None)
+        self.assertNotEqual(plan.get("recommendation"), "WAIT:single-active-audit")
+        self.assertIn("HARD_GATE:dispatch_required=4", stdout)
+
+    def test_harness_spawn_intent_bypasses_single_audit_wait(self) -> None:
+        self.append_harness_spawn_intent()
+
+        plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
+
+        self.assertEqual(plan["actions"][0]["kind"], "harness-spawn-intent")
+        self.assertTrue(has_dispatchable_action(plan["actions"]))
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
         self.assertEqual(plan["hard_gate"]["reason"], None)
