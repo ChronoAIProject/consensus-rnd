@@ -1,4 +1,4 @@
-"""Review-fix prompt render boundary helpers."""
+"""Review-fix prompt render and completion boundary helpers."""
 
 from __future__ import annotations
 
@@ -49,6 +49,36 @@ class ReviewFixDispatchSpec:
                 "FIX_OUTPUT_PATH must match .refactor-loop/runs/fix-pr<N>-round-<R>-report.md"
             )
         return value
+
+
+@dataclass(frozen=True)
+class ReviewThreadCompletionEvidence:
+    """Evidence required before a review-thread-driven fix is complete."""
+
+    review_thread_driven: bool
+    thread_id: str = ""
+    replied: bool = False
+    resolved: bool = False
+    escalation_evidence: str = ""
+
+
+class ReviewThreadCompletionError(ValueError):
+    """Raised when review-thread completion evidence is missing or incomplete."""
+
+
+def validate_review_thread_completion(evidence: ReviewThreadCompletionEvidence) -> None:
+    """Fail closed unless original review-thread completion evidence is present."""
+
+    if not evidence.review_thread_driven:
+        return
+    if evidence.escalation_evidence.strip():
+        return
+    if not evidence.thread_id.strip():
+        raise ReviewThreadCompletionError("review-thread-driven fix requires original thread_id evidence")
+    if not evidence.replied:
+        raise ReviewThreadCompletionError("review-thread-driven fix requires reply evidence on the original thread")
+    if not evidence.resolved:
+        raise ReviewThreadCompletionError("review-thread-driven fix requires resolved evidence on the original thread")
 
 
 def _validate_positive_int(value: int, label: str) -> str:

@@ -15,7 +15,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
-from codex_refactor_loop.review_fix_dispatch import ReviewFixDispatchSpec
+from codex_refactor_loop.review_fix_dispatch import (
+    ReviewFixDispatchSpec,
+    ReviewThreadCompletionError,
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 
 
 class ReviewFixDispatchTests(unittest.TestCase):
@@ -86,6 +91,77 @@ class ReviewFixDispatchTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/fix-pr269-round-1-report.md", rendered)
         self.assertNotIn("${FIX_OUTPUT_PATH}", rendered)
         self.assertTrue(prompt.exists())
+
+    def test_review_thread_completion_ignores_non_thread_driven_fix(self) -> None:
+        validate_review_thread_completion(
+            ReviewThreadCompletionEvidence(
+                review_thread_driven=False,
+                replied=False,
+                resolved=False,
+            )
+        )
+
+    def test_review_thread_completion_accepts_replied_and_resolved_original_thread(self) -> None:
+        validate_review_thread_completion(
+            ReviewThreadCompletionEvidence(
+                review_thread_driven=True,
+                thread_id="PRRT_kwDOExample",
+                replied=True,
+                resolved=True,
+            )
+        )
+
+    def test_review_thread_completion_accepts_explicit_escalation(self) -> None:
+        validate_review_thread_completion(
+            ReviewThreadCompletionEvidence(
+                review_thread_driven=True,
+                thread_id="PRRT_kwDOExample",
+                replied=False,
+                resolved=False,
+                escalation_evidence="META_RESOLVED:escalate-human:conflicting-review-thread",
+            )
+        )
+
+    def test_review_thread_completion_blocks_missing_original_thread_evidence(self) -> None:
+        with self.assertRaisesRegex(ReviewThreadCompletionError, "thread_id"):
+            validate_review_thread_completion(
+                ReviewThreadCompletionEvidence(
+                    review_thread_driven=True,
+                    replied=True,
+                    resolved=True,
+                )
+            )
+
+    def test_review_thread_completion_blocks_unreplied_or_unresolved_thread(self) -> None:
+        blocked = (
+            ReviewThreadCompletionEvidence(
+                review_thread_driven=True,
+                thread_id="PRRT_kwDOExample",
+                replied=False,
+                resolved=True,
+            ),
+            ReviewThreadCompletionEvidence(
+                review_thread_driven=True,
+                thread_id="PRRT_kwDOExample",
+                replied=True,
+                resolved=False,
+            ),
+        )
+        for evidence in blocked:
+            with self.subTest(replied=evidence.replied, resolved=evidence.resolved):
+                with self.assertRaises(ReviewThreadCompletionError):
+                    validate_review_thread_completion(evidence)
+
+    def test_controller_completion_path_fails_closed_for_open_review_thread(self) -> None:
+        with self.assertRaises(ReviewThreadCompletionError):
+            self.actions.validate_review_fix_completion(
+                ReviewThreadCompletionEvidence(
+                    review_thread_driven=True,
+                    thread_id="PRRT_kwDOExample",
+                    replied=True,
+                    resolved=False,
+                )
+            )
 
 
 if __name__ == "__main__":

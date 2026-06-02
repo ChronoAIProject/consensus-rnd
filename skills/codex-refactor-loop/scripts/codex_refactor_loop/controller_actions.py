@@ -19,7 +19,11 @@ from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .release.publisher import ReleasePublishResult, ReleasePublisher
-from .review_fix_dispatch import ReviewFixDispatchSpec
+from .review_fix_dispatch import (
+    ReviewFixDispatchSpec,
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -566,6 +570,9 @@ class ControllerActions:
             env=render_env,
         )
         return spec
+
+    def validate_review_fix_completion(self, evidence: ReviewThreadCompletionEvidence) -> None:
+        validate_review_thread_completion(evidence)
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):
