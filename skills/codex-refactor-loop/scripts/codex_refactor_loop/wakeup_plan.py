@@ -30,6 +30,7 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
+MARKER_TAIL_LINES = 30
 DONE_PREFIXES = (
     "AUDIT_DONE",
     "SOLVER_DONE",
@@ -543,15 +544,43 @@ def tail_lines(path: Path, count: int) -> list[str]:
 def marker_from_completed_log(log_path: Path) -> str | None:
     if not is_clean_exit(log_path):
         return None
-    for line in reversed(tail_lines(log_path, 5)):
-        stripped = line.strip()
-        if stripped == "EXIT=0" or not stripped:
-            continue
-        if "<" in stripped and ">" in stripped:
-            continue
-        if DONE_PREFIX_RE.fullmatch(stripped):
-            return stripped
+    tail = tail_lines(log_path, MARKER_TAIL_LINES)
+    try:
+        exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
+    except ValueError:
         return None
+    before_exit = tail[:exit_index]
+    for line in reversed(before_exit):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        marker = _extract_completed_marker_line(stripped)
+        if marker:
+            return marker
+        break
+    for index, line in enumerate(before_exit):
+        if "⟦AI:AUTO-LOOP⟧" not in line:
+            continue
+        for candidate in before_exit[index + 1 : index + 4]:
+            marker = _extract_completed_marker_line(candidate.strip())
+            if marker:
+                return marker
+    return None
+
+
+def _extract_completed_marker_line(text: str) -> str | None:
+    stripped = text.strip()
+    if stripped.startswith("+") and not stripped.startswith("+++"):
+        stripped = stripped[1:].strip()
+    stripped = stripped.strip("`")
+    if not stripped:
+        return None
+    if "<" in stripped and ">" in stripped:
+        return None
+    if any(stripped.startswith(f"{prefix}:") for prefix in DONE_PREFIXES):
+        return stripped
+    if DONE_PREFIX_RE.fullmatch(stripped):
+        return stripped
     return None
 
 
