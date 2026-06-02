@@ -36,6 +36,7 @@ TARGET_ANCHORS = {
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
+    "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import sys
 from pathlib import Path
 from typing import Sequence
 
+from .gh_accounting import accounting_env
 from .processes import ProcessSupervisor, prompt_file_from_text
 
 
@@ -51,13 +54,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         sys.stderr.write(f"codex stall window must be a positive integer number of seconds: {args.stall}\n")
         return 2
     command = build_codex_args(cd=args.cd, model=args.model, add_dirs=args.add_dir)
+    task_id = _task_id_from_log(log_path)
+    usage_repo = Path(os.environ.get("REPO_ROOT") or args.cd)
+    child_env = accounting_env(os.environ, skill_root=Path(__file__).resolve().parents[2], repo_root=usage_repo, source=f"codex:{task_id}", force_source=True)
     banner = f"SPAWN: prompt={prompt_path} log={log_path} cd={args.cd} stall={args.stall}s"
     if args.model:
         banner += f" model={args.model}"
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         sys.stderr.write(banner + "\n")
-        exit_code = ProcessSupervisor().supervise(command, stdin=prompt_path, log=log_path, stall=args.stall, preamble=banner + "\n")
+        exit_code = ProcessSupervisor().supervise(command, stdin=prompt_path, log=log_path, stall=args.stall, preamble=banner + "\n", env=child_env)
     except RuntimeError as exc:
         sys.stderr.write(f"{exc}\n")
         return 3 if "refusing to reuse unfinished log" in str(exc) else 1
@@ -66,6 +72,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     sys.stderr.write(f"DONE: log={log_path} exit={exit_code} prompt={prompt_path}\n")
     return exit_code
+
+
+def _task_id_from_log(log_path: Path) -> str:
+    stem = log_path.name.rsplit(".", 1)[0]
+    clean = re.sub(r"[^A-Za-z0-9_.:-]+", "-", stem).strip("-")
+    return clean or "unknown"
 
 
 if __name__ == "__main__":

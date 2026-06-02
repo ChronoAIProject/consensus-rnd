@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 
 STALL_EXIT_CODE = 137
@@ -24,7 +24,16 @@ class ProcessSupervisor:
     clock: callable = time.time
     sleeper: callable = time.sleep
 
-    def supervise(self, command: Sequence[str], *, stdin: Path, log: Path, stall: int, preamble: str = "") -> int:
+    def supervise(
+        self,
+        command: Sequence[str],
+        *,
+        stdin: Path,
+        log: Path,
+        stall: int,
+        preamble: str = "",
+        env: Mapping[str, str] | None = None,
+    ) -> int:
         if not stdin.is_file():
             raise ValueError(f"prompt file not found: {stdin}")
         if stall <= 0:
@@ -42,6 +51,7 @@ class ProcessSupervisor:
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
+                    env=dict(env) if env is not None else None,
                 )
             except OSError as exc:
                 _append(log, f"SPAWN_FAILED={exc}\nEXIT=127\nDONE_AT={_utc_now()}\n")

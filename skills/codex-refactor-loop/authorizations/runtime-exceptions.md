@@ -314,3 +314,16 @@ New: mirror narrows skip to pid alive + fresh heartbeat + current fingerprint + 
 - forbidden: no daemon direct `nohup spawn-codex`, no daemon executable command surface, no argv array, no shell command, no generic command bus, no `argv`, `args`, `shell`, `cmd`, `commands`, `env`, `git`, `gh`, `executor`, or `target_ref` fields in the spawn intent, no gh issue close, gh issue edit, gh label, gh pr merge, gh release, GitHub lifecycle mutation, issue close, PR merge, label lifecycle, git, commit, push, tag, release, or generic lifecycle authority.
 - verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_wakeup_plan.py`, `test_wakeup_runner.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This mirror records only the #229 state-only `read-gh` source-OPEN gate and the #330 narrowed direct spawn-intent allowlist; it does not grant daemon process-spawn or lifecycle authority.
+
+<a id="gh-usage-accounting-455"></a>
+## gh-usage-accounting-455
+
+- surface: `gh usage accounting`
+- source_issue: `#455`
+- source_round: `maintainer-directive`
+- source_marker: `direct maintainer instruction: hijack all gh calls and count them`
+- skill_anchor: `#gh-usage-accountingper-455`
+- allowed: prepend checked-in `skills/codex-refactor-loop/scripts/ghwrap/gh` to controller, daemon, and codex worker `PATH`; set `CRND_GH_SOURCE` as `controller`, `daemon:<name>`, or `codex:<task_id>`; transparently delegate to the real `gh` after removing the shim directory from PATH; append bounded JSONL runtime rows to `.refactor-loop/state/gh-usage.jsonl` with schema fields `schema`, `ts`, `source`, `subcommand`, `pool`, `exit_code`, and `count`; read aggregate stats through `consensus-rnd-cli gh-stats`.
+- forbidden: no issue/PR/label lifecycle, no merge/close, no tag/release, no dispatch, no controller lifecycle authority, no host config edits, no GitHub request made only for measurement, no stdout/stderr/stdin capture that changes gh semantics, and no blocking real gh when accounting fails.
+- verification: `test_gh_accounting.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This is observability-only accounting over existing `gh` calls; it does not authorize any new GitHub or git side effect.
