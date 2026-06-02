@@ -718,6 +718,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
         self.assertIn("DesignConsensusIssueIntake", self.skill)
+        self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
+        self.assertIn("existing evidence/log/in-flight for one solver role suppresses only that role", self.skill)
+        self.assertNotIn("with no r1 solver evidence", self.skill)
         self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
         self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
@@ -1086,7 +1089,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
             "DesignConsensusIssueIntake",
-            "queue r1 minimal/structural/delete solver `HARNESS_SPAWN_INTENT`",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/in-flight for one solver role suppresses only that role",
             "SOLVER_DONE:<minimal|structural|delete>:*",
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
