@@ -16,7 +16,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
-from codex_refactor_loop.wakeup_runner import WakeupRunner, main as wakeup_runner_main
+from codex_refactor_loop.wakeup_runner import WakeupRunner, _run_once_with_periodic_heartbeat, main as wakeup_runner_main
 
 
 class FakeSupervisor:
@@ -74,6 +74,51 @@ class FakeActions:
 
     def publish_release_candidate(self, *, candidate_path: str, target_ref: str):
         raise AssertionError("release publish should not be dispatched")
+
+
+class FakeHeartbeatLease:
+    heartbeat_interval = 7
+
+    def __init__(self) -> None:
+        self.beats = 0
+
+    def beat(self) -> None:
+        self.beats += 1
+
+
+class ScriptedEvent:
+    instances: list["ScriptedEvent"] = []
+
+    def __init__(self) -> None:
+        self.wait_results: list[bool] = []
+        self.wait_timeouts: list[float] = []
+        self.set_called = False
+        ScriptedEvent.instances.append(self)
+
+    def wait(self, timeout: float | None = None) -> bool:
+        self.wait_timeouts.append(float(timeout or 0))
+        return self.wait_results.pop(0) if self.wait_results else True
+
+    def set(self) -> None:
+        self.set_called = True
+
+
+class InlineThread:
+    instances: list["InlineThread"] = []
+
+    def __init__(self, *, target, name: str, daemon: bool) -> None:
+        self.target = target
+        self.name = name
+        self.daemon = daemon
+        self.started = False
+        self.join_timeouts: list[float] = []
+        InlineThread.instances.append(self)
+
+    def start(self) -> None:
+        self.started = True
+
+    def join(self, timeout: float | None = None) -> None:
+        self.join_timeouts.append(float(timeout or 0))
 
 
 class WakeupRunnerBehaviorTests(unittest.TestCase):
@@ -996,6 +1041,54 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
+    def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:
+        ScriptedEvent.instances = []
+        InlineThread.instances = []
+        lease = FakeHeartbeatLease()
+        expected = [object()]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
+            "codex_refactor_loop.wakeup_runner.threading.Thread",
+            InlineThread,
+        ):
+
+            def run_once():
+                ScriptedEvent.instances[0].wait_results = [False, False, True]
+                InlineThread.instances[0].target()
+                return expected
+
+            result = _run_once_with_periodic_heartbeat(run_once, lease)
+
+        self.assertIs(result, expected)
+        self.assertEqual(lease.beats, 2)
+        self.assertEqual(ScriptedEvent.instances[0].wait_timeouts, [7.0, 7.0, 7.0])
+        self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertTrue(InlineThread.instances[0].daemon)
+        self.assertEqual(InlineThread.instances[0].name, "wakeup-runner-heartbeat-renewer")
+        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+
+    def test_daemon_run_once_periodic_heartbeat_propagates_exception_and_stops_thread(self) -> None:
+        ScriptedEvent.instances = []
+        InlineThread.instances = []
+        lease = FakeHeartbeatLease()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.threading.Event", ScriptedEvent), mock.patch(
+            "codex_refactor_loop.wakeup_runner.threading.Thread",
+            InlineThread,
+        ):
+
+            def run_once():
+                ScriptedEvent.instances[0].wait_results = [False, True]
+                InlineThread.instances[0].target()
+                raise RuntimeError("boom")
+
+            with self.assertRaisesRegex(RuntimeError, "boom"):
+                _run_once_with_periodic_heartbeat(run_once, lease)
+
+        self.assertEqual(lease.beats, 1)
+        self.assertTrue(ScriptedEvent.instances[0].set_called)
+        self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
+
     def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         for helper in (
@@ -1012,6 +1105,31 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("dispatch_next_step_worker", source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        helper_start = source.index("def _run_once_with_periodic_heartbeat(")
+        helper_end = source.index("\ndef load_plan_file", helper_start)
+        helper = source[helper_start:helper_end]
+        daemon_branch = source[source.index("    if args.daemon:") : source.index("    results = runner.run_once()")]
+
+        for needle in (
+            "def _run_once_with_periodic_heartbeat(",
+            "threading.Event()",
+            "threading.Thread(",
+            "daemon=True",
+            "lease.heartbeat_interval",
+            "lease.beat()",
+            "return run_once()",
+            "finally:",
+            "stop.set()",
+            "renewer.join(timeout=1.0)",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, helper)
+        self.assertIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
+        self.assertIn("lease.sleep_with_lease(interval)", daemon_branch)
+        self.assertNotIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", source[source.index("    results = runner.run_once()") :])
 
     def test_close_managed_item_from_drop_marker_routes_to_named_helper(self) -> None:
         actions = FakeActions()
