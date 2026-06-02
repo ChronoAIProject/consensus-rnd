@@ -398,6 +398,39 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(self.commands, [])
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["417-1-structural"])
 
+    def test_phase9_router_design_issue_intake_suppresses_legacy_r1_solver_evidence(self) -> None:
+        issue = {
+            "number": 417,
+            "title": "legacy seeded",
+            "labels": [
+                {"name": "crnd:lifecycle:managed"},
+                {"name": "crnd:phase:design-solving"},
+                {"name": "crnd:human:auto"},
+            ],
+        }
+        legacy_minimal = self.repo / ".refactor-loop" / "logs" / "solver-issue417-r1-minimal.log"
+        legacy_minimal.write_text("legacy minimal already seeded\n", encoding="utf-8")
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(
+            sorted(command["log"] for command in self.commands),
+            [
+                ".refactor-loop/logs/phase9-issue417-r1-delete.log",
+                ".refactor-loop/logs/phase9-issue417-r1-structural.log",
+            ],
+        )
+        self.assertFalse((self.repo / ".refactor-loop/prompts/phase9/phase9-issue417-r1-minimal.md").exists())
+        self.assertFalse(self.router._log_path("417", 1, "minimal").exists())
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["417-1-delete", "417-1-structural"],
+        )
+
     def test_phase9_router_design_issue_intake_ignores_non_design_or_human_items(self) -> None:
         rows = [
             {
