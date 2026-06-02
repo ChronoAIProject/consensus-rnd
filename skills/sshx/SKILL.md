@@ -62,8 +62,10 @@ Each thinking or review record must include these fields:
 - `worker_mode`
 - `worker_carrier`
 - `verdict`
+- `conclusion`
+- `log_ref`
 
-Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned summaries/verdicts, summarize outcomes, and produce the final report.
+Thinking, implementation, and review are worker dispatches. The caller context may intake the task, choose worker mode, dispatch workers, run the meta-judge over returned `SshxResultEnvelope.conclusion` values, aggregate conclusions, and produce the final report from conclusions only while preserving `log_ref` references.
 
 Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal` and must not include same-round peer outputs.
 
@@ -83,15 +85,24 @@ Each `visible_inputs` value must include the same `GoalArtifact.normalized_goal`
 
 `abstain` is required when neither `codex-cli` nor `isolated-token-subagent` is available. Do not self-apply the triplet inside the caller context and present it as worker consensus.
 
+## Result Envelope
+
+`SshxResultEnvelope` is a prompt-level record, not a runtime API. Every caller-carried result from `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` must use exactly these top-level fields:
+
+- `conclusion`: compact structured result consumed by the caller. It may include verdicts, decisions, blocking goal gaps, final decision points, changed-file evidence, and test evidence when applicable. It must not include process logs, step-by-step reasoning, raw transcripts, debug output, or same-round peer output.
+- `log_ref`: artifact reference for the non-inline worker, meta-judge, implementation, review, or fix log. The caller may open the referenced artifact on demand, but caller-carried transcripts and final reports must keep only the reference and must not inline the log body.
+
+Logs are not inline in caller context. Final reports aggregate `conclusion` values only and retain `log_ref` references for optional inspection.
+
 ## No Context Pollution
 
 The caller context must not carry worker full reasoning or same-round peer outputs. It may carry only:
 
 - intake inputs and constraints;
 - dispatch briefs sent to each worker;
-- worker summaries, verdicts, and explicitly surfaced blockers;
-- meta-judge synthesis;
-- final summary and report.
+- `SshxResultEnvelope.conclusion` values, including verdicts and explicitly surfaced blockers;
+- `SshxResultEnvelope.log_ref` artifact references;
+- final reports that aggregate conclusions only.
 
 Same-round thinking workers must not see one another's outputs before their own verdicts are returned. Same-round review workers follow the same rule. If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay.
 
@@ -133,7 +144,7 @@ Implement only the concrete plan approved by the thinking gate. Keep the impleme
 
 `sshx` does not grant permission to commit, push, merge, close issues, edit labels, publish releases, or mutate external lifecycle state.
 
-Implementation must be delegated to a worker using the selected `WorkerMode`. The caller context may pass the approved concrete plan and constraints, then receive a bounded implementation summary and changed-file/test evidence.
+Implementation must be delegated to a worker using the selected `WorkerMode`. The caller context may pass the approved concrete plan and constraints, then receive `conclusion` and `log_ref`; changed-file and test evidence belong in `conclusion`, and process logs stay behind `log_ref`.
 
 ## Review Triplet
 
@@ -165,7 +176,7 @@ Advisory comments do not count as approval. A reject blocks done until the issue
 
 If review exits `fix`, ask what still differs from `GoalArtifact`, apply the smallest change that addresses that blocking goal gap, and rerun the review triplet. Stop after a bounded number of fix passes and report remaining blockers honestly.
 
-If review exits `done with advisory surfaced`, summarize the final outcome and include any non-blocking advisory feedback.
+If review exits `done with advisory surfaced`, report the final outcome by aggregating `conclusion` values and include any non-blocking advisory feedback without inlining logs.
 
 If review exits `explicit user decision or another bounded review pass`, either run one more bounded pass with a concrete next iteration question tied to `GoalArtifact`, or ask the user to decide. Do not loop indefinitely.
 
@@ -222,38 +233,55 @@ thinking_triplet_workers:
     worker_mode:
     worker_carrier:
     verdict:
+    conclusion:
+    log_ref:
   - role: structural
     bias:
     visible_inputs:
     worker_mode:
     worker_carrier:
     verdict:
+    conclusion:
+    log_ref:
   - role: delete
     bias:
     visible_inputs:
     worker_mode:
     worker_carrier:
     verdict:
+    conclusion:
+    log_ref:
 meta_judge:
   exit:
   concrete_plan:
   goal_gap:
   next_iteration_question:
+  conclusion:
+  log_ref:
 implementation_worker:
   worker_mode:
-  summary:
+  conclusion:
+  log_ref:
 review_triplet_workers:
   - role: architecture
     worker_mode:
     verdict:
+    conclusion:
+    log_ref:
   - role: quality
     worker_mode:
     verdict:
+    conclusion:
+    log_ref:
   - role: tests
     worker_mode:
     verdict:
+    conclusion:
+    log_ref:
 fix_or_done:
   exit:
+  conclusion:
+  log_ref:
 ```
 
 ## Verification
