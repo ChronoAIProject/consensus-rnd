@@ -938,7 +938,7 @@ class Phase9Router:
             "priority": "p1",
             "command": "spawn-codex",
             "controller_action": "spawn_codex_harness_background",
-            "cd": ".",
+            "cd": str(self.ctx.repo_root.resolve()),
             "prompt": self._artifact_path(prompt),
             "log": self._artifact_path(log_path),
             "stall": 3600,

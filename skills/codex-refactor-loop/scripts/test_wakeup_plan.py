@@ -561,6 +561,24 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
 
+    def test_harness_spawn_intent_accepts_absolute_repo_contained_cd(self) -> None:
+        self.append_harness_spawn_intent(cd=str(self.repo.resolve()))
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent")
+        self.assertEqual(action["cd"], str(self.repo.resolve()))
+
+    def test_harness_spawn_intent_rejects_absolute_cd_outside_repo(self) -> None:
+        self.append_harness_spawn_intent(cd="/tmp/outside-consensus-rnd")
+
+        plan = self.run_plan()
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
+        self.assertIn("invalid-path:cd escapes REPO_ROOT", action["reason"])
+
     def test_harness_spawn_intent_rejects_argv_command_array(self) -> None:
         self.append_harness_spawn_intent(command=["consensus-rnd-cli", "spawn-codex"])
 
@@ -606,7 +624,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assert_harness_spawn_intent_invalid(f"missing-{field}", **{field: ""})
 
         self.assert_harness_spawn_intent_invalid(
-            "invalid-path:artifact path must be repo-relative POSIX text: '../outside'",
+            "invalid-path:cd escapes REPO_ROOT: '../outside'",
             cd="../outside",
         )
 

@@ -286,7 +286,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         intent = self.commands[0]
         self.assertEqual(intent["command"], "spawn-codex")
         self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
-        self.assertEqual(intent["cd"], ".")
+        self.assertEqual(intent["cd"], str(self.repo.resolve()))
+        self.assertNotEqual(intent["cd"], ".")
+        self.assertTrue(Path(str(intent["cd"])).is_absolute())
         self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue37-r4-judge.log")
         self.assertNotIn("argv", intent)
         self.assertNotIn("shell", intent)
@@ -311,7 +313,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         intent = json.loads(intent_lines[0].split(" HARNESS_SPAWN_INTENT ", 1)[1])
         self.assertEqual(intent["command"], "spawn-codex")
         self.assertEqual(intent["controller_action"], "spawn_codex_harness_background")
-        self.assertEqual(intent["cd"], ".")
+        self.assertEqual(intent["cd"], str(self.repo.resolve()))
+        self.assertNotEqual(intent["cd"], ".")
+        self.assertTrue(Path(str(intent["cd"])).is_absolute())
         self.assertEqual(intent["prompt"], ".refactor-loop/prompts/phase9/phase9-issue330-r4-judge.md")
         self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue330-r4-judge.log")
         self.assertTrue(intent["run_in_background_required"])
@@ -356,7 +360,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             self.assertEqual(command["command"], "spawn-codex")
             self.assertEqual(command["controller_action"], "spawn_codex_harness_background")
             self.assertEqual(command["route"], "design_consensus_issue_intake")
-            self.assertEqual(command["cd"], ".")
+            self.assertEqual(command["cd"], str(self.repo.resolve()))
+            self.assertNotEqual(command["cd"], ".")
+            self.assertTrue(Path(str(command["cd"])).is_absolute())
             self.assertTrue(command["run_in_background_required"])
             self.assertTrue(command["no_lifecycle_authority"])
             self.assertNotIn("argv", command)
@@ -876,9 +882,11 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn(str(self.repo), json.dumps(ledger, ensure_ascii=False))
         intent = self.commands[0]
         self.assertEqual(intent["command"], "spawn-codex")
+        self.assertEqual(intent["cd"], str(self.repo.resolve()))
         self.assertEqual(intent["prompt"], ".refactor-loop/prompts/phase9/phase9-issue202-r1-judge.md")
         self.assertEqual(intent["log"], ".refactor-loop/logs/phase9-issue202-r1-judge.log")
-        self.assertNotIn(str(self.repo), json.dumps(intent, ensure_ascii=False))
+        self.assertNotIn(str(self.repo), str(intent["prompt"]))
+        self.assertNotIn(str(self.repo), str(intent["log"]))
         self.assertNotIn("argv", intent)
         self.assertNotIn("shell", intent)
 
@@ -1649,6 +1657,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
     def test_phase9_router_source_regression_uses_loop_context_artifact_path_boundary(self) -> None:
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
+        self.assertIn('"cd": str(self.ctx.repo_root.resolve())', src)
+        self.assertNotIn('"cd": "."', src)
         self.assertIn("self.ctx.durable_artifact_path(path)", src)
         self.assertIn("self.ctx.artifact_execution_path(text)", src)
         for forbidden in (
@@ -1673,7 +1683,9 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertEqual(exit_code, 0)
         self.assertEqual(len(commands), 1)
-        self.assertEqual(commands[0]["cd"], ".")
+        self.assertEqual(commands[0]["cd"], str(self.repo.resolve()))
+        self.assertNotEqual(commands[0]["cd"], ".")
+        self.assertTrue(Path(str(commands[0]["cd"])).is_absolute())
         self.assertEqual(commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["37-4-judge"])
 
