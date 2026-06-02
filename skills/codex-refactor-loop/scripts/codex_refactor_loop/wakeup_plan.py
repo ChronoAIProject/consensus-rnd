@@ -116,6 +116,14 @@ NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_BLOCKED: "blocked",
     label_catalog.PHASE_MERGED: "merged",
 }
+DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
+    {
+        label_catalog.PHASE_CONSENSUS_REACHED,
+        label_catalog.PHASE_IMPLEMENTING,
+        label_catalog.PHASE_MERGED,
+        label_catalog.PHASE_CLOSED,
+    }
+)
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
@@ -204,7 +212,9 @@ def harness_spawn_intent_actions(
     actions: list[dict[str, Any]] = []
     seen: set[str] = set()
     terminal_blocked_intent_ids = _terminal_blocked_harness_spawn_intent_ids(lines)
-    open_targets = _open_managed_targets(gh_items or []) if gh_items_loaded else set()
+    open_items = gh_items or []
+    open_targets = _open_managed_targets(open_items) if gh_items_loaded else set()
+    terminal_design_targets = _terminal_design_consensus_targets(open_items) if gh_items_loaded else set()
     for line in lines:
         if " HARNESS_SPAWN_INTENT " not in line:
             continue
@@ -237,7 +247,13 @@ def harness_spawn_intent_actions(
             continue
         if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
             continue
-        if _suppress_harness_spawn_intent(intent, terminal_blocked_intent_ids, open_targets, gh_items_loaded):
+        if _suppress_harness_spawn_intent(
+            intent,
+            terminal_blocked_intent_ids,
+            open_targets,
+            gh_items_loaded,
+            terminal_design_targets,
+        ):
             continue
         actions.append(
             {
@@ -294,11 +310,20 @@ def _open_managed_targets(items: list[GhItem]) -> set[tuple[str, int]]:
     return {(item.kind, item.number) for item in items if item.kind in {"PR", "issue"}}
 
 
+def _terminal_design_consensus_targets(items: list[GhItem]) -> set[tuple[str, int]]:
+    return {
+        (item.kind, item.number)
+        for item in items
+        if label_catalog.normalize_label_set(item.labels).phase in DESIGN_CONSENSUS_TERMINAL_PHASES
+    }
+
+
 def _suppress_harness_spawn_intent(
     intent: dict[str, Any],
     terminal_blocked_intent_ids: set[str],
     open_targets: set[tuple[str, int]],
     gh_items_loaded: bool,
+    terminal_design_targets: set[tuple[str, int]] | None = None,
 ) -> bool:
     intent_id = str(intent.get("intent_id") or "")
     if intent_id in terminal_blocked_intent_ids:
@@ -306,7 +331,24 @@ def _suppress_harness_spawn_intent(
     target = _harness_spawn_intent_target(intent)
     if gh_items_loaded and target is not None and target not in open_targets:
         return True
+    if (
+        gh_items_loaded
+        and target is not None
+        and target in (terminal_design_targets or set())
+        and _is_design_consensus_solver_dispatch_intent(intent)
+    ):
+        return True
     return False
+
+
+def _is_design_consensus_solver_dispatch_intent(intent: dict[str, Any]) -> bool:
+    if intent.get("controller_action") != "spawn_codex_harness_background":
+        return False
+    route = str(intent.get("route") or "")
+    if route in {"design_consensus_issue_intake", "converge_to_next_solvers"}:
+        return True
+    task_id = str(intent.get("task_id") or "")
+    return bool(re.fullmatch(r"phase9-issue[1-9][0-9]*-r[1-9][0-9]*-(minimal|structural|delete)", task_id))
 
 
 def _harness_spawn_intent_target(intent: dict[str, Any]) -> tuple[str, int] | None:
@@ -1372,6 +1414,31 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
+def suppress_terminal_design_consensus_actions(
+    actions: list[dict[str, Any]],
+    gh_items: list[GhItem],
+    gh_items_loaded: bool,
+) -> list[dict[str, Any]]:
+    if not gh_items_loaded:
+        return actions
+    terminal_targets = _terminal_design_consensus_targets(gh_items)
+    if not terminal_targets:
+        return actions
+    kept: list[dict[str, Any]] = []
+    for action in actions:
+        target_kind = action.get("target_kind")
+        target_number = action.get("target_number")
+        if (
+            action.get("controller_action") == "dispatch_design_consensus"
+            and isinstance(target_kind, str)
+            and isinstance(target_number, int)
+            and (target_kind, target_number) in terminal_targets
+        ):
+            continue
+        kept.append(action)
+    return kept
+
+
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish_implementation_output"
@@ -1602,6 +1669,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
+    actions = suppress_terminal_design_consensus_actions(actions, gh_items, gh_items_loaded)
     actions.sort(key=lambda action: action["priority"])
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 

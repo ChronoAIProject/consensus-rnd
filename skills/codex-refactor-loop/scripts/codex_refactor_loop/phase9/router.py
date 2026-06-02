@@ -120,6 +120,13 @@ class Phase9SourceIssueDecision:
 
 
 @dataclass(frozen=True)
+class Phase9TerminalDecision:
+    allowed: bool
+    reason: str
+    terminal_source: str | None = None
+
+
+@dataclass(frozen=True)
 class MetaJudgePromptContext:
     issue: str
     round: int
@@ -263,6 +270,7 @@ class Phase9Router:
         self.command_runner = command_runner or self._default_runner
         self._fallback_seen: set[str] = self._load_persisted_fallback_seen()
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
+        self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
@@ -276,6 +284,7 @@ class Phase9Router:
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
         self._source_issue_decisions = {}
+        self._terminal_decisions = {}
         ledger = self._read_ledger()
         markers = self._collect_markers()
         self._dispatch_design_issue_intake(ledger)
@@ -427,6 +436,8 @@ class Phase9Router:
                 seen.add(key)
             if isinstance(key, str) and key.startswith("phase9-triplet-suppression:"):
                 seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-terminal-eligibility:"):
+                seen.add(key)
         return seen
 
     def _identity_from_path(self, path: Path) -> Phase9LogIdentity | None:
@@ -498,6 +509,24 @@ class Phase9Router:
                 key = self._key(issue, 1, role)
                 log_path = self._log_path(issue, 1, role)
                 if key in ledger or self._solver_intake_suppressed(issue, 1, role, log_path):
+                    continue
+                terminal_decision = self._solver_dispatch_terminal_decision(
+                    issue,
+                    1,
+                    "design_consensus_issue_intake",
+                    "DesignConsensusIssueIntake",
+                    self.pending_events_path,
+                    item.labels,
+                )
+                if not terminal_decision.allowed:
+                    self._append_terminal_fallback_event(
+                        issue,
+                        1,
+                        "design_consensus_issue_intake",
+                        "DesignConsensusIssueIntake",
+                        self.pending_events_path,
+                        terminal_decision,
+                    )
                     continue
                 prompt = self._write_prompt(
                     issue,
@@ -591,6 +620,23 @@ class Phase9Router:
                     log_path = self._log_path(marker.issue, target_round, role)
                     if key in ledger or self._in_flight(log_path):
                         continue
+                    terminal_decision = self._solver_dispatch_terminal_decision(
+                        marker.issue,
+                        target_round,
+                        "converge_to_next_solvers",
+                        marker.marker,
+                        marker.log_path,
+                    )
+                    if not terminal_decision.allowed:
+                        self._append_terminal_fallback_event(
+                            marker.issue,
+                            target_round,
+                            "converge_to_next_solvers",
+                            marker.marker,
+                            marker.log_path,
+                            terminal_decision,
+                        )
+                        continue
                     if not self._require_open_source_issue(
                         marker.issue,
                         target_round,
@@ -638,6 +684,8 @@ class Phase9Router:
                 if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
                     return True
                 return self._key(marker.issue, marker.round, "reflector") in ledger
+            if f"phase9-terminal-eligibility:{marker.issue}-{target_round}-converge_to_next_solvers" in self._fallback_seen:
+                return True
             if f"phase9-source-eligibility:{marker.issue}-{target_round}-converge_to_next_solvers" in self._fallback_seen:
                 return True
             return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
@@ -858,6 +906,126 @@ class Phase9Router:
             "key": event_key,
             "reason": decision.reason,
             "state": decision.state,
+            "issue": issue,
+            "round": round_no,
+            "route": route,
+            "marker": marker,
+            "log_path": self._artifact_path(log_path),
+            "dispatched_at": self._now(),
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
+    def _solver_dispatch_terminal_decision(
+        self,
+        issue: str,
+        round_no: int,
+        route: str,
+        marker: str,
+        log_path: Path,
+        issue_labels: Iterable[str] | None = None,
+    ) -> Phase9TerminalDecision:
+        del round_no, route, marker, log_path
+        label_source = self._terminal_source_from_labels(issue_labels)
+        if label_source is not None:
+            return Phase9TerminalDecision(False, "phase9-already-consensus", label_source)
+        if issue not in self._terminal_decisions:
+            self._terminal_decisions[issue] = self._read_terminal_decision(issue)
+        return self._terminal_decisions[issue]
+
+    def _read_terminal_decision(self, issue: str) -> Phase9TerminalDecision:
+        judge_source = self._terminal_consensus_judge_source(issue)
+        if judge_source is not None:
+            return Phase9TerminalDecision(False, "phase9-already-consensus", judge_source)
+        live_source = self._live_terminal_issue_source(issue)
+        if live_source is not None:
+            return Phase9TerminalDecision(False, "phase9-already-consensus", live_source)
+        return Phase9TerminalDecision(True, "phase9-terminal-open", None)
+
+    def _terminal_source_from_labels(self, issue_labels: Iterable[str] | None) -> str | None:
+        if issue_labels is None:
+            return None
+        phase = label_catalog.normalize_label_set(issue_labels).phase
+        if phase in self._terminal_phase_labels():
+            return f"phase-label:{phase}"
+        return None
+
+    def _terminal_consensus_judge_source(self, issue: str) -> str | None:
+        patterns = (f"phase9-issue{issue}-r*-judge.log", f"meta-judge-issue{issue}-r*.log")
+        for pattern in patterns:
+            for log_path in sorted(self.logs_dir.glob(pattern)):
+                identity = self._identity_from_path(log_path)
+                if identity is None or identity.issue != issue or identity.actor != self._judge_role():
+                    continue
+                if not self._is_clean_exit(log_path):
+                    continue
+                marker = self._final_marker_from_path(log_path)
+                if marker and marker.startswith("META_JUDGE_DONE:consensus:"):
+                    return f"consensus-judge-log:{self._artifact_path(log_path)}"
+        return None
+
+    def _live_terminal_issue_source(self, issue: str) -> str | None:
+        if not self.ctx.gh_repo_slug or "GH_REPO_SLUG" not in self.ctx.host_env:
+            return None
+        command = [
+            "gh",
+            "api",
+            f"repos/{self.ctx.gh_repo_slug}/issues/{issue}",
+            "--jq",
+            "{state:.state,labels:[.labels[].name]}",
+        ]
+        try:
+            result = subprocess.run(
+                command,
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=15,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        labels = payload.get("labels")
+        if isinstance(labels, list):
+            return self._terminal_source_from_labels(label for label in labels if isinstance(label, str))
+        return None
+
+    def _terminal_phase_labels(self) -> frozenset[str]:
+        return frozenset(
+            {
+                label_catalog.PHASE_CONSENSUS_REACHED,
+                label_catalog.PHASE_IMPLEMENTING,
+                label_catalog.PHASE_MERGED,
+                label_catalog.PHASE_CLOSED,
+            }
+        )
+
+    def _append_terminal_fallback_event(
+        self,
+        issue: str,
+        round_no: int,
+        route: str,
+        marker: str,
+        log_path: Path,
+        decision: Phase9TerminalDecision,
+    ) -> None:
+        event_key = f"phase9-terminal-eligibility:{issue}-{round_no}-{route}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": decision.reason,
+            "terminal_source": decision.terminal_source,
             "issue": issue,
             "round": round_no,
             "route": route,
