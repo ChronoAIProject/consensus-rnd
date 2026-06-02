@@ -785,6 +785,36 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("gh issue view 427", prompt)
         self.assertNotIn(str(self.repo), prompt)
 
+    def test_phase9_router_comments_read_failure_injects_unavailable_snapshot_only(self) -> None:
+        calls: list[str] = []
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.solver_triplet(issue=429, round_no=4)
+
+        def fake_run(command, **kwargs):
+            calls.append(command[2])
+            if command[2].endswith("/comments?per_page=20"):
+                return mock.Mock(returncode=1, stdout="", stderr="comments rate limited")
+            return mock.Mock(
+                returncode=0,
+                stdout=json.dumps({"state": "open", "title": "Snapshot title", "body": "Snapshot body"}),
+                stderr="",
+            )
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            self.router.tick()
+
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429"), 1)
+        self.assertEqual(calls.count("repos/example/consensus-rnd/issues/429/comments?per_page=20"), 1)
+        self.assertEqual(len(self.commands), 1)
+        prompt = (self.repo / ".refactor-loop/prompts/phase9/phase9-issue429-r4-judge.md").read_text(encoding="utf-8")
+        self.assertIn("Snapshot unavailable.", prompt)
+        self.assertIn("unavailable_reason: comments-read-failed", prompt)
+        self.assertIn("Fallback only: run `gh issue view 429` if the injected snapshot is unavailable.", prompt)
+        self.assertNotIn("# Issue #429: Snapshot title", prompt)
+        self.assertNotIn("Snapshot body", prompt)
+        self.assertNotIn("## Recent comments", prompt)
+        self.assertNotIn(str(self.repo), prompt)
+
     def test_phase9_router_unavailable_issue_source_snapshot_injects_fallback_only(self) -> None:
         self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
         self.write_log("phase9-issue428-r1-judge.log", "META_JUDGE_DONE:converge:round-2:need-more")
