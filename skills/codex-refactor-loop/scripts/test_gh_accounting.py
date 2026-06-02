@@ -432,6 +432,8 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, module)
+        self.assertNotIn("CRND_GH_REAL", source)
+        self.assertNotIn("CRND_GH_REAL", module)
 
     def test_spawn_and_daemon_paths_inject_path_and_crnd_source(self) -> None:
         spawn = (SCRIPT_DIR / "codex_refactor_loop" / "spawn.py").read_text(encoding="utf-8")

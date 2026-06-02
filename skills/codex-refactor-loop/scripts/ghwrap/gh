@@ -34,7 +34,7 @@ def _fallback_exec() -> int:
         for part in os.environ.get("PATH", "").split(os.pathsep)
         if part and Path(part).resolve() != shim_dir
     )
-    real = os.environ.get("CRND_GH_REAL") or shutil.which("gh", path=path)
+    real = shutil.which("gh", path=path)
     if real is None:
         sys.stderr.write("ghwrap: real gh not found after removing shim directory from PATH\n")
         return 127

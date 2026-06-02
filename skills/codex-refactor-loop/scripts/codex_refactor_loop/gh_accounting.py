@@ -144,9 +144,6 @@ def activate_controller_accounting(*, skill_root: Path | None = None) -> None:
 
 def resolve_real_gh(argv0: str, env: Mapping[str, str] | None = None) -> str | None:
     source_env = os.environ if env is None else env
-    explicit = source_env.get("CRND_GH_REAL")
-    if explicit:
-        return explicit
     shim_dir = Path(argv0).resolve().parent
     filtered = []
     for part in source_env.get("PATH", "").split(os.pathsep):
