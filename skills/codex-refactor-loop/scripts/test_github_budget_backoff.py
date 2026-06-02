@@ -147,6 +147,40 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].reason, "graphql-backoff")
         self.assertIn("graphql-backoff: skipping wakeup-runner tick (remaining<threshold)", out.getvalue())
 
+    def test_wakeup_runner_spawn_low_headroom_records_backoff_and_does_not_spawn(self) -> None:
+        supervisor = mock.Mock()
+        runner = WakeupRunner(self.ctx, supervisor=supervisor, actions=mock.Mock())
+        prompt = self.tmp / ".refactor-loop" / "prompts" / "spawn.md"
+        log = self.tmp / ".refactor-loop" / "logs" / "spawn.log"
+        prompt.parent.mkdir(parents=True)
+        log.parent.mkdir(parents=True)
+        prompt.write_text("run\n", encoding="utf-8")
+        action = {
+            "action_id": "spawn-low-headroom",
+            "controller_action": "spawn_codex_harness_background",
+            "runner_authority": "wakeup-runner-396",
+            "no_generic_command": True,
+            "preconditions": ["target_log_absent"],
+            "source_marker": "IMPLEMENT_DONE:0:ok",
+            "cd": str(self.tmp),
+            "prompt": str(prompt),
+            "log": str(log),
+        }
+
+        out = io.StringIO()
+        with (
+            mock.patch("codex_refactor_loop.wakeup_runner.graphql_headroom_ok", return_value=False),
+            redirect_stdout(out),
+        ):
+            result = runner.apply_action(action)
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "helper_exit:3")
+        self.assertIn("graphql-backoff: skipping wakeup-runner tick (remaining<threshold)", out.getvalue())
+        pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_SPAWN_BACKOFF:spawn-low-headroom:graphql-headroom-low", pending)
+        supervisor.supervise.assert_not_called()
+
     def test_progress_reporter_low_headroom_skips_post_or_update(self) -> None:
         reporter = ProgressReporter(self.ctx, interval=1)
         reporter.log_dir.mkdir(parents=True, exist_ok=True)
