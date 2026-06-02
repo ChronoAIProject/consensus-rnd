@@ -18,9 +18,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import github_budget
+from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.monitors.comment import CommentMonitor
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+from codex_refactor_loop.monitors.progress import ProgressReporter
+from codex_refactor_loop.phase9.router import Phase9Router
 from codex_refactor_loop.wakeup_runner import WakeupRunner
 
 
@@ -132,7 +135,7 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         self.assertIn("DISPATCH_BACKOFF:graphql-headroom-low", pending)
 
     def test_wakeup_runner_low_headroom_skips_plan_apply_without_consume(self) -> None:
-        runner = WakeupRunner(self.ctx, plan_loader=lambda _repo: {"schema": "wakeup-plan"}, supervisor=mock.Mock())
+        runner = WakeupRunner(self.ctx, plan_loader=lambda _repo: {"schema": "wakeup-plan"}, supervisor=mock.Mock(), actions=mock.Mock())
         out = io.StringIO()
         with (
             mock.patch("codex_refactor_loop.wakeup_runner.graphql_headroom_ok", return_value=False),
@@ -143,6 +146,56 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "skipped")
         self.assertEqual(results[0].reason, "graphql-backoff")
         self.assertIn("graphql-backoff: skipping wakeup-runner tick (remaining<threshold)", out.getvalue())
+
+    def test_progress_reporter_low_headroom_skips_post_or_update(self) -> None:
+        reporter = ProgressReporter(self.ctx, interval=1)
+        reporter.log_dir.mkdir(parents=True, exist_ok=True)
+        log = reporter.log_dir / "fix-pr434-round-1.log"
+        log.write_text("still running\n", encoding="utf-8")
+
+        out = io.StringIO()
+        with (
+            mock.patch("codex_refactor_loop.monitors.progress.graphql_headroom_ok", return_value=False),
+            mock.patch.object(reporter, "post_or_update", side_effect=AssertionError("progress post/update should be skipped")),
+            redirect_stdout(out),
+        ):
+            reporter.tick()
+
+        self.assertIn("graphql-backoff: skipping progress-reporter tick (remaining<threshold)", out.getvalue())
+
+    def test_closed_label_reconciler_low_headroom_skips_active_controller_and_plan_collection(self) -> None:
+        reconciler = ClosedLabelReconciler(self.ctx)
+        out = io.StringIO()
+        with (
+            mock.patch("codex_refactor_loop.closed_label_reconciler.graphql_headroom_ok", return_value=False),
+            mock.patch(
+                "codex_refactor_loop.closed_label_reconciler.require_active_controller",
+                side_effect=AssertionError("active-controller check should be skipped"),
+            ),
+            mock.patch.object(reconciler, "collect_plans", side_effect=AssertionError("plan collection should be skipped")),
+            redirect_stdout(out),
+        ):
+            result = reconciler.run_once()
+
+        self.assertEqual(result, 0)
+        self.assertIn("graphql-backoff: skipping closed-label-reconciler tick (remaining<threshold)", out.getvalue())
+
+    def test_phase9_router_low_headroom_skips_marker_collection_and_dispatch(self) -> None:
+        router = Phase9Router(ctx=self.ctx, command_runner=mock.Mock())
+        out = io.StringIO()
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.graphql_headroom_ok", return_value=False),
+            mock.patch(
+                "codex_refactor_loop.phase9.router.require_active_controller",
+                side_effect=AssertionError("active-controller check should be skipped"),
+            ),
+            mock.patch.object(router, "_collect_markers", side_effect=AssertionError("marker collection should be skipped")),
+            mock.patch.object(router, "_dispatch_design_issue_intake", side_effect=AssertionError("dispatch should be skipped")),
+            redirect_stdout(out),
+        ):
+            router.tick()
+
+        self.assertIn("graphql-backoff: skipping phase9-router tick (remaining<threshold)", out.getvalue())
 
 
 class GraphqlBudgetSourceRegressionTests(unittest.TestCase):
