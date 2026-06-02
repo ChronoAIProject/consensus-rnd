@@ -984,6 +984,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
 
+    def test_solver_triplet_completed_marker_projects_executable_design_consensus(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
+
+        plan = self.run_plan()
+
+        action = next(
+            item for item in plan["actions"]
+            if item["action_id"].startswith("completed-marker:phase9-issue453-r1-minimal")
+        )
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue453-r1-minimal.log")
+        self.assertEqual(action["source_marker"], "SOLVER_DONE:minimal:ready:real")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 453)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 453})
+        for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
+            self.assertNotIn(forbidden, action)
+
     def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 

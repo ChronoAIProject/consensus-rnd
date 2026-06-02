@@ -566,6 +566,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
         self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
+        self.assertIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
         self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
 
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
