@@ -33,7 +33,7 @@ ${SCOPE_PATHS}
    ```
    3-5 行内；不是 changelog，是代码自我说明。
    - missing/empty/default/`none`：MUST NOT add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments. Put the rationale in the implementation summary and include exactly: `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`.
-3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型须注释 "refactor helper, no behavior change"。
+3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型的注释也必须遵守 `${HOST_REFACTOR_COMMENT_POLICY}`：missing/empty/default/`none` 时不得写 `refactor helper`, `no behavior change`, `Old`, `New`, 或 `iterN` 等 refactor-history source comments；如确需源码注释，只写面向业务行为的准确英文说明。仅 explicit `self-doc-comment` 时才按第 2 条既有 Refactor self-documentation 格式写注释。
 4. **测试**：按 `verification_hints` 跑测试，必须通过；测试不足必须补；任何 `sleep/delay` 轮询测试必须改为确定性断言。
 5. **架构守卫**：跑 host 配置的 `$CI_GUARDS`，必须通过。其它 cluster 特定守卫见 verification hints。
 6. **不依赖外部仓库**：禁止建议在 $EXTERNAL_REPOS/$EXTERNAL_REPOS 改动。
