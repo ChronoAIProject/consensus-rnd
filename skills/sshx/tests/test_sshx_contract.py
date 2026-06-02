@@ -45,6 +45,7 @@ class SshxContractTests(unittest.TestCase):
             "## Goal Contract",
             "## InlineConsensusProtocol",
             "## Worker Delegation",
+            "## Result Envelope",
             "## No Context Pollution",
             "## Design Truth Table",
             "## Implementation Worker",
@@ -123,11 +124,17 @@ class SshxContractTests(unittest.TestCase):
         for allowed_context in [
             "intake inputs and constraints",
             "dispatch briefs sent to each worker",
+            "`SshxResultEnvelope.conclusion` values, including verdicts and explicitly surfaced blockers",
+            "`SshxResultEnvelope.log_ref` artifact references",
+            "final reports that aggregate conclusions only",
+        ]:
+            self.assertIn(allowed_context, text)
+        for removed_escape_hatch in [
             "worker summaries, verdicts, and explicitly surfaced blockers",
             "meta-judge synthesis",
             "final summary and report",
         ]:
-            self.assertIn(allowed_context, text)
+            self.assertNotIn(removed_escape_hatch, text)
         self.assertIn(
             "Same-round thinking workers must not see one another's outputs before their own verdicts are returned",
             text,
@@ -136,6 +143,96 @@ class SshxContractTests(unittest.TestCase):
             "If worker isolation is unavailable, exit through `abstain` instead of degrading the protocol into single-context roleplay",
             text,
         )
+
+    def test_sshx_result_envelope_contract(self) -> None:
+        text = read(SKILL)
+        self.assertIn("## Result Envelope", text)
+        self.assertIn("`SshxResultEnvelope` is a prompt-level record, not a runtime API", text)
+        self.assertIn(
+            "Every caller-carried result from `thinking_triplet_workers`, `meta_judge`, `implementation_worker`, `review_triplet_workers`, and `fix_or_done` must use exactly these top-level fields",
+            text,
+        )
+        self.assertIn("`conclusion`: compact structured result consumed by the caller", text)
+        self.assertIn("`log_ref`: artifact reference for the non-inline worker", text)
+        for forbidden_inline in [
+            "process logs",
+            "step-by-step reasoning",
+            "raw transcripts",
+            "debug output",
+            "same-round peer output",
+        ]:
+            self.assertIn(forbidden_inline, text)
+        self.assertIn("Logs are not inline in caller context", text)
+        self.assertIn("Final reports aggregate `conclusion` values only", text)
+        self.assertIn("produce the final report from conclusions only while preserving `log_ref` references", text)
+        self.assertIn("process logs stay behind `log_ref`", text)
+        self.assertIn("without inlining logs", text)
+
+    def test_sshx_result_envelope_caller_context_excludes_inline_logs(self) -> None:
+        caller_carried_transcript = {
+            "thinking_triplet_workers": [
+                {
+                    "role": "minimal",
+                    "verdict": "propose",
+                    "conclusion": {
+                        "decision": "use the smallest contract edit",
+                        "goal_gap": "none",
+                    },
+                    "log_ref": "artifacts/sshx/minimal.log",
+                }
+            ],
+            "meta_judge": {
+                "conclusion": {
+                    "exit": "implement",
+                    "decision": "all worker conclusions agree",
+                },
+                "log_ref": "artifacts/sshx/meta-judge.log",
+            },
+            "implementation_worker": {
+                "conclusion": {
+                    "changed_files": ["skills/sshx/SKILL.md"],
+                    "tests": ["python3 -m unittest discover -s skills/sshx/tests -p 'test_*.py'"],
+                },
+                "log_ref": "artifacts/sshx/implementation.log",
+            },
+            "review_triplet_workers": [
+                {
+                    "role": "tests",
+                    "verdict": "approve",
+                    "conclusion": {"coverage": "contract locks envelope-only output"},
+                    "log_ref": "artifacts/sshx/review-tests.log",
+                }
+            ],
+            "fix_or_done": {
+                "conclusion": {"exit": "done with advisory surfaced"},
+                "log_ref": "artifacts/sshx/fix-or-done.log",
+            },
+        }
+
+        def assert_envelope(node: dict[str, object]) -> None:
+            self.assertIn("conclusion", node)
+            self.assertIn("log_ref", node)
+            self.assertNotIn("summary", node)
+            self.assertNotIn("report", node)
+            self.assertNotIn("synthesis", node)
+
+        for worker in caller_carried_transcript["thinking_triplet_workers"]:
+            assert_envelope(worker)
+        assert_envelope(caller_carried_transcript["meta_judge"])
+        assert_envelope(caller_carried_transcript["implementation_worker"])
+        for reviewer in caller_carried_transcript["review_triplet_workers"]:
+            assert_envelope(reviewer)
+        assert_envelope(caller_carried_transcript["fix_or_done"])
+
+        rendered = repr(caller_carried_transcript)
+        for inline_log_phrase in [
+            "worker reasoning:",
+            "raw transcript:",
+            "debug log body:",
+            "step-by-step reasoning:",
+            "same-round peer output:",
+        ]:
+            self.assertNotIn(inline_log_phrase, rendered)
 
     def test_sshx_design_truth_table(self) -> None:
         text = read(SKILL)

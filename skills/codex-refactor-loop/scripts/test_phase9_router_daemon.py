@@ -418,6 +418,42 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("Convergence marker: DesignConsensusIssueIntake", prompt)
         self.assertEqual(self.pending_events(), "")
 
+    def test_phase9_router_design_issue_intake_suppresses_after_clean_consensus_judge_log(self) -> None:
+        issue = {
+            "number": 416,
+            "title": "terminal design consensus",
+            "labels": [
+                {"name": "crnd:lifecycle:managed"},
+                {"name": "crnd:phase:design-solving"},
+                {"name": "crnd:human:auto"},
+            ],
+        }
+        self.write_log("phase9-issue416-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
+        ):
+            self.router.tick()
+            fresh_router = self.new_router()
+            fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+            fresh_router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = [
+            event for event in self.pending_event_payloads()
+            if event.get("key") == "phase9-terminal-eligibility:416-1-design_consensus_issue_intake"
+        ]
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-terminal-eligibility:416-1-design_consensus_issue_intake")
+        self.assertEqual(event["reason"], "phase9-already-consensus")
+        self.assertEqual(event["route"], "design_consensus_issue_intake")
+        self.assertEqual(event["marker"], "DesignConsensusIssueIntake")
+        self.assertEqual(event["terminal_source"], "consensus-judge-log:.refactor-loop/logs/phase9-issue416-r1-judge.log")
+        self.assertEqual(self.pending_events().count("phase9-terminal-eligibility:416-1-design_consensus_issue_intake"), 1)
+
     def test_phase9_router_design_issue_intake_suppresses_existing_and_in_flight_r1(self) -> None:
         issue = {
             "number": 417,
@@ -1207,6 +1243,48 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             sorted(entry["key"] for entry in self.ledger_entries()),
             ["37-5-delete", "37-5-minimal", "37-5-structural"],
         )
+
+    def test_phase9_router_converge_suppresses_when_live_label_is_implementing(self) -> None:
+        (self.repo / ".refactor-loop" / "host.env").write_text(
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG={self.TEST_GH_REPO_SLUG}\n",
+            encoding="utf-8",
+        )
+        self.router = self.new_router()
+        self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
+        self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
+
+        def fake_run(command, **kwargs):
+            if command[:2] == ["gh", "api"]:
+                jq_arg = command[command.index("--jq") + 1]
+                if jq_arg == ".state":
+                    return mock.Mock(returncode=0, stdout=json.dumps("OPEN"), stderr="")
+                if jq_arg == "[.labels[].name]":
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=json.dumps(["crnd:lifecycle:managed", "crnd:phase:implementing"]),
+                        stderr="",
+                    )
+                self.fail(f"unexpected gh api jq query: {jq_arg}")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+            self.router.tick()
+            fresh_router = self.new_router()
+            fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
+            fresh_router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        events = self.pending_event_payloads()
+        self.assertEqual(len(events), 1)
+        event = events[0]
+        self.assertEqual(event["key"], "phase9-terminal-eligibility:37-5-converge_to_next_solvers")
+        self.assertEqual(event["reason"], "phase9-already-consensus")
+        self.assertEqual(event["route"], "converge_to_next_solvers")
+        self.assertEqual(event["marker"], "META_JUDGE_DONE:converge:round-5:need-more")
+        self.assertEqual(event["terminal_source"], "phase-label:crnd:phase:implementing")
+        self.assertFalse((self.repo / ".refactor-loop/prompts/phase9/phase9-issue37-r5-minimal.md").exists())
+        self.assertEqual(self.pending_events().count("phase9-terminal-eligibility:37-5-converge_to_next_solvers"), 1)
 
     def test_phase9_router_closed_issue_suppresses_converge_without_lifecycle_mutation(self) -> None:
         self.source_issue_states["37"] = "CLOSED"

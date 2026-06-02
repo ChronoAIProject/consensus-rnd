@@ -750,10 +750,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
         self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`", self.skill)
         self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
         self.assertIn("wakeup-plan design-consensus issue evidence is status-only", self.skill)
+        self.assertIn("design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only", self.skill)
+        self.assertIn("state-only", self.skill)
+        self.assertIn("labels-only terminal gate", self.skill)
         self.assertIn("phase9-source-not-open", self.skill)
         self.assertIn("phase9-source-state-unavailable", self.skill)
+        self.assertIn("phase9-terminal-eligibility:", self.skill)
+        self.assertIn("phase9-already-consensus", self.skill)
+        self.assertIn("clean consensus judge log", self.skill)
+        self.assertIn("terminal design-consensus phase labels", self.skill)
+        for label in (
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, self.skill)
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, SpawnIntentInbox, spawn-intents, ControllerOrchestrator", self.skill)
 

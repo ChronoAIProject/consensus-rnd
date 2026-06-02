@@ -707,13 +707,25 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "router-injected issue source snapshots",
             "router-local prompt-source projection",
             "not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority",
+            "`gh api repos/<slug>/issues/<N> --jq .state`",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
             "four built-in phase9 direct routes",
             "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
             "existing evidence/log/in-flight for one solver role suppresses only that role",
             "source-OPEN gate",
+            "labels-only live read",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
             "HARNESS_SPAWN_INTENT",
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
@@ -744,6 +756,50 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
                 self.assertIn(forbidden, self.skill)
+        self.assertIn("terminal design-consensus suppression must not write spawn intent or dispatch ledger", entry)
+        self.assertIn("without writing spawn intent or dispatch ledger", self.skill)
+
+    def test_phase9_router_terminal_design_gate_matches_implementation(self) -> None:
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+        router = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
+        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        combined_authority = "\n".join((entry, self.skill))
+
+        for token in (
+            "Phase9TerminalDecision",
+            "_solver_dispatch_terminal_decision",
+            "_terminal_consensus_judge_source",
+            "_live_terminal_issue_source",
+            "_append_terminal_fallback_event",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "META_JUDGE_DONE:consensus:",
+            "PHASE_CONSENSUS_REACHED",
+            "PHASE_IMPLEMENTING",
+            "PHASE_MERGED",
+            "PHASE_CLOSED",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+        self.assertIn('"[.labels[].name]"', router)
+        self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
+        self.assertIn("suppress_terminal_design_consensus_actions", wakeup_plan)
+        self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
+        for token in (
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
+        ):
+            with self.subTest(authority_token=token):
+                self.assertIn(token, combined_authority)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
         # Refactor (iter193/issue-193):
