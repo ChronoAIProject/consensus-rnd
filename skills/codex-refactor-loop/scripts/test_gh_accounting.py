@@ -12,6 +12,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -30,8 +31,11 @@ from codex_refactor_loop.gh_accounting import (
     default_usage_path,
     load_records,
 )
+from codex_refactor_loop import spawn
+from codex_refactor_loop.cli import COMMANDS, CommandSpec, RuntimeCommandRouter
+from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.processes import ProcessSupervisor
-from codex_refactor_loop.restart import DAEMON_COMMANDS
+from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcessInventory, RestartConfig, RestartDaemons
 
 
 class GhAccountingBehaviorTests(unittest.TestCase):
@@ -273,6 +277,124 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         payload = json.loads(result.stdout)
         self.assertEqual(1, payload["total"]["by_pool"]["graphql"])
+
+    def test_controller_router_accounts_handler_gh_calls_as_controller(self) -> None:
+        def handler(_args: list[str] | None) -> int:
+            return subprocess.run(["gh", "issue", "view", "457"], check=False).returncode
+
+        env = {
+            "PATH": f"{self.realbin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "REPO_ROOT": str(self.repo),
+            "CRND_GH_USAGE_PATH": str(self.usage),
+        }
+
+        with mock.patch.dict(COMMANDS, {"accounting-test": CommandSpec(handler, "test command", ("read-gh",))}):
+            with mock.patch.dict(os.environ, env, clear=True):
+                exit_code = RuntimeCommandRouter(script_dir=SCRIPT_DIR).run("accounting-test", [])
+
+        self.assertEqual(0, exit_code)
+        record = self.read_records()[0]
+        self.assertEqual("controller", record["source"])
+        self.assertEqual("issue view", record["subcommand"])
+        self.assertEqual("graphql", record["pool"])
+
+    def test_restart_daemon_child_receives_daemon_accounting_environment(self) -> None:
+        env_path = self.tmp / "daemon-env.json"
+        child_code = textwrap.dedent(
+            """\
+            import json, os, signal
+            from pathlib import Path
+            Path(os.environ["TEST_DAEMON_ENV_PATH"]).write_text(json.dumps({
+                "source": os.environ.get("CRND_GH_SOURCE"),
+                "usage": os.environ.get("CRND_GH_USAGE_PATH"),
+                "path_head": os.environ.get("PATH", "").split(os.pathsep)[0],
+            }, sort_keys=True), encoding="utf-8")
+            Path(os.environ["RESTART_DAEMON_HEARTBEAT_FILE"]).write_text("1\\n", encoding="utf-8")
+            signal.signal(signal.SIGTERM, lambda _signum, _frame: raise_system_exit())
+            def raise_system_exit():
+                raise SystemExit(0)
+            while True:
+                signal.pause()
+            """
+        )
+        command = (sys.executable, "-c", child_code)
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=SKILL_ROOT)
+        helper = RestartDaemons(ctx, RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1))
+        env = {
+            "PATH": f"{self.realbin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "REPO_ROOT": str(self.repo),
+            "TEST_DAEMON_ENV_PATH": str(env_path),
+            "CRND_GH_USAGE_PATH": str(self.usage),
+        }
+
+        try:
+            with mock.patch.dict(os.environ, env, clear=True):
+                with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=DaemonProcessInventory(())):
+                    helper.start_daemon("accounting-daemon", command)
+            payload = json.loads(env_path.read_text(encoding="utf-8"))
+            self.assertEqual("daemon:accounting-daemon", payload["source"])
+            self.assertEqual(str(self.usage.resolve()), payload["usage"])
+            self.assertEqual(str(SKILL_ROOT / "scripts" / "ghwrap"), payload["path_head"])
+        finally:
+            for proc in helper._wrappers:
+                if proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+
+    def test_spawn_codex_uses_log_derived_task_source_and_accounting_environment(self) -> None:
+        env_path = self.tmp / "codex-env.json"
+        prompt = self.tmp / "prompt.md"
+        log = self.tmp / "review-pr457 fix!.log"
+        prompt.write_text("prompt\n", encoding="utf-8")
+        fake_codex = self.realbin / "codex"
+        fake_codex.write_text(
+            textwrap.dedent(
+                f"""\
+                #!{sys.executable}
+                import json, os, sys
+                from pathlib import Path
+                Path(os.environ["TEST_CODEX_ENV_PATH"]).write_text(json.dumps({{
+                    "argv": sys.argv[1:],
+                    "source": os.environ.get("CRND_GH_SOURCE"),
+                    "usage": os.environ.get("CRND_GH_USAGE_PATH"),
+                    "path_head": os.environ.get("PATH", "").split(os.pathsep)[0],
+                }}, sort_keys=True), encoding="utf-8")
+                raise SystemExit(0)
+                """
+            ),
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        env = {
+            "PATH": f"{self.realbin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+            "REPO_ROOT": str(self.repo),
+            "TEST_CODEX_ENV_PATH": str(env_path),
+            "CRND_GH_USAGE_PATH": str(self.usage),
+        }
+
+        with mock.patch.dict(os.environ, env, clear=True):
+            exit_code = spawn.main(
+                [
+                    "--cd",
+                    str(self.repo),
+                    "--prompt",
+                    str(prompt),
+                    "--log",
+                    str(log),
+                    "--stall",
+                    "5",
+                ]
+            )
+
+        self.assertEqual(0, exit_code)
+        payload = json.loads(env_path.read_text(encoding="utf-8"))
+        self.assertEqual("codex:review-pr457-fix", payload["source"])
+        self.assertEqual(str(self.usage.resolve()), payload["usage"])
+        self.assertEqual(str(SKILL_ROOT / "scripts" / "ghwrap"), payload["path_head"])
+        self.assertEqual(["exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(self.repo), "-"], payload["argv"])
 
 
 class GhAccountingSourceRegressionTests(unittest.TestCase):
