@@ -89,13 +89,13 @@ def usage_path_for_repo(repo_root: Path) -> Path:
 
 def default_usage_path(env: Mapping[str, str] | None = None, cwd: Path | None = None) -> Path:
     source_env = os.environ if env is None else env
+    repo_root = _repo_root(source_env, cwd=cwd)
     explicit = source_env.get("CRND_GH_USAGE_PATH")
     if explicit:
-        return Path(explicit).expanduser()
-    repo = source_env.get("REPO_ROOT")
-    if repo:
-        return usage_path_for_repo(Path(repo).expanduser())
-    return usage_path_for_repo(cwd or Path.cwd())
+        bounded = _repo_contained_path(explicit, repo_root=repo_root)
+        if bounded is not None:
+            return bounded
+    return usage_path_for_repo(repo_root)
 
 
 def accounting_env(
@@ -110,11 +110,32 @@ def accounting_env(
     shim = str(ghwrap_dir(skill_root))
     path_parts = [part for part in result.get("PATH", "").split(os.pathsep) if part and part != shim]
     result["PATH"] = os.pathsep.join([shim, *path_parts])
-    if repo_root is not None and "CRND_GH_USAGE_PATH" not in result:
-        result["CRND_GH_USAGE_PATH"] = str(usage_path_for_repo(repo_root))
+    if repo_root is not None:
+        bounded = None
+        if result.get("CRND_GH_USAGE_PATH"):
+            bounded = _repo_contained_path(result["CRND_GH_USAGE_PATH"], repo_root=repo_root)
+        result["CRND_GH_USAGE_PATH"] = str(bounded or usage_path_for_repo(repo_root))
     if source and (force_source or not result.get("CRND_GH_SOURCE")):
         result["CRND_GH_SOURCE"] = source
     return result
+
+
+def _repo_root(env: Mapping[str, str], *, cwd: Path | None = None) -> Path:
+    raw = env.get("REPO_ROOT")
+    return Path(raw).expanduser().resolve() if raw else (cwd or Path.cwd()).resolve()
+
+
+def _repo_contained_path(raw: str, *, repo_root: Path) -> Path | None:
+    root = repo_root.expanduser().resolve()
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = root / candidate
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
 
 
 def activate_controller_accounting(*, skill_root: Path | None = None) -> None:
@@ -238,9 +259,12 @@ def _retention_lines(env: Mapping[str, str]) -> int:
     if raw is None:
         return DEFAULT_RETENTION_LINES
     try:
-        return int(raw)
+        value = int(raw)
     except ValueError:
         return DEFAULT_RETENTION_LINES
+    if 1 <= value <= DEFAULT_RETENTION_LINES:
+        return value
+    return DEFAULT_RETENTION_LINES
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:

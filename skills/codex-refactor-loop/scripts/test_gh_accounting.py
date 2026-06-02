@@ -21,7 +21,15 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 SHIM = SCRIPT_DIR / "ghwrap" / "gh"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.gh_accounting import aggregate_records, accounting_env, classify_pool, classify_subcommand, load_records
+from codex_refactor_loop.gh_accounting import (
+    DEFAULT_RETENTION_LINES,
+    aggregate_records,
+    accounting_env,
+    classify_pool,
+    classify_subcommand,
+    default_usage_path,
+    load_records,
+)
 from codex_refactor_loop.processes import ProcessSupervisor
 from codex_refactor_loop.restart import DAEMON_COMMANDS
 
@@ -115,7 +123,7 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual("unknown", record["pool"])
 
     def test_accounting_failure_fails_open_after_real_gh(self) -> None:
-        bad_parent = self.tmp / "not-a-dir"
+        bad_parent = self.repo / "not-a-dir"
         bad_parent.write_text("not a directory", encoding="utf-8")
         bad_usage = bad_parent / "gh-usage.jsonl"
 
@@ -123,6 +131,28 @@ class GhAccountingBehaviorTests(unittest.TestCase):
 
         self.assertEqual(0, result.returncode)
         self.assertIn("fake stdout:pr list", result.stdout)
+
+    def test_usage_path_override_ignores_repo_escape_and_preserves_real_gh(self) -> None:
+        outside = self.tmp / "outside" / "gh-usage.jsonl"
+
+        result = self.run_shim(["pr", "list"], extra_env={"CRND_GH_USAGE_PATH": str(outside)})
+
+        self.assertEqual(0, result.returncode)
+        self.assertIn("fake stdout:pr list", result.stdout)
+        self.assertFalse(outside.exists())
+        records = self.read_records()
+        self.assertEqual(1, len(records))
+        self.assertEqual("pr list", records[0]["subcommand"])
+
+    def test_repo_contained_usage_path_override_is_allowed(self) -> None:
+        contained = self.repo / ".refactor-loop" / "state" / "custom-gh-usage.jsonl"
+
+        result = self.run_shim(["issue", "view", "1"], extra_env={"CRND_GH_USAGE_PATH": str(contained)})
+
+        self.assertEqual(0, result.returncode)
+        self.assertTrue(contained.exists())
+        self.assertFalse(self.usage.exists())
+        self.assertEqual("issue view", json.loads(contained.read_text(encoding="utf-8"))["subcommand"])
 
     def test_import_failure_fallback_delegates_to_real_gh(self) -> None:
         isolated_scripts = self.tmp / "isolated" / "scripts"
@@ -165,6 +195,15 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertEqual(2, len(records))
         self.assertTrue(records[0]["subcommand"] == "api")
 
+    def test_retention_override_is_bounded(self) -> None:
+        for raw in ("0", "-1", str(DEFAULT_RETENTION_LINES + 1), "not-int"):
+            with self.subTest(raw=raw):
+                for index in range(3):
+                    result = self.run_shim(["api", f"repos/owner/repo/issues/{index}"], extra_env={"CRND_GH_USAGE_MAX_LINES": raw})
+                    self.assertEqual(0, result.returncode)
+                self.assertEqual(3, len(self.read_records()))
+                self.usage.unlink()
+
     def test_aggregate_reports_per_source_pool_and_subcommand(self) -> None:
         self.run_shim(["issue", "view", "1"], source="controller")
         self.run_shim(["api", "repos/owner/repo/issues/1"], source="daemon:progress-reporter")
@@ -184,6 +223,21 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.assertIn("/usr/bin", env["PATH"])
         self.assertEqual(str(self.usage), env["CRND_GH_USAGE_PATH"])
         self.assertEqual("controller", env["CRND_GH_SOURCE"])
+
+    def test_accounting_env_rewrites_escaping_usage_path_to_repo_default(self) -> None:
+        outside = self.tmp / "outside" / "gh-usage.jsonl"
+        env = accounting_env(
+            {"PATH": "/usr/bin", "CRND_GH_USAGE_PATH": str(outside)},
+            skill_root=SKILL_ROOT,
+            repo_root=self.repo,
+            source="controller",
+        )
+
+        self.assertEqual(str(self.usage), env["CRND_GH_USAGE_PATH"])
+        self.assertEqual(
+            self.usage.resolve(),
+            default_usage_path({"REPO_ROOT": str(self.repo), "CRND_GH_USAGE_PATH": "../escape.jsonl"}).resolve(),
+        )
 
     def test_process_supervisor_passes_env_to_child(self) -> None:
         prompt = self.tmp / "prompt.md"
@@ -240,6 +294,11 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
             "no merge/close",
             "no tag/release",
             "DEFAULT_ARTIFACT_RELATIVE = Path(\".refactor-loop\") / \"state\" / \"gh-usage.jsonl\"",
+            "CRND_GH_USAGE_PATH",
+            "_repo_contained_path",
+            "resolved.relative_to(root)",
+            "CRND_GH_USAGE_MAX_LINES",
+            "1 <= value <= DEFAULT_RETENTION_LINES",
             "schema",
             "ts",
             "source",
@@ -271,6 +330,17 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
         cli = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
         self.assertIn('"gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",))', cli)
         self.assertNotIn('"gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-gh",))', cli)
+
+    def test_runtime_surface_bounds_are_documented(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        authorization = (SKILL_ROOT / "authorizations" / "runtime-exceptions.md").read_text(encoding="utf-8")
+        for source in (skill, authorization):
+            with self.subTest(source="skill" if source is skill else "authorization"):
+                self.assertIn("CRND_GH_USAGE_PATH", source)
+                self.assertIn("repo-relative or repo-contained", source)
+                self.assertIn("CRND_GH_USAGE_MAX_LINES", source)
+                self.assertIn("invalid, non-positive, or larger values fall back to the default", source)
+                self.assertIn("no accounting artifact outside `$REPO_ROOT`", source)
 
 
 if __name__ == "__main__":
