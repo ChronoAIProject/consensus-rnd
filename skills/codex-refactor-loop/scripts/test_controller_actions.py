@@ -27,6 +27,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.git import Git
 from codex_refactor_loop.release.publisher import ReleasePublishResult
+from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
 
 
 class ControllerActionsTests(unittest.TestCase):
@@ -819,6 +820,46 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("HARNESS_SPAWN_INTENT", pending)
         self.assertIn('"intent_id": "dispatch-consensus-implementation:413"', pending)
         self.assertIn('"task_id": "implement-issue-413"', pending)
+
+    def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        worktree = self.tmp / ".worktrees" / "iter413-issue-413"
+        action = {
+            "target_kind": "issue",
+            "target_number": 413,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+            "verification_hints": "python3 -m unittest",
+            "cluster_id": "issue-413",
+            "iteration": "413",
+            "source_ref": "gh-issue-413",
+        }
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            Path(output_path).write_text("rendered prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+
+        pending = self.pending_events()
+        self.assertRegex(pending, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z HARNESS_SPAWN_INTENT ")
+        self.assertIn(" HARNESS_SPAWN_INTENT ", pending)
+
+        ctx = LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp, read_only=True)
+        projected = harness_spawn_intent_actions(self.tmp, ctx, monitor=None, gh_items=[], gh_items_loaded=False)
+
+        self.assertEqual(1, len(projected), projected)
+        action = projected[0]
+        self.assertEqual("harness-spawn-intent", action["kind"])
+        self.assertEqual("dispatch-consensus-implementation:413", action["intent_id"])
+        self.assertEqual("implement-issue-413", action["item"])
+        self.assertEqual("controller-actions", action["source"])
+        self.assertIn(" HARNESS_SPAWN_INTENT ", action["evidence"])
 
     def test_dispatch_consensus_implementation_rejects_empty_plan_fields_before_worktree(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
