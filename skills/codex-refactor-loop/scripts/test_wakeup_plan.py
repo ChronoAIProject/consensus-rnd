@@ -1353,6 +1353,45 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["goal"]["release"]["total_signals"], 8)
         self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
 
+    def test_release_countdown_fail_soft_when_version_manifest_has_no_files_list(self) -> None:
+        (self.repo / ".version-bump.json").write_text(json.dumps({"version": "0.0.0"}), encoding="utf-8")
+
+        plan = self.run_plan(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["activation"], "default-goal")
+        self.assertEqual(action["goal"]["milestone"], {"number": 1, "title": "Soon", "due_on": "2026-06-15T00:00:00Z"})
+        self.assertIsNone(action["goal"]["release"])
+        self.assertIsNone(action["from_version"])
+        self.assertIsNone(action["to_version"])
+        self.assertFalse(action["ready"])
+        self.assertEqual(action["red_signals"], [])
+        self.assertEqual(action["blocked_reasons"], [])
+        self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
+
+    def test_release_countdown_fail_soft_when_mapped_manifest_versions_are_not_synchronized(self) -> None:
+        (self.repo / ".version-bump.json").write_text(
+            json.dumps(
+                {
+                    "files": [
+                        {"path": "package.json", "field": "version"},
+                        {"path": "other-package.json", "field": "version"},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / "other-package.json").write_text(json.dumps({"version": "9.9.9"}), encoding="utf-8")
+
+        plan = self.run_plan(fixture="existing")
+
+        by_kind = {action["kind"]: action for action in plan["actions"]}
+        self.assertEqual(by_kind["existing-issue"]["item"], "issue #10")
+        self.assertIsNone(by_kind["release-countdown"]["goal"]["release"])
+        self.assertFalse(has_dispatchable_action([by_kind["release-countdown"]]))
+
     def test_release_countdown_default_goal_falls_back_to_release_only_without_open_milestone(self) -> None:
         old_env = os.environ.copy()
         os.environ.pop("GH_REPO_SLUG", None)

@@ -1165,18 +1165,20 @@ def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any 
     red_signals = [name for name, signal in signals.items() if isinstance(signal, dict) and not signal.get("passed")]
     blocked = score.get("blocked_reasons")
     blocked_reasons = [str(reason) for reason in blocked] if isinstance(blocked, list) else red_signals
-    release_goal = {
-        "from_version": score.get("from_version"),
-        "to_version": score.get("to_version"),
-        "countdown_to_version": score.get("to_version"),
-        "stability_score": score.get("stability_score"),
-        "ready": bool(score.get("ready")),
-        "passed_signals": sum(1 for signal in signals.values() if isinstance(signal, dict) and signal.get("passed")),
-        "total_signals": len(signals),
-        "red_signals": red_signals,
-        "blocked_reasons": blocked_reasons,
-        "source": "release-gate",
-    }
+    release_goal = None
+    if score:
+        release_goal = {
+            "from_version": score.get("from_version"),
+            "to_version": score.get("to_version"),
+            "countdown_to_version": score.get("to_version"),
+            "stability_score": score.get("stability_score"),
+            "ready": bool(score.get("ready")),
+            "passed_signals": sum(1 for signal in signals.values() if isinstance(signal, dict) and signal.get("passed")),
+            "total_signals": len(signals),
+            "red_signals": red_signals,
+            "blocked_reasons": blocked_reasons,
+            "source": "release-gate",
+        }
     return [
         {
             "priority": 8,
@@ -1232,8 +1234,12 @@ def _default_goal_milestone(repo_root: Path) -> dict[str, Any] | None:
 
 
 def _release_countdown_score(repo_root: Path, scorer: Any | None = None) -> dict[str, Any]:
-    with contextlib.redirect_stdout(sys.stderr):
-        score = (scorer or decide_release_artifact)(repo_root)
+    try:
+        with contextlib.redirect_stdout(sys.stderr):
+            score = (scorer or decide_release_artifact)(repo_root)
+    except (KeyError, RuntimeError, ValueError) as exc:
+        print(f"release-countdown: release goal unavailable: {exc}", file=sys.stderr)
+        return {}
     return score if isinstance(score, dict) else {}
 
 
