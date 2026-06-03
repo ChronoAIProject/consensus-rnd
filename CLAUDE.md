@@ -117,3 +117,16 @@ Refactor (iter343/issue-343):
 - **测试按风险扩展**:窄文档改动可用 source-regression 覆盖;共享脚本或跨 skill 流程改动必须补 behavior test。
 - **生成物不当事实源**:临时日志、一次性报告、agent 草稿、运行输出不得成为长期规范来源;权威源永远在 SKILL.md / 脚本 / 测试里。
 - **历史由 git 保存**:需要追溯旧行为时查 git,不在工作树保留影子副本或归档目录。
+
+
+<!-- consensus-rnd:foundational-invariants:start version=1 sha256=f5c24b0c3515993a7b86c4ed78ce7386add665f8c8b84cc7275aedebd6c3e6af -->
+## 共识研发不动点（由 consensus-rnd 管理）
+
+- FI-001 AI 产物默认不可信；进入主线前必须经过独立检查，至少包含共识、review 或自动验证中的适用组合。
+- FI-002 Host 事实必须由 host 配置或 host 规则注入；通用 skill / engine 不硬编码具体项目、组织、路径、分支或人员事实；skill-private runtime directories such as `.refactor-loop/` must not become host production configuration or ledger SSOT.
+- FI-003 稳定核心保持小而可审计；高频变化留在 host 规则、prompt、脚本或扩展层，不下沉为核心不变量。
+- FI-004 跨进程、跨 turn 或跨节点的事实必须有权威记录；进程内记忆、cache、临时变量不能冒充事实源。
+- FI-005 边界优先于便利；职责、层级、协议和状态所有权必须清楚，禁止用中间层快捷方式绕过主链路。
+- FI-006 变更必须可验证且基于 evidence；失败、缺口和越界承诺要显式暴露，禁止用静默假设或禁用测试换取通过。
+- FI-007 删除优先；废弃路径直接移除，除非 host 规则明确要求迁移期兼容。
+<!-- consensus-rnd:foundational-invariants:end -->
