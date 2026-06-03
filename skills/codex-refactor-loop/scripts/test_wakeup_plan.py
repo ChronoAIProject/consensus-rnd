@@ -1283,7 +1283,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("review-gate-readiness", action)
         self.assertNotIn("review_gate_actions", action)
 
-    def test_meta_resolved_drop_completed_marker_projects_close_helper(self) -> None:
+    def test_meta_resolved_drop_completed_marker_for_open_target_is_status_only(self) -> None:
         (self.logs / "issue53-judge-drop.log").write_text(
             "raw prose is diagnostic only\n"
             "META_RESOLVED:drop:no-action\n"
@@ -1294,6 +1294,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="open_issue_53")
 
         action = plan["actions"][0]
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["suppressed_reason"], "live_open_target")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/issue53-judge-drop.log")
+        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 53)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 53})
+
+    def test_meta_resolved_drop_completed_marker_for_closed_target_projects_close_helper(self) -> None:
+        (self.logs / "issue53-judge-drop.log").write_text(
+            "raw prose is diagnostic only\n"
+            "META_RESOLVED:drop:no-action\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_issue_54")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:issue53-judge-drop"))
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")

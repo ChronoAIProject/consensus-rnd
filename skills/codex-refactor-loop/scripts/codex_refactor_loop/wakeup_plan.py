@@ -703,6 +703,7 @@ def completed_marker_actions(
             and target is not None
             and target not in open_targets
             and not marker.startswith("META_JUDGE_DONE:consensus")
+            and controller_action_from_marker(marker) != "close_managed_item_from_drop_marker"
         ):
             continue
         route = route_from_marker(marker)
@@ -1976,8 +1977,8 @@ def _stale_unexecutable_reason(
         return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees)
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
-        if target is not None and target not in open_targets:
-            return "target_not_open"
+        if target is not None and target in open_targets:
+            return "live_open_target"
     return None
 
 
