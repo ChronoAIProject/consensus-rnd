@@ -107,6 +107,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
+    def test_zero_codex_has_no_observe_mode_exemption(self) -> None:
+        required = (
+            "无观察模式豁免(强制,airtight)",
+            "必须在同一 turn 内立即派出真实下一步 codex",
+            "维持 floor 是 controller 不可让渡、不可暂缓的职责",
+            "`actual == 0 + active work` 永远是必须当 turn 修复的 P0,不是可观察的状态",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
             "## Milestone priority",
