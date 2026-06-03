@@ -724,7 +724,7 @@ class ControllerActions:
         )
         if pr_target is None:
             return 2
-        pr = self.gh(["pr", "view", pr_target, "--json", "title,baseRefName,headRefName"], check=False)
+        pr = self.gh(["pr", "view", pr_target, "--json", "title,baseRefName,headRefName,headRefOid"], check=False)
         if pr.returncode != 0:
             return pr.returncode
         try:
@@ -733,8 +733,9 @@ class ControllerActions:
             return 2
         base = str(facts.get("baseRefName") or self.integration_branch)
         head = str(facts.get("headRefName") or "")
+        head_sha = str(facts.get("headRefOid") or "")
         title = str(facts.get("title") or f"PR {pr_target}")
-        if not head:
+        if not head or not head_sha:
             return 2
         for role in ("architect", "tests", "quality"):
             prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r1.md"
@@ -747,6 +748,7 @@ class ControllerActions:
                     "PR_TITLE": title,
                     "BASE_BRANCH": base,
                     "HEAD_BRANCH": head,
+                    "HEAD_SHA": head_sha,
                     "REVIEW_OUTPUT_PATH": f".refactor-loop/runs/review-pr{pr_target}-{role}-r1.md",
                 },
             )

@@ -125,6 +125,9 @@ DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
     }
 )
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
+REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
+REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
+REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge)\.log$")
@@ -139,6 +142,7 @@ class GhItem:
     title: str
     labels: tuple[str, ...]
     head_ref: str | None = None
+    head_sha: str = ""
     body: str = ""
 
     @property
@@ -982,6 +986,132 @@ def _reviewed_head_sha_from_log(log_path: Path) -> str:
     return match.group(1) if match else ""
 
 
+def _reviewed_head_sha_from_file(path: Path) -> str:
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    match = REVIEW_HEAD_RE.search(text)
+    return match.group(1) if match else ""
+
+
+def _reviewer_log_has_exit_zero(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return any(line.strip() == "EXIT=0" for line in lines)
+
+
+def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    prefix = f"REVIEW_DONE:{pr_number}:{role}:"
+    return sum(1 for line in lines if line.strip().startswith(prefix)) == 1
+
+
+def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
+    rounds: dict[int, dict[str, str]] = {}
+    runs_dir = repo_root / ".refactor-loop" / "runs"
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    prompts_dir = repo_root / ".refactor-loop" / "prompts"
+    for path in sorted(runs_dir.glob(f"review-pr{pr_number}-*-r*.md")):
+        match = REVIEW_ARTIFACT_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
+        if not _reviewer_log_has_exit_zero(log_path):
+            continue
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
+        if head_sha:
+            rounds.setdefault(round_number, {})[role] = head_sha
+    artifact_keys = {(role, round_number) for round_number, heads in rounds.items() for role in heads}
+    for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
+        match = REVIEW_LOG_RE.match(path.name)
+        if not match or int(match.group(1)) != pr_number:
+            continue
+        role = match.group(2)
+        round_number = int(match.group(3))
+        if (role, round_number) in artifact_keys:
+            continue
+        if not _reviewer_log_has_exit_zero(path) or not _reviewer_log_has_valid_marker(path, pr_number, role):
+            continue
+        prompt_path = prompts_dir / path.with_suffix(".md").name
+        head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
+        if head_sha:
+            rounds.setdefault(round_number, {})[role] = head_sha
+    return rounds[max(rounds)] if rounds else {}
+
+
+def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:
+    pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    try:
+        lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    prefix = f"dispatch-reviewers:{pr_number}:"
+    for line in lines:
+        if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        try:
+            intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(intent, dict):
+            continue
+        intent_id = str(intent.get("intent_id") or "")
+        if not intent_id.startswith(prefix):
+            continue
+        log_value = str(intent.get("log") or "")
+        log_path = Path(log_value)
+        if not log_path.is_absolute():
+            log_path = repo_root / log_path
+        if not _harness_spawn_intent_log_suppresses_retry(log_path):
+            return True
+    return False
+
+
+def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    for item in gh_items:
+        if item.kind != "PR":
+            continue
+        projection = label_catalog.normalize_label_set(item.labels)
+        if projection.phase not in {label_catalog.PHASE_REVIEWING, label_catalog.PHASE_PR_OPEN}:
+            continue
+        if not item.head_sha or pending_review_spawn_exists(repo_root, item.number):
+            continue
+        heads = latest_reviewer_heads(repo_root, item.number)
+        stale_roles = [role for role in REQUIRED_REVIEW_ROLES if heads.get(role, "") != item.head_sha]
+        if not stale_roles:
+            continue
+        actions.append(
+            {
+                "priority": 2,
+                "kind": "review-evidence-redispatch",
+                "action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}",
+                "item": item.item,
+                "phase": "review-gate",
+                "actor": "controller",
+                "route": "dispatch-reviewers",
+                "controller_action": "dispatch_reviewers",
+                "target_kind": "PR",
+                "target_number": item.number,
+                "target": {"kind": "PR", "number": item.number},
+                "head_sha": item.head_sha,
+                "stale_review_roles": stale_roles,
+                "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+            }
+        )
+    return actions
+
+
 def phase_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish"
@@ -1189,7 +1319,7 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     loaded_ok = True
     for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
         rows: list[dict[str, Any]] = []
-        json_fields = "number,title,labels,headRefName,body" if kind == "PR" else "number,title,labels"
+        json_fields = "number,title,labels,headRefName,headRefOid,body" if kind == "PR" else "number,title,labels"
         for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
             command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
             data = run_json(command, cwd=repo_root)
@@ -1218,6 +1348,7 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
                     title=str(raw.get("title") or ""),
                     labels=labels,
                     head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
+                    head_sha=str(raw.get("headRefOid") or "") if kind == "PR" else "",
                     body=str(raw.get("body") or "") if kind == "PR" else "",
                 )
             )
@@ -2153,6 +2284,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor, gh_items, gh_items_loaded))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
+    actions.extend(review_evidence_redispatch_actions(repo_root, gh_items if gh_items_loaded else []))
     completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
     actions.extend(completed_marker_actions(repo_root, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
     actions.extend(release_rollup_actions(repo_root))

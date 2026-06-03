@@ -40,6 +40,7 @@ Write `${REVIEW_OUTPUT_PATH}`:
 ---
 pr: ${PR_NUMBER}
 role: architect
+head_sha: ${HEAD_SHA}
 verdict: approve | comment | reject
 ---
 

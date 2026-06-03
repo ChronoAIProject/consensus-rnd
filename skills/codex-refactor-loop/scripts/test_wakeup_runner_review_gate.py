@@ -212,6 +212,26 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:architect")
         self.assertEqual(self.actions.merged, [])
 
+    def test_missing_artifact_head_recovers_from_controller_rendered_prompt(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr12-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:12:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr12-{role}-r1.log").write_text(
+                f"REVIEW_DONE:12:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+
     def test_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
         for status, conclusion, reason in (
             ("queued", "", "ci_pending"),

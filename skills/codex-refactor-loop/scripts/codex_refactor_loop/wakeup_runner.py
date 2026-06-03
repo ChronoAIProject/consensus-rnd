@@ -851,7 +851,8 @@ class WakeupRunner:
         )
         if marker_count > 1:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"duplicate_review_marker:{role}")
-        return ReviewEvidence(role, round_number, verdict, _extract_review_head_sha(text), str(path))
+        prompt_path = self.ctx.paths.prompts / path.name
+        return ReviewEvidence(role, round_number, verdict, self._review_head_sha_for(prompt_path, companion_log, text), str(path))
 
     def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -873,7 +874,22 @@ class WakeupRunner:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
         if len(verdicts) != 1:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
-        return ReviewEvidence(role, round_number, verdicts[0], _extract_review_head_sha(text), str(path))
+        prompt_path = self.ctx.paths.prompts / path.with_suffix(".md").name
+        return ReviewEvidence(role, round_number, verdicts[0], self._review_head_sha_for(prompt_path, path, text), str(path))
+
+    def _review_head_sha_for(self, prompt_path: Path, log_path: Path, evidence_text: str) -> str:
+        head_sha = _extract_review_head_sha(evidence_text)
+        if head_sha:
+            return head_sha
+        for path in (prompt_path, log_path):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            head_sha = _extract_review_head_sha(text)
+            if head_sha:
+                return head_sha
+        return ""
 
     def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
         if not self.ctx.gh_repo_slug:

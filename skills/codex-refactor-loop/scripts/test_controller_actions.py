@@ -945,10 +945,10 @@ class ControllerActionsTests(unittest.TestCase):
         render_envs: list[dict[str, str]] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
-            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName"]:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
                 return mock.Mock(
                     returncode=0,
-                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue413"}),
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue413", "headRefOid": "a" * 40}),
                     stderr="",
                 )
             raise AssertionError(f"unexpected gh call: {args}")
@@ -966,6 +966,7 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual([".refactor-loop/runs/review-pr77-architect-r1.md", ".refactor-loop/runs/review-pr77-tests-r1.md", ".refactor-loop/runs/review-pr77-quality-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
         self.assertTrue(all(env["BASE_BRANCH"] == "dev" and env["HEAD_BRANCH"] == "refactor/issue413" for env in render_envs))
+        self.assertTrue(all(env["HEAD_SHA"] == "a" * 40 for env in render_envs))
         pending = self.pending_events()
         for role in ("architect", "tests", "quality"):
             self.assertIn(f'"intent_id": "dispatch-reviewers:77:{role}:r1"', pending)
@@ -973,16 +974,30 @@ class ControllerActionsTests(unittest.TestCase):
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
 
-        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
-            with mock.patch.object(
-                self.actions,
-                "gh",
-                return_value=mock.Mock(returncode=0, stdout=json.dumps({"title": "PR", "baseRefName": "dev", "headRefName": ""}), stderr=""),
-            ):
-                with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
-                    self.assertEqual(2, self.actions.dispatch_reviewers({"target_kind": "PR", "target_number": 77}))
+        for facts in (
+            {"title": "PR", "baseRefName": "dev", "headRefName": "", "headRefOid": "a" * 40},
+            {"title": "PR", "baseRefName": "dev", "headRefName": "refactor/issue413", "headRefOid": ""},
+        ):
+            with self.subTest(facts=facts):
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(
+                        self.actions,
+                        "gh",
+                        return_value=mock.Mock(returncode=0, stdout=json.dumps(facts), stderr=""),
+                    ):
+                        with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                            self.assertEqual(2, self.actions.dispatch_reviewers({"target_kind": "PR", "target_number": 77}))
 
-        self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+                self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
+
+    def test_dispatch_reviewers_source_requires_controller_head_oid_binding(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertIn('"title,baseRefName,headRefName,headRefOid"', source)
+        self.assertIn('"HEAD_SHA": head_sha', source)
+        for prompt_name in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):
+            with self.subTest(prompt=prompt_name):
+                prompt = (SCRIPT_DIR.parent / "prompts" / prompt_name).read_text(encoding="utf-8")
+                self.assertIn("head_sha: ${HEAD_SHA}", prompt)
 
     def test_open_release_rollup_pr_from_action_passes_event_json_body_and_title(self) -> None:
         event = {"integration_sha": "abc123", "integration_branch": "auto-refact-dev"}

@@ -332,6 +332,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    open_pr_480)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":480,"title":"wedged review PR","headRefName":"impl/pr480","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_pr_77)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":77,"title":"open PR target","headRefName":"impl/pr77","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
@@ -844,7 +851,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan = self.run_plan()
 
-                action = plan["actions"][0]
+                action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], expected_reason)
 
@@ -1529,6 +1536,69 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
+    def test_reviewing_pr_with_missing_reviewer_heads_projects_dispatch_reviewers(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.logs / f"review-pr480-{role}-r1.log").write_text(
+                f"REVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 480)
+        self.assertEqual(action["head_sha"], "a" * 40)
+        self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+
+    def test_reviewing_pr_with_stale_reviewer_head_projects_dispatch_reviewers(self) -> None:
+        stale = "b" * 40
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
+                f"---\nhead_sha: {stale if role == 'architect' else 'a' * 40}\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.logs / f"review-pr480-{role}-r1.log").write_text(
+                f"REVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
+        self.assertEqual(action["target_number"], 480)
+        self.assertEqual(action["stale_review_roles"], ["architect"])
+
+    def test_reviewing_pr_with_prompt_bound_valid_heads_does_not_redispatch_reviewers(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts" / f"review-pr480-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.logs / f"review-pr480-{role}-r1.log").write_text(
+                f"REVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
 
@@ -1968,6 +2038,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertIn(helper, source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_plan_source_locks_reviewer_head_redispatch_contract(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for token in (
+            "headRefName,headRefOid,body",
+            "def review_evidence_redispatch_actions(",
+            "latest_reviewer_heads(repo_root, item.number)",
+            "pending_review_spawn_exists(repo_root, item.number)",
+            '"controller_action": "dispatch_reviewers"',
+            '"missing_or_stale_reviewer_head_evidence"',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
