@@ -86,14 +86,23 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         action.update(overrides)
         return action
 
-    def run_action(self, action: dict | None = None, *, live_head: str = "a" * 40, check_status: str = "completed", check_conclusion: str = "success", mergeable: str = "MERGEABLE") -> object:
+    def run_action(
+        self,
+        action: dict | None = None,
+        *,
+        live_head: str = "a" * 40,
+        check_status: str = "completed",
+        check_conclusion: str = "success",
+        mergeable: str = "MERGEABLE",
+        is_draft: bool = False,
+    ) -> object:
         def command_runner(command):
             if command[:3] == ["gh", "pr", "view"] and ".state" in command:
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
             if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
                 return subprocess.CompletedProcess(command, 0, live_head + "\n", "")
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
-                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": False}), "")
+                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": is_draft}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": live_head}}), "")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
@@ -124,6 +133,17 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.write_review("quality", "comment")
 
         result = self.run_action()
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+        self.assertEqual(self.supervisor.calls, 0)
+
+    def test_managed_draft_with_green_review_gate_reaches_merge_decision(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+
+        result = self.run_action(is_draft=True)
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
@@ -310,6 +330,12 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertIn("def _latest_review_evidence_by_role(", source)
         self.assertIn("evidences = self._latest_review_evidence_by_role(pr_number)", source)
         self.assertIn("evidence.round_number > existing.round_number", source)
+
+    def test_review_gate_source_does_not_treat_draft_as_mergeability_blocker(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        method = source[source.index("    def _review_gate_mergeability_error") : source.index("    def _next_fix_round")]
+        self.assertIn('"mergeable,isDraft"', method)
+        self.assertNotIn("pr_draft", method)
 
 
 if __name__ == "__main__":

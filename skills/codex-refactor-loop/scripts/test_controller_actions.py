@@ -359,6 +359,8 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
                 return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args == ["pr", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
             if args[:3] == ["pr", "ready", "77"]:
                 return mock.Mock(returncode=0, stdout="Ready\n", stderr="")
             if args[:2] == ["pr", "merge"]:
@@ -385,7 +387,30 @@ class ControllerActionsTests(unittest.TestCase):
             self.assertEqual(0, self.actions.merge_pr("77"))
 
         self.assertIn(["pr", "ready", "77"], gh_calls)
+        self.assertLess(gh_calls.index(["pr", "view", "77", "--json", "labels,body"]), gh_calls.index(["pr", "ready", "77"]))
         self.assertLess(gh_calls.index(["pr", "ready", "77"]), gh_calls.index(["pr", "merge", "77", "--squash", "--delete-branch"]))
+
+    def test_merge_pr_non_managed_draft_fails_closed_before_ready_or_merge(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:5] == ["pr", "view", "77", "--json", "body"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
+                return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args == ["pr", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": "human-owned"}], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh side effect for non-managed draft: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "git", side_effect=AssertionError("git should not be called")):
+                self.assertEqual(2, self.actions.merge_pr("77"))
+
+        self.assertIn(["pr", "view", "77", "--json", "labels,body"], gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "ready"] for call in gh_calls), gh_calls)
+        self.assertFalse(any(call[:2] == ["pr", "merge"] for call in gh_calls), gh_calls)
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:target-not-managed:merge-pr:pr:77", self.pending_events())
 
     def test_merge_pr_ready_failure_fails_closed_before_merge_side_effects(self) -> None:
         gh_calls: list[list[str]] = []
@@ -396,6 +421,8 @@ class ControllerActionsTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args[:5] == ["pr", "view", "77", "--json", "isDraft"]:
                 return mock.Mock(returncode=0, stdout="true\n", stderr="")
+            if args == ["pr", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
             if args[:3] == ["pr", "ready", "77"]:
                 return mock.Mock(returncode=9, stdout="", stderr="ready failed")
             raise AssertionError(f"unexpected gh side effect after ready failure: {args}")
@@ -1976,6 +2003,8 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertIn('"pr", "create", "--draft"', text)
         self.assertIn('def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:', text)
         self.assertIn('"pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"', text)
+        self.assertIn('self._live_target_has_managed_label(kind="pr", target=pr_target)', text)
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:target-not-managed:merge-pr:pr:", text)
         self.assertIn('"pr", "ready", pr_target', text)
         self.assertIn("ready = self._ensure_pr_ready_for_merge(pr_target)", text)
         self.assertLess(text.index("ready = self._ensure_pr_ready_for_merge(pr_target)"), text.index('"pr", "merge", pr_target'))

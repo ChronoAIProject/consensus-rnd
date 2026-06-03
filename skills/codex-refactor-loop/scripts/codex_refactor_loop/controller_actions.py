@@ -243,6 +243,10 @@ class ControllerActions:
         if draft.returncode != 0:
             return draft.returncode
         if draft.stdout.strip() == "true":
+            if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+                self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:target-not-managed:merge-pr:pr:{pr_target}")
+                sys.stderr.write("merge_pr: live draft PR is not managed\n")
+                return 2
             ready = self.gh(["pr", "ready", pr_target], check=False)
             if ready.returncode != 0:
                 return ready.returncode

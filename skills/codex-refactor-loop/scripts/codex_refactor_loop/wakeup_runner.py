@@ -928,8 +928,6 @@ class WakeupRunner:
             return "mergeability_invalid_json"
         if not isinstance(payload, dict):
             return "mergeability_invalid_json"
-        if payload.get("isDraft") is True:
-            return "pr_draft"
         if payload.get("mergeable") != "MERGEABLE":
             return "non_mergeable_pr"
         return None
