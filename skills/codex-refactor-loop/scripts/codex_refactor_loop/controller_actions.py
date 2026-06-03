@@ -23,6 +23,7 @@ from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
+from .git import Git
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
@@ -235,6 +236,9 @@ class ControllerActions:
             result = self.git(["worktree", "add", "-b", branch, str(wt_path), base])
         sys.stderr.write("\n".join(result.stderr.splitlines()[-2:]) + "\n")
         return wt_path, branch
+
+    def fresh_safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
+        return Git(self.ctx.repo_root).fresh_safe_worktree(iteration, cluster, base)
 
     def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:
         draft = self.gh(["pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"], check=False)
@@ -621,6 +625,14 @@ class ControllerActions:
         if not self._live_target_has_managed_label(kind="issue", target=issue_target):
             sys.stderr.write("publish_implementation_output: linked issue is not managed\n")
             return 2
+        identity_error = self._validate_publish_implementation_identity(action, issue_target, head_ref, worktree)
+        if identity_error:
+            sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
+            return 2
+        base_error = self._validate_publish_implementation_base(worktree)
+        if base_error:
+            sys.stderr.write(f"publish_implementation_output: {base_error}\n")
+            return 2
         if self._open_pr_exists_for_head(head_ref):
             sys.stderr.write("publish_implementation_output: duplicate open PR for head_ref\n")
             return 2
@@ -634,7 +646,7 @@ class ControllerActions:
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
+        commit = self._git_in(worktree, ["commit", "-m", f"Implement issue #{issue_target}"], check=False)
         if commit.returncode != 0:
             if commit.stderr:
                 sys.stderr.write(commit.stderr)
@@ -643,9 +655,38 @@ class ControllerActions:
         if pushed != 0:
             return pushed
         body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"实现 issue #{issue_target}")
+        title = str(action.get("title") or f"Implement issue #{issue_target}")
         pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
+
+    def _validate_publish_implementation_identity(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+    ) -> str | None:
+        marker = str(action.get("source_marker") or "")
+        marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+        candidate = marker_id.replace("_", "-").strip("-") or f"issue-{issue_target}"
+        expected_head = f"refactor/iter{issue_target}-{candidate}"
+        expected_worktree = (self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{candidate}").resolve()
+        if head_ref != expected_head or worktree.resolve() != expected_worktree:
+            return "noncanonical identity"
+        branch = self._git_in(worktree, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        if branch.returncode != 0 or branch.stdout.strip() != head_ref:
+            return "noncanonical branch"
+        return None
+
+    def _validate_publish_implementation_base(self, worktree: Path) -> str | None:
+        integration, _review_base = self._require_branch_config()
+        merge_base = self._git_in(worktree, ["merge-base", "HEAD", f"origin/{integration}"], check=False)
+        current = self._git_in(worktree, ["rev-parse", "--verify", f"origin/{integration}"], check=False)
+        if merge_base.returncode != 0 or current.returncode != 0:
+            return "base unavailable"
+        if merge_base.stdout.strip() != current.stdout.strip():
+            return "stale base"
+        return None
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -683,7 +724,7 @@ class ControllerActions:
             return 2
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
-        worktree, branch = self.safe_worktree(iteration, cluster_id, self.integration_branch)
+        worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -929,7 +970,7 @@ class ControllerActions:
         path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"## 🤖 实现 issue #{issue_target}\n\n"
+            f"## Implementation for issue #{issue_target}\n\n"
             f"Closes #{issue_target}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",

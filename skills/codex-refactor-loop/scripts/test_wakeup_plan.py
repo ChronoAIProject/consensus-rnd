@@ -487,6 +487,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20" ]] && printf '2\n' && exit 0
                   exit 1
                 fi
+                if [[ "$*" == *"diff --quiet"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && exit 1
+                  exit 0
+                fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/integration"* ]]; then
                   [[ "$fixture" == "release_rollup_refs_fail" ]] && exit 42
                   if [[ "$fixture" == "release_rollup_moved" ]]; then
@@ -1156,7 +1160,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only"))
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
 
-    def test_stale_publish_implementation_marker_is_status_only_without_verified_head(self) -> None:
+    def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
 
         plan = self.run_plan(fixture="open_issue_20")
@@ -1169,6 +1173,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("no_generic_command", action)
 
     def test_publish_implementation_marker_with_verified_local_head_remains_executable(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         (self.logs / "implement-issue20.log").write_text(
             "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
             encoding="utf-8",
@@ -1182,6 +1187,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(action["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertIn("canonical_implementation_identity", action["preconditions"])
+        self.assertIn("fresh_integration_base", action["preconditions"])
+        self.assertNotIn("verified_pr_head", action["preconditions"])
 
     def test_completed_marker_without_target_is_status_only_when_open_managed_read_model_is_loaded(self) -> None:
         self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
@@ -1813,29 +1821,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("open_closing_pr", action["suppressed_reason"])
         self.assertFalse(action["consensus_implementation_ready"])
 
-    def test_consensus_implementation_readiness_suppresses_remote_or_local_iter_branch(self) -> None:
-        for fixture, reason in (
-            ("local_iter_branch_issue20", "local_iter_branch"),
-            ("remote_iter_branch_issue20", "remote_iter_branch"),
-        ):
-            with self.subTest(fixture=fixture):
-                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
-                self.write_consensus_artifact()
-                self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+    def test_consensus_implementation_readiness_suppresses_remote_iter_branch_only(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
 
-                plan = self.run_plan(fixture=fixture)
+        plan = self.run_plan(fixture="remote_iter_branch_issue20")
 
-                action = next(
-                    item for item in plan["actions"]
-                    if item.get("controller_action") == "dispatch_consensus_implementation"
-                )
-                self.assertTrue(action["status_only"])
-                self.assertEqual(reason, action["suppressed_reason"])
+        action = next(
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertTrue(action["status_only"])
+        self.assertEqual("remote_iter_branch", action["suppressed_reason"])
+
+    def test_consensus_implementation_readiness_redispatches_markerless_local_attempt(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        (self.logs / "implement-issue-20.log").write_text("old output\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_issue_20")
+
+        action = next(
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertNotIn("status_only", action)
+        self.assertTrue(action["consensus_implementation_ready"])
 
     def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
         cases = (
-            ("worktree", "local_worktree"),
-            ("log", "existing_implement_log"),
             ("pending", "pending_implement_intent"),
             ("in-flight", "in_flight_implement"),
         )

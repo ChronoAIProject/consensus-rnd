@@ -531,7 +531,8 @@ class WakeupRunner:
             return "publish_implementation_missing_preconditions"
         for required in (
             "clean_exit_source_marker",
-            "verified_pr_head",
+            "canonical_implementation_identity",
+            "fresh_integration_base",
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
@@ -595,11 +596,45 @@ class WakeupRunner:
             worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
         except ValueError:
             return "publish_implementation_worktree_outside_controller_owned_root"
+        identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
+        if identity_error:
+            return identity_error
+        base_error = self._validate_fresh_implementation_base(worktree)
+        if base_error:
+            return base_error
         diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
             return "publish_implementation_diff_unavailable"
+        return None
+
+    def _validate_canonical_implementation_identity(self, action: Mapping[str, Any], worktree: Path, head_ref: str) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        marker = str(action.get("source_marker") or "")
+        marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+        candidate = marker_id.replace("_", "-").strip("-") or f"issue-{target}"
+        expected_head = f"refactor/iter{target}-{candidate}"
+        expected_worktree = (self.ctx.repo_root / ".worktrees" / f"iter{target}-{candidate}").resolve()
+        if head_ref != expected_head or worktree.resolve() != expected_worktree:
+            return "publish_implementation_noncanonical_identity"
+        branch = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
+        if branch.returncode != 0 or branch.stdout.strip() != head_ref:
+            return "publish_implementation_noncanonical_identity"
+        return None
+
+    def _validate_fresh_implementation_base(self, worktree: Path) -> str | None:
+        integration = str(self.ctx.env_for_subprocess().get("INTEGRATION_BRANCH") or "").strip()
+        if not integration:
+            return "publish_implementation_integration_branch_missing"
+        merge_base = self.command_runner(["git", "-C", str(worktree), "merge-base", "HEAD", f"origin/{integration}"])
+        current = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--verify", f"origin/{integration}"])
+        if merge_base.returncode != 0 or current.returncode != 0:
+            return "publish_implementation_base_unavailable"
+        if merge_base.stdout.strip() != current.stdout.strip():
+            return "publish_implementation_stale_base"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:

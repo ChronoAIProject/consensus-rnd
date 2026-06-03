@@ -83,7 +83,7 @@ class GhInvokeCallSiteCharacterizationTests(unittest.TestCase):
             'export REVIEW_BASE_BRANCH="canonical-review"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.tmp)
+        self.ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"}, cwd=self.tmp)
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

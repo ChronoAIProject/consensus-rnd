@@ -288,6 +288,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, gh_state + "\n", "")
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "pr77")]:
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
+            if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
+                if command[3:] == ["diff", "--quiet"]:
+                    return subprocess.CompletedProcess(command, git_diff_code, "", "")
+                if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
+                if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
+                    return subprocess.CompletedProcess(command, 0, "base-sha\n", "")
+                if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
+                    return subprocess.CompletedProcess(command, 0, "base-sha\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -433,7 +442,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         return action
 
     def implementation_output_action(self, **overrides) -> dict:
-        worktree = self.repo / ".worktrees" / "pr77"
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True, exist_ok=True)
         marker = "IMPLEMENT_DONE:issue-77:ok"
         log = self.repo / ".refactor-loop/logs/implement-issue77.log"
@@ -445,7 +454,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "preconditions": [
                 "active_controller_owner",
                 "clean_exit_source_marker",
-                "verified_pr_head",
+                "canonical_implementation_identity",
+                "fresh_integration_base",
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
@@ -458,7 +468,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "target": {"kind": "issue", "number": 77},
             "controller_action": "publish_implementation_output",
             "no_generic_command": True,
-            "head_ref": "refactor/iter77-worker",
+            "head_ref": "refactor/iter77-issue-77",
             "worktree": str(worktree),
         }
         action.update(overrides)
@@ -762,7 +772,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 (
                     "publish-implementation:missing-verified-head-before-spawn",
                     "blocked",
-                    "publish_implementation_missing_precondition:verified_pr_head",
+                    "publish_implementation_missing_precondition:canonical_implementation_identity",
                 ),
                 ("spawn:after-blocked-lifecycle", "applied", ""),
             ],
@@ -771,7 +781,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         launch.assert_called_once()
         self.assert_blocked_event(
             "publish-implementation:missing-verified-head-before-spawn",
-            "publish_implementation_missing_precondition:verified_pr_head",
+            "publish_implementation_missing_precondition:canonical_implementation_identity",
         )
 
     def test_wakeup_runner_design_consensus_no_intents_does_not_dead_stop_later_spawn_batch(self) -> None:
@@ -863,7 +873,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 (
                     "publish-implementation:missing-verified-head-before-spawns",
                     "blocked",
-                    "publish_implementation_missing_precondition:verified_pr_head",
+                    "publish_implementation_missing_precondition:canonical_implementation_identity",
                 ),
                 (
                     "close-managed-item:53:closed-before-spawns",
@@ -879,7 +889,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 3)
         self.assert_blocked_event(
             "publish-implementation:missing-verified-head-before-spawns",
-            "publish_implementation_missing_precondition:verified_pr_head",
+            "publish_implementation_missing_precondition:canonical_implementation_identity",
         )
         self.assert_blocked_event(
             "close-managed-item:53:closed-before-spawns",
@@ -891,7 +901,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             RunnerResult(
                 "publish-implementation:missing-verified-head-before-spawn",
                 "blocked",
-                "publish_implementation_missing_precondition:verified_pr_head",
+                "publish_implementation_missing_precondition:canonical_implementation_identity",
             ),
             RunnerResult("harness-spawn-intent:phase9-router:493:1:minimal", "applied", ""),
             RunnerResult("harness-spawn-intent:phase9-router:493:1:structural", "applied", ""),
@@ -1377,7 +1387,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     preconditions=[
                         "active_controller_owner",
                         "clean_exit_source_marker",
-                        "verified_pr_head",
+                        "canonical_implementation_identity",
+                        "fresh_integration_base",
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "no_duplicate_open_pr",
@@ -1533,17 +1544,52 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
-    def test_dispatch_consensus_implementation_blocks_existing_implement_log_before_helper(self) -> None:
+    def test_dispatch_consensus_implementation_redispatches_markerless_implement_log(self) -> None:
         actions = FakeActions()
         action = self.consensus_action(action_id="consensus:existing-log")
         (self.repo / ".refactor-loop/logs/implement-issue-20.log").write_text("", encoding="utf-8")
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
+
+    def test_publish_implementation_output_blocks_stale_base_before_helper(self) -> None:
+        actions = FakeActions()
+
+        def command_runner(command):
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if "/issues/" in endpoint:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open"}), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            if command[:3] == ["gh", "issue", "view"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), "")
+            if command[:4] == ["gh", "pr", "list", "--state"]:
+                return subprocess.CompletedProcess(command, 0, "[]", "")
+            if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
+                if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
+                if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
+                    return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+                if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
+                    return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.base_plan(self.implementation_output_action()),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        results = runner.run_once()
+
         self.assert_blocked_before_dispatch(
             results,
-            "consensus:existing-log",
-            "consensus_implementation_not_ready:existing_implement_log",
+            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
+            "publish_implementation_stale_base",
             actions,
         )
 

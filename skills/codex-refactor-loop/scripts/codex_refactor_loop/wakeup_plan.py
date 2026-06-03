@@ -1749,18 +1749,16 @@ def consensus_implementation_suppressed_reason(
     branch = _canonical_consensus_implementation_branch(action)
     if not branch:
         return "invalid_iter_branch"
-    if _local_iter_branch_exists(repo_root, branch):
-        return "local_iter_branch"
-    if _remote_iter_branch_exists(repo_root, branch):
-        return "remote_iter_branch"
-    if _canonical_consensus_worktree_exists(repo_root, action):
-        return "local_worktree"
-    if _implement_log_exists(repo_root, action):
-        return "existing_implement_log"
     if _pending_implement_intent_exists(repo_root, target_number, action):
         return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"
+    if _publish_ready_implementation_exists(repo_root, action):
+        return "implementation_ready_to_publish"
+    if gh_items is not None and _open_pr_exists_for_branch(gh_items, branch):
+        return "open_closing_pr"
+    if _remote_iter_branch_exists(repo_root, branch) and not _local_iter_branch_exists(repo_root, branch):
+        return "remote_iter_branch"
     return None
 
 
@@ -1810,6 +1808,44 @@ def _implement_log_exists(repo_root: Path, action: dict[str, Any]) -> bool:
     if not cluster_id:
         return False
     return (repo_root / ".refactor-loop" / "logs" / f"implement-{cluster_id}.log").exists()
+
+
+def _publish_ready_implementation_exists(repo_root: Path, action: dict[str, Any]) -> bool:
+    log_path = _canonical_implement_log_path(repo_root, action)
+    marker = marker_from_completed_log(log_path)
+    if not marker or not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
+        return False
+    branch = _canonical_consensus_implementation_branch(action)
+    if not branch:
+        return False
+    if not _local_iter_branch_exists(repo_root, branch):
+        return False
+    worktree = _canonical_consensus_worktree_path(repo_root, action)
+    return worktree.is_dir()
+
+
+def _canonical_implement_log_path(repo_root: Path, action: dict[str, Any]) -> Path:
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    return repo_root / ".refactor-loop" / "logs" / f"implement-{cluster_id}.log"
+
+
+def _canonical_consensus_worktree_path(repo_root: Path, action: dict[str, Any]) -> Path:
+    iteration = str(action.get("iteration") or "").strip()
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    return repo_root / ".worktrees" / f"iter{iteration}-{cluster_id}"
+
+
+def _open_pr_exists_for_branch(items: list[GhItem], head_ref: str) -> bool:
+    if not head_ref:
+        return False
+    for item in items:
+        if item.kind != "PR":
+            continue
+        if label_catalog.MANAGED not in label_catalog.normalize_label_set(item.labels).canonical:
+            continue
+        if item.head_ref == head_ref:
+            return True
+    return False
 
 
 def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any]) -> bool:
@@ -2159,20 +2195,30 @@ def _stale_publish_implementation_reason(
     worktree = worktrees.get(head_ref)
     if worktree is None:
         return "verified_pr_head_unavailable"
-    remote_ref = f"refs/remotes/origin/{head_ref}"
-    remote = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref], cwd=repo_root)
-    count = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"], cwd=repo_root)
-    if remote.returncode != 0 or count.returncode != 0:
-        return "verified_pr_head_unavailable"
-    try:
-        ahead_count = int(count.stdout.strip())
-    except ValueError:
-        return "verified_pr_head_unavailable"
-    if ahead_count <= 0:
+    if not _worktree_has_non_empty_diff(worktree):
         return "verified_pr_head_unavailable"
     action["head_ref"] = head_ref
     action["worktree"] = str(worktree)
+    preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
+    for required in (
+        "canonical_implementation_identity",
+        "fresh_integration_base",
+        "single_linked_managed_issue",
+        "no_duplicate_open_pr",
+        "host_checks_green",
+        "clean_scoped_diff",
+    ):
+        if required not in preconditions:
+            preconditions.append(required)
+    if "verified_pr_head" in preconditions:
+        preconditions.remove("verified_pr_head")
+    action["preconditions"] = preconditions
     return None
+
+
+def _worktree_has_non_empty_diff(worktree: Path) -> bool:
+    diff = git_text(["git", "-C", str(worktree), "diff", "--quiet"], cwd=worktree)
+    return diff.returncode == 1
 
 
 def _implementation_head_ref(action: dict[str, Any], target: tuple[str, int] | None) -> str | None:

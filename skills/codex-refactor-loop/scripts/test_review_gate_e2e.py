@@ -60,7 +60,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             'export REVIEW_BASE_BRANCH="canonical-review"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"}, cwd=self.repo)
         self.actions = FakeActions(self.repo)
 
     def tearDown(self) -> None:
