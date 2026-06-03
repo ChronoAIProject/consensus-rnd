@@ -176,10 +176,11 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                 self.assertIn(behavior, self.rows[key]["Missing/empty behavior"])
 
         locator = self.rows["CONSENSUS_RND_HOST_ENV"]
-        self.assertEqual("compatibility", locator["Category"])
+        self.assertEqual("required", locator["Category"])
         self.assertEqual("HostEnvLocator", locator["Owner"])
         self.assertEqual("LoopContext locator", locator["Consumer"])
-        self.assertIn("optional locator only", locator["Missing/empty behavior"])
+        self.assertIn("required for host fact loading", locator["Missing/empty behavior"])
+        self.assertIn("no `.refactor-loop/host.env` fallback is read", locator["Missing/empty behavior"])
         self.assertIn("not host production config schema", locator["Missing/empty behavior"])
         self.assertIn("test_loop_context.py", locator["Test owner"])
         self.assertNotIn("CONSENSUS_RND_HOST_ENV", self.exports)

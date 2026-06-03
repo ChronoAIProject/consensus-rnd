@@ -29,7 +29,8 @@ class PackageTriageDecisionTests(unittest.TestCase):
         self.repo = Path(self.tmp.name).resolve()
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True)
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
@@ -43,7 +44,7 @@ class PackageTriageDecisionTests(unittest.TestCase):
             debug_paths=[".refactor-loop/runs/authority.md"],
         )
         self.decision_path = runs / "triage-issue-53.json"
-        self.config = TriageApplyConfig(LoopContext.load(repo_root=self.repo))
+        self.config = TriageApplyConfig(LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}))
         self.write_decision()
 
     def tearDown(self) -> None:

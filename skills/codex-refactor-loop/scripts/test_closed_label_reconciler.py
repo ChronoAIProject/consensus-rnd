@@ -200,11 +200,12 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         self.repo = self.tmp_root / "repo"
         self.repo.mkdir()
         (self.repo / ".refactor-loop").mkdir()
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.repo, skill_root=SCRIPT_DIR.parent)
+        self.ctx = LoopContext.load(repo_root=self.repo, skill_root=SCRIPT_DIR.parent, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_root, ignore_errors=True)
@@ -221,7 +222,8 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         self.assertEqual("noop:not-owner", status["active_controller"])
 
     def test_owner_without_repo_slug_noops_before_gh_calls(self) -> None:
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\n',
             encoding="utf-8",
         )

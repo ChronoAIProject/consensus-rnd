@@ -47,8 +47,9 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         for rel in (".refactor-loop/state", ".refactor-loop/logs", ".refactor-loop/prompts", ".refactor-loop/runs"):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
-        (self.repo / ".refactor-loop/host.env").write_text(f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config/consensus-rnd/host.env").write_text(f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
+        self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         (self.repo / ".refactor-loop/prompts/fix.md").write_text("fix\n", encoding="utf-8")
         self.actions = FakeActions()
         self.supervisor = FakeSupervisor()

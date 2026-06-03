@@ -26,11 +26,12 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="comment-progress-active-"))
         (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True)
         (self.tmp / ".refactor-loop" / "prompts").mkdir(parents=True)
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.tmp)
+        self.ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)

@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
@@ -70,7 +71,8 @@ def set_mapped_version(repo: Path, version: str) -> None:
 
 def write_host_opt_in(repo: Path, enabled: bool = True) -> None:
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
-    (repo / ".refactor-loop/host.env").write_text(
+    (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+    (repo / ".config/consensus-rnd/host.env").write_text(
         f"export RELEASE_AUTO_ENABLE={'true' if enabled else 'false'}\n"
         'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
@@ -82,7 +84,17 @@ def write_host_auto_release_without_required_checks(repo: Path, *, value: str | 
     lines = ["export RELEASE_AUTO_ENABLE=true"]
     if value is not None:
         lines.append(f"export HOST_GITHUB_RELEASE_REQUIRED_CHECKS={value}")
-    (repo / ".refactor-loop/host.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+    (repo / ".config/consensus-rnd/host.env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_host_env_without_release_opt_in(repo: Path) -> None:
+    path = repo / ".config/consensus-rnd/host.env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
+        encoding="utf-8",
+    )
 
 
 def write_explicit_host_opt_in(repo: Path, enabled: bool = True) -> Path:
@@ -94,6 +106,10 @@ def write_explicit_host_opt_in(repo: Path, enabled: bool = True) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def explicit_host_env():
+    return mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, clear=False)
 
 
 def green_required_signals() -> dict[str, object]:
@@ -175,8 +191,14 @@ class ReleasePublishPreflightTests(unittest.TestCase):
     #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
     #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
 
+    def setUp(self) -> None:
+        self.host_env_patch = explicit_host_env()
+        self.host_env_patch.start()
+
+    def tearDown(self) -> None:
+        self.host_env_patch.stop()
+
     def assert_preflight_denies_with_reason(self, repo: Path, expected_reason: str) -> None:
-        # refactor helper, no behavior change
         result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
         self.assertFalse(result.allowed)
         self.assertIn(expected_reason, result.reasons)
@@ -204,6 +226,8 @@ class ReleasePublishPreflightTests(unittest.TestCase):
                 repo = Path(tmp) / "repo"
                 if enabled is not None:
                     write_host_opt_in(repo, enabled=enabled)
+                else:
+                    write_host_env_without_release_opt_in(repo)
                 write_ready_artifacts(repo)
 
                 result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")

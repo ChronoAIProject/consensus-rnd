@@ -46,7 +46,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.fakebin = self.repo / "fakebin"
         self.logs.mkdir(parents=True)
         self.fakebin.mkdir()
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
             encoding="utf-8",
         )
@@ -570,6 +571,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}",
                 "CODEX_FLOOR": "5",
                 "GH_REPO_SLUG": "owner/repo",
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "WAKEUP_PLAN_GH_FIXTURE": fixture,
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_ACTIVE_AUDIT": "1" if active_audit else "0",
@@ -608,6 +610,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "PATH": f"{self.fakebin}{os.pathsep}{env.get('PATH', '')}",
                 "CODEX_FLOOR": "5",
                 "GH_REPO_SLUG": "owner/repo",
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "WAKEUP_PLAN_GH_FIXTURE": fixture,
                 "WAKEUP_PLAN_PS_COUNT": str(ps_count),
                 "WAKEUP_PLAN_ACTIVE_AUDIT": "1" if active_audit else "0",
@@ -1461,9 +1464,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("LoopContext.load(repo_root=arg_root", wakeup_source)
 
     def test_wakeup_plan_bootstrap_uses_explicit_host_env_locator_not_legacy_path(self) -> None:
-        (self.repo / ".refactor-loop" / "host.env").unlink()
+        (self.repo / ".refactor-loop" / "host.env").unlink(missing_ok=True)
         host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
-        host_env.parent.mkdir(parents=True)
+        host_env.parent.mkdir(parents=True, exist_ok=True)
         host_env.write_text(
             f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
             encoding="utf-8",
@@ -2974,7 +2977,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nHOST_WORKFLOW_SPEC=workflow.json\n",
             encoding="utf-8",
         )
@@ -2992,7 +2996,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def test_invalid_host_workflow_spec_is_noop_error_reason(self) -> None:
         (self.repo / "workflow.json").write_text(json.dumps({"events": [{"name": "host:x", "stage": "missing"}]}), encoding="utf-8")
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nHOST_WORKFLOW_SPEC=workflow.json\n",
             encoding="utf-8",
         )

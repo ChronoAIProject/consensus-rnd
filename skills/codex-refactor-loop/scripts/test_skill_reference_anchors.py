@@ -304,7 +304,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "git show <ref>:<path>",
             "raw URL",
             "gh api",
-            ".refactor-loop/host.env",
+            "explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`",
             "must not directly emit a generic `no-plan`",
             "source-location-missing-or-invalid",
         ):
@@ -438,10 +438,10 @@ class SkillReferenceAnchorTests(unittest.TestCase):
 
         required = (
             "host.env.example",
-            ".refactor-loop/host.env",
+            "CONSENSUS_RND_HOST_ENV",
             "consensus-rnd-cli restart-daemons",
             "consensus-rnd-cli statusline",
-            "source .refactor-loop/host.env && exec",
+            'source "$CONSENSUS_RND_HOST_ENV"',
             ".git",
             "CI",
             "policy",

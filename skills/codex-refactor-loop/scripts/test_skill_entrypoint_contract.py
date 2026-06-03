@@ -141,7 +141,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         self.assertTrue(phase0)
         obligations = (
-            'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"',
+            'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"',
             "fail closed",
             "ProjectRulesFixedPointProbe",
             "consensus-rnd-cli check-project-rules",
@@ -636,7 +636,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "$CONSENSUS_RND_HOST_ENV",
             "locates the host-owned `host.env` loop runtime injection file",
             "not host production configuration schema",
-            "legacy `.refactor-loop/host.env`",
+            "no `.refactor-loop/host.env` fallback is read",
             "`.refactor-loop/` is the skill-private runtime home",
             "Host production facts, branch topology, durable ledger authority, and host-owned config SSOT must live in host-owned config/rules/artifacts, not in `.refactor-loop/`.",
         ):

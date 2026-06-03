@@ -28,7 +28,9 @@ class LogRetentionBehaviorTests(unittest.TestCase):
         self.repo = self.tmp_root / "repo"
         self.logs = self.repo / ".refactor-loop" / "logs"
         self.logs.mkdir(parents=True)
-        (self.repo / ".refactor-loop" / "host.env").write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True)
+        host_env.write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_root, ignore_errors=True)
@@ -44,6 +46,10 @@ class LogRetentionBehaviorTests(unittest.TestCase):
     def run_cli(self, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         run_env = os.environ.copy()
         run_env.pop("REPO_ROOT", None)
+        if cwd is None or cwd.resolve() == self.repo.resolve():
+            run_env["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
+        else:
+            run_env.pop("CONSENSUS_RND_HOST_ENV", None)
         if env:
             run_env.update(env)
         return subprocess.run(
