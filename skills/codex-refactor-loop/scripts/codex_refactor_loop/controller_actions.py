@@ -24,6 +24,7 @@ from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
+from .wakeup_plan import consensus_implementation_suppressed_reason
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
@@ -672,6 +673,10 @@ class ControllerActions:
                 return 2
         if str(action.get("design_decision_path")) != str(action.get("consensus_artifact")):
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
+            return 2
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        if readiness_reason:
+            sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])

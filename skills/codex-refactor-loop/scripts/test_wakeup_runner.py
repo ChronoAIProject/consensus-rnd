@@ -458,7 +458,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "kind": "completed-marker",
             "action_id": "completed-marker:phase9-issue20-r5-judge.log:META_JUDGE_DONE:consensus:structural",
             "runner_authority": "wakeup-runner-396",
-            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present", "durable_consensus_artifact"],
+            "preconditions": [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "live_open_target_if_present",
+                "durable_consensus_artifact",
+                "consensus_implementation_ready",
+            ],
             "source_artifact": ".refactor-loop/logs/phase9-issue20-r5-judge.log",
             "source_marker": marker,
             "target_kind": "issue",
@@ -1072,6 +1078,20 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 actions = FakeActions()
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_dispatch_consensus_implementation_blocks_existing_implement_log_before_helper(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(action_id="consensus:existing-log")
+        (self.repo / ".refactor-loop/logs/implement-issue-20.log").write_text("", encoding="utf-8")
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "consensus:existing-log",
+            "consensus_implementation_not_ready:existing_implement_log",
+            actions,
+        )
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
