@@ -31,6 +31,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     has_dispatchable_action,
     marker_from_completed_log,
     release_countdown_actions,
+    release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
 )
@@ -431,6 +432,33 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   fi
                   exit 0
                 fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/integration"* ]]; then
+                  [[ "$fixture" == "release_rollup_refs_fail" ]] && exit 42
+                  if [[ "$fixture" == "release_rollup_moved" ]]; then
+                    printf 'current-integration-sha\n'
+                  elif [[ "$fixture" == release_rollup* ]]; then
+                    printf 'integration-sha\n'
+                  fi
+                  exit 0
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/review"* ]]; then
+                  [[ "$fixture" == "release_rollup_refs_fail" ]] && exit 42
+                  if [[ "$fixture" == "release_rollup_same_sha" ]]; then
+                    printf 'integration-sha\n'
+                  elif [[ "$fixture" == release_rollup* ]]; then
+                    printf 'review-sha\n'
+                  fi
+                  exit 0
+                fi
+                if [[ "$*" == *"rev-list --count refs/remotes/origin/review..refs/remotes/origin/integration"* ]]; then
+                  [[ "$fixture" == "release_rollup_refs_fail" ]] && exit 42
+                  if [[ "$fixture" == "release_rollup_no_ahead" ]]; then
+                    printf '0\n'
+                  elif [[ "$fixture" == release_rollup* ]]; then
+                    printf '2\n'
+                  fi
+                  exit 0
+                fi
                 exit 0
                 """
             ).lstrip(),
@@ -670,6 +698,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
         with pending.open("a", encoding="utf-8") as handle:
             handle.write(f"2026-05-31T00:00:00Z HARNESS_SPAWN_INTENT {payload}\n")
+
+    def append_release_rollup_event(self, **overrides: object) -> dict[str, object]:
+        event: dict[str, object] = {
+            "integration_branch": "integration",
+            "review_base_branch": "review",
+            "integration_sha": "integration-sha",
+            "review_base_sha": "review-sha",
+            "ahead_count": 2,
+            "reason": "integration-ahead-review-base-without-open-rollup-pr",
+        }
+        event.update(overrides)
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write("DEV_SYNC_PENDING:release-rollup-needed:" + json.dumps(event, sort_keys=True) + "\n")
+        return event
 
     def assert_harness_spawn_intent_invalid(self, expected_reason: str, **overrides: object) -> None:
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -1424,6 +1467,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("wakeup_plan.py", consensus_action["scope_paths"])
         self.assertIn("wakeup_runner.py", consensus_action["scope_paths"])
         self.assertIn("durable_consensus_artifact", consensus_action["preconditions"])
+
+    def test_release_rollup_projection_keeps_latest_event_per_integration_sha(self) -> None:
+        self.append_release_rollup_event(reason="old", ahead_count=1)
+        self.append_release_rollup_event(reason="latest", ahead_count=2)
+
+        actions = release_rollup_actions(self.repo)
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["event"]["reason"], "latest")
+        self.assertEqual(actions[0]["event"]["ahead_count"], 2)
+
+    def test_release_rollup_projection_requires_current_remote_integration_sha_and_ahead(self) -> None:
+        stale_cases = (
+            "release_rollup_no_ahead",
+            "release_rollup_moved",
+            "release_rollup_same_sha",
+        )
+        for fixture in stale_cases:
+            with self.subTest(fixture=fixture):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.append_release_rollup_event()
+
+                plan = self.run_plan(fixture=fixture)
+
+                self.assertFalse([action for action in plan["actions"] if action["kind"] == "release-rollup-needed"])
+
+    def test_release_rollup_projection_fails_open_when_local_ref_probe_fails(self) -> None:
+        self.append_release_rollup_event()
+
+        plan = self.run_plan(fixture="release_rollup_refs_fail")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual(actions[0]["event"]["integration_sha"], "integration-sha")
 
     def test_consensus_marker_after_exit_zero_with_harness_done_at_projects_implementation(self) -> None:
         artifact = self.write_consensus_artifact(issue=449, round_no=2)

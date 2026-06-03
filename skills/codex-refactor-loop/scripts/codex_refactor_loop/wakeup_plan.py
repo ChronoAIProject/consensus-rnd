@@ -1327,15 +1327,12 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
     except OSError:
         return []
     actions: list[dict[str, Any]] = []
-    seen: set[str] = set()
+    latest_by_integration_sha: dict[str, tuple[dict[str, Any], str, str]] = {}
     for line in reversed(lines[-200:]):
         marker = "DEV_SYNC_PENDING:release-rollup-needed:"
         if marker not in line:
             continue
         event_json = line.split(marker, 1)[1].strip()
-        if event_json in seen:
-            continue
-        seen.add(event_json)
         try:
             event = json.loads(event_json)
         except json.JSONDecodeError:
@@ -1344,6 +1341,12 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
             continue
         integration_sha = str(event.get("integration_sha") or "").strip()
         if not integration_sha:
+            continue
+        if integration_sha in latest_by_integration_sha:
+            continue
+        latest_by_integration_sha[integration_sha] = (event, event_json, line)
+    for integration_sha, (event, event_json, line) in latest_by_integration_sha.items():
+        if not _release_rollup_event_is_fresh(repo_root, event, integration_sha):
             continue
         actions.append(
             {
@@ -1371,6 +1374,27 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
             }
         )
     return actions
+
+
+def _release_rollup_event_is_fresh(repo_root: Path, event: dict[str, Any], integration_sha: str) -> bool:
+    integration_branch = safe_head_ref(str(event.get("integration_branch") or ""))
+    review_base_branch = safe_head_ref(str(event.get("review_base_branch") or ""))
+    if not integration_branch or not review_base_branch:
+        return True
+    integration_ref = f"refs/remotes/origin/{integration_branch}"
+    review_base_ref = f"refs/remotes/origin/{review_base_branch}"
+    current_integration = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", integration_ref], cwd=repo_root)
+    current_review_base = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", review_base_ref], cwd=repo_root)
+    ahead = git_text(["git", "-C", str(repo_root), "rev-list", "--count", f"{review_base_ref}..{integration_ref}"], cwd=repo_root)
+    if current_integration.returncode != 0 or current_review_base.returncode != 0 or ahead.returncode != 0:
+        return True
+    current_integration_sha = current_integration.stdout.strip()
+    current_review_base_sha = current_review_base.stdout.strip()
+    try:
+        ahead_count = int(ahead.stdout.strip())
+    except ValueError:
+        return True
+    return ahead_count > 0 and current_integration_sha == integration_sha and current_review_base_sha != current_integration_sha
 
 
 def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
