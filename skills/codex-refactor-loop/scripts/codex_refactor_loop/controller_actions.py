@@ -746,9 +746,10 @@ class ControllerActions:
         else:
             roles = REVIEW_ROLES
         for role in roles:
-            if self._pending_review_spawn_exists(pr_target, role):
+            round_number = self._next_review_round(pr_target, role)
+            if self._pending_review_spawn_exists(pr_target, role, round_number):
                 continue
-            prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r1.md"
+            prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md"
             template = self.ctx.skill_root / "prompts" / f"reviewer-{role}.md"
             self.render_template(
                 str(template),
@@ -759,27 +760,37 @@ class ControllerActions:
                     "BASE_BRANCH": base,
                     "HEAD_BRANCH": head,
                     "HEAD_SHA": head_sha,
-                    "REVIEW_OUTPUT_PATH": f".refactor-loop/runs/review-pr{pr_target}-{role}-r1.md",
+                    "REVIEW_OUTPUT_PATH": f".refactor-loop/runs/review-pr{pr_target}-{role}-r{round_number}.md",
                 },
             )
             self._append_harness_spawn_intent(
-                intent_id=f"dispatch-reviewers:{pr_target}:{role}:r1",
-                task_id=f"review-pr{pr_target}-{role}-r1",
+                intent_id=f"dispatch-reviewers:{pr_target}:{role}:r{round_number}",
+                task_id=f"review-pr{pr_target}-{role}-r{round_number}",
                 route="dispatch-reviewers",
                 cd=self.ctx.repo_root,
                 prompt=prompt,
-                log=self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r1.log",
+                log=self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log",
                 stall=5400,
                 reason=f"review PR #{pr_target} as {role}",
             )
         return 0
 
-    def _pending_review_spawn_exists(self, pr_target: str, role: str) -> bool:
+    def _next_review_round(self, pr_target: str, role: str) -> int:
+        rounds: list[int] = []
+        pattern = re.compile(rf"^review-pr{re.escape(pr_target)}-{re.escape(role)}-r([1-9][0-9]*)\.(?:md|log)$")
+        for directory in (self.ctx.paths.prompts, self.ctx.paths.runs, self.ctx.paths.logs):
+            for path in directory.glob(f"review-pr{pr_target}-{role}-r*.*"):
+                match = pattern.match(path.name)
+                if match:
+                    rounds.append(int(match.group(1)))
+        return (max(rounds) if rounds else 0) + 1
+
+    def _pending_review_spawn_exists(self, pr_target: str, role: str, round_number: int) -> bool:
         try:
             lines = self.ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
         except OSError:
             return False
-        intent_id = f"dispatch-reviewers:{pr_target}:{role}:r1"
+        intent_id = f"dispatch-reviewers:{pr_target}:{role}:r{round_number}"
         for line in lines:
             if " HARNESS_SPAWN_INTENT " not in line:
                 continue
@@ -819,7 +830,7 @@ class ControllerActions:
             "priority": "p1",
             "command": "spawn-codex",
             "controller_action": "spawn_codex_harness_background",
-            "cd": self.ctx.durable_artifact_path(cd),
+            "cd": str(cd.resolve()),
             "prompt": self.ctx.durable_artifact_path(prompt),
             "log": self.ctx.durable_artifact_path(log),
             "stall": stall,

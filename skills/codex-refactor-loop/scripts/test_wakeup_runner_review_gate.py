@@ -212,6 +212,22 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:stale_reviewed_head_sha:architect")
         self.assertEqual(self.actions.merged, [])
 
+    def test_review_gate_uses_latest_round_per_role_after_partial_redispatch(self) -> None:
+        stale = "b" * 40
+        self.write_review("architect", "approve", head_sha=stale, round_number=1)
+        self.write_review("tests", "approve", head_sha="a" * 40, round_number=1)
+        self.write_review("quality", "comment", head_sha="a" * 40, round_number=1)
+        self.write_review("architect", "reject", head_sha="a" * 40, round_number=2)
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_action()
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, [])
+        self.assertEqual(self.actions.rendered, [(12, 1)])
+        launch.assert_called_once()
+        self.assertEqual(self.supervisor.calls, 0)
+
     def test_missing_artifact_head_recovers_from_controller_rendered_prompt(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             (self.repo / ".refactor-loop/prompts" / f"review-pr12-{role}-r1.md").write_text(
@@ -288,6 +304,12 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:missing_exit_zero:quality")
         self.assertEqual(self.actions.merged, [])
+
+    def test_review_gate_source_locks_latest_evidence_per_role(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        self.assertIn("def _latest_review_evidence_by_role(", source)
+        self.assertIn("evidences = self._latest_review_evidence_by_role(pr_number)", source)
+        self.assertIn("evidence.round_number > existing.round_number", source)
 
 
 if __name__ == "__main__":

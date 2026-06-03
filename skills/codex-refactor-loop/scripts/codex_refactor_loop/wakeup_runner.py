@@ -769,7 +769,7 @@ class WakeupRunner:
         return {"decision": decision, "reason": "", "gate": gate}
 
     def _review_gate(self, pr_number: int) -> dict[str, Any]:
-        evidences = self._latest_review_round(pr_number)
+        evidences = self._latest_review_evidence_by_role(pr_number)
         verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
         invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
         heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
@@ -789,13 +789,16 @@ class WakeupRunner:
             invalid=invalid,
         ).as_dict()
 
-    def _latest_review_round(self, pr_number: int) -> dict[str, ReviewEvidence]:
-        by_round: dict[int, dict[str, ReviewEvidence]] = {}
+    def _latest_review_evidence_by_role(self, pr_number: int) -> dict[str, ReviewEvidence]:
+        latest: dict[str, ReviewEvidence] = {}
+        duplicate_keys: set[tuple[str, int]] = set()
         for evidence in self._review_evidences(pr_number):
-            round_bucket = by_round.setdefault(evidence.round_number, {})
-            existing = round_bucket.get(evidence.role)
-            if existing is not None:
-                round_bucket[evidence.role] = ReviewEvidence(
+            key = (evidence.role, evidence.round_number)
+            if key in duplicate_keys:
+                continue
+            existing = latest.get(evidence.role)
+            if existing is not None and existing.round_number == evidence.round_number:
+                latest[evidence.role] = ReviewEvidence(
                     role=evidence.role,
                     round_number=evidence.round_number,
                     verdict="",
@@ -804,11 +807,11 @@ class WakeupRunner:
                     valid=False,
                     reason=f"duplicate_reviewer_evidence:{evidence.role}",
                 )
+                duplicate_keys.add(key)
                 continue
-            round_bucket[evidence.role] = evidence
-        if not by_round:
-            return {}
-        return by_round[max(by_round)]
+            if existing is None or evidence.round_number > existing.round_number:
+                latest[evidence.role] = evidence
+        return latest
 
     def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
         evidences: list[ReviewEvidence] = []

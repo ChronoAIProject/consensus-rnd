@@ -1014,7 +1014,8 @@ def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> boo
 
 
 def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
-    rounds: dict[int, dict[str, str]] = {}
+    by_role: dict[str, tuple[int, str]] = {}
+    artifact_keys: set[tuple[str, int]] = set()
     runs_dir = repo_root / ".refactor-loop" / "runs"
     logs_dir = repo_root / ".refactor-loop" / "logs"
     prompts_dir = repo_root / ".refactor-loop" / "prompts"
@@ -1024,13 +1025,15 @@ def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
             continue
         role = match.group(2)
         round_number = int(match.group(3))
+        artifact_keys.add((role, round_number))
         log_path = logs_dir / f"review-pr{pr_number}-{role}-r{round_number}.log"
         if not _reviewer_log_has_exit_zero(log_path):
             continue
         head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompts_dir / path.name) or _reviewed_head_sha_from_file(log_path)
         if head_sha:
-            rounds.setdefault(round_number, {})[role] = head_sha
-    artifact_keys = {(role, round_number) for round_number, heads in rounds.items() for role in heads}
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
     for path in sorted(logs_dir.glob(f"review-pr{pr_number}-*-r*.log")):
         match = REVIEW_LOG_RE.match(path.name)
         if not match or int(match.group(1)) != pr_number:
@@ -1044,8 +1047,10 @@ def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
         prompt_path = prompts_dir / path.with_suffix(".md").name
         head_sha = _reviewed_head_sha_from_file(path) or _reviewed_head_sha_from_file(prompt_path)
         if head_sha:
-            rounds.setdefault(round_number, {})[role] = head_sha
-    return rounds[max(rounds)] if rounds else {}
+            existing = by_role.get(role)
+            if existing is None or round_number >= existing[0]:
+                by_role[role] = (round_number, head_sha)
+    return {role: head_sha for role, (_round_number, head_sha) in by_role.items()}
 
 
 def pending_review_spawn_exists(repo_root: Path, pr_number: int) -> bool:

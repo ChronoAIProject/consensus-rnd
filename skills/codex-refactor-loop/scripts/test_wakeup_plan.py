@@ -1581,6 +1581,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["stale_review_roles"], ["architect"])
         self.assertNotIn("status_only", action)
 
+    def test_review_redispatch_next_round_intent_projects_despite_stale_exit_zero_r1_log(self) -> None:
+        stale = "b" * 40
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
+                f"---\nhead_sha: {stale if role == 'architect' else 'a' * 40}\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop" / "prompts" / f"review-pr480-{role}-r1.md").write_text(
+                f"head_sha: {stale if role == 'architect' else 'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.logs / f"review-pr480-{role}-r1.log").write_text(
+                f"head_sha: {stale if role == 'architect' else 'a' * 40}\nREVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-reviewers:480:architect:r2",
+            source="controller-actions",
+            route="dispatch-reviewers",
+            task_id="review-pr480-architect-r2",
+            cd=str(self.repo.resolve()),
+            prompt=".refactor-loop/prompts/review-pr480-architect-r2.md",
+            log=".refactor-loop/logs/review-pr480-architect-r2.log",
+            reason="review PR #480 as architect",
+        )
+        (self.repo / ".refactor-loop" / "prompts" / "review-pr480-architect-r2.md").write_text(
+            f"head_sha: {'a' * 40}\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_480", ps_count=0)
+
+        spawn = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
+        self.assertEqual(spawn["intent_id"], "dispatch-reviewers:480:architect:r2")
+        self.assertEqual(spawn["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(spawn["cd"], str(self.repo.resolve()))
+        self.assertEqual(spawn["log"], str((self.logs / "review-pr480-architect-r2.log").resolve()))
+        self.assertNotEqual(spawn["log"], str((self.logs / "review-pr480-architect-r1.log").resolve()))
+
     def test_reviewing_pr_with_prompt_bound_valid_heads_does_not_redispatch_reviewers(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
@@ -2048,6 +2089,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "headRefName,headRefOid,body",
             "def review_evidence_redispatch_actions(",
             "latest_reviewer_heads(repo_root, item.number)",
+            "by_role: dict[str, tuple[int, str]]",
             "pending_review_spawn_exists(repo_root, item.number)",
             '"controller_action": "dispatch_reviewers"',
             '"missing_or_stale_reviewer_head_evidence"',

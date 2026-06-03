@@ -970,6 +970,9 @@ class ControllerActionsTests(unittest.TestCase):
         pending = self.pending_events()
         for role in ("architect", "tests", "quality"):
             self.assertIn(f'"intent_id": "dispatch-reviewers:77:{role}:r1"', pending)
+        intents = [json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1]) for line in pending.splitlines() if " HARNESS_SPAWN_INTENT " in line]
+        self.assertTrue(all(Path(str(intent["cd"])).is_absolute() for intent in intents))
+        self.assertTrue(all(intent["cd"] == str(self.tmp.resolve()) for intent in intents))
 
     def test_dispatch_reviewers_redispatches_only_stale_roles_and_skips_pending_intents(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
@@ -1020,6 +1023,74 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
         self.assertNotIn('"intent_id": "dispatch-reviewers:77:quality:r1"', pending)
 
+    def test_dispatch_reviewers_redispatch_uses_next_round_after_completed_stale_logs(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        for role in ("architect", "tests"):
+            (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+            (self.tmp / ".refactor-loop" / "runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nhead_sha: {'b' * 40}\nverdict: approve\n---\nREVIEW_DONE:77:{role}:approve\n",
+                encoding="utf-8",
+            )
+            (self.tmp / ".refactor-loop" / "logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"head_sha: {'b' * 40}\nREVIEW_DONE:77:{role}:approve\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        existing_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r2",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(existing_intent, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue413", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["architect", "tests"],
+                                "head_sha": "a" * 40,
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-tests-r2.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertEqual(1, pending.count('"intent_id": "dispatch-reviewers:77:architect:r2"'))
+        self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r2"', pending)
+        self.assertNotIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
+        tests_intent = [
+            json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            for line in pending.splitlines()
+            if '"intent_id": "dispatch-reviewers:77:tests:r2"' in line
+        ][0]
+        self.assertEqual(tests_intent["task_id"], "review-pr77-tests-r2")
+        self.assertEqual(tests_intent["log"], ".refactor-loop/logs/review-pr77-tests-r2.log")
+        self.assertEqual(tests_intent["cd"], str(self.tmp.resolve()))
+        self.assertTrue(Path(str(tests_intent["cd"])).is_absolute())
+
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
 
@@ -1043,6 +1114,10 @@ class ControllerActionsTests(unittest.TestCase):
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         self.assertIn('"title,baseRefName,headRefName,headRefOid"', source)
         self.assertIn('"HEAD_SHA": head_sha', source)
+        self.assertIn("def _next_review_round(", source)
+        self.assertIn("round_number = self._next_review_round(pr_target, role)", source)
+        self.assertIn("intent_id=f\"dispatch-reviewers:{pr_target}:{role}:r{round_number}\"", source)
+        self.assertIn('"cd": str(cd.resolve())', source)
         for prompt_name in ("reviewer-architect.md", "reviewer-tests.md", "reviewer-quality.md"):
             with self.subTest(prompt=prompt_name):
                 prompt = (SCRIPT_DIR.parent / "prompts" / prompt_name).read_text(encoding="utf-8")
