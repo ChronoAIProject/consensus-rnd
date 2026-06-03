@@ -134,6 +134,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    open_issues_330_331_332)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":330,"title":"first target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":331,"title":"overlap target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":332,"title":"disjoint target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_issue_453)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":453,"title":"solver target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
@@ -448,6 +455,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
                   [[ "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter"* ]]; then
                   exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
@@ -1662,6 +1675,46 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("consensus_implementation_ready", actions[0]["preconditions"])
         self.assertNotIn("suppressed_reason", actions[0])
 
+    def test_consensus_implementation_scope_conflicts_serialize_overlapping_dispatches(self) -> None:
+        self.write_consensus_artifact(
+            issue=330,
+            round_no=1,
+            scope_paths=(
+                "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n"
+                "- skills/codex-refactor-loop/scripts/test_wakeup_plan.py"
+            ),
+        )
+        self.write_completed_log("phase9-issue330-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.write_consensus_artifact(
+            issue=331,
+            round_no=1,
+            scope_paths="skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+        )
+        self.write_completed_log("phase9-issue331-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.write_consensus_artifact(
+            issue=332,
+            round_no=1,
+            scope_paths="skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py",
+        )
+        self.write_completed_log("phase9-issue332-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        plan = self.run_plan(fixture="open_issues_330_331_332")
+
+        actions = [
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        ]
+        by_issue = {item["target_number"]: item for item in actions}
+        executable = {item["target_number"] for item in actions if not item.get("status_only")}
+        waiting = [item for item in actions if item.get("suppressed_reason") == "scope_conflict_waiting"]
+        self.assertEqual(1, len(waiting))
+        self.assertEqual({332}, executable - {330, 331})
+        self.assertEqual(1, len(executable.intersection({330, 331})))
+        self.assertIn(waiting[0]["target_number"], {330, 331})
+        self.assertFalse(waiting[0]["consensus_implementation_ready"])
+        self.assertNotIn("runner_authority", waiting[0])
+        self.assertFalse(by_issue[332].get("status_only"))
+
     def test_consensus_projection_accepts_verdict_consensus_frontmatter(self) -> None:
         artifact = self.write_consensus_artifact(issue=451, round_no=3, frontmatter="verdict: consensus")
         self.write_completed_log("phase9-issue451-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
@@ -1808,6 +1861,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertIn(required, source)
         self.assertNotIn("_extract_solver_scope_paths", source)
         self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", source)
+
+    def test_wakeup_plan_source_locks_consensus_implementation_scope_conflict_serialization(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for required in (
+            "serialize_conflicting_consensus_implementation_actions(actions)",
+            "_normalized_consensus_scope_paths",
+            "_scope_paths_overlap",
+            "scope_conflict_waiting",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
 
     def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
