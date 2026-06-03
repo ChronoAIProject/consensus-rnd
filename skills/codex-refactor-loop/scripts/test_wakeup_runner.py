@@ -727,6 +727,70 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_missing_precondition:verified_pr_head",
         )
 
+    def test_wakeup_runner_blocked_non_spawn_actions_do_not_dead_stop_spawn_batch(self) -> None:
+        blocked_publish = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-spawns",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "clean_scoped_diff",
+                "host_checks_green",
+                "single_linked_managed_issue",
+                "no_duplicate_open_pr",
+            ],
+        )
+        spawns = [
+            self.spawn_action(
+                action_id=f"spawn:after-blockers:{index}",
+                log=str(self.repo / f".refactor-loop/logs/after-blockers-{index}.log"),
+            )
+            for index in range(3)
+        ]
+        blocked_close = self.close_action(
+            action_id="close-managed-item:53:closed-before-spawns",
+            preconditions=["active_controller_owner", "live_managed_target"],
+        )
+        (self.repo / ".refactor-loop/.controller-pending-events.log").write_text(
+            "META_RESOLVED:drop:no-action\nintent-marker\n",
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([blocked_publish, blocked_close, *spawns], dispatch_required=3, deficit=3),
+                actions=actions,
+            )
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                (
+                    "publish-implementation:missing-verified-head-before-spawns",
+                    "blocked",
+                    "publish_implementation_missing_precondition:verified_pr_head",
+                ),
+                (
+                    "close-managed-item:53:closed-before-spawns",
+                    "blocked",
+                    "close_managed_drop_missing_precondition:live_open_target",
+                ),
+                ("spawn:after-blockers:0", "applied", ""),
+                ("spawn:after-blockers:1", "applied", ""),
+                ("spawn:after-blockers:2", "applied", ""),
+            ],
+        )
+        self.assertEqual(actions.calls, [])
+        self.assertEqual(launch.call_count, 3)
+        self.assert_blocked_event(
+            "publish-implementation:missing-verified-head-before-spawns",
+            "publish_implementation_missing_precondition:verified_pr_head",
+        )
+        self.assert_blocked_event(
+            "close-managed-item:53:closed-before-spawns",
+            "close_managed_drop_missing_precondition:live_open_target",
+        )
+
     def test_wakeup_runner_tick_reports_later_solver_launch_after_blocked_lifecycle(self) -> None:
         results = [
             RunnerResult(
@@ -744,7 +808,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "dispatched harness-spawn-intent:phase9-router:493:1:minimal+2",
         )
 
-    def test_wakeup_runner_blocked_non_spawn_does_not_batch_later_lifecycle_action(self) -> None:
+    def test_wakeup_runner_blocked_non_spawn_can_continue_to_one_later_lifecycle_action(self) -> None:
         blocked = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-close",
             preconditions=[
@@ -761,9 +825,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = self.run_result(self.batch_plan([blocked, close], dispatch_required=2, deficit=2), actions=actions)
 
-        self.assertEqual([result.action_id for result in results], ["publish-implementation:missing-verified-head-before-close"])
-        self.assertEqual(results[0].status, "blocked")
-        self.assertEqual(actions.calls, [])
+        self.assertEqual(
+            [(result.action_id, result.status) for result in results],
+            [
+                ("publish-implementation:missing-verified-head-before-close", "blocked"),
+                ("close-managed-item:53:after-blocked-publish", "applied"),
+            ],
+        )
+        self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
 
     def test_wakeup_runner_does_not_apply_non_spawn_after_spawn_batch(self) -> None:
         close = self.close_action(action_id="close-managed-item:53:after-spawn")
@@ -1515,6 +1584,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("dispatch_next_step_worker", source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_runner_source_locks_blocked_non_spawn_scan_invariant(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        run_once = source[source.index("    def run_once(self) -> list[RunnerResult]:") : source.index("    def apply_action", source.index("    def run_once(self) -> list[RunnerResult]:"))]
+
+        self.assertIn('if result.status in {"blocked", "skipped"} and not is_spawn_action:', run_once)
+        self.assertIn("continue", run_once)
+        self.assertIn("if is_spawn_action and applied_spawns >= budget.spawn_budget:", run_once)
+        self.assertIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
+        self.assertNotIn("blocked_non_spawn_before_spawn", run_once)
 
     def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")

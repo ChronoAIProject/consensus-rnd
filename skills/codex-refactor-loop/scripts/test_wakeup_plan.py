@@ -437,6 +437,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"worktree list --porcelain"* ]]; then
                   [[ "$fixture" == "unpushed_no_worktree" ]] && exit 0
+                  if [[ "$fixture" == "local_iter_branch_issue20" ]]; then
+                    printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/refactor/iter77-worker\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                   exit 0
                 fi
@@ -454,7 +458,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
@@ -470,6 +474,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf '2\n'
                   fi
                   exit 0
+                fi
+                if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter20-issue-20..HEAD"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf '2\n' && exit 0
+                  exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/integration"* ]]; then
                   [[ "$fixture" == "release_rollup_refs_fail" ]] && exit 42
@@ -1138,7 +1146,34 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only"))
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
 
-    def test_completed_marker_keeps_marker_without_target_when_open_managed_read_model_is_loaded(self) -> None:
+    def test_stale_publish_implementation_marker_is_status_only_without_verified_head(self) -> None:
+        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
+
+        plan = self.run_plan(fixture="open_issue_20")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_publish_implementation_marker_with_verified_local_head_remains_executable(self) -> None:
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertNotIn("status_only", action)
+        self.assertEqual(action["head_ref"], "refactor/iter20-issue-20")
+        self.assertEqual(Path(action["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+
+    def test_completed_marker_without_target_is_status_only_when_open_managed_read_model_is_loaded(self) -> None:
         self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
 
         plan = self.run_plan(fixture="open_issue_331")
@@ -1147,7 +1182,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["kind"], "completed-marker")
         self.assertIsNone(action["target_kind"])
         self.assertIsNone(action["target_number"])
-        self.assertFalse(action.get("status_only"))
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertNotIn("runner_authority", action)
 
     def test_completed_marker_keeps_legacy_projection_without_open_managed_read_model(self) -> None:
         self.write_completed_log("review-pr467-architect-r1.log", "REVIEW_DONE:467:architect:approve")
@@ -1506,7 +1543,6 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         }
         for helper in (
             "dispatch_consensus_implementation",
-            "publish_implementation_output",
             "open_release_rollup_pr_from_action",
         ):
             with self.subTest(helper=helper):
@@ -1515,6 +1551,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertTrue(executable[helper]["no_generic_command"])
                 for forbidden in ("argv", "shell", "cmd", "commands", "env", "git", "gh", "executor"):
                     self.assertNotIn(forbidden, executable[helper])
+        publish_action = next(
+            action for action in plan["actions"]
+            if action.get("controller_action") == "publish_implementation_output"
+        )
+        self.assertTrue(publish_action["status_only"])
+        self.assertEqual(publish_action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertNotIn("runner_authority", publish_action)
         consensus_action = executable["dispatch_consensus_implementation"]
         self.assertEqual(consensus_action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
         self.assertEqual(consensus_action["design_decision_path"], artifact.relative_to(self.repo).as_posix())
@@ -1900,6 +1943,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertIn(helper, source)
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
+
+    def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for token in (
+            "suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)",
+            "def suppress_stale_unexecutable_actions(",
+            'controller_action == "publish_implementation_output"',
+            'controller_action == "close_managed_item_from_drop_marker"',
+            '"verified_pr_head_unavailable"',
+            'action["status_only"] = True',
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
 
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

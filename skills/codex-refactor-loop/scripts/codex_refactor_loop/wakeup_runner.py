@@ -213,22 +213,20 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
-        blocked_non_spawn_before_spawn = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
+            if is_spawn_action and applied_spawns >= budget.spawn_budget:
+                break
             if applied_spawns > 0 and not is_spawn_action:
                 break
-            if blocked_non_spawn_before_spawn and not is_spawn_action:
-                continue
             result = self.apply_action(action)
             results.append(result)
             if result.status == "skipped" and is_spawn_action:
                 continue
             if result.status != "applied":
                 if result.status in {"blocked", "skipped"} and not is_spawn_action:
-                    blocked_non_spawn_before_spawn = True
                     continue
                 if result.status == "blocked" and is_spawn_action and not _spawn_launch_failure(result):
                     continue

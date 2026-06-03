@@ -1430,6 +1430,13 @@ def _release_rollup_event_is_fresh(repo_root: Path, event: dict[str, Any], integ
     return ahead_count > 0 and current_integration_sha == integration_sha and current_review_base_sha != current_integration_sha
 
 
+def _worktrees_by_branch(repo_root: Path) -> dict[str, Path]:
+    listed = git_text(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"], cwd=repo_root)
+    if listed.returncode != 0:
+        return {}
+    return parse_worktree_branches(listed.stdout)
+
+
 def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -> list[dict[str, Any]]:
     actions: list[dict[str, Any]] = []
     raw_by_key = {(item.kind.lower(), item.number): item for item in items}
@@ -1932,6 +1939,102 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
     return closed
 
 
+def suppress_stale_unexecutable_actions(
+    actions: list[dict[str, Any]],
+    *,
+    repo_root: Path,
+    gh_items: list[GhItem],
+    gh_items_loaded: bool,
+) -> None:
+    if not gh_items_loaded:
+        return
+    open_targets = _open_managed_targets(gh_items)
+    worktrees: dict[str, Path] | None = None
+    for action in actions:
+        if action.get("status_only"):
+            continue
+        if action.get("controller_action") == "publish_implementation_output" and worktrees is None:
+            worktrees = _worktrees_by_branch(repo_root)
+        reason = _stale_unexecutable_reason(action, repo_root, open_targets, worktrees or {})
+        if not reason:
+            continue
+        action["status_only"] = True
+        action["no_lifecycle_authority"] = True
+        action["suppressed_reason"] = reason
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+
+
+def _stale_unexecutable_reason(
+    action: dict[str, Any],
+    repo_root: Path,
+    open_targets: set[tuple[str, int]],
+    worktrees: dict[str, Path],
+) -> str | None:
+    controller_action = action.get("controller_action")
+    if controller_action == "publish_implementation_output":
+        return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees)
+    if controller_action == "close_managed_item_from_drop_marker":
+        target = _action_target_key(action)
+        if target is not None and target not in open_targets:
+            return "target_not_open"
+    return None
+
+
+def _stale_publish_implementation_reason(
+    action: dict[str, Any],
+    repo_root: Path,
+    open_targets: set[tuple[str, int]],
+    worktrees: dict[str, Path],
+) -> str | None:
+    target = _action_target_key(action)
+    if target is not None and target not in open_targets:
+        return "target_not_open"
+    head_ref = _implementation_head_ref(action, target)
+    if not head_ref:
+        return "verified_pr_head_unavailable"
+    worktree = worktrees.get(head_ref)
+    if worktree is None:
+        return "verified_pr_head_unavailable"
+    remote_ref = f"refs/remotes/origin/{head_ref}"
+    remote = git_text(["git", "-C", str(worktree), "rev-parse", "--verify", remote_ref], cwd=repo_root)
+    count = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"{remote_ref}..HEAD"], cwd=repo_root)
+    if remote.returncode != 0 or count.returncode != 0:
+        return "verified_pr_head_unavailable"
+    try:
+        ahead_count = int(count.stdout.strip())
+    except ValueError:
+        return "verified_pr_head_unavailable"
+    if ahead_count <= 0:
+        return "verified_pr_head_unavailable"
+    action["head_ref"] = head_ref
+    action["worktree"] = str(worktree)
+    return None
+
+
+def _implementation_head_ref(action: dict[str, Any], target: tuple[str, int] | None) -> str | None:
+    explicit = safe_head_ref(str(action.get("head_ref") or ""))
+    if explicit:
+        return explicit
+    if target is None or target[0] != "issue":
+        return None
+    marker = str(action.get("source_marker") or "")
+    candidates: list[str] = []
+    marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+    if marker_id:
+        candidates.append(marker_id)
+    candidates.append(f"issue-{target[1]}")
+    candidates.append(f"issue{target[1]}")
+    for candidate in candidates:
+        normalized = candidate.replace("_", "-").strip("-")
+        if not normalized:
+            continue
+        ref = safe_head_ref("refactor/" + f"iter{target[1]}-{normalized}")
+        if ref:
+            return ref
+    return None
+
+
 def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:
     hard_gate = concurrency.get("hard_gate", {})
     if hard_gate.get("reason") != "single_active_audit_in_flight":
@@ -2073,6 +2176,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     actions = suppress_terminal_design_consensus_actions(actions, gh_items, gh_items_loaded)
+    suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.sort(key=lambda action: action["priority"])
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
