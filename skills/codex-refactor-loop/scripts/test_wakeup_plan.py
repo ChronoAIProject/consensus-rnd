@@ -25,6 +25,8 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     close_projection_actions,
+    completed_marker_actions,
+    consensus_implementation_fields,
     existing_issue_actions,
     has_dispatchable_action,
     marker_from_completed_log,
@@ -506,30 +508,65 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def write_consensus_artifact(self, issue: int = 20, round_no: int = 5) -> Path:
+    def write_consensus_artifact(
+        self,
+        issue: int = 20,
+        round_no: int = 5,
+        *,
+        frontmatter: str = "decision: consensus",
+        include_if_consensus: bool = True,
+        include_owner: bool = True,
+        design_decision_path: str | None = None,
+        scope_paths: str | None = None,
+        old_pattern: str | None = "consensus to implement used solver fallback",
+        new_principle: str | None = "project implementation only from the consensus judge artifact",
+        verification_hints: str | None = "python3 -m unittest skills/codex-refactor-loop/scripts/test_wakeup_plan.py",
+        marker: str = "META_JUDGE_DONE:consensus:structural",
+    ) -> Path:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
         artifact = runs / f"phase9-issue{issue}-r{round_no}-judge.md"
-        artifact.write_text(
-            textwrap.dedent(
-                f"""\
-                ---
-                issue: {issue}
-                verdict: consensus
-                ---
-
-                ## PROJECT_RULES clause violated
-                Durable source must be checked before implementation dispatch.
-
-                ## Concrete plan
-                - `skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py`: project durable consensus artifact fields.
-                - `skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py`: revalidate the consensus artifact before dispatch.
-
-                META_JUDGE_DONE:consensus:structural
-                """
-            ),
-            encoding="utf-8",
-        )
+        rel = artifact.relative_to(self.repo).as_posix()
+        owner_path = design_decision_path if design_decision_path is not None else rel
+        if_consensus_lines: list[str] = []
+        if include_if_consensus:
+            owner_line = (
+                f"- Implementation owner: dispatch implement codex with cluster_id=issue-{issue}, design_decision_path={owner_path}"
+                if include_owner
+                else ""
+            )
+            scope_value = scope_paths if scope_paths is not None else (
+                "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n"
+                "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py"
+            )
+            if_consensus_lines = [
+                "## If consensus",
+                "- Chosen framing: structural",
+                "- Implement plan:",
+                "  - scope_paths:",
+                *[f"    {line}" for line in scope_value.splitlines()],
+                f"  - old_pattern: {old_pattern or ''}",
+                f"  - new_principle: {new_principle or ''}",
+                f"  - verification_hints: {verification_hints or ''}",
+            ]
+            if owner_line:
+                if_consensus_lines.append(owner_line)
+        body_lines = [
+            "---",
+            f"issue: {issue}",
+            f"convergence_round: {round_no}",
+            frontmatter,
+            "---",
+            "",
+            "## Decision",
+            "Durable source must be checked before implementation dispatch.",
+            "",
+            *if_consensus_lines,
+            "",
+            marker,
+            "",
+        ]
+        artifact.write_text("\n".join(body_lines), encoding="utf-8")
         return artifact
 
     def append_harness_spawn_intent(self, **overrides: object) -> dict[str, object]:
@@ -1223,6 +1260,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["consensus_issue"], 449)
         self.assertEqual(action["consensus_round"], 2)
         self.assertIn("durable_consensus_artifact", action["preconditions"])
+        self.assertEqual(action["cluster_id"], "issue-449")
+        self.assertIn("project implementation only from the consensus judge artifact", action["new_principle"])
+
+    def test_consensus_projection_accepts_verdict_consensus_frontmatter(self) -> None:
+        artifact = self.write_consensus_artifact(issue=451, round_no=3, frontmatter="verdict: consensus")
+        self.write_completed_log("phase9-issue451-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        actions = completed_marker_actions(self.repo)
+
+        action = next(
+            item for item in actions
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual(artifact.relative_to(self.repo).as_posix(), action["consensus_artifact"])
+        self.assertEqual("issue-451", action["cluster_id"])
+        self.assertFalse(action.get("status_only"))
+
+    def test_consensus_projection_allows_empty_optional_verification_hints(self) -> None:
+        self.write_consensus_artifact(issue=452, round_no=3, verification_hints="")
+        self.write_completed_log("phase9-issue452-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        actions = completed_marker_actions(self.repo)
+
+        action = next(
+            item for item in actions
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual("", action["verification_hints"])
+        self.assertIn("wakeup_plan.py", action["scope_paths"])
+        self.assertFalse(action.get("status_only"))
 
     def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
@@ -1233,6 +1300,58 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["status_only"])
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("consensus_artifact", action)
+
+    def test_consensus_projection_fail_closed_for_invalid_judge_artifact_shapes(self) -> None:
+        cases = (
+            ("missing-scope", {"scope_paths": ""}),
+            ("missing-old-pattern", {"old_pattern": None}),
+            ("missing-new-principle", {"new_principle": None}),
+            ("missing-owner", {"include_owner": False}),
+            ("missing-if-consensus", {"include_if_consensus": False}),
+            ("bad-design-path", {"design_decision_path": ".refactor-loop/runs/other.md"}),
+            ("non-consensus-frontmatter", {"frontmatter": "decision: converge"}),
+            ("missing-marker", {"marker": "META_JUDGE_DONE:converge:round-3"}),
+        )
+        for name, kwargs in cases:
+            with self.subTest(name=name):
+                self.write_consensus_artifact(issue=330, round_no=4, **kwargs)
+                self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+                plan = self.run_plan(fixture="open_issue_330")
+
+                projected = [
+                    action for action in plan["actions"]
+                    if action.get("controller_action") == "dispatch_consensus_implementation"
+                    and not action.get("status_only")
+                ]
+                self.assertEqual([], projected)
+
+    def test_consensus_projection_rejects_log_artifact_identity_mismatch(self) -> None:
+        self.write_consensus_artifact(issue=330, round_no=4)
+        log = self.logs / "phase9-issue330-r5-judge.log"
+        log.write_text("META_JUDGE_DONE:consensus:structural\nEXIT=0\n", encoding="utf-8")
+
+        fields = consensus_implementation_fields(self.repo, log, "issue #330")
+
+        self.assertEqual({}, fields)
+
+    def test_consensus_projection_does_not_read_solver_artifact_fallback(self) -> None:
+        self.write_consensus_artifact(issue=330, round_no=4, scope_paths="")
+        solver = self.repo / ".refactor-loop/runs/phase9-issue330-r4-structural.md"
+        solver.write_text(
+            "scope_paths:\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n",
+            encoding="utf-8",
+        )
+        self.write_completed_log("phase9-issue330-r4-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        actions = completed_marker_actions(self.repo)
+
+        projected = [
+            action for action in actions
+            if action.get("controller_action") == "dispatch_consensus_implementation"
+            and not action.get("status_only")
+        ]
+        self.assertEqual([], projected)
 
     def test_milestone_implementation_issue_projects_latest_durable_consensus_artifact(self) -> None:
         artifact = self.write_consensus_artifact()
@@ -1257,6 +1376,39 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("durable_consensus_artifact", action["preconditions"])
         projected = [item for item in [action] if not item.get("status_only")]
         self.assertEqual(1, len(projected))
+
+    def test_milestone_implementation_issue_does_not_project_unstructured_consensus_artifact(self) -> None:
+        self.write_consensus_artifact(old_pattern=None)
+
+        actions = existing_issue_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=20,
+                    title="implementation issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT),
+                )
+            ],
+            repo_root=self.repo,
+        )
+
+        projected = [item for item in actions if item.get("kind") == "consensus-implementation-ready"]
+        self.assertEqual([], projected)
+
+    def test_wakeup_plan_source_locks_consensus_projection_to_judge_artifact_only(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        for required in (
+            "CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)",
+            "CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)",
+            "_frontmatter_is_consensus",
+            "_extract_implementation_owner",
+            "_extract_structured_consensus_field",
+            "_consensus_projection_from_artifact",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        self.assertNotIn("_extract_solver_scope_paths", source)
+        self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", source)
 
     def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

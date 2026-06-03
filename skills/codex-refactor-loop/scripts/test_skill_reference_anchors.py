@@ -1026,6 +1026,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "peek.py",
                 "phase9/router.py",
                 "wakeup_plan.py",
+                "wakeup_runner.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
@@ -1390,6 +1391,26 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.claude)
+
+    def test_consensus_implementation_projection_fact_source_is_judge_only(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        meta_judge = read(SKILL_ROOT / "prompts" / "meta-judge.md")
+        for needle in (
+            "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
+            "named helper `dispatch_consensus_implementation`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, wakeup_runner)
+        for needle in (
+            "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
+            "scope_paths",
+            "old_pattern",
+            "new_principle",
+            "verification_hints",
+            "Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, meta_judge)
 
     def test_wakeup_plan_closed_projection_is_not_standalone_authorization(self) -> None:
         section = section_after_heading(self.skill, "Wakeup Skeleton")

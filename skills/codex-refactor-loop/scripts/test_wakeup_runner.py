@@ -977,9 +977,40 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             actions,
         )
 
+    def test_dispatch_consensus_implementation_blocks_missing_required_projection_field(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(action_id="consensus:missing-scope", scope_paths="")
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "consensus:missing-scope",
+            "consensus_implementation_missing_field:scope_paths",
+            actions,
+        )
+
+    def test_dispatch_consensus_implementation_blocks_design_path_mismatch(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(
+            action_id="consensus:design-path-mismatch",
+            design_decision_path=".refactor-loop/runs/other.md",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "consensus:design-path-mismatch",
+            "consensus_implementation_design_path_mismatch",
+            actions,
+        )
+
     def test_dispatch_consensus_implementation_blocks_invalid_durable_artifact(self) -> None:
         outside = self.repo / "outside-consensus.md"
         outside.write_text("META_JUDGE_DONE:consensus:structural\n", encoding="utf-8")
+        bad_basename = self.repo / ".refactor-loop/runs/xphase9-issue20-r5-judge.md"
+        bad_basename.write_text("META_JUDGE_DONE:consensus:structural\n", encoding="utf-8")
         cases = [
             (
                 "outside-runs",
@@ -998,6 +1029,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             (
                 "identity-mismatch",
                 lambda: self.consensus_action(action_id="consensus:identity-mismatch", consensus_round=6),
+                "consensus_artifact_identity_mismatch",
+            ),
+            (
+                "bad-basename",
+                lambda: self.consensus_action(
+                    action_id="consensus:bad-basename",
+                    consensus_artifact=".refactor-loop/runs/xphase9-issue20-r5-judge.md",
+                    design_decision_path=".refactor-loop/runs/xphase9-issue20-r5-judge.md",
+                ),
                 "consensus_artifact_identity_mismatch",
             ),
             (
