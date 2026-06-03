@@ -23,7 +23,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 | Pure orchestration | Controller execution may be interactive or #396 `wakeup-runner`; all reasoning remains in codex workers / consensus gates. `phase9-router` handles only deterministic design-consensus routes; `wakeup-runner` consumes only `wakeup-plan` evidence-bound closed action projection and existing controller helpers. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes and `consensus-rnd-cli wakeup-runner` mechanically apply only closed projection actions. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
 | Sentinel | Every AI-authored GitHub body ends with a final independent `⟦AI:AUTO-LOOP⟧` line. | Filter AI comments by sentinel and AI banner prefixes; never react to own comments as maintainer input. | [sentinel and comment filters](#sentinel-and-comment-filters) | prompts, `consensus-rnd-cli comment-monitor` |
 <!-- Refactor (iter1/issue-139): Old pattern: Wake-source 契约措辞自相矛盾:SKILL.md/REFERENCE.md 多处写三选一(Monitor / task-notification / ScheduleWakeup 任一即可),与 checklist step15 / ownership 的必维持 Monitor 冲突,新会话据此漏挂 Monitor bridge。
-  New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。删除所有三选一/or-ScheduleWakeup 弱化措辞,替换 test_skill_entrypoint_contract.py 与 test_skill_reference_anchors.py 两个 source-regression 入口,不引入 SessionWakeSourceContract 等新命名,不新增 helper/schema/daemon,不改 CLAUDE.md/Tier/lifecycle。严格按 .refactor-loop/runs/phase9-issue139-r2-judge.md 的 Implement plan 逐条改。
+  New principle: 统一语义:每个 controller 会话必须 arm/confirm persistent daemon-event Monitor bridge;task-notification / ScheduleWakeup 仅作 turn 级 completion/fallback,非 Monitor 替代。Durable anchors are the Wake source contract row, wake-source-rules anchor, test_skill_entrypoint_contract.py, and test_skill_reference_anchors.py; no SessionWakeSourceContract/helper/schema/daemon/Tier lifecycle expansion.
 -->
 | Wake source | Every controller session must maintain a persistent daemon-event Monitor bridge. | Arm or confirm the daemon-event Monitor bridge; before ending a turn, also confirm any in-flight codex task-notification or registered ScheduleWakeup fallback used as the next wake. | [wake source rules](#wake-source-rules) | Monitor bridge, harness Bash background tasks, ScheduleWakeup fallback |
 | First wakeup | Consensus-rnd Phase bootstrap is ordered and mandatory before any normal phase. | Run the Consensus-rnd Phase bootstrap checklist in this file, in order. | [daemon command bodies](#daemon-command-bodies) | scripts, `host.env` |
@@ -1036,7 +1036,7 @@ Recovery rules:
 <!--
 Refactor (iter6/issue-118):
   Old pattern: skill docs maintained a posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+  New principle: prompt-self-declaration posting mode is owned by the GitHub Posting Contract, prompts/_github-post-rules.md, prompt body self-declaration, test_marker_only_prompts_gh_ban.py, and test_marker_emission_contract.py; no SKILL-maintained prompt filename roster.
 -->
 
 Posting rules:
@@ -2215,7 +2215,7 @@ EVERYTHING ELSE(reviewer verdict、fix-done body、consensus 公告、escalation
 <!--
 Refactor (iter6/issue-118):
   Old pattern: skill docs maintained a posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+  New principle: prompt-self-declaration posting mode is owned by the GitHub Posting Contract, prompts/_github-post-rules.md, prompt body self-declaration, test_marker_only_prompts_gh_ban.py, and test_marker_emission_contract.py; no SKILL-maintained prompt filename roster.
 -->
 
 - A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
