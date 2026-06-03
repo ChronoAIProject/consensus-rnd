@@ -45,6 +45,7 @@ SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
+REVIEW_ROLES = ("architect", "tests", "quality")
 
 
 class ControllerActions:
@@ -737,7 +738,16 @@ class ControllerActions:
         title = str(facts.get("title") or f"PR {pr_target}")
         if not head or not head_sha:
             return 2
-        for role in ("architect", "tests", "quality"):
+        stale_roles = action.get("stale_review_roles")
+        if isinstance(stale_roles, list):
+            roles = tuple(role for role in REVIEW_ROLES if role in {str(item) for item in stale_roles})
+            if not roles:
+                return 2
+        else:
+            roles = REVIEW_ROLES
+        for role in roles:
+            if self._pending_review_spawn_exists(pr_target, role):
+                continue
             prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r1.md"
             template = self.ctx.skill_root / "prompts" / f"reviewer-{role}.md"
             self.render_template(
@@ -763,6 +773,23 @@ class ControllerActions:
                 reason=f"review PR #{pr_target} as {role}",
             )
         return 0
+
+    def _pending_review_spawn_exists(self, pr_target: str, role: str) -> bool:
+        try:
+            lines = self.ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return False
+        intent_id = f"dispatch-reviewers:{pr_target}:{role}:r1"
+        for line in lines:
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            try:
+                intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(intent, dict) and intent.get("intent_id") == intent_id:
+                return True
+        return False
 
     def open_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
         event = action.get("event")

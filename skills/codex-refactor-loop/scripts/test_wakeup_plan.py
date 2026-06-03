@@ -1556,8 +1556,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 480)
         self.assertEqual(action["head_sha"], "a" * 40)
         self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
+        self.assertIn("missing_or_stale_reviewer_head_evidence", action["preconditions"])
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertTrue(action["no_generic_command"])
+        self.assertNotIn("status_only", action)
 
     def test_reviewing_pr_with_stale_reviewer_head_projects_dispatch_reviewers(self) -> None:
         stale = "b" * 40
@@ -1577,6 +1579,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["target_number"], 480)
         self.assertEqual(action["stale_review_roles"], ["architect"])
+        self.assertNotIn("status_only", action)
 
     def test_reviewing_pr_with_prompt_bound_valid_heads_does_not_redispatch_reviewers(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
@@ -2048,9 +2051,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "pending_review_spawn_exists(repo_root, item.number)",
             '"controller_action": "dispatch_reviewers"',
             '"missing_or_stale_reviewer_head_evidence"',
+            '"review-evidence-redispatch"',
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
+        constants = source[source.index("EXECUTABLE_ACTION_KINDS = {") : source.index("NON_ACTION_PHASE_LABELS = {")]
+        self.assertIn('"review-evidence-redispatch"', constants)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")

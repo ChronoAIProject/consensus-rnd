@@ -1487,6 +1487,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
 
+    def test_review_evidence_redispatch_routes_to_named_helper_after_pr_target_validation(self) -> None:
+        actions = FakeActions()
+        action = self.reviewer_dispatch_action(
+            kind="review-evidence-redispatch",
+            action_id="review-evidence-redispatch:77:" + "a" * 40,
+            source_artifact="wakeup-plan",
+            source_marker="review-evidence-redispatch",
+            head_sha="a" * 40,
+            stale_review_roles=["architect", "tests"],
+            preconditions=[
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "missing_or_stale_reviewer_head_evidence",
+            ],
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "dispatch_reviewers")
+        self.assertEqual(actions.calls[0][1]["stale_review_roles"], ["architect", "tests"])
+
     def test_dispatch_reviewers_blocks_missing_or_non_pr_target_before_helper(self) -> None:
         cases = (
             (

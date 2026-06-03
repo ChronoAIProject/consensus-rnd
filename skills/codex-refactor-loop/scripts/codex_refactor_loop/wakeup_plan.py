@@ -109,6 +109,7 @@ EXECUTABLE_ACTION_KINDS = {
     "completed-marker",
     "release-rollup-needed",
     "ci-red",
+    "review-evidence-redispatch",
 }
 NON_ACTION_PHASE_LABELS = {
     label_catalog.PHASE_PR_OPEN: "pr-open",

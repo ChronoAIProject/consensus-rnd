@@ -971,6 +971,55 @@ class ControllerActionsTests(unittest.TestCase):
         for role in ("architect", "tests", "quality"):
             self.assertIn(f'"intent_id": "dispatch-reviewers:77:{role}:r1"', pending)
 
+    def test_dispatch_reviewers_redispatches_only_stale_roles_and_skips_pending_intents(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
+        existing_intent = {
+            "intent_id": "dispatch-reviewers:77:architect:r1",
+            "controller_action": "spawn_codex_harness_background",
+        }
+        (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(existing_intent, sort_keys=True)}\n",
+            encoding="utf-8",
+        )
+        render_envs: list[dict[str, str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["pr", "view", "77", "--json", "title,baseRefName,headRefName,headRefOid"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"title": "Fix wakeup runner", "baseRefName": "dev", "headRefName": "refactor/issue413", "headRefOid": "a" * 40}),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            assert env is not None
+            render_envs.append(dict(env))
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(output_path).write_text("review prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(
+                        0,
+                        self.actions.dispatch_reviewers(
+                            {
+                                "target_kind": "PR",
+                                "target_number": 77,
+                                "stale_review_roles": ["architect", "tests"],
+                                "head_sha": "a" * 40,
+                            }
+                        ),
+                    )
+
+        self.assertEqual([".refactor-loop/runs/review-pr77-tests-r1.md"], [env["REVIEW_OUTPUT_PATH"] for env in render_envs])
+        self.assertEqual(["a" * 40], [env["HEAD_SHA"] for env in render_envs])
+        pending = self.pending_events()
+        self.assertEqual(1, pending.count('"intent_id": "dispatch-reviewers:77:architect:r1"'))
+        self.assertIn('"intent_id": "dispatch-reviewers:77:tests:r1"', pending)
+        self.assertNotIn('"intent_id": "dispatch-reviewers:77:quality:r1"', pending)
+
     def test_dispatch_reviewers_fails_closed_when_pr_head_missing(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
 
