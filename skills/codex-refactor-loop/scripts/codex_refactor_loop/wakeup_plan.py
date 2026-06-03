@@ -715,7 +715,7 @@ def completed_marker_actions(
         if route:
             action["route"] = route
         if marker.startswith("REVIEW_DONE"):
-            head_sha = _reviewed_head_sha_from_log(log_path)
+            head_sha = _review_done_action_head_sha(repo_root, log_path, marker, gh_items)
             if head_sha:
                 action["head_sha"] = head_sha
         if marker.startswith("META_JUDGE_DONE:consensus"):
@@ -994,6 +994,31 @@ def _reviewed_head_sha_from_file(path: Path) -> str:
         return ""
     match = REVIEW_HEAD_RE.search(text)
     return match.group(1) if match else ""
+
+
+def _review_done_action_head_sha(repo_root: Path, log_path: Path, marker: str, gh_items: list[GhItem] | None) -> str:
+    match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$", marker)
+    if match is None:
+        return _reviewed_head_sha_from_log(log_path)
+    pr_number = int(match.group(1))
+    role = match.group(2)
+    live_head = _gh_item_head_sha(gh_items, pr_number)
+    heads = latest_reviewer_heads(repo_root, pr_number)
+    role_head = heads.get(role, "")
+    if role_head:
+        return role_head
+    if live_head and all(heads.get(required, "") == live_head for required in REQUIRED_REVIEW_ROLES):
+        return live_head
+    return _reviewed_head_sha_from_log(log_path)
+
+
+def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
+    if gh_items is None:
+        return ""
+    for item in gh_items:
+        if item.kind == "PR" and item.number == pr_number:
+            return item.head_sha
+    return ""
 
 
 def _reviewer_log_has_exit_zero(path: Path) -> bool:

@@ -1643,6 +1643,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
 
+    def test_review_done_completed_marker_projects_prompt_bound_reviewed_head(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts").mkdir(parents=True, exist_ok=True)
+            (self.repo / ".refactor-loop" / "prompts" / f"review-pr480-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop" / "runs" / f"review-pr480-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:480:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.logs / f"review-pr480-{role}-r1.log").write_text(
+                f"REVIEW_DONE:480:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+        plan = self.run_plan(fixture="open_pr_480")
+
+        action = next(item for item in plan["actions"] if item["controller_action"] == "review_gate")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 480)
+        self.assertEqual(action["head_sha"], "a" * 40)
+        self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
 
