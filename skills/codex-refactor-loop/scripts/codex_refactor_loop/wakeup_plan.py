@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
@@ -1491,6 +1491,61 @@ def _apply_consensus_implementation_readiness(
     action.pop("no_generic_command", None)
 
 
+def serialize_conflicting_consensus_implementation_actions(actions: list[dict[str, Any]]) -> None:
+    executable: list[tuple[int, tuple[str, ...]]] = []
+    for index, action in enumerate(actions):
+        if action.get("controller_action") != "dispatch_consensus_implementation" or action.get("status_only"):
+            continue
+        scope = _normalized_consensus_scope_paths(action.get("scope_paths"))
+        if any(_scope_paths_overlap(scope, other_scope) for _other_index, other_scope in executable):
+            action["consensus_implementation_ready"] = False
+            action["suppressed_reason"] = "scope_conflict_waiting"
+            action["status_only"] = True
+            action["no_lifecycle_authority"] = True
+            action.pop("runner_authority", None)
+            action.pop("no_generic_command", None)
+            continue
+        executable.append((index, scope))
+
+
+def _normalized_consensus_scope_paths(raw_scope_paths: Any) -> tuple[str, ...]:
+    paths: set[str] = set()
+    for raw_line in str(raw_scope_paths or "").splitlines():
+        path = _normalized_consensus_scope_path(raw_line)
+        if path:
+            paths.add(path)
+    return tuple(sorted(paths))
+
+
+def _normalized_consensus_scope_path(raw_line: str) -> str:
+    text = raw_line.strip()
+    if not text:
+        return ""
+    text = re.sub(r"^(?:[-*]\s+|\d+\.\s+)", "", text).strip()
+    text = text.strip("`'\"")
+    if not text or text.startswith("#"):
+        return ""
+    if "#" in text:
+        text = text.split("#", 1)[0].strip()
+    text = text.replace("\\", "/")
+    path = PurePosixPath(text)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        return ""
+    return path.as_posix().rstrip("/")
+
+
+def _scope_paths_overlap(left: tuple[str, ...], right: tuple[str, ...]) -> bool:
+    if not left or not right:
+        return True
+    return any(_scope_path_overlaps_one(left_path, right_path) for left_path in left for right_path in right)
+
+
+def _scope_path_overlaps_one(left: str, right: str) -> bool:
+    if left == right:
+        return True
+    return right.startswith(left + "/") or left.startswith(right + "/")
+
+
 def consensus_implementation_suppressed_reason(
     action: dict[str, Any],
     repo_root: Path,
@@ -2005,6 +2060,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(existing_issue_actions(gh_items, repo_root))
     actions = suppress_terminal_design_consensus_actions(actions, gh_items, gh_items_loaded)
     actions.sort(key=lambda action: action["priority"])
+    serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 
     recommendation: str | None = None

@@ -1415,6 +1415,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`open_closing_pr`",
             "`remote_iter_branch`",
             "`in_flight_implement`",
+            "`scope_conflict_waiting`",
+            "overlapping normalized `scope_paths`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):
@@ -1429,6 +1431,17 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
+
+    def test_batching_heuristics_lock_consensus_implementation_scope_serialization(self) -> None:
+        batching = section_after_anchor(self.skill, "batching-heuristics")
+        for needle in (
+            "For executable consensus→implement wakeup actions",
+            "normalizes `scope_paths` to repo-relative file/directory keys",
+            "`status_only` with `suppressed_reason=scope_conflict_waiting`",
+            "disjoint groups remain parallel",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, batching)
 
     def test_wakeup_plan_release_rollup_freshness_prunes_superseded_local_evidence(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
