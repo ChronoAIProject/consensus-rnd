@@ -191,6 +191,17 @@ class PrChecksProjectionTests(unittest.TestCase):
 
 
 class PrChecksSourceRegressionTests(unittest.TestCase):
+    def test_direct_script_help_still_imports(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "codex_refactor_loop" / "pr_checks.py"), "--help"],
+            cwd=str(SCRIPT_DIR),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--repo", result.stdout)
+
     def test_production_source_uses_rest_projection_not_legacy_or_lifecycle_surfaces(self) -> None:
         production_dir = SCRIPT_DIR / "codex_refactor_loop"
         texts = {

@@ -10,6 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
+try:
+    from .gh_invoke import build_gh_argv
+except ImportError:  # pragma: no cover - direct script execution
+    from gh_invoke import build_gh_argv
+
 
 API_READ_ATTEMPTS = 3
 
@@ -124,7 +129,7 @@ class PrChecksProjection:
         if not repo_slug or "/" not in repo_slug:
             return self._failed(repo_slug, pr, "", "invalid_repo")
 
-        pull = self._run_api_read(["gh", "api", f"repos/{repo_slug}/pulls/{pr}"])
+        pull = self._run_api_read(build_gh_argv(repo_slug, ["gh", "api", f"repos/{repo_slug}/pulls/{pr}"]))
         if pull.returncode != 0:
             return self._failed(repo_slug, pr, "", "pull_api_failure")
         try:
@@ -136,7 +141,9 @@ class PrChecksProjection:
         if not isinstance(head_sha, str) or not head_sha.strip():
             return self._failed(repo_slug, pr, "", "missing_head_sha")
 
-        checks = self._run_api_read(["gh", "api", f"repos/{repo_slug}/commits/{head_sha}/check-runs", "--paginate", "--slurp"])
+        checks = self._run_api_read(
+            build_gh_argv(repo_slug, ["gh", "api", f"repos/{repo_slug}/commits/{head_sha}/check-runs", "--paginate", "--slurp"])
+        )
         if checks.returncode != 0:
             return self._failed(repo_slug, pr, head_sha, "checks_api_failure")
         try:

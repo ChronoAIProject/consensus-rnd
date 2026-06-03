@@ -18,6 +18,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .context import LoopContext, LoopContextError
 from .controller_actions import ControllerActions
+from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
 from .phase9.router import Marker, Phase9Router, Phase9SourceIssueDecision
@@ -980,10 +981,7 @@ class WakeupRunner:
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def _run_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        full = [str(part) for part in command]
-        if len(full) >= 3 and full[0] == "gh" and full[1] in {"pr", "issue"} and self.ctx.gh_repo_slug and "--repo" not in full:
-            insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
-            full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
+        full = build_gh_argv(self.ctx.gh_repo_slug, command)
         return subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
 
     def _ledger_has(self, action: Mapping[str, Any]) -> bool:

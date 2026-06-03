@@ -17,6 +17,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
+from .gh_invoke import build_gh_argv
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
@@ -68,10 +69,7 @@ class ControllerActions:
         return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = ["gh", *(str(a) for a in args)]
-        if self.ctx.gh_repo_slug:
-            insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
-            full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
+        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *args])
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(args)} failed")
