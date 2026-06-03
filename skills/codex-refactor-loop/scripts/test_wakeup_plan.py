@@ -27,6 +27,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     close_projection_actions,
     completed_marker_actions,
     consensus_implementation_fields,
+    consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
     marker_from_completed_log,
@@ -103,6 +104,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       fi
                       ;;
                     open_issue_20)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    closed_issue_20)
+                      printf '[]\n'
+                      ;;
+                    closing_pr_issue20|local_iter_branch_issue20|remote_iter_branch_issue20)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -321,6 +332,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    closing_pr_issue20)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":320,"title":"closing PR","headRefName":"refactor/iter20-issue-20","body":"Closes #20","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     represented_parent)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
@@ -423,6 +441,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "unpushed_no_remote" ]] && exit 1
                   printf 'remote-sha\n'
                   exit 0
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter20-issue-20"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'local-iter-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
+                  [[ "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
                   if [[ "$fixture" == "unpushed_no_ahead" ]]; then
@@ -947,6 +973,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
         self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
+        self.assertIn("if monitor is None:\n        return False", wakeup_source)
+        self.assertNotIn('["ps", "-eo", "command"]', wakeup_source)
         self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
         self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
 
@@ -1520,6 +1548,119 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("durable_consensus_artifact", action["preconditions"])
         self.assertEqual(action["cluster_id"], "issue-449")
         self.assertIn("project implementation only from the consensus judge artifact", action["new_principle"])
+
+    def test_consensus_implementation_readiness_suppresses_closed_issue(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        plan = self.run_plan(fixture="closed_issue_20")
+
+        actions = [
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        ]
+        self.assertEqual([], [item for item in actions if not item.get("status_only")])
+
+    def test_consensus_implementation_readiness_suppresses_open_closing_pr(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        plan = self.run_plan(fixture="closing_pr_issue20")
+
+        action = next(
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertTrue(action["status_only"])
+        self.assertEqual("open_closing_pr", action["suppressed_reason"])
+        self.assertFalse(action["consensus_implementation_ready"])
+
+    def test_consensus_implementation_readiness_suppresses_remote_or_local_iter_branch(self) -> None:
+        for fixture, reason in (
+            ("local_iter_branch_issue20", "local_iter_branch"),
+            ("remote_iter_branch_issue20", "remote_iter_branch"),
+        ):
+            with self.subTest(fixture=fixture):
+                (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
+                self.write_consensus_artifact()
+                self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+                plan = self.run_plan(fixture=fixture)
+
+                action = next(
+                    item for item in plan["actions"]
+                    if item.get("controller_action") == "dispatch_consensus_implementation"
+                )
+                self.assertTrue(action["status_only"])
+                self.assertEqual(reason, action["suppressed_reason"])
+
+    def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
+        cases = (
+            ("worktree", "local_worktree"),
+            ("log", "existing_implement_log"),
+            ("pending", "pending_implement_intent"),
+            ("in-flight", "in_flight_implement"),
+        )
+        for name, reason in cases:
+            with self.subTest(name=name):
+                self.tmp.cleanup()
+                self.setUp()
+                self.write_consensus_artifact()
+                self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+                env_updates: dict[str, str] = {}
+                if name == "worktree":
+                    (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+                elif name == "log":
+                    (self.logs / "implement-issue-20.log").write_text("", encoding="utf-8")
+                elif name == "pending":
+                    self.append_harness_spawn_intent(
+                        intent_id="dispatch-consensus-implementation:20",
+                        task_id="implement-issue-20",
+                        route="dispatch-consensus-implementation",
+                        log=".refactor-loop/logs/implement-issue-20.log",
+                    )
+                elif name == "in-flight":
+                    env_updates["WAKEUP_PLAN_PS_EXTRA"] = (
+                        f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo}/.worktrees/iter20-issue-20 "
+                        f"--log {self.repo}/.refactor-loop/logs/implement-issue-20.log"
+                    )
+
+                plan, _stdout = self.run_plan_with_env(env_updates, fixture="open_issue_20")
+
+                action = next(
+                    item for item in plan["actions"]
+                    if item.get("controller_action") == "dispatch_consensus_implementation"
+                )
+                self.assertTrue(action["status_only"])
+                self.assertEqual(reason, action["suppressed_reason"])
+
+    def test_consensus_implementation_readiness_in_flight_fails_open_without_monitor(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertIsNone(reason)
+
+    def test_consensus_implementation_readiness_fresh_open_issue_dispatches_once(self) -> None:
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        plan = self.run_plan(fixture="open_issue_20")
+
+        actions = [
+            item for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+            and not item.get("status_only")
+        ]
+        self.assertEqual(1, len(actions))
+        self.assertTrue(actions[0]["consensus_implementation_ready"])
+        self.assertIn("consensus_implementation_ready", actions[0]["preconditions"])
+        self.assertNotIn("suppressed_reason", actions[0])
 
     def test_consensus_projection_accepts_verdict_consensus_frontmatter(self) -> None:
         artifact = self.write_consensus_artifact(issue=451, round_no=3, frontmatter="verdict: consensus")

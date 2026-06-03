@@ -883,6 +883,63 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertNotIn("HARNESS_SPAWN_INTENT", self.pending_events())
 
+    def test_dispatch_consensus_implementation_rejects_not_ready_target_before_worktree(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+
+        def action_for(reason: str) -> dict[str, object]:
+            return {
+                "target_kind": "issue",
+                "target_number": 413,
+                "consensus_artifact": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+                "design_decision_path": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+                "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+                "old_pattern": "old",
+                "new_principle": "new",
+                "verification_hints": "python3 -m unittest",
+                "cluster_id": f"issue-413-{reason}",
+                "iteration": "413",
+                "source_ref": "gh-issue-413",
+            }
+
+        def fake_git_text(args: list[str], *, cwd: Path) -> mock.Mock:
+            command = " ".join(args)
+            if "refs/heads/refactor/iter413-issue-413-local_iter_branch" in command:
+                return mock.Mock(returncode=0, stdout="local-sha\n", stderr="")
+            if "refs/remotes/origin/refactor/iter413-issue-413-remote_iter_branch" in command:
+                return mock.Mock(returncode=0, stdout="remote-sha\n", stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="")
+
+        for reason in ("existing_implement_log", "pending_implement_intent", "local_worktree", "local_iter_branch", "remote_iter_branch"):
+            with self.subTest(reason=reason):
+                shutil.rmtree(self.tmp / ".worktrees", ignore_errors=True)
+                shutil.rmtree(self.tmp / ".refactor-loop" / "logs", ignore_errors=True)
+                (self.tmp / ".refactor-loop" / "logs").mkdir(parents=True, exist_ok=True)
+                (self.tmp / ".refactor-loop" / ".controller-pending-events.log").unlink(missing_ok=True)
+                action = action_for(reason)
+                cluster_id = str(action["cluster_id"])
+                if reason == "existing_implement_log":
+                    (self.tmp / ".refactor-loop" / "logs" / f"implement-{cluster_id}.log").write_text("", encoding="utf-8")
+                elif reason == "pending_implement_intent":
+                    pending = {
+                        "intent_id": "dispatch-consensus-implementation:413",
+                        "task_id": f"implement-{cluster_id}",
+                    }
+                    (self.tmp / ".refactor-loop" / ".controller-pending-events.log").write_text(
+                        f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending)}\n",
+                        encoding="utf-8",
+                    )
+                elif reason == "local_worktree":
+                    (self.tmp / ".worktrees" / f"iter413-{cluster_id}").mkdir(parents=True)
+
+                pending_before = self.pending_events()
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git_text):
+                        with mock.patch.object(self.actions, "safe_worktree", side_effect=AssertionError("safe_worktree should not run")):
+                            with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                                self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
+
+                self.assertEqual(pending_before, self.pending_events())
+
     def test_dispatch_reviewers_renders_three_role_prompts_with_pr_facts(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
         render_envs: list[dict[str, str]] = []

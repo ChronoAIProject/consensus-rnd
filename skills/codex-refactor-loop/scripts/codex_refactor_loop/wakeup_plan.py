@@ -24,7 +24,7 @@ from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
-from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
+from codex_refactor_loop.work_items import ManagedWorkProjection, extract_closing_issue_numbers, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -128,6 +128,8 @@ REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge)\.log$")
+IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
+IMPLEMENT_TASK_PREFIX = "implement-"
 
 
 @dataclass(frozen=True)
@@ -317,6 +319,14 @@ def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
 
 def _open_managed_targets(items: list[GhItem]) -> set[tuple[str, int]]:
     return {(item.kind, item.number) for item in items if item.kind in {"PR", "issue"}}
+
+
+def _open_managed_issue_numbers(items: list[GhItem]) -> set[int]:
+    return {
+        item.number
+        for item in items
+        if item.kind == "issue" and label_catalog.MANAGED in label_catalog.normalize_label_set(item.labels).canonical
+    }
 
 
 def _terminal_design_consensus_targets(items: list[GhItem]) -> set[tuple[str, int]]:
@@ -639,6 +649,8 @@ def _extract_completed_marker_line(text: str) -> str | None:
 def completed_marker_actions(
     repo_root: Path,
     open_targets: set[tuple[str, int]] | None = None,
+    gh_items: list[GhItem] | None = None,
+    monitor: Any | None = None,
 ) -> list[dict[str, Any]]:
     logs_dir = repo_root / ".refactor-loop" / "logs"
     if not logs_dir.exists():
@@ -672,7 +684,12 @@ def completed_marker_actions(
             "no_generic_command": True,
         }
         target = _action_target_key(action)
-        if open_targets is not None and target is not None and target not in open_targets:
+        if (
+            open_targets is not None
+            and target is not None
+            and target not in open_targets
+            and not marker.startswith("META_JUDGE_DONE:consensus")
+        ):
             continue
         route = route_from_marker(marker)
         if route:
@@ -688,7 +705,9 @@ def completed_marker_actions(
                 action["preconditions"] = [
                     *action["preconditions"],
                     "durable_consensus_artifact",
+                    "consensus_implementation_ready",
                 ]
+                _apply_consensus_implementation_readiness(action, repo_root, gh_items, monitor)
             else:
                 action["status_only"] = True
                 action["no_lifecycle_authority"] = True
@@ -1436,15 +1455,167 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                         "action_id": f"consensus-implementation-ready:{item.number}:{consensus_fields['consensus_round']}",
                         "route": "dispatch-consensus-implementation",
                         "controller_action": "dispatch_consensus_implementation",
-                        "preconditions": ["active_controller_owner", "live_open_target", "durable_consensus_artifact"],
+                        "preconditions": [
+                            "active_controller_owner",
+                            "live_open_target",
+                            "durable_consensus_artifact",
+                            "consensus_implementation_ready",
+                        ],
                         "runner_authority": RUNNER_AUTHORITY,
                         "no_generic_command": True,
                         **consensus_fields,
                     }
                 )
-                action.pop("status_only", None)
+                _apply_consensus_implementation_readiness(action, repo_root, items, None)
+                if action.get("consensus_implementation_ready") is True:
+                    action.pop("status_only", None)
         actions.append(action)
     return actions
+
+
+def _apply_consensus_implementation_readiness(
+    action: dict[str, Any],
+    repo_root: Path,
+    gh_items: list[GhItem] | None,
+    monitor: Any | None,
+) -> None:
+    reason = consensus_implementation_suppressed_reason(action, repo_root, gh_items, monitor)
+    if not reason:
+        action["consensus_implementation_ready"] = True
+        return
+    action["consensus_implementation_ready"] = False
+    action["suppressed_reason"] = reason
+    action["status_only"] = True
+    action["no_lifecycle_authority"] = True
+    action.pop("runner_authority", None)
+    action.pop("no_generic_command", None)
+
+
+def consensus_implementation_suppressed_reason(
+    action: dict[str, Any],
+    repo_root: Path,
+    gh_items: list[GhItem] | None = None,
+    monitor: Any | None = None,
+) -> str | None:
+    target_kind = action.get("target_kind")
+    target_number = action.get("target_number")
+    if target_kind != "issue" or not isinstance(target_number, int):
+        return "target_not_issue"
+    if gh_items is not None:
+        open_issues = _open_managed_issue_numbers(gh_items)
+        if target_number not in open_issues:
+            return "target_not_open"
+        if _open_closing_pr_number(gh_items, target_number) is not None:
+            return "open_closing_pr"
+    branch = _canonical_consensus_implementation_branch(action)
+    if not branch:
+        return "invalid_iter_branch"
+    if _local_iter_branch_exists(repo_root, branch):
+        return "local_iter_branch"
+    if _remote_iter_branch_exists(repo_root, branch):
+        return "remote_iter_branch"
+    if _canonical_consensus_worktree_exists(repo_root, action):
+        return "local_worktree"
+    if _implement_log_exists(repo_root, action):
+        return "existing_implement_log"
+    if _pending_implement_intent_exists(repo_root, target_number, action):
+        return "pending_implement_intent"
+    if _in_flight_implement_exists(repo_root, action, monitor):
+        return "in_flight_implement"
+    return None
+
+
+def _canonical_consensus_implementation_branch(action: dict[str, Any]) -> str:
+    iteration = str(action.get("iteration") or "").strip()
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    if not SAFE_WORKTREE_ITERATION_RE.fullmatch(iteration) or not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster_id):
+        return ""
+    return "refactor/" + f"iter{iteration}-{cluster_id}"
+
+
+SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
+SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _open_closing_pr_number(items: list[GhItem], issue: int) -> int | None:
+    for item in items:
+        if item.kind != "PR":
+            continue
+        if label_catalog.MANAGED not in label_catalog.normalize_label_set(item.labels).canonical:
+            continue
+        if issue in extract_closing_issue_numbers(item.body):
+            return item.number
+    return None
+
+
+def _local_iter_branch_exists(repo_root: Path, branch: str) -> bool:
+    result = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", f"refs/heads/{branch}"], cwd=repo_root)
+    return result.returncode == 0
+
+
+def _remote_iter_branch_exists(repo_root: Path, branch: str) -> bool:
+    result = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", f"refs/remotes/origin/{branch}"], cwd=repo_root)
+    return result.returncode == 0
+
+
+def _canonical_consensus_worktree_exists(repo_root: Path, action: dict[str, Any]) -> bool:
+    iteration = str(action.get("iteration") or "").strip()
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    if not iteration or not cluster_id:
+        return False
+    return (repo_root / ".worktrees" / f"iter{iteration}-{cluster_id}").is_dir()
+
+
+def _implement_log_exists(repo_root: Path, action: dict[str, Any]) -> bool:
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    if not cluster_id:
+        return False
+    return (repo_root / ".refactor-loop" / "logs" / f"implement-{cluster_id}.log").exists()
+
+
+def _pending_implement_intent_exists(repo_root: Path, issue: int, action: dict[str, Any]) -> bool:
+    pending_path = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    if not pending_path.exists():
+        return False
+    try:
+        lines = pending_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    expected_ids = {f"{IMPLEMENT_PENDING_INTENT_PREFIX}{issue}"}
+    if cluster_id:
+        expected_ids.add(f"{IMPLEMENT_TASK_PREFIX}{cluster_id}")
+    for line in lines:
+        if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        try:
+            intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(intent, dict):
+            continue
+        intent_values = {str(intent.get("intent_id") or ""), str(intent.get("task_id") or "")}
+        if expected_ids.intersection(intent_values):
+            return True
+    return False
+
+
+def _in_flight_implement_exists(repo_root: Path, action: dict[str, Any], monitor: Any | None) -> bool:
+    cluster_id = str(action.get("cluster_id") or "").strip()
+    if not cluster_id:
+        return False
+    if monitor is None:
+        return False
+    try:
+        lines = monitor.list_in_flight_codex_lines()
+    except Exception:
+        return False
+    needles = (
+        f"implement-{cluster_id}",
+        f".refactor-loop/logs/implement-{cluster_id}.log",
+        f".worktrees/iter{action.get('iteration')}-{cluster_id}",
+    )
+    return any("spawn-codex" in line and any(needle in line for needle in needles) for line in lines)
 
 
 def latest_consensus_implementation_for_issue(repo_root: Path | None, issue: int) -> dict[str, Any]:
@@ -1810,7 +1981,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
-    actions.extend(completed_marker_actions(repo_root, completed_marker_open_targets))
+    actions.extend(completed_marker_actions(repo_root, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))

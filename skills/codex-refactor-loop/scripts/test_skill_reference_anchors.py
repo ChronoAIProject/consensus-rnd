@@ -1409,6 +1409,12 @@ class WakeupRunnerContractTests(unittest.TestCase):
         meta_judge = read(SKILL_ROOT / "prompts" / "meta-judge.md")
         for needle in (
             "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
+            "Consensus implementation readiness is a helper-specific precondition",
+            "`consensus_implementation_ready`",
+            "`suppressed_reason`",
+            "`open_closing_pr`",
+            "`remote_iter_branch`",
+            "`in_flight_implement`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):

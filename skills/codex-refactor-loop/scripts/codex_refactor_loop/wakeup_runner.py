@@ -25,7 +25,7 @@ from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
-from .wakeup_plan import build_plan
+from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
 
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
@@ -396,6 +396,9 @@ class WakeupRunner:
                 return f"consensus_implementation_missing_field:{field}"
         if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
             return "consensus_implementation_design_path_mismatch"
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        if readiness_reason:
+            return f"consensus_implementation_not_ready:{readiness_reason}"
         return None
 
     def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
