@@ -1062,13 +1062,32 @@ class ControllerActionsTests(unittest.TestCase):
             ("publish-ready", "IMPLEMENT_DONE:issue-493:ok\nEXIT=0\n"),
         ):
             with self.subTest(name=name):
-                log = self.tmp / ".refactor-loop" / "logs" / f"implement-issue-493-{name}.log"
+                log = self.tmp / ".refactor-loop" / "logs" / "implement-issue-493.log"
                 log.parent.mkdir(parents=True, exist_ok=True)
                 log.write_text(contents, encoding="utf-8")
+                action = {"target_number": 493, "cluster_id": "issue-493"}
+                if name == "publish-ready":
+                    worktree = self.tmp / ".worktrees" / "iter493-issue-493"
+                    worktree.mkdir(parents=True, exist_ok=True)
 
-                self.actions._clear_stale_implement_log_for_fresh_dispatch(log)
+                    def fake_command(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+                        if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                            return subprocess.CompletedProcess(command, 0, "refactor/iter493-issue-493\n", "")
+                        if command[-3:] == ["merge-base", "HEAD", "origin/canonical-integration"]:
+                            return subprocess.CompletedProcess(command, 0, "base\n", "")
+                        if command[-2:] == ["--verify", "origin/canonical-integration"]:
+                            return subprocess.CompletedProcess(command, 0, "base\n", "")
+                        if command[-2:] == ["diff", "--quiet"]:
+                            return subprocess.CompletedProcess(command, 1, "", "")
+                        return subprocess.CompletedProcess(command, 0, "", "")
+
+                    with mock.patch.object(self.actions, "_git_lifecycle_command", side_effect=fake_command):
+                        self.actions._clear_stale_implement_log_for_fresh_dispatch(log, action)
+                else:
+                    self.actions._clear_stale_implement_log_for_fresh_dispatch(log, action)
 
                 self.assertTrue(log.exists())
+                log.unlink(missing_ok=True)
 
     def test_dispatch_reviewers_renders_three_role_prompts_with_pr_facts(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")

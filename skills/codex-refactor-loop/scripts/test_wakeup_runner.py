@@ -247,6 +247,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         gh_head_ref: str = "refactor/iter77-worker",
         git_diff_code: int = 0,
         duplicate_prs: list[dict] | None = None,
+        implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
     ) -> list:
         def command_runner(command):
@@ -294,9 +295,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
                 if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
-                    return subprocess.CompletedProcess(command, 0, "base-sha\n", "")
+                    return subprocess.CompletedProcess(command, 0, implementation_base[0] + "\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
-                    return subprocess.CompletedProcess(command, 0, "base-sha\n", "")
+                    return subprocess.CompletedProcess(command, 0, implementation_base[1] + "\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -1547,12 +1548,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def test_dispatch_consensus_implementation_redispatches_markerless_implement_log(self) -> None:
         actions = FakeActions()
         action = self.consensus_action(action_id="consensus:existing-log")
-        (self.repo / ".refactor-loop/logs/implement-issue-20.log").write_text("", encoding="utf-8")
+        (self.repo / ".refactor-loop/logs/implement-issue-20.log").write_text("worker finished without marker\nEXIT=0\n", encoding="utf-8")
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
+
+    def test_dispatch_consensus_implementation_blocks_inflight_implement_log(self) -> None:
+        actions = FakeActions()
+        action = self.consensus_action(action_id="consensus:inflight-log")
+        log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
+        log.write_text("worker still running\n", encoding="utf-8")
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, action["action_id"], "consensus_implementation_not_ready:in_flight_implement", actions)
+        self.assertTrue(log.exists())
 
     def test_failed_consensus_implementation_redispatch_clears_log_and_spawn_launches(self) -> None:
         failed_log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
@@ -1627,6 +1639,64 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(spawn_results[0].status, "applied")
         launch.assert_called_once()
         self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), failed_log.resolve())
+
+    def test_spawn_apply_clears_terminal_markerless_implement_log_before_launch(self) -> None:
+        log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
+        log.write_text("old terminal markerless run\nEXIT=0\n", encoding="utf-8")
+        action = self.spawn_action(
+            action_id="spawn:implement-issue-20",
+            target={"kind": "codex", "task_id": "implement-issue-20"},
+            log=str(log),
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertFalse(log.exists())
+        launch.assert_called_once()
+
+    def test_spawn_apply_preserves_inflight_implement_log(self) -> None:
+        log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
+        log.write_text("worker still running\n", encoding="utf-8")
+        actions = FakeActions()
+        action = self.spawn_action(
+            action_id="spawn:implement-issue-20",
+            target={"kind": "codex", "task_id": "implement-issue-20"},
+            log=str(log),
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, action["action_id"], "target_log_exists", actions)
+        self.assertTrue(log.exists())
+        launch.assert_not_called()
+
+    def test_publish_ready_implementation_routes_to_publish_helper(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.implementation_output_action()), actions=actions, git_diff_code=1)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_clean_implementation_on_stale_base_blocks_publish_for_redispatch(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.base_plan(self.implementation_output_action()),
+            actions=actions,
+            git_diff_code=1,
+            implementation_base=("old-base", "new-base"),
+        )
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
+            "publish_implementation_stale_base",
+            actions,
+        )
 
     def test_publish_implementation_output_blocks_stale_base_before_helper(self) -> None:
         actions = FakeActions()

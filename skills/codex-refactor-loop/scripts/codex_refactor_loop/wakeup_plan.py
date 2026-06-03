@@ -20,6 +20,11 @@ from typing import Any
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.implement_lifecycle import (
+    classify_implement_attempt,
+    clear_redispatchable_implement_log,
+    is_implement_log,
+)
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
@@ -306,6 +311,8 @@ def harness_spawn_intent_actions(
 
 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
+    if is_implement_log(log_path):
+        return classify_implement_attempt(repo_root=_repo_root_from_log(log_path), log_path=log_path).in_flight
     if not log_path.exists():
         return False
     try:
@@ -317,6 +324,15 @@ def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
             continue
         return line.strip() == "EXIT=0"
     return True
+
+
+def _repo_root_from_log(log_path: Path) -> Path:
+    parts = log_path.resolve().parts
+    try:
+        index = parts.index(".refactor-loop")
+    except ValueError:
+        return log_path.resolve().parent
+    return Path(*parts[:index])
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
@@ -1749,17 +1765,29 @@ def consensus_implementation_suppressed_reason(
     branch = _canonical_consensus_implementation_branch(action)
     if not branch:
         return "invalid_iter_branch"
+    lifecycle = classify_implement_attempt(
+        repo_root=repo_root,
+        action=action,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
+    if lifecycle.in_flight:
+        return "in_flight_implement"
+    if lifecycle.publish_ready:
+        return "implementation_ready_to_publish"
     if _pending_implement_intent_exists(repo_root, target_number, action):
         return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"
-    if _publish_ready_implementation_exists(repo_root, action):
-        return "implementation_ready_to_publish"
     if gh_items is not None and _open_pr_exists_for_branch(gh_items, branch):
         return "open_closing_pr"
     if _remote_iter_branch_exists(repo_root, branch) and not _local_iter_branch_exists(repo_root, branch):
         return "remote_iter_branch"
     return None
+
+
+def _integration_branch_from_env() -> str:
+    return str(os.environ.get("INTEGRATION_BRANCH") or "auto-refact-dev").strip()
 
 
 def _canonical_consensus_implementation_branch(action: dict[str, Any]) -> str:
@@ -1811,17 +1839,12 @@ def _implement_log_exists(repo_root: Path, action: dict[str, Any]) -> bool:
 
 
 def _publish_ready_implementation_exists(repo_root: Path, action: dict[str, Any]) -> bool:
-    log_path = _canonical_implement_log_path(repo_root, action)
-    marker = marker_from_completed_log(log_path)
-    if not marker or not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
-        return False
-    branch = _canonical_consensus_implementation_branch(action)
-    if not branch:
-        return False
-    if not _local_iter_branch_exists(repo_root, branch):
-        return False
-    worktree = _canonical_consensus_worktree_path(repo_root, action)
-    return worktree.is_dir()
+    return classify_implement_attempt(
+        repo_root=repo_root,
+        action=action,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    ).publish_ready
 
 
 def _canonical_implement_log_path(repo_root: Path, action: dict[str, Any]) -> Path:
@@ -2195,8 +2218,24 @@ def _stale_publish_implementation_reason(
     worktree = worktrees.get(head_ref)
     if worktree is None:
         return "verified_pr_head_unavailable"
-    if not _worktree_has_non_empty_diff(worktree):
-        return "verified_pr_head_unavailable"
+    state = classify_implement_attempt(
+        repo_root=repo_root,
+        action=action,
+        log_path=(repo_root / str(action.get("source_artifact") or "")),
+        integration_branch=_integration_branch_from_env(),
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
+    if state.redispatch:
+        clear_redispatchable_implement_log(
+            repo_root=repo_root,
+            action=action,
+            log_path=(repo_root / str(action.get("source_artifact") or "")),
+            integration_branch=_integration_branch_from_env(),
+            command_runner=lambda command: git_text(list(command), cwd=repo_root),
+        )
+        return f"implementation_redispatch:{state.reason}"
+    if state.in_flight:
+        return "in_flight_implement"
     action["head_ref"] = head_ref
     action["worktree"] = str(worktree)
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])

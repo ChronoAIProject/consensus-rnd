@@ -21,6 +21,7 @@ from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .phase9.router import Marker, Phase9Router, Phase9SourceIssueDecision
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
@@ -394,7 +395,7 @@ class WakeupRunner:
         if not isinstance(preconditions, list) or "target_log_absent" not in preconditions:
             return "spawn_missing_precondition:target_log_absent"
         log = Path(str(action.get("log") or ""))
-        if _spawn_log_suppresses_retry(log):
+        if self._spawn_log_suppresses_retry(log):
             return "target_log_exists"
         return None
 
@@ -686,10 +687,22 @@ class WakeupRunner:
         stall = int(action.get("stall") or 5400)
         if not prompt.is_file():
             return 2
+        self._clear_redispatchable_spawn_log(log)
         exit_code = self._launch_spawn_codex_supervisor(cd=cd, prompt=prompt, log=log, stall=stall)
         if exit_code != 0:
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
         return exit_code
+
+    def _spawn_log_suppresses_retry(self, log: Path) -> bool:
+        if is_implement_log(log):
+            state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
+            return state.in_flight or state.publish_ready
+        return _spawn_log_suppresses_retry(log)
+
+    def _clear_redispatchable_spawn_log(self, log: Path) -> None:
+        if not is_implement_log(log):
+            return
+        clear_redispatchable_implement_log(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
 
     def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
         return launch_spawn_codex_supervisor(

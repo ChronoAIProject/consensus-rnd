@@ -114,6 +114,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     closed_issue_20)
                       printf '[]\n'
                       ;;
+                    local_iter_branch_issue20_stale_base)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"},{"name":"crnd:milestone:current"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     closing_pr_issue20|local_iter_branch_issue20|remote_iter_branch_issue20)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
@@ -445,7 +452,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"worktree list --porcelain"* ]]; then
                   [[ "$fixture" == "unpushed_no_worktree" ]] && exit 0
-                  if [[ "$fixture" == "local_iter_branch_issue20" ]]; then
+                  if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
@@ -462,17 +469,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'local-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf 'local-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter"* ]]; then
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"rev-parse --abbrev-ref HEAD"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"merge-base HEAD origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
+                    printf 'old-base\n'
+                    exit 0
+                  fi
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'fresh-base\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
+                    printf 'new-base\n'
+                    exit 0
+                  fi
+                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
@@ -484,11 +512,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter20-issue-20..HEAD"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf '2\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf '2\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"diff --quiet"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" ]] && exit 1
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && exit 1
                   exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/integration"* ]]; then
@@ -1190,6 +1218,34 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_clean_implementation_marker_with_stale_base_redispatches_consensus_issue(self) -> None:
+        self.write_consensus_artifact()
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        log = self.logs / "implement-issue20.log"
+        log.write_text("IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20_stale_base")
+
+        publish = next(item for item in plan["actions"] if str(item.get("action_id") or "").startswith("completed-marker:implement-issue20"))
+        self.assertTrue(publish["status_only"])
+        self.assertEqual(publish["suppressed_reason"], "implementation_redispatch:stale_base")
+        self.assertFalse(log.exists())
+        dispatch_actions = existing_issue_actions(
+            [
+                GhItem(
+                    kind="issue",
+                    number=20,
+                    title="implementation issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT),
+                )
+            ],
+            repo_root=self.repo,
+        )
+        dispatch = next(item for item in dispatch_actions if item.get("controller_action") == "dispatch_consensus_implementation")
+        self.assertEqual(dispatch["target_number"], 20)
+        self.assertFalse(dispatch.get("status_only"))
+        self.assertTrue(dispatch["consensus_implementation_ready"])
 
     def test_completed_marker_without_target_is_status_only_when_open_managed_read_model_is_loaded(self) -> None:
         self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
