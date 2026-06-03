@@ -14,6 +14,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+META_JUDGE_PROMPT = SKILL_ROOT / "prompts" / "meta-judge.md"
 MIRROR_RELATIVE = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"
 MIRROR = REPO_ROOT / MIRROR_RELATIVE
 REPO_RULES = REPO_ROOT / "CLAUDE.md"
@@ -26,6 +27,8 @@ TARGET_ANCHORS = {
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
     "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
+    "wakeup-runner-396": "## Named runtime exception - wakeup-runner(per #396)",
+    "issue-decomposition-403": "## Large issue decomposition(per #403)",
     "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
     "observability-comment-writers-53": "## Named runtime exception — observability-comment-writers(per #53)",
@@ -34,6 +37,7 @@ TARGET_ANCHORS = {
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
+    "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -160,6 +164,60 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 for field in REQUIRED_FIELDS:
                     self.assertRegex(entry, rf"(?m)^- {field}:")
+
+    def test_issue_403_decomposition_allowlist_excludes_wakeup_plan_public_projection(self) -> None:
+        entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        skill_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
+        claude = self.repo_rules
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        controller_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
+
+        for needle in (
+            "active-controller owner only",
+            "IssueDecompositionPlan",
+            "children:[{slug,title,scope,non_goals,body_artifact_path}]",
+            "parent_update:{comment_artifact_path}",
+            "catalog design issue label bundle",
+            "phase9-router fallback pending events",
+            "generic completed-marker projection",
+            "read-only `peek` pending-events tail",
+            "no daemon/worker issue creation",
+            "no public issue factory",
+            "no public CLI command",
+            "no wakeup-plan decompose projection",
+            "no parent issue close/reopen/body-title edit",
+            "no lifecycle_owner/lifecycle_authority/cmd/argv/shell/gh/git/close fields",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "#403 是唯一大 issue 分解 carveout",
+            "checked-in apply helper",
+            "`wakeup-plan` 不投射 issue-decomposition apply/status action",
+            "父 epic 保持 open/tracking",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn("apply_issue_decomposition_plan", controller_source)
+        for forbidden in (
+            "apply-decomposition",
+            "open-child-issue",
+            "issue-decomposition",
+            "decomposition-plan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(f'"{forbidden}"', cli_source)
+        for forbidden in (
+            "IssueDecompositionPlan",
+            "issue-decomposition",
+            "decomposition-plan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, wakeup_source)
+        self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
@@ -455,6 +513,79 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("checked-in `closed-label-reconciler`", self.repo_rules)
         self.assertIn("exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`", self.repo_rules)
 
+    def test_wakeup_runner_396_preserves_closed_projection_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "wakeup-runner-396")
+
+        for required in (
+            "#396",
+            "wakeup-runner",
+            "active-controller owner",
+            "`wakeup-plan` evidence-bound closed action projection",
+            'mode: "closed-action-projection"',
+            'apply_authority: "wakeup-runner-396-only"',
+            'runner_authority: "wakeup-runner-396"',
+            "clean `EXIT=0` source marker",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "missing/stale per-reviewer head SHA",
+            "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+            "OPEN/live GitHub state",
+            "release #322 preflight",
+            "helper-specific precondition",
+            "spawn codex",
+            "named helper `dispatch_design_consensus` through phase9-router deterministic routes",
+            "named helper `dispatch_consensus_implementation`",
+            "named helper `publish_implementation_output`",
+            "named helper `open_release_rollup_pr_from_action`",
+            "publish worker output",
+            "dispatch reviewers/fix/remote-ci worker",
+            "apply triage decision",
+            "merge PR under review truth table",
+            "close managed item from drop marker",
+            "publish release through #322",
+            "test_wakeup_runner.py",
+            "test_wakeup_runner_review_gate.py",
+            "test_wakeup_runner_release.py",
+            "test_wakeup_plan.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
+        self.assertIn("all required reviewer heads equal live PR head", entry)
+        self.assertIn("all required reviewer heads equal live PR head", self.skill)
+        self.assertIn(
+            "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
+            self.skill,
+        )
+        meta_judge = read(META_JUDGE_PROMPT)
+        self.assertIn(
+            "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
+            meta_judge,
+        )
+
+        for forbidden in (
+            "no arbitrary git/gh command",
+            "workflow tag/release",
+            "prompt-body decision",
+            "standalone authorization from `wakeup-plan`",
+            "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
+            "`ControllerTurnDecision`",
+            "controller-turn worker",
+            "private schema",
+            "active-active scheduler",
+            "`.refactor-loop/host.env` as host production SSOT",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
+        self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
+        self.assertIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
+        self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
+
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "update-check-231")
 
@@ -574,27 +705,50 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         other_mirror_entries = self.mirror.replace(integration_entry, "")
         self.assertNotIn(expected_command, other_mirror_entries)
 
-    def test_phase9_router_open_state_gate_authorizes_only_state_read(self) -> None:
-        # Refactor (fix/pr245-router-authority-anchor): Old: phase9-router's new source issue state read was absent from the mechanical runtime-exception mirror. New: source-regression locks the exact state-only read and lifecycle denials in both mirror and SKILL.
+    def test_phase9_router_open_state_gate_authorizes_only_prompt_source_reads(self) -> None:
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
-            "`gh issue view <N> --json state`",
-            "state-only",
-            "`read-gh`",
+            "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
+            "`gh api repos/<slug>/issues/<N>`",
+            "`gh api repos/<slug>/issues/<N>/comments?per_page=20`",
+            "issue state/title/body",
+            "bounded recent comments",
+            "router-injected issue source snapshots",
+            "router-local prompt-source projection",
+            "not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority",
+            "`gh api repos/<slug>/issues/<N> --jq .state`",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
+            "DesignConsensusIssueIntake",
+            "four built-in phase9 direct routes",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/in-flight for one solver role suppresses only that role",
             "source-OPEN gate",
+            "labels-only live read",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
             "phase9-source-not-open",
             "phase9-source-state-unavailable",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
             "HARNESS_SPAWN_INTENT",
             '`command: "spawn-codex"`',
             'dispatch_state="harness-intent"',
             "test_phase9_router_open_state_gate.py",
+            "test_wakeup_plan.py",
+            "test_wakeup_runner.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
+        self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",
             "gh issue edit",
@@ -612,6 +766,50 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
                 self.assertIn(forbidden, self.skill)
+        self.assertIn("terminal design-consensus suppression must not write spawn intent or dispatch ledger", entry)
+        self.assertIn("without writing spawn intent or dispatch ledger", self.skill)
+
+    def test_phase9_router_terminal_design_gate_matches_implementation(self) -> None:
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+        router = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
+        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        combined_authority = "\n".join((entry, self.skill))
+
+        for token in (
+            "Phase9TerminalDecision",
+            "_solver_dispatch_terminal_decision",
+            "_terminal_consensus_judge_source",
+            "_live_terminal_issue_source",
+            "_append_terminal_fallback_event",
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "META_JUDGE_DONE:consensus:",
+            "PHASE_CONSENSUS_REACHED",
+            "PHASE_IMPLEMENTING",
+            "PHASE_MERGED",
+            "PHASE_CLOSED",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router)
+        self.assertIn('"[.labels[].name]"', router)
+        self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
+        self.assertIn("suppress_terminal_design_consensus_actions", wakeup_plan)
+        self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
+        for token in (
+            "phase9-terminal-eligibility:",
+            "phase9-already-consensus",
+            "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+            "clean consensus judge log",
+            "terminal design-consensus phase labels",
+            "design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only",
+        ):
+            with self.subTest(authority_token=token):
+                self.assertIn(token, combined_authority)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
         # Refactor (iter193/issue-193):
@@ -725,6 +923,40 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(required=required):
                 self.assertIn(required, self.skill)
                 self.assertIn(required, observability_entry)
+
+    def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
+        heading = "## Named runtime exception — observability-comment-writers(per #53)"
+        start = self.skill.index(heading)
+        rest = self.skill[start:]
+        next_heading = rest.find("\n## ", len(heading))
+        section = rest if next_heading == -1 else rest[:next_heading]
+
+        for required in (
+            "Progress target/kind facts are owned locally by `monitors/progress.py`",
+            "exact log basenames are the canonical target source",
+            "prompt fallback applies only when the matching prompt file exists",
+            "Comment-monitor controller-post identity is owned locally by `monitors/comment.py`",
+            "final `⟦AI:AUTO-LOOP⟧` sentinel is canonical",
+            "`CONTROLLER_PREFIXES` is only a legacy compatibility skip list",
+            "private `.refactor-loop` paths derived from `LoopContext`, not host env surfaces",
+            "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "label mutation",
+            "issue/PR close/create/merge",
+            "release/tag",
+            "git lifecycle",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, section)
+
+        for forbidden in (
+            "observability_comments.py",
+            "progress-comment-targets",
+            "PROGRESS_REPORTER_INTERVAL",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, section)
+                self.assertNotIn(forbidden, self.skill)
+                self.assertNotIn(forbidden, self.mirror)
 
 
 if __name__ == "__main__":

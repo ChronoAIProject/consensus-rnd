@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
     Phase9SourceIssueDecision,
@@ -35,6 +36,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.ctx = LoopContext.load(repo_root=self.repo)
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -118,6 +120,87 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(self.commands[0]["command"], "spawn-codex")
         self.assertEqual([entry["key"] for entry in self.ledger_entries()], ["160-3-judge"])
 
+    def test_package_router_design_issue_intake_dispatches_r1_triplet(self) -> None:
+        rows = [
+            {
+                "number": 410,
+                "title": "package intake",
+                "labels": [
+                    {"name": "crnd:lifecycle:managed"},
+                    {"name": "crnd:phase:design-solving"},
+                    {"name": "crnd:human:auto"},
+                ],
+            }
+        ]
+        self.router = Phase9Router(
+            ctx=LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": "owner/repo"}),
+            command_runner=self.commands.append,
+        )
+        self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        for command in self.commands:
+            self.assertEqual(command["cd"], str(self.repo.resolve()))
+            self.assertNotEqual(command["cd"], ".")
+            self.assertTrue(Path(str(command["cd"])).is_absolute())
+        self.assertEqual(
+            sorted(command["log"] for command in self.commands),
+            [
+                ".refactor-loop/logs/phase9-issue410-r1-delete.log",
+                ".refactor-loop/logs/phase9-issue410-r1-minimal.log",
+                ".refactor-loop/logs/phase9-issue410-r1-structural.log",
+            ],
+        )
+        self.assertEqual(
+            sorted(entry["key"] for entry in self.ledger_entries()),
+            ["410-1-delete", "410-1-minimal", "410-1-structural"],
+        )
+
+    def test_design_issue_intake_absolute_cd_matches_concurrency_floor_scope(self) -> None:
+        rows = [
+            {
+                "number": 430,
+                "title": "intake floor scope",
+                "labels": [
+                    {"name": "crnd:lifecycle:managed"},
+                    {"name": "crnd:phase:design-solving"},
+                    {"name": "crnd:human:auto"},
+                ],
+            }
+        ]
+        self.router = Phase9Router(
+            ctx=LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": "owner/repo"}),
+            command_runner=self.commands.append,
+        )
+        self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
+
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.subprocess.run",
+            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
+        ):
+            self.router.tick()
+
+        self.assertEqual(len(self.commands), 3)
+        command = self.commands[0]
+        self.assertEqual(command["cd"], str(self.repo.resolve()))
+        self.assertNotEqual(command["cd"], ".")
+        fake_ps = (
+            f"python3 consensus-rnd-cli spawn-codex --cd {command['cd']} "
+            f"--prompt {self.repo.resolve()}/{command['prompt']} "
+            f"--log {self.repo.resolve()}/{command['log']}\n"
+        )
+        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo))
+        with mock.patch.object(monitor, "run", return_value=mock.Mock(stdout=fake_ps, returncode=0)):
+            self.assertEqual(monitor.count_in_flight_codex(), 1)
+
     # Refactor (impl/issue191-single-active-controller): Old pattern: every
     # device-local phase9 router could write prompts, ledgers, and fallback
     # events. New principle: non-owner routers are read-only/noop.
@@ -155,7 +238,8 @@ class Phase9RouterPackageTests(unittest.TestCase):
             encoding="utf-8"
         )
         self.assertIn("Consensus-rnd Phase design-consensus minimal solver", prompt)
-        self.assertNotRegex(prompt, re.compile(r"\bPhase\s+[0-9]\b"))
+        router_header = prompt.split("## Issue source snapshot", 1)[0]
+        self.assertNotRegex(router_header, re.compile(r"\bPhase\s+[0-9]\b"))
 
     def test_package_router_converge_current_round_dispatches_adjacent_next_round(self) -> None:
         self.write_log(
@@ -193,14 +277,16 @@ class Phase9RouterPackageTests(unittest.TestCase):
             "WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)",
             "WORK_UNIT_SOURCE_REF=gh-issue-114",
             "SOLVER_OUTPUT_PATH=.refactor-loop/runs/phase9-issue114-r2-minimal.md",
-            "gh issue view 114",
-            "issue body/comments are the scope spec when no local audit artifact is provided",
+            "Use the router-injected issue source snapshot as the scope spec",
+            "## Issue source snapshot",
+            "source: gh-issue-114",
         )
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
-        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", prompt)
-        self.assertNotIn("cluster spec", prompt)
+        router_header = prompt.split("## Issue source snapshot", 1)[0]
+        self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", router_header)
+        self.assertNotIn("cluster spec", router_header)
 
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")
@@ -208,6 +294,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router.tick()
         fresh_router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         fresh_router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
+        fresh_router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
         fresh_router.tick()
 
         self.assertEqual(self.commands, [])
@@ -219,6 +306,33 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertEqual(event["key"], "fallback:160-1")
         self.assertEqual(event["marker"], "SOMETHING_DONE:surprise:payload")
         self.assertEqual(self.ledger_entries(), [])
+
+    def test_package_router_ignores_embedded_marker_without_fallback(self) -> None:
+        self.write_log(
+            "phase9-issue160-r1-judge.log",
+            "controller saw META_JUDGE_DONE:converge:round-2:embedded prose",
+            "> META_JUDGE_DONE:converge:round-2:quoted",
+            "grep output: META_JUDGE_DONE:converge:round-2:grep",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
+
+    def test_package_router_ignores_standalone_marker_followed_by_raw_prose(self) -> None:
+        self.write_log(
+            "phase9-issue160-r1-judge.log",
+            "META_JUDGE_DONE:converge:round-2",
+            "later raw judge prose",
+        )
+
+        self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.ledger_entries(), [])
+        self.assertEqual(self.pending_events(), "")
 
     def test_package_router_converge_dispatches_stalled_reflector_when_predicate_holds(self) -> None:
         # Refactor (issue-304): Old: package smoke used a fresh stalled judge
@@ -407,6 +521,13 @@ class Phase9RouterPackageTests(unittest.TestCase):
                 self.assertIn(required, combined)
         self.assertNotIn("Read the three completed solver logs and emit META_JUDGE_DONE", src)
 
+    def test_router_source_uses_standalone_marker_matching(self) -> None:
+        src = PACKAGE_ROUTER.read_text(encoding="utf-8")
+        self.assertIn("MARKER_RE.fullmatch", src)
+        self.assertIn("stripped.startswith(prefix)", src)
+        self.assertNotIn("stripped.find(prefix)", src)
+        self.assertNotIn("MARKER_RE.search", src)
+
     def test_package_main_once_dispatches_via_absolute_repo_root(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_log(f"phase9-issue160-r5-{role}.log", f"SOLVER_DONE:{role}:same:summary")
@@ -416,7 +537,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
             Phase9Router,
             "_read_source_issue_decision",
             return_value=Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open"),
-        ):
+        ), mock.patch.object(Phase9Router, "_open_design_consensus_issues", return_value=[]):
             exit_code = main(["--once", "--repo-root", str(self.repo)], command_runner=commands.append)
 
         self.assertEqual(exit_code, 0)

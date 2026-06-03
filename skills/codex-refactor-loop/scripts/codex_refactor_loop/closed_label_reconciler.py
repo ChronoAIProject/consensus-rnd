@@ -13,6 +13,7 @@ from . import labels as label_catalog
 from .active_controller import require_active_controller, write_active_controller_status
 from .closed_phase_labels import ClosedPhaseLabelPlan, plan_from_gh_item
 from .context import LoopContext, LoopContextError
+from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
 
 
@@ -26,11 +27,17 @@ class ClosedLabelReconciler:
     def __init__(self, ctx: LoopContext, *, dry_run: bool = False) -> None:
         self.ctx = ctx
         self.dry_run = dry_run
+        self._host_label_names: frozenset[str] | None = None
+        self._warned_unresolved_host_labels: set[tuple[str, int, str]] = set()
+        self._apply_skip_reasons: dict[tuple[str, int], str] = {}
 
     # Refactor (iter370/issue-370): keep the #238 reconciler alive across mixed closed-item drift.
     # Old pattern: one slow or failing item could stall the whole tick and let the daemon heartbeat expire.
     # New principle: renew during the tick and isolate each item so closed-only phase reconciliation continues.
     def run_once(self, beat: Callable[[], None] | None = None) -> int:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            log_graphql_backoff("closed-label-reconciler")
+            return 0
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
@@ -53,7 +60,9 @@ class ClosedLabelReconciler:
                     continue
                 live_plan = self.apply_plan(plan)
                 if live_plan is None:
-                    print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
+                    reason = self._apply_skip_reasons.pop((plan.kind, plan.number), None)
+                    if reason is None:
+                        print(f"closed-label-reconciler skip: {plan.kind} #{plan.number} no longer closed managed")
                     continue
                 self.verify_plan(live_plan)
                 print(_format_plan(live_plan, dry_run=False))
@@ -71,15 +80,32 @@ class ClosedLabelReconciler:
         seen: set[tuple[str, int]] = set()
         for kind, state in (("issue", "closed"), ("pr", "closed"), ("pr", "merged")):
             for item in self._list_managed(kind, state):
-                plan = plan_from_gh_item(kind, item, linked_merged=self._issue_has_merged_pr(item) if kind == "issue" else False)
+                plan = plan_from_gh_item(kind, item)
                 if plan is None:
                     continue
                 key = (plan.kind, plan.number)
                 if key in seen:
                     continue
                 seen.add(key)
+                if self._has_human_label_drift(item, plan):
+                    continue
+                if kind == "issue":
+                    plan = plan_from_gh_item(kind, item, linked_merged=self._issue_has_merged_pr(item))
+                    if plan is None:
+                        continue
                 plans.append(plan)
         return tuple(plans)
+
+    def _has_human_label_drift(self, item: Mapping[str, object], plan: ClosedPhaseLabelPlan) -> bool:
+        projection = label_catalog.normalize_label_set(_label_names(item))
+        humans = projection.labels_for_group("human")
+        if len(humans) == 1:
+            return False
+        print(
+            f"closed-label-reconciler warn: {plan.kind} #{plan.number} "
+            f"expected exactly one canonical human label, got {len(humans)}; skipping phase reconciliation"
+        )
+        return True
 
     def apply_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
         live_plan = self._live_plan(plan)
@@ -87,13 +113,67 @@ class ClosedLabelReconciler:
             return None
         if not live_plan.needs_edit:
             return live_plan
+        edit_plan = self._plan_for_host_labels(live_plan)
+        if edit_plan is None:
+            self._warn_unresolved_host_label_once(live_plan)
+            self._apply_skip_reasons[(live_plan.kind, live_plan.number)] = "unresolved-host-label"
+            return None
         command = [live_plan.kind, "edit", str(live_plan.number)]
-        for label in live_plan.add_labels:
+        for label in edit_plan.add_labels:
             command.extend(["--add-label", label])
-        for label in live_plan.remove_labels:
+        for label in edit_plan.remove_labels:
             command.extend(["--remove-label", label])
         self._gh(command)
         return live_plan
+
+    def _warn_unresolved_host_label_once(self, plan: ClosedPhaseLabelPlan) -> None:
+        key = (plan.kind, plan.number, plan.terminal_phase)
+        if key in self._warned_unresolved_host_labels:
+            return
+        self._warned_unresolved_host_labels.add(key)
+        print(
+            f"closed-label-reconciler warn: {plan.kind} #{plan.number} "
+            f"cannot resolve host label for terminal phase {plan.terminal_phase}; skipping phase reconciliation"
+        )
+
+    def _plan_for_host_labels(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
+        add_labels = []
+        for label in plan.add_labels:
+            resolved = self._resolve_writable_label(label)
+            if resolved is None:
+                return None
+            add_labels.append(resolved)
+        return ClosedPhaseLabelPlan(
+            kind=plan.kind,
+            number=plan.number,
+            terminal_phase=plan.terminal_phase,
+            add_labels=tuple(add_labels),
+            remove_labels=plan.remove_labels,
+            reason=plan.reason,
+        )
+
+    def _resolve_writable_label(self, canonical_label: str) -> str | None:
+        host_labels = self._host_labels()
+        if canonical_label in host_labels:
+            return canonical_label
+        for alias in label_catalog.aliases_for(canonical_label):
+            if alias in host_labels:
+                return alias
+        return None
+
+    def _host_labels(self) -> frozenset[str]:
+        if self._host_label_names is not None:
+            return self._host_label_names
+        data = self._gh_json(["label", "list", "--json", "name", "--limit", "1000"], [])
+        if not isinstance(data, list):
+            self._host_label_names = frozenset()
+            return self._host_label_names
+        self._host_label_names = frozenset(
+            str(item.get("name", ""))
+            for item in data
+            if isinstance(item, Mapping)
+        )
+        return self._host_label_names
 
     # Refactor (iter370/issue-370): verify only the terminal phase label this daemon is authorized to own.
     # Old pattern: post-edit verification required a human label and coupled #238 cleanup to human authority.

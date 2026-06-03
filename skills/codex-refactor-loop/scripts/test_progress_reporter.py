@@ -44,6 +44,33 @@ class ProgressReporterTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             self.assertEqual(expected, exit_status(path))
 
+    def test_generic_env_overrides_do_not_change_default_runtime_paths_or_interval(self) -> None:
+        override_root = self.tmp / "override"
+        with mock.patch.dict(
+            os.environ,
+            {
+                "INTERVAL": "1",
+                "STATE_DIR": str(override_root / "state"),
+                "STATE_FILE": str(override_root / "state.json"),
+                "LOG_DIR": str(override_root / "logs"),
+                "PROMPTS_DIR": str(override_root / "prompts"),
+            },
+        ):
+            reporter = ProgressReporter(self.ctx)
+
+        self.assertEqual(600, reporter.interval)
+        self.assertEqual(self.ctx.paths.refactor_loop, reporter.state_dir)
+        self.assertEqual(self.ctx.paths.refactor_loop / "codex-progress-state.json", reporter.state_file)
+        self.assertEqual(self.ctx.paths.refactor_loop / "logs", reporter.log_dir)
+        self.assertEqual(self.ctx.paths.refactor_loop / "prompts", reporter.prompts_dir)
+        self.assertFalse(override_root.exists())
+
+    def test_explicit_interval_parameter_remains_test_seam(self) -> None:
+        with mock.patch.dict(os.environ, {"INTERVAL": "1"}):
+            reporter = ProgressReporter(self.ctx, interval=7)
+
+        self.assertEqual(7, reporter.interval)
+
     def test_exit_failed_posts_and_keeps_failed_state(self) -> None:
         log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
         log.write_text("important failure\nEXIT=17\n", encoding="utf-8")
@@ -52,8 +79,8 @@ class ProgressReporterTests(unittest.TestCase):
         def fake_run(command, cwd, *, check):
             del cwd, check
             text = " ".join(command)
-            if "pr view 47" in text:
-                return mock.Mock(returncode=0, stdout="{}", stderr="")
+            if "api repos/owner/repo/issues/47" in text:
+                return mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")
             if "pr comment 47" in text:
                 return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/47#issuecomment-24680\n", stderr="")
             return mock.Mock(returncode=1, stdout="", stderr="")
@@ -65,6 +92,28 @@ class ProgressReporterTests(unittest.TestCase):
         state = json.loads((self.tmp / ".refactor-loop" / "codex-progress-state.json").read_text(encoding="utf-8"))
         self.assertEqual(state["fix-pr47-round2"]["finished"], "failed")
         self.assertEqual(state["fix-pr47-round2"]["comment_id"], 24680)
+
+    def test_in_flight_progress_body_omits_raw_log_tail(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue81-r10-minimal.log"
+        log.write_text("secret raw worker prose\nSOLVER_DONE:minimal:echo\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        body = reporter.build_body(log.stem, log, "false")
+
+        self.assertIn("Task id: `phase9-issue81-r10-minimal`", body)
+        self.assertIn("Raw log tail is intentionally omitted", body)
+        self.assertNotIn("secret raw worker prose", body)
+        self.assertNotIn("SOLVER_DONE:minimal:echo", body)
+
+    def test_failed_progress_body_keeps_bounded_tail_as_exception_diagnostic(self) -> None:
+        log = self.tmp / ".refactor-loop" / "logs" / "fix-pr47-round2.log"
+        log.write_text("important failure diagnostic\nEXIT=17\n", encoding="utf-8")
+        reporter = ProgressReporter(self.ctx)
+
+        body = reporter.build_body(log.stem, log, "failed")
+
+        self.assertIn("异常诊断 tail (non-zero EXIT only)", body)
+        self.assertIn("important failure diagnostic", body)
 
     def test_orphan_delete_retry_keeps_state_when_delete_fails_and_comment_exists(self) -> None:
         state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
@@ -115,16 +164,49 @@ class ProgressReporterTests(unittest.TestCase):
 
         def fake_gh(args, check=True):
             gh_calls.append(list(args))
-            if args[:2] == ["pr", "view"]:
-                return mock.Mock(returncode=1, stdout="", stderr="not pr")
             return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/191#issuecomment-55\n", stderr="")
 
         with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
-            with mock.patch.object(reporter, "gh", side_effect=fake_gh):
-                reporter.post_or_update(log.stem, log)
+            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({}), stderr="")):
+                with mock.patch.object(reporter, "gh", side_effect=fake_gh):
+                    reporter.post_or_update(log.stem, log)
 
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertIn(log.stem, reporter._state())
+
+    def test_parse_kind_uses_rest_issue_pull_request_projection(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+        calls: list[list[str]] = []
+
+        def fake_gh_api(args, check=True):
+            del check
+            calls.append(list(args))
+            if args == ["repos/owner/repo/issues/47"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"number": 47, "pull_request": {"url": "x"}}), stderr="")
+            if args == ["repos/owner/repo/issues/48"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"number": 48}), stderr="")
+            return mock.Mock(returncode=1, stdout="", stderr="")
+
+        with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
+            self.assertEqual("pr", reporter.parse_kind("47"))
+            self.assertEqual("issue", reporter.parse_kind("48"))
+            self.assertEqual("issue", reporter.parse_kind("49"))
+
+        self.assertEqual(
+            calls,
+            [
+                ["repos/owner/repo/issues/47"],
+                ["repos/owner/repo/issues/48"],
+                ["repos/owner/repo/issues/49"],
+            ],
+        )
+
+    def test_parse_kind_does_not_use_pr_view(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+
+        with mock.patch.object(reporter, "gh", side_effect=AssertionError("gh pr view must not be called")):
+            with mock.patch.object(reporter, "gh_api", return_value=mock.Mock(returncode=0, stdout=json.dumps({"pull_request": {}}), stderr="")):
+                self.assertEqual("pr", reporter.parse_kind("47"))
 
     def test_parse_target_accepts_exact_owner_local_log_names(self) -> None:
         reporter = ProgressReporter(self.ctx)
@@ -177,6 +259,18 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
         self.assertIn("TEST_NO_LOOP", text)
         executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         self.assertNotIn(r"^phase9-issue([0-9]+).*", executable)
+        for token in (
+            'os.environ.get("INTERVAL"',
+            'os.environ.get("STATE_DIR"',
+            'os.environ.get("STATE_FILE"',
+            'os.environ.get("LOG_DIR"',
+            'os.environ.get("PROMPTS_DIR"',
+            "PROGRESS_REPORTER_INTERVAL",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, executable)
+        self.assertIn('f"repos/{self.repo}/issues/{target}"', text)
+        self.assertNotIn('["pr", "view"', text)
 
 
 if __name__ == "__main__":

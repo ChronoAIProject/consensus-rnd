@@ -187,8 +187,9 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertIn(label_catalog.HUMAN_MAINTAINER_DECISION, labels)
             heartbeat_signal = stability.signals["fresh_heartbeats"]
             self.assertEqual(heartbeat_signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 6)
+            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 7)
             self.assertTrue(heartbeat_signal["heartbeats"]["closed_label_reconciler"])
+            self.assertTrue(heartbeat_signal["heartbeats"]["wakeup_runner_daemon"])
 
     def test_live_release_gate_fails_closed_when_auto_release_lacks_host_required_checks(self) -> None:
         for value in (None, ""):
@@ -360,8 +361,9 @@ class ReleaseGateModuleTests(unittest.TestCase):
         self.assertEqual(gate.REQUIRED_CHECKS({"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests,manifest-version-sync,skill-degradation"}), ("contract-tests", "manifest-version-sync", "skill-degradation"))
         self.assertEqual(gate.HEARTBEAT_FRESH_SECONDS, 90)
         self.assertEqual(gate.DAEMON_NAMES, restart.restart_managed_daemon_names())
-        self.assertEqual(6, len(gate.DAEMON_NAMES))
+        self.assertEqual(7, len(gate.DAEMON_NAMES))
         self.assertIn("closed_label_reconciler", gate.DAEMON_NAMES)
+        self.assertIn("wakeup_runner_daemon", gate.DAEMON_NAMES)
 
     def test_fresh_heartbeats_requires_each_restart_managed_daemon(self) -> None:
         with copy_repo_fixture() as tmp:

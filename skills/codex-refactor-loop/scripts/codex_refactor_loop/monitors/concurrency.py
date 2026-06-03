@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from typing import Any, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
@@ -264,7 +266,10 @@ class ConcurrencyMonitor:
                 continue
             if " -c " in line:
                 continue
-            tokens = line.split()
+            try:
+                tokens = shlex.split(line)
+            except ValueError:
+                continue
             try:
                 spawn_index = tokens.index("spawn-codex")
             except ValueError:
@@ -275,8 +280,11 @@ class ConcurrencyMonitor:
                 continue
             if cd_index + 1 >= len(tokens):
                 continue
+            cd_token = Path(tokens[cd_index + 1]).expanduser()
+            if not cd_token.is_absolute():
+                cd_token = self.repo_root / cd_token
             try:
-                cd_path = Path(tokens[cd_index + 1]).expanduser().resolve()
+                cd_path = cd_token.resolve()
             except OSError:
                 continue
             if not (cd_path == self.repo_root or self.repo_root in cd_path.parents):
@@ -491,6 +499,10 @@ class ConcurrencyMonitor:
 
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
         if actual >= floor:
+            return actual
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            self.write_pending_event("DISPATCH_BACKOFF:graphql-headroom-low")
+            log_graphql_backoff("concurrency-monitor")
             return actual
         max_dispatches = floor - actual
         for _ in range(max_dispatches):

@@ -82,14 +82,17 @@ class ProjectRulesPatchArtifact:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         original_name = str(report.target_relative)
         updated_name = str(report.target_relative)
+        proposed_text = _ensure_trailing_newline(report.proposed_text)
         patch = "".join(
             difflib.unified_diff(
                 report.original_text.splitlines(keepends=True),
-                report.proposed_text.splitlines(keepends=True),
+                proposed_text.splitlines(keepends=True),
                 fromfile=f"a/{original_name}",
                 tofile=f"b/{updated_name}",
+                lineterm="\n",
             )
         )
+        patch = _ensure_trailing_newline(patch)
         self.path.write_text(patch, encoding="utf-8")
         return self.path
 
@@ -196,6 +199,12 @@ class ProjectRulesFixedPointProbe:
             f"{CANONICAL_BODY}"
             f"{END_MARKER}"
         )
+
+
+def _ensure_trailing_newline(text: str) -> str:
+    if text.endswith("\n"):
+        return text
+    return f"{text}\n"
 
 
 def main(argv: list[str] | None = None) -> int:

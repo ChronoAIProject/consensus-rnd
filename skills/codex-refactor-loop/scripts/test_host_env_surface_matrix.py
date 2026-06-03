@@ -313,6 +313,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
     def test_high_risk_runtime_literals_remain_aligned(self) -> None:
         release_gate = read(SCRIPTS_DIR / "codex_refactor_loop" / "release" / "gate.py")
         comment_monitor = read(SCRIPTS_DIR / "codex_refactor_loop" / "monitors" / "comment.py")
+        progress_monitor = read(SCRIPTS_DIR / "codex_refactor_loop" / "monitors" / "progress.py")
         concurrency_monitor = read(SCRIPTS_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py")
         sync_dev = read(SCRIPTS_DIR / "codex_refactor_loop" / "sync" / "dev.py")
         active_controller = read(SCRIPTS_DIR / "codex_refactor_loop" / "active_controller.py")
@@ -322,7 +323,20 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("empty GH_REPO_SLUG, REVIEW_BASE_BRANCH, or INTEGRATION_BRANCH", release_gate)
         self.assertIn("MAINTAINER_WHITELIST is unset; comment-monitor fails closed", comment_monitor)
         self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', comment_monitor)
+        self.assertIn('os.environ.get("COMMENT_MONITOR_INTERVAL")', comment_monitor)
         self.assertIn('return f"updated:>={raw}"', comment_monitor)
+        for key in ("STATE_DIR", "STATE_FILE", "LOG_DIR", "PROMPTS_DIR", "PROGRESS_REPORTER_INTERVAL"):
+            with self.subTest(unregistered=key):
+                self.assertNotIn(key, self.rows)
+                self.assertNotIn(key, self.exports)
+                self.assertNotIn(key, read(SKILL_MD))
+                self.assertNotIn(key, read(HOST_ENV_EXAMPLE))
+                self.assertNotIn(key, progress_monitor)
+                self.assertNotIn(key, comment_monitor)
+        self.assertNotIn('os.environ.get("INTERVAL"', progress_monitor)
+        self.assertNotIn('os.environ.get("INTERVAL"', comment_monitor)
+        self.assertNotIn('os.environ.get("STATE_FILE"', comment_monitor)
+        self.assertNotIn('os.environ.get("STATE_FILE"', progress_monitor)
         self.assertIn('os.environ.get("CODEX_FLOOR", "5")', concurrency_monitor)
         self.assertIn("return max(2, floor)", concurrency_monitor)
         self.assertIn('env.get("UPDATE_CHECK_ENABLE")', read(SCRIPTS_DIR / "codex_refactor_loop" / "update_check.py"))

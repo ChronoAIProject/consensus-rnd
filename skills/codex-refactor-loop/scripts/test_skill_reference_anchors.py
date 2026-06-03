@@ -235,6 +235,38 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+        section = section_after_anchor(self.skill, "large-issue-decomposition")
+        for needle in (
+            "IssueDecompositionPlan",
+            "parent_issue",
+            "source_consensus_artifact",
+            "body_artifact_path",
+            "parent_update",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "parent epic remains open/tracking",
+            "META_JUDGE_DONE:consensus:decompose",
+            "phase9-router-fallback",
+            "completed_marker_actions()",
+            "kind: completed-marker",
+            "peek",
+            "wakeup_plan.py` is not the #403 owner",
+            "must not project a decompose action/status",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        for forbidden in (
+            "public issue factory",
+            "parent issue close",
+            "reopen",
+            "body edit",
+            "title edit",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
@@ -248,8 +280,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "WORK_UNIT_SOURCE_REF",
             "source_ref",
             "gh-issue-<N>",
-            "gh issue view <N>",
-            "issue body/comments are the scope source",
+            "router-injected issue source snapshot is the preferred scope source",
+            "bounded issue title/body and recent comments",
+            "prompt projection only",
+            "not durable schema, host production SSOT, lifecycle authority",
+            "`gh issue view <N>` issue body/comments are fallback-only",
             "must not be fabricated",
             "A missing audit `evidence:` block is not by itself a defect for manual issues",
             "Path A issue body/comments that cite files absent from the current checkout",
@@ -264,6 +299,28 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, phase9)
 
+    def test_router_injected_issue_source_snapshot_contract_matches_router_surface(self) -> None:
+        phase9 = section_after_heading(
+            self.skill,
+            "Consensus-rnd Phase design-consensus — Multi-solver design consensus (sole authorization gate)",
+        )
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        combined = "\n".join((phase9, router))
+
+        for needle in (
+            "IssueSourceSnapshot",
+            "def _issue_source_snapshot_markdown",
+            "def _read_issue_source_snapshot",
+            "def _issue_snapshot_preferred_text",
+            "router-injected issue source snapshot is the preferred scope source",
+            "`gh issue view <N>` issue body/comments are fallback-only",
+            "Snapshot unavailable.",
+            "Fallback only: run `gh issue view",
+            "/comments?per_page=20",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_release_countdown_contract_is_wakeup_plan_only_status_projection(self) -> None:
         milestone = section_after_heading(self.skill, "Milestone priority(强制)")
         wakeup = section_after_heading(self.skill, "Wakeup Skeleton")
@@ -271,13 +328,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         for needle in (
             "crnd:milestone:release-target",
             "release countdown status",
+            "explicit-target precedence",
             "non-exclusive milestone fact",
-            "crnd:milestone:current` remains dispatch priority only and must not trigger release countdown by itself",
+            "crnd:milestone:current` remains dispatch priority only and must not trigger explicit release-target mode by itself",
             "wakeup-plan-only and read-only",
             "status-only, non-dispatchable `release-countdown` action",
+            "does not query the GitHub milestones API",
+            "default goal countdown",
+            "GitHub open milestones",
+            "`due_on` ascending",
+            "no `due_on` sorted after dated milestones",
+            "goal.milestone: null",
             "release-gate scoring source",
             ".version-bump.json",
             "existing release commits projection",
+            'activation: "explicit-target" | "default-goal"',
+            "goal.milestone",
+            "goal.release",
+            "goal.release.passed_signals",
+            "goal.release.total_signals",
+            "goal.release.countdown_to_version",
             "no_lifecycle_authority",
             "targets",
             "from_version",
@@ -287,6 +357,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "red_signals",
             "blocked_reasons",
             'source: "release-gate"',
+            "host.env",
+            "statusline snapshots",
+            "local state are not a goal SSOT",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, milestone)
@@ -304,7 +377,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, milestone)
-        self.assertIn("release-countdown status is status-only", wakeup)
+        self.assertIn("Release-countdown status is status-only", wakeup)
         self.assertIn("not dispatchable", wakeup)
 
     def test_skill_documents_transition_assessment_sidecar_boundary(self) -> None:
@@ -669,10 +742,35 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(token, self.skill)
         self.assertIn(".controller-pending-events.log", self.skill)
         self.assertIn("no lifecycle authority", self.skill)
-        self.assertIn("`gh issue view <N> --json state`", self.skill)
+        self.assertIn("DesignConsensusIssueIntake", self.skill)
+        self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
+        self.assertIn("existing evidence/log/in-flight for one solver role suppresses only that role", self.skill)
+        self.assertNotIn("with no r1 solver evidence", self.skill)
+        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
+        self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
+        self.assertIn("`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`", self.skill)
+        self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
+        self.assertIn("wakeup-plan design-consensus issue evidence is status-only", self.skill)
+        self.assertIn("design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only", self.skill)
         self.assertIn("state-only", self.skill)
+        self.assertIn("labels-only terminal gate", self.skill)
         self.assertIn("phase9-source-not-open", self.skill)
         self.assertIn("phase9-source-state-unavailable", self.skill)
+        self.assertIn("phase9-terminal-eligibility:", self.skill)
+        self.assertIn("phase9-already-consensus", self.skill)
+        self.assertIn("clean consensus judge log", self.skill)
+        self.assertIn("terminal design-consensus phase labels", self.skill)
+        for label in (
+            "crnd:phase:consensus-reached",
+            "crnd:phase:implementing",
+            "crnd:phase:merged",
+            "crnd:phase:closed",
+        ):
+            with self.subTest(label=label):
+                self.assertIn(label, self.skill)
         self.assertIn("skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229", self.skill)
         self.assertIn("must not introduce ControllerEvent, ControllerCommand, SpawnIntentInbox, spawn-intents, ControllerOrchestrator", self.skill)
 
@@ -928,15 +1026,16 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "peek.py",
                 "phase9/router.py",
                 "wakeup_plan.py",
+                "wakeup_runner.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "review-pr": {"monitors/progress.py", "monitors/concurrency.py", "peek.py"},
-            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py"},
+            "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_runner.py"},
+            "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
-            "COMMANDS": {"cli.py", "restart.py"},
+            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():
@@ -1033,6 +1132,9 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "HostWorkflowSpec is not a phase9 direct-spawn-intent authority",
             "host `roles`, `dispatch`, and `consensus_policies` are validation/display/data-only projection surfaces",
             "must not alter this allowlist or block the built-in router routes",
+            "DesignConsensusIssueIntake",
+            "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
+            "existing evidence/log/in-flight for one solver role suppresses only that role",
             "SOLVER_DONE:<minimal|structural|delete>:*",
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
@@ -1157,6 +1259,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("prefix `phase9-triplet-suppression:`", self.skill)
         self.assertIn("reason exactly one of", self.skill)
 
+    def test_structured_consumption_boundary_contract_is_locked(self) -> None:
+        wakeup_plan = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        router = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py").read_text(encoding="utf-8")
+        progress = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py").read_text(
+            encoding="utf-8"
+        )
+        for needle in (
+            '<a id="structured-consumption-boundary"></a>',
+            "final allowlisted standalone marker/verdict lines",
+            "artifact frontmatter",
+            "CLI JSON/action fields",
+            "artifact paths",
+            "EXIT!=0",
+            "stream disconnect/503",
+            "stuck/crash",
+            "missing/invalid structured artifact",
+            "router fallback",
+            "worker self-post failure",
+            "controller must not summarize or transcribe",
+            "Worker self-posts own full solver, judge, reviewer, or fix artifacts",
+            "REVIEW_ARCHITECT_PATH",
+            "REVIEW_TESTS_PATH",
+            "REVIEW_QUALITY_PATH",
+            "FIX_OUTPUT_PATH",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+        self.assertIn("DONE_PREFIX_RE.fullmatch", wakeup_plan)
+        self.assertNotIn("' '.join(tail_lines(log_path, 40))", wakeup_plan)
+        self.assertIn("MARKER_RE.fullmatch", router)
+        self.assertNotIn("stripped.find(prefix)", router)
+        self.assertIn("Raw log tail is intentionally omitted", progress)
+        self.assertIn("异常诊断 tail (non-zero EXIT only)", progress)
+
 
 class AutoLoopStatuslineContractTests(unittest.TestCase):
     # Refactor (iter1/issue-140):
@@ -1230,6 +1366,84 @@ class AutoLoopStatuslineContractTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertIn(field, self.skill)
+
+
+class WakeupRunnerContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.skill = read(SKILL_MD)
+        self.claude = read(REPO_ROOT / "CLAUDE.md")
+
+    def test_wakeup_runner_396_anchor_and_claude_carveout_are_locked(self) -> None:
+        available = reference_anchors(self.skill)
+        self.assertIn("named-runtime-exception---wakeup-runnerper-396", available)
+        for needle in (
+            "#396 是唯一 unattended wakeup-runner carveout",
+            "evidence-bound closed action projection",
+            "`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source",
+            "不得新增 `ControllerTurnDecision`/controller-turn worker/schema",
+            "不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
+            "不得把 `.refactor-loop/host.env` 当 host production SSOT",
+            "允许动作仅限 spawn codex",
+            "named helper `dispatch_consensus_implementation`",
+            "named helper `publish_implementation_output`",
+            "named helper `open_release_rollup_pr_from_action`",
+            "publish release through #322",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.claude)
+
+    def test_consensus_implementation_projection_fact_source_is_judge_only(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        meta_judge = read(SKILL_ROOT / "prompts" / "meta-judge.md")
+        for needle in (
+            "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
+            "named helper `dispatch_consensus_implementation`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, wakeup_runner)
+        for needle in (
+            "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
+            "scope_paths",
+            "old_pattern",
+            "new_principle",
+            "verification_hints",
+            "Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, meta_judge)
+
+    def test_wakeup_plan_closed_projection_is_not_standalone_authorization(self) -> None:
+        section = section_after_heading(self.skill, "Wakeup Skeleton")
+        for needle in (
+            'mode: "closed-action-projection"',
+            'no_lifecycle_authority: true',
+            'apply_authority: "wakeup-runner-396-only"',
+            'runner_authority: "wakeup-runner-396"',
+            "status actions remain `status_only: true` and cannot apply",
+            "not standalone authorization source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section + self.skill)
+        self.assertNotIn("ControllerTurnDecision", self.skill.replace("`ControllerTurnDecision`", ""))
+
+    def test_review_gate_requires_per_reviewer_live_head_binding(self) -> None:
+        review_gate = section_after_heading(self.skill, "Consensus-rnd Phase review-gate — Multi-codex PR review with consensus merge")
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        combined = "\n".join((review_gate, wakeup_runner))
+        for needle in (
+            "missing/stale per-reviewer head SHA",
+            "every required reviewer head SHA equals the live PR head",
+            "Review artifact verdict authority does not bypass current-head binding; merge readiness requires every required reviewer artifact to bind to the live PR head.",
+            "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
+            "`wakeup-plan` action `head_sha` is not reviewer-head authority",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_restart_managed_daemon_list_mentions_seventh_daemon(self) -> None:
+        self.assertIn("All seven daemon command bodies", self.skill)
+        self.assertIn("wakeup_runner_daemon", self.skill)
+        self.assertIn("`consensus-rnd-cli wakeup-runner`", self.skill)
 
 
 if __name__ == "__main__":

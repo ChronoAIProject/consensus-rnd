@@ -17,6 +17,7 @@ from typing import Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 
 
@@ -53,11 +54,11 @@ class ProgressReporter:
         self.repo = ctx.gh_repo_slug
         if not self.repo:
             raise RuntimeError("FATAL: GH_REPO_SLUG is unset and gh repo view failed")
-        self.interval = int(interval or os.environ.get("INTERVAL", "600"))
-        self.state_dir = Path(os.environ.get("STATE_DIR", str(ctx.paths.refactor_loop)))
-        self.state_file = Path(os.environ.get("STATE_FILE", str(self.state_dir / "codex-progress-state.json")))
-        self.log_dir = Path(os.environ.get("LOG_DIR", str(self.state_dir / "logs")))
-        self.prompts_dir = Path(os.environ.get("PROMPTS_DIR", str(self.state_dir / "prompts")))
+        self.interval = int(interval or 600)
+        self.state_dir = ctx.paths.refactor_loop
+        self.state_file = self.state_dir / "codex-progress-state.json"
+        self.log_dir = self.state_dir / "logs"
+        self.prompts_dir = self.state_dir / "prompts"
         self.state_dir.mkdir(parents=True, exist_ok=True)
         if not self.state_file.exists():
             self.state_file.write_text("{}\n", encoding="utf-8")
@@ -71,6 +72,9 @@ class ProgressReporter:
             self.heartbeat.sleep_with_lease(self.interval)
 
     def tick(self) -> None:
+        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
+            log_graphql_backoff("progress-reporter")
+            return
         for log in sorted(self.log_dir.glob("*.log")):
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
@@ -90,7 +94,16 @@ class ProgressReporter:
         return ""
 
     def parse_kind(self, target: str) -> str:
-        return "pr" if self.gh(["pr", "view", target, "--json", "number"], check=False).returncode == 0 else "issue"
+        result = self.gh_api([f"repos/{self.repo}/issues/{target}"], check=False)
+        if result.returncode != 0 or not result.stdout.strip():
+            return "issue"
+        try:
+            payload = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return "issue"
+        if isinstance(payload, dict) and isinstance(payload.get("pull_request"), dict):
+            return "pr"
+        return "issue"
 
     def is_zombie(self, log: Path) -> bool:
         if exit_status(log) == "exit_ok":
@@ -105,18 +118,23 @@ class ProgressReporter:
             elapsed_min = int((time.time() - log.stat().st_ctime) / 60)
         except OSError:
             elapsed_min = 0
-        tail_block = extract_tail(log)
         if finished == "failed":
             status_line = f"❌ 失败; 已跑 {elapsed_min} min"
+            details = f"""异常诊断 tail (non-zero EXIT only):
+
+```
+{extract_tail(log)}
+```"""
             delete_note = "codex 已非零退出;保留此 comment 直到 controller 处理失败。"
         else:
             status_line = f"⏳ 进行中; 已跑 {elapsed_min} min"
+            details = f"""Task id: `{base}`
+Log: `{log.name}`
+Raw log tail is intentionally omitted while the worker is still running."""
             delete_note = "自动更新每 10 分钟;edit-in-place 不堆评论;codex EXIT=0 后此 comment 自动删除。"
         body = f"""## 📊 codex 进展 {base} ({status_line})
 
-```
-{tail_block}
-```
+{details}
 
 > {delete_note}
 🤖 controller progress reporter

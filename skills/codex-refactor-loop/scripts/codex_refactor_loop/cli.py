@@ -13,6 +13,8 @@ from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
 from .daemon_status import main as daemon_status_main
+from .gh_accounting import activate_controller_accounting
+from .gh_accounting import main as gh_stats_main
 from .labels import main as labels_main
 from .monitors.comment import main as comment_monitor_main
 from .monitors.concurrency import main as concurrency_main
@@ -27,6 +29,7 @@ from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
+from .wakeup_runner import main as wakeup_runner_main
 
 
 SCRIPT_DIR = Path(__file__).resolve().parents[1]
@@ -48,7 +51,28 @@ class CommandSpec:
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
+    "gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",)),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
+    "wakeup-runner": CommandSpec(
+        wakeup_runner_main,
+        "apply the #396 wakeup-plan closed action projection",
+        (
+            "read-state",
+            "read-log",
+            "read-gh",
+            "read-git",
+            "write-artifact",
+            "write-event",
+            "spawn",
+            "git-commit-worker-output",
+            "git-push",
+            "gh-open",
+            "gh-merge",
+            "gh-close-linked",
+            "gh-label-owned",
+            "controller-lifecycle-runner",
+        ),
+    ),
     "pr-checks": CommandSpec(
         pr_checks_main,
         "read PR-head check-runs through the narrow Checks API projection",
@@ -172,6 +196,7 @@ class RuntimeCommandRouter:
         return self.run(args.command, list(args.args))
 
     def run(self, command: str, args: Sequence[str]) -> int:
+        activate_controller_accounting(skill_root=self.script_dir.parent)
         spec = COMMANDS.get(command)
         if spec is None:
             sys.stderr.write(f"unknown command: {command}\n")

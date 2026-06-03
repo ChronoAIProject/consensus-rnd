@@ -111,10 +111,15 @@ decision: consensus | converge
 
 ## If consensus
 - Chosen framing: <minimal | structural | delete | hybrid-A+B>
-- Implement plan (verbatim copy from the winning solver's "Concrete plan" section)
+- Implement plan (structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text):
+  - scope_paths: <newline list of repo-relative files/directories allowed for implementation>
+  - old_pattern: <concise statement of the rejected pattern>
+  - new_principle: <concise statement of the replacement principle>
+  - verification_hints: <optional test/guard commands or empty>
 - Philosophy/CLAUDE.md/SPEC/Tier changes included: <none OR exact agreed clause/file changes from the winning plan>
 - Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>
 - Add `crnd:triage:resume-requested` label to issue ${ISSUE_NUMBER}
+- For large-issue decomposition consensus, the decision may authorize an `IssueDecompositionPlan` artifact and child body artifacts only. Do not authorize solver/judge/implement worker GitHub lifecycle calls, public issue factory commands, parent close/reopen/body-title edits, or `wakeup_plan.py` decompose projections.
 
 ## If converge
 - Convergence question (specific): <one sentence>
@@ -153,6 +158,7 @@ Refactor (iter6/issue-118):
 
 - You do NOT propose a solution; you ARBITRATE between proposals.
 - You do NOT dispatch other codexes; controller does.
+- You do NOT run GitHub lifecycle mutation. For decomposition, judge only the `IssueDecompositionPlan` artifact boundary; active-controller checked-in helpers own issue creation.
 - You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
 - Be willing to converge on philosophy. Fundamental philosophy gaps are not human escalation by themselves; ask the solvers for exact clause/Tier/SPEC changes until consensus or router-derived true stall.
 - Treat deep consensus as sufficient authorization. Never require post-consensus human approval, physical GPG ratification, or Tier I reinstall ratification.

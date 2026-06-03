@@ -17,6 +17,7 @@ from typing import Any, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
+from .gh_accounting import accounting_env
 from .retention import retain_logs
 from .update_check import maybe_run_update_check
 
@@ -30,6 +31,7 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
     ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
+    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")),
 )
 
 def restart_managed_daemon_names() -> tuple[str, ...]:
@@ -292,7 +294,13 @@ class RestartDaemons:
             return
         self._stop_existing_daemon(name)
         wrapper_code = WRAPPER_CODE
-        env = self.ctx.env_for_subprocess()
+        env = accounting_env(
+            self.ctx.env_for_subprocess(),
+            skill_root=self.ctx.skill_root,
+            repo_root=self.ctx.repo_root,
+            source=f"daemon:{name}",
+            force_source=True,
+        )
         env.update(
             {
                 "RESTART_DAEMON_NAME": name,

@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.phase9.router import Phase9Router
 
 
@@ -30,10 +31,7 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         return Phase9Router(ctx=LoopContext.load(repo_root=self.repo, env=env))
 
     def assert_state_only_read(self, command: list[str], *, issue: str, repo_slug: str | None = None) -> None:
-        # Refactor (fix/pr245-router-authority-anchor): Old: tests covered route suppression through a fake source-issue decision but did not prove the real gh argv was state-only. New: behavior tests assert the exact read command and forbid lifecycle/mutation flags.
-        expected = ["gh", "issue", "view", issue, "--json", "state"]
-        if repo_slug:
-            expected.extend(["--repo", repo_slug])
+        expected = ["gh", "api", f"repos/{repo_slug}/issues/{issue}"]
         self.assertEqual(expected, command)
         forbidden = {
             "--add-label",
@@ -53,20 +51,21 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
             "pr",
             "release",
             "reopen",
+            "view",
         }
         self.assertFalse(set(command) & forbidden)
 
     def test_open_state_allows_dispatch_using_exact_state_only_issue_read(self) -> None:
-        result = mock.Mock(returncode=0, stdout=json.dumps({"state": " open "}), stderr="")
+        result = mock.Mock(returncode=0, stdout=json.dumps({"state": "open", "title": "issue", "body": ""}), stderr="")
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
-            decision = self.router()._read_source_issue_decision("37")
+            decision = self.router(gh_repo_slug="owner/repo")._read_source_issue_decision("37")
 
         self.assertTrue(decision.allowed)
         self.assertEqual("OPEN", decision.state)
         self.assertEqual("phase9-source-open", decision.reason)
         run.assert_called_once()
         command = run.call_args.args[0]
-        self.assert_state_only_read(command, issue="37")
+        self.assert_state_only_read(command, issue="37", repo_slug="owner/repo")
         self.assertEqual(str(self.repo.resolve()), run.call_args.kwargs["cwd"])
         self.assertEqual(15, run.call_args.kwargs["timeout"])
         self.assertFalse(run.call_args.kwargs["check"])
@@ -81,6 +80,43 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         self.assertEqual("phase9-source-not-open", decision.reason)
         run.assert_called_once()
         self.assert_state_only_read(run.call_args.args[0], issue="245", repo_slug="owner/repo")
+
+    def test_design_issue_intake_uses_open_managed_list_without_lifecycle_commands(self) -> None:
+        rows = [
+            {
+                "number": 416,
+                "title": "design issue",
+                "labels": [
+                    {"name": label_catalog.MANAGED},
+                    {"name": label_catalog.PHASE_DESIGN_SOLVING},
+                    {"name": label_catalog.HUMAN_AUTO},
+                ],
+            }
+        ]
+        result = mock.Mock(returncode=0, stdout=json.dumps(rows), stderr="")
+        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
+            issues = self.router(gh_repo_slug="owner/repo")._open_design_consensus_issues()
+
+        self.assertEqual([issue.number for issue in issues], ["416"])
+        command = run.call_args.args[0]
+        self.assertEqual(
+            command,
+            [
+                "gh",
+                "issue",
+                "list",
+                "--repo",
+                "owner/repo",
+                "--state",
+                "open",
+                "--label",
+                "crnd:lifecycle:managed",
+                "--json",
+                "number,title,labels",
+            ],
+        )
+        forbidden = {"close", "comment", "create", "delete", "edit", "merge", "pr", "release", "reopen"}
+        self.assertFalse(set(command) & forbidden)
 
 
 if __name__ == "__main__":

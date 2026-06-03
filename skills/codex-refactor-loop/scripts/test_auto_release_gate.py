@@ -602,9 +602,10 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertTrue(signal["passed"])
             self.assertEqual(signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 7)
+            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 8)
             self.assertTrue(signal["heartbeats"]["concurrency_monitor"])
             self.assertTrue(signal["heartbeats"]["closed_label_reconciler"])
+            self.assertTrue(signal["heartbeats"]["wakeup_runner_daemon"])
 
     def test_fail_closed_when_any_restart_managed_heartbeat_is_missing(self) -> None:
         with copy_repo_fixture() as tmp:
