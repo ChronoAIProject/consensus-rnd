@@ -1017,6 +1017,59 @@ class ControllerActionsTests(unittest.TestCase):
         fresh_safe_worktree.assert_called_once_with("413", "issue-413", "canonical-integration")
         self.assertIn("HARNESS_SPAWN_INTENT", self.pending_events())
 
+    def test_dispatch_consensus_implementation_clears_failed_log_before_fresh_spawn_intent(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        action = {
+            "target_kind": "issue",
+            "target_number": 493,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue493-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue493-r5-judge.md",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+            "verification_hints": "python3 -m unittest",
+            "cluster_id": "issue-493",
+            "iteration": "493",
+            "source_ref": "gh-issue-493",
+        }
+        worktree = self.tmp / ".worktrees" / "iter493-issue-493"
+        log = self.tmp / ".refactor-loop" / "logs" / "implement-issue-493.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("old failed run\nEXIT=1\n", encoding="utf-8")
+
+        def fake_render(_template: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
+            Path(output_path).write_text("rendered prompt\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter493-issue-493")):
+                with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
+                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+
+        self.assertFalse(log.exists())
+        projected = harness_spawn_intent_actions(
+            self.tmp,
+            LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp, read_only=True),
+            monitor=None,
+            gh_items=[],
+            gh_items_loaded=False,
+        )
+        self.assertEqual(1, len(projected), projected)
+        self.assertEqual(str(log.resolve()), projected[0]["log"])
+
+    def test_dispatch_consensus_implementation_preserves_inflight_and_publish_ready_logs(self) -> None:
+        for name, contents in (
+            ("in-flight", "worker still running\n"),
+            ("publish-ready", "IMPLEMENT_DONE:issue-493:ok\nEXIT=0\n"),
+        ):
+            with self.subTest(name=name):
+                log = self.tmp / ".refactor-loop" / "logs" / f"implement-issue-493-{name}.log"
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_text(contents, encoding="utf-8")
+
+                self.actions._clear_stale_implement_log_for_fresh_dispatch(log)
+
+                self.assertTrue(log.exists())
+
     def test_dispatch_reviewers_renders_three_role_prompts_with_pr_facts(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-reviewers", lease_id="lease", expires_at="soon")
         render_envs: list[dict[str, str]] = []

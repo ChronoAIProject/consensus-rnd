@@ -1554,6 +1554,80 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
 
+    def test_failed_consensus_implementation_redispatch_clears_log_and_spawn_launches(self) -> None:
+        failed_log = self.repo / ".refactor-loop/logs/implement-issue-20.log"
+        failed_log.write_text("old failed run\nEXIT=1\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+
+        class ClearingActions(FakeActions):
+            def __init__(inner_self, ctx: LoopContext) -> None:
+                super().__init__()
+                inner_self.ctx = ctx
+
+            def dispatch_consensus_implementation(inner_self, action: dict) -> int:
+                inner_self.calls.append(("dispatch_consensus_implementation", dict(action)))
+                failed_log.unlink(missing_ok=True)
+                prompt = inner_self.ctx.paths.prompts / "implement-issue-20.md"
+                prompt.write_text("fresh prompt\n", encoding="utf-8")
+                inner_self.ctx.paths.pending_events.write_text(
+                    "2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT "
+                    + json.dumps(
+                        {
+                            "intent_id": "dispatch-consensus-implementation:20",
+                            "source": "controller-actions",
+                            "route": "dispatch-consensus-implementation",
+                            "task_id": "implement-issue-20",
+                            "priority": "p1",
+                            "command": "spawn-codex",
+                            "controller_action": "spawn_codex_harness_background",
+                            "cd": str(worktree.resolve()),
+                            "prompt": ".refactor-loop/prompts/implement-issue-20.md",
+                            "log": ".refactor-loop/logs/implement-issue-20.log",
+                            "stall": 5400,
+                            "reason": "issue #20 consensus implementation",
+                            "run_in_background_required": True,
+                            "no_lifecycle_authority": True,
+                        },
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                return 0
+
+        actions = ClearingActions(self.ctx)
+        dispatch_action = self.consensus_action(action_id="consensus:failed-log")
+        dispatch_results = self.run_result(self.base_plan(dispatch_action), actions=actions)
+
+        self.assertEqual(dispatch_results[0].status, "applied")
+        self.assertFalse(failed_log.exists())
+
+        spawn_plan = self.base_plan(
+            {
+                "kind": "harness-spawn-intent",
+                "action_id": "harness-spawn-intent:dispatch-consensus-implementation:20",
+                "runner_authority": "wakeup-runner-396",
+                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+                "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                "source_marker": "HARNESS_SPAWN_INTENT",
+                "target_kind": "codex",
+                "target_number": None,
+                "target": {"kind": "codex", "task_id": "implement-issue-20"},
+                "controller_action": "spawn_codex_harness_background",
+                "no_generic_command": True,
+                "cd": str(worktree),
+                "prompt": str(self.repo / ".refactor-loop/prompts/implement-issue-20.md"),
+                "log": str(failed_log),
+                "stall": 5400,
+            }
+        )
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            spawn_results = self.run_result(spawn_plan, actions=FakeActions())
+
+        self.assertEqual(spawn_results[0].status, "applied")
+        launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), failed_log.resolve())
+
     def test_publish_implementation_output_blocks_stale_base_before_helper(self) -> None:
         actions = FakeActions()
 

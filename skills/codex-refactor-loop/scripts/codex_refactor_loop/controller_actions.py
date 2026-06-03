@@ -48,6 +48,7 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
+IMPLEMENT_DONE_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:ok$")
 
 
 class ControllerActions:
@@ -725,6 +726,8 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
+        self._clear_stale_implement_log_for_fresh_dispatch(log)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -744,7 +747,6 @@ class ControllerActions:
                 "VERIFICATION_HINTS": str(action.get("verification_hints") or ""),
             },
         )
-        log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
         self._append_harness_spawn_intent(
             intent_id=f"dispatch-consensus-implementation:{number}",
             task_id=f"implement-{cluster_id}",
@@ -756,6 +758,24 @@ class ControllerActions:
             reason=f"issue #{number} consensus implementation",
         )
         return 0
+
+    def _clear_stale_implement_log_for_fresh_dispatch(self, log: Path) -> None:
+        if not log.exists():
+            return
+        try:
+            lines = log.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return
+        terminal_exit = ""
+        for line in reversed(lines[-20:]):
+            if line.startswith("EXIT="):
+                terminal_exit = line.strip()
+                break
+        if not terminal_exit:
+            return
+        if terminal_exit == "EXIT=0" and any(IMPLEMENT_DONE_OK_RE.fullmatch(line.strip()) for line in lines):
+            return
+        log.unlink(missing_ok=True)
 
     def dispatch_reviewers(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-reviewers", code=3):
