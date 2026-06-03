@@ -70,7 +70,13 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "review_gate",
     "publish_release_candidate",
 }
-SPAWN_BATCH_CONTROLLER_ACTION = "spawn_codex_harness_background"
+# Worker-dispatch (non-lifecycle) controller actions that may batch up to the
+# per-tick spawn budget. Both directly spawn codex workers and carry no
+# lifecycle authority, so batching them only fills the concurrency floor faster
+# and never batches review/merge/close/release lifecycle actions.
+SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
+    {"spawn_codex_harness_background", "dispatch_design_consensus"}
+)
 
 
 @dataclass(frozen=True)
@@ -108,7 +114,7 @@ class WakeupApplyBudget:
         return cls(1, "legacy-single-apply")
 
     def is_spawn_action(self, action: Mapping[str, Any]) -> bool:
-        return action.get("controller_action") == SPAWN_BATCH_CONTROLLER_ACTION
+        return action.get("controller_action") in SPAWN_BATCH_CONTROLLER_ACTIONS
 
 
 @dataclass(frozen=True)

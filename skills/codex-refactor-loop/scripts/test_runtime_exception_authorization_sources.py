@@ -930,12 +930,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         budget = runner[runner.index("class WakeupApplyBudget") : runner.index("@dataclass(frozen=True)", runner.index("class WakeupApplyBudget"))]
 
         for required in (
-            "SPAWN_BATCH_CONTROLLER_ACTION = \"spawn_codex_harness_background\"",
+            "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
+            "\"spawn_codex_harness_background\", \"dispatch_design_consensus\"",
             "class WakeupApplyBudget",
             "hard_gate.dispatch_required/concurrency.deficit",
             "return cls.legacy()",
             "min(dispatch_required, deficit)",
-            "return action.get(\"controller_action\") == SPAWN_BATCH_CONTROLLER_ACTION",
+            "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
             "budget = WakeupApplyBudget.from_plan(plan)",
             "result = self.apply_action(action)",
             "if result.status != \"applied\":",
