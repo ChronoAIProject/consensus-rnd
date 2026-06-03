@@ -220,6 +220,8 @@ class WakeupRunner:
                 break
             result = self.apply_action(action)
             results.append(result)
+            if result.status == "skipped" and budget.is_spawn_action(action):
+                continue
             if result.status != "applied":
                 break
             if budget.is_spawn_action(action):
@@ -233,7 +235,7 @@ class WakeupRunner:
         action_id = str(action.get("action_id") or "")
         if not action_id:
             return self._blocked(action, "missing_action_id")
-        if self._ledger_has(action_id):
+        if self._ledger_has(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
@@ -248,6 +250,8 @@ class WakeupRunner:
             return self._blocked(action, f"exception:{exc}")
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
+        if exit_code != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_HELPER_EXIT:{action_id}:{controller_action}:{exit_code}")
         return self._record(RunnerResult(action_id, status, reason), action)
 
     def _validate_plan(self, plan: Mapping[str, Any]) -> str | None:
@@ -620,13 +624,16 @@ class WakeupRunner:
         stall = int(action.get("stall") or 5400)
         if not prompt.is_file():
             return 2
-        return launch_spawn_codex_supervisor(
+        exit_code = launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
             cd=cd,
             prompt=prompt,
             log=log,
             stall=stall,
         )
+        if exit_code != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
+        return exit_code
 
     def _dispatch_design_consensus(self, action: Mapping[str, Any]) -> int:
         marker = self._design_consensus_marker(action)
@@ -673,7 +680,10 @@ class WakeupRunner:
             exit_code = self._spawn_codex(spawn_action)
             if exit_code != 0:
                 return exit_code
-        return 0 if intents else 3
+        if not intents:
+            self._append_pending_event(f"WAKEUP_RUNNER_DESIGN_CONSENSUS_NO_INTENTS:{action.get('action_id', '')}")
+            return 3
+        return 0
 
     def _design_consensus_marker(self, action: Mapping[str, Any]) -> Marker | str:
         source_artifact = str(action.get("source_artifact") or "")
@@ -928,7 +938,8 @@ class WakeupRunner:
             full[1:1] = ["--repo", self.ctx.gh_repo_slug]
         return subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
 
-    def _ledger_has(self, action_id: str) -> bool:
+    def _ledger_has(self, action: Mapping[str, Any]) -> bool:
+        action_id = str(action.get("action_id") or "")
         if not self.ledger_path.exists():
             return False
         for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -936,12 +947,25 @@ class WakeupRunner:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("action_id") == action_id and (
-                row.get("status") in {"applied", "dry-run"}
-                or (row.get("status") == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")))
-            ):
+            if row.get("action_id") != action_id:
+                continue
+            status = row.get("status")
+            if status == "dry-run":
+                return True
+            if status == "applied":
+                if self._applied_spawn_is_stale(action):
+                    self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:target-log-absent")
+                    continue
+                return True
+            if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
                 return True
         return False
+
+    def _applied_spawn_is_stale(self, action: Mapping[str, Any]) -> bool:
+        if action.get("controller_action") != "spawn_codex_harness_background":
+            return False
+        log = Path(str(action.get("log") or ""))
+        return not log.is_absolute() or not log.exists()
 
     def _blocked(self, action: Mapping[str, Any], reason: str) -> RunnerResult:
         self._append_pending_event(f"WAKEUP_RUNNER_BLOCKED:{action.get('action_id', '')}:{reason}")

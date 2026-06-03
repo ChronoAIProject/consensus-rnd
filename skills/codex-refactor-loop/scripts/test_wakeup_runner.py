@@ -597,6 +597,59 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1"])
         self.assertEqual(launch.call_count, 2)
 
+    def test_wakeup_runner_headless_harness_spawn_intents_launch_to_deficit(self) -> None:
+        actions = [
+            self.design_consensus_spawn_action(
+                action_id=f"harness-spawn-intent:phase9-router:{issue}:1:minimal",
+                target={"kind": "codex", "task_id": f"phase9-issue{issue}-r1-minimal"},
+                prompt=str(self.repo / ".refactor-loop/prompts/phase9/phase9-issue104-r2-judge.md"),
+                log=str(self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-minimal.log"),
+            )
+            for issue in (104, 105, 106)
+        ]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan(actions, dispatch_required=2, deficit=2), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual([result.status for result in results], ["applied", "applied"])
+        self.assertEqual([result.action_id for result in results], [actions[0]["action_id"], actions[1]["action_id"]])
+        self.assertEqual(launch.call_count, 2)
+
+    def test_wakeup_runner_stale_applied_spawn_ledger_retries_headless_intent(self) -> None:
+        action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:1:minimal-retry")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        launch.assert_called_once()
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:phase9-router:104:1:minimal-retry:target-log-absent", pending)
+
+    def test_wakeup_runner_spawn_duplicate_does_not_block_later_spawn_batch(self) -> None:
+        duplicate = self.spawn_action(action_id="spawn:duplicate", log=str(self.repo / ".refactor-loop/logs/duplicate.log"))
+        later = self.spawn_action(action_id="spawn:later", log=str(self.repo / ".refactor-loop/logs/later.log"))
+        Path(duplicate["log"]).write_text("SPAWN\n", encoding="utf-8")
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": duplicate["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([duplicate, later], dispatch_required=2, deficit=2))
+
+        self.assertEqual([result.status for result in results], ["skipped", "applied"])
+        self.assertEqual([result.action_id for result in results], ["spawn:duplicate", "spawn:later"])
+        launch.assert_called_once()
+
     def test_wakeup_runner_missing_or_invalid_budget_keeps_single_apply_compatibility(self) -> None:
         cases = (
             ("missing", self.base_plan),
@@ -657,6 +710,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[1].reason, "target_log_exists")
         self.assertEqual(launch.call_count, 1)
         self.assert_blocked_event("spawn:blocked", "target_log_exists")
+
+    def test_wakeup_runner_records_helper_exit_source_for_spawn_supervisor_failure(self) -> None:
+        action = self.spawn_action(action_id="spawn:supervisor-exit-3")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=3):
+            results = self.run_result(self.base_plan(action))
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "helper_exit:3")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:spawn:supervisor-exit-3:3", pending)
+        self.assertIn("WAKEUP_RUNNER_HELPER_EXIT:spawn:supervisor-exit-3:spawn_codex_harness_background:3", pending)
 
     def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
@@ -1410,6 +1475,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         plan = self.base_plan(self.spawn_action())
         with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
             first = self.run_result(plan)
+        (self.repo / ".refactor-loop/logs/task.log").write_text("SPAWN\n", encoding="utf-8")
         second = self.run_result(plan)
 
         self.assertEqual(first[0].status, "applied")
