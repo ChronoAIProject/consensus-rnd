@@ -1376,6 +1376,8 @@ gh issue view <N> --json comments --jq '
 
 **consensus-rnd-cli concurrency** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
 
+**无观察模式豁免(强制,airtight)**:controller 任何时刻——无论 wakeup、task-notification、还是 Monitor 事件——一旦观察到本 loop codex `actual == 0` 且存在 active phase issue/PR(非全 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),**必须在同一 turn 内立即派出真实下一步 codex**,把并发拉回 floor。**禁止**以下任何理由 defer、end-turn、或转入被动等待:"观察 daemon 自驱 / 验证 headless"、"等 daemon 1/tick 自己爬"、"floor 会自己回升"、"router/wakeup_runner 会接管"、"等 cascade / fix 完会派"、"backoff 是已知症状"。daemon 自驱达稳态(批量派 + worker 解耦落地)**之前**,维持 floor 是 controller 不可让渡、不可暂缓的职责;`actual == 0 + active work` 永远是必须当 turn 修复的 P0,不是可观察的状态。唯一例外是上面 point 3(所有 active item 真在等 maintainer),且必须在 status 显式说明。
+
 ### Controller 每 wakeup 必派"下一步"(no gap policy)
 
 Controller wakeup 处理 markers 后,**必须在同 turn 内派出下一步 codex**(if any actionable),不留 gap 等下次 wakeup:
