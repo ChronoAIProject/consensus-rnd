@@ -1604,19 +1604,17 @@ def _in_flight_implement_exists(repo_root: Path, action: dict[str, Any], monitor
     cluster_id = str(action.get("cluster_id") or "").strip()
     if not cluster_id:
         return False
+    if monitor is None:
+        return False
+    try:
+        lines = monitor.list_in_flight_codex_lines()
+    except Exception:
+        return False
     needles = (
         f"implement-{cluster_id}",
         f".refactor-loop/logs/implement-{cluster_id}.log",
         f".worktrees/iter{action.get('iteration')}-{cluster_id}",
     )
-    if monitor is not None:
-        try:
-            lines = monitor.list_in_flight_codex_lines()
-        except Exception:
-            lines = []
-    else:
-        result = subprocess.run(["ps", "-eo", "command"], cwd=repo_root, capture_output=True, text=True, check=False)
-        lines = result.stdout.splitlines() if result.returncode == 0 else []
     return any("spawn-codex" in line and any(needle in line for needle in needles) for line in lines)
 
 

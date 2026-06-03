@@ -27,6 +27,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     close_projection_actions,
     completed_marker_actions,
     consensus_implementation_fields,
+    consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
     marker_from_completed_log,
@@ -972,6 +973,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
         self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
+        self.assertIn("if monitor is None:\n        return False", wakeup_source)
+        self.assertNotIn('["ps", "-eo", "command"]', wakeup_source)
         self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
         self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
 
@@ -1630,6 +1633,18 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 )
                 self.assertTrue(action["status_only"])
                 self.assertEqual(reason, action["suppressed_reason"])
+
+    def test_consensus_implementation_readiness_in_flight_fails_open_without_monitor(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertIsNone(reason)
 
     def test_consensus_implementation_readiness_fresh_open_issue_dispatches_once(self) -> None:
         self.write_consensus_artifact()
