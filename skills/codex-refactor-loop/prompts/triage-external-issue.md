@@ -96,7 +96,9 @@ Artifact profile: marker-only-work-unit
 
 ## GitHub post
 
-遵循 `prompts/_github-post-rules.md`。
+遵循渲染期内联的共享规则。
+
+{{GITHUB_POST_RULES_CONTRACT}}
 
 按 accept / reject 分别:
 - accept 评论头行 `## 🤖 Triage codex — accept: issue-${ISSUE_NUMBER}`
