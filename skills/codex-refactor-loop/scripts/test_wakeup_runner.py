@@ -219,6 +219,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
                 endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint == "repos/owner/repo/pulls/77":
+                    if gh_state is None:
+                        return subprocess.CompletedProcess(command, 1, "", "not found")
+                    payload = {"state": str(gh_state).lower(), "head": {"sha": "a" * 40}}
+                    if gh_state == "MERGED":
+                        payload = {"state": "closed", "merged": True, "head": {"sha": "a" * 40}}
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
+                    payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 if "/pulls/" in endpoint or "/issues/" in endpoint:
                     if gh_state is None:
                         return subprocess.CompletedProcess(command, 1, "", "not found")
@@ -236,6 +246,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 if "headRefName" in command:
                     return subprocess.CompletedProcess(command, 0, gh_head_ref + "\n", "")
+                if ".headRefOid" in command:
+                    return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+                if "mergeable,isDraft" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
                 if gh_state is None:
                     return subprocess.CompletedProcess(command, 1, "", "not found")
                 return subprocess.CompletedProcess(command, 0, gh_state + "\n", "")
@@ -882,17 +896,38 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
 
-    def test_wakeup_runner_does_not_apply_non_spawn_after_spawn_batch(self) -> None:
-        close = self.close_action(action_id="close-managed-item:53:after-spawn")
-        spawn = self.spawn_action(action_id="spawn:first")
+    def test_wakeup_runner_lifecycle_review_gate_not_starved_after_spawn_batch(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:77:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        first = self.dispatch_design_consensus_action(action_id="design-consensus:before-review-gate:1", issue=453, round_number=1)
+        second = self.dispatch_design_consensus_action(action_id="design-consensus:before-review-gate:2", issue=454, round_number=1)
+        gate = self.review_gate_action(action_id="review-gate:77:after-spawns")
         actions = FakeActions()
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
-            results = self.run_result(self.batch_plan([spawn, close], dispatch_required=3, deficit=3), actions=actions)
+            results = self.run_result(self.batch_plan([first, second, gate], dispatch_required=2, deficit=2), actions=actions)
 
-        self.assertEqual([result.action_id for result in results], ["spawn:first"])
-        self.assertEqual(launch.call_count, 1)
-        self.assertEqual(actions.calls, [])
+        self.assertEqual(
+            [(result.action_id, result.status) for result in results],
+            [
+                ("design-consensus:before-review-gate:1", "applied"),
+                ("design-consensus:before-review-gate:2", "applied"),
+                ("review-gate:77:after-spawns", "applied"),
+            ],
+        )
+        self.assertEqual(launch.call_count, 2)
+        self.assertEqual(actions.calls, [("merge_pr", "77")])
 
     def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
@@ -1659,10 +1694,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         run_once = source[source.index("    def run_once(self) -> list[RunnerResult]:") : source.index("    def apply_action", source.index("    def run_once(self) -> list[RunnerResult]:"))]
 
-        self.assertIn('if result.status in {"blocked", "skipped"} and not is_spawn_action:', run_once)
+        self.assertIn('if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:', run_once)
         self.assertIn("continue", run_once)
-        self.assertIn("if is_spawn_action and applied_spawns >= budget.spawn_budget:", run_once)
-        self.assertIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
+        self.assertIn("consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)", run_once)
+        self.assertIn("if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:", run_once)
+        self.assertNotIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
+        self.assertIn('controller_action == "dispatch_reviewers"', run_once)
+        self.assertIn('controller_action == "review_gate"', run_once)
+        self.assertIn('.get("decision") == "FIX"', run_once)
         self.assertNotIn("blocked_non_spawn_before_spawn", run_once)
 
     def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:

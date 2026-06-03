@@ -217,16 +217,15 @@ class WakeupRunner:
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
-            if is_spawn_action and applied_spawns >= budget.spawn_budget:
-                break
-            if applied_spawns > 0 and not is_spawn_action:
-                break
+            consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
+                continue
             result = self.apply_action(action)
             results.append(result)
-            if result.status == "skipped" and is_spawn_action:
+            if result.status == "skipped" and consumes_spawn_budget:
                 continue
             if result.status != "applied":
-                if result.status in {"blocked", "skipped"} and not is_spawn_action:
+                if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:
                     continue
                 # A blocked dispatch_design_consensus produced no spawn intents
                 # (e.g. an incomplete/markerless solver triplet) or an invalid
@@ -239,15 +238,24 @@ class WakeupRunner:
                     and action.get("controller_action") != "spawn_codex_harness_background"
                 ):
                     continue
-                if result.status == "blocked" and is_spawn_action and not _spawn_launch_failure(result):
+                if result.status == "blocked" and consumes_spawn_budget and not _spawn_launch_failure(result):
                     continue
                 break
-            if is_spawn_action:
+            if consumes_spawn_budget:
                 applied_spawns += 1
-                if applied_spawns < budget.spawn_budget:
-                    continue
+                continue
             break
         return results
+
+    def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action == "dispatch_reviewers":
+            return True
+        if controller_action == "review_gate":
+            if self._validate_action(action) is not None:
+                return False
+            return self._review_gate_decision(action).get("decision") == "FIX"
+        return False
 
     def apply_action(self, action: Mapping[str, Any]) -> RunnerResult:
         action_id = str(action.get("action_id") or "")
