@@ -267,6 +267,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
 
+    def test_runtime_retention_anchor_documents_canonical_owner_and_alias(self) -> None:
+        section = section_after_anchor(self.skill, "named-runtime-exception--runtime-retentionper-437")
+        for needle in (
+            "RuntimeRetention(per #437)",
+            "runtime-retention-437",
+            "`consensus-rnd-cli runtime-retention` is the canonical command",
+            "`consensus-rnd-cli log-retention` is a one-release compatibility alias",
+            "$RUNTIME_RETENTION_ENABLE=true",
+            "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "same inode",
+            ".controller-pending-events.log",
+            ".refactor-loop/state/runtime-retention-plan.json",
+            "git worktree remove <path>",
+            "git worktree prune",
+            "no `git fetch`",
+            "no GitHub write or lifecycle authority",
+            "test_runtime_retention.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.

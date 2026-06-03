@@ -23,6 +23,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
 from codex_refactor_loop import restart
 from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons, daemon_targets, restart_managed_daemon_names
+from codex_refactor_loop.runtime_retention import RuntimeRetentionResult
 
 
 DAEMON_NAMES = restart_managed_daemon_names()
@@ -81,7 +82,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=DaemonProcessInventory(())):
-                with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+                with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                     helper = RestartDaemons(self.ctx, self.config)
                     self.helpers.append(helper)
                     helper.run()
@@ -91,7 +92,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=inventory):
-                with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+                with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                     helper = RestartDaemons(self.ctx, self.config)
                     self.helpers.append(helper)
                     helper.run()
@@ -102,6 +103,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory or DaemonProcessInventory(())):
                 return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+
+    def noop_retention(self) -> RuntimeRetentionResult:
+        return RuntimeRetentionResult(False, 0, 0, False, 0, False, self.repo / ".refactor-loop", False)
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -404,7 +408,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             calls.append(name)
 
         with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
-            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", return_value={"status": "disabled", "reason": "noop"}) as update:
                         helper = RestartDaemons(self.ctx, self.config)
@@ -414,7 +418,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         update.assert_called_once_with(self.ctx, startup=True)
 
         with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
-            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", side_effect=RuntimeError("network")):
                         helper = RestartDaemons(self.ctx, self.config)

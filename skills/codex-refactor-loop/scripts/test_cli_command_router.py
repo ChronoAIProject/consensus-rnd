@@ -22,7 +22,7 @@ from codex_refactor_loop.cli import COMMANDS, RuntimeCommandRouter
 CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 ALL_AUTHORITY_TOKENS = {
-    "delete-log",
+    "delete-runtime",
     "gh-close",
     "gh-close-linked",
     "gh-comment",
@@ -73,6 +73,7 @@ DAEMON_COMMANDS = {
     "progress-reporter",
     "release-gate",
     "restart-daemons",
+    "runtime-retention",
     "wakeup-runner",
 }
 
@@ -91,6 +92,8 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+    "log-retention": {"git-worktree"},
+    "runtime-retention": {"git-worktree"},
     "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
 }
 
@@ -125,6 +128,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "concurrency",
                 "dev-sync",
                 "log-retention",
+                "runtime-retention",
                 "spawn-codex",
                 "peek",
                 "pr-checks",
@@ -367,6 +371,16 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
+
+    def test_runtime_retention_is_canonical_and_log_retention_is_one_release_alias(self) -> None:
+        self.assertEqual(("delete-runtime", "git-worktree"), COMMANDS["runtime-retention"].authority)
+        self.assertEqual(COMMANDS["runtime-retention"].handler, COMMANDS["log-retention"].handler)
+        self.assertEqual(COMMANDS["runtime-retention"].authority, COMMANDS["log-retention"].authority)
+        self.assertIn("canonical RuntimeRetention", COMMANDS["runtime-retention"].description)
+        self.assertIn("one-release compatibility alias", COMMANDS["log-retention"].description)
+        for forbidden in ("read-gh", "gh-close", "gh-edit", "gh-label", "gh-merge", "gh-open", "git-fetch", "git-push", "git-merge", "git-reset", "git-rebase"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS["runtime-retention"].authority)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():

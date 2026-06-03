@@ -35,6 +35,7 @@ TARGET_ANCHORS = {
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
+    "runtime-retention-437": "## Named runtime exception - RuntimeRetention(per #437)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
@@ -218,6 +219,54 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
+
+    def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "runtime-retention-437")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - RuntimeRetention(per #437)") :]
+        claude = self.repo_rules
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        runtime_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "runtime_retention.py")
+        retention_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "retention.py")
+
+        for needle in (
+            "#437",
+            "RuntimeRetention",
+            "RUNTIME_RETENTION_ENABLE=true",
+            "only canonical owner",
+            "one-release compatibility alias",
+            "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "same-inode compact",
+            ".refactor-loop/state/runtime-retention-plan.json",
+            "no_in_flight",
+            "no_open_issue_or_pr",
+            "no_dirty",
+            "no_local_ahead",
+            "merged_or_missing_safe",
+            "git worktree remove <path>",
+            "git worktree prune",
+            "no GitHub write",
+            "no `git fetch`",
+            "no branch deletion",
+            "no worktree cleanup without planner proof",
+            "no generic lifecycle actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "#437 是唯一 skill-private runtime-retention local-GC carveout",
+            "checked-in `RuntimeRetention` helper",
+            "same-inode compact",
+            "`git worktree remove <path>` 与 `git worktree prune`",
+            "禁止 `git fetch`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn("Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#runtime-retention-437`", skill_section)
+        self.assertIn('"runtime-retention": CommandSpec(', cli_source)
+        self.assertIn('"log-retention": CommandSpec(', cli_source)
+        self.assertIn("runtime_retention_main", cli_source)
+        self.assertIn("RuntimeRetentionPlan", runtime_source)
+        self.assertIn("Compatibility alias for RuntimeRetention", retention_source)
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)

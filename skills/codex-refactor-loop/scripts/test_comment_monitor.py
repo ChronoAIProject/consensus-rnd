@@ -54,9 +54,11 @@ class CommentMonitorTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
+                "PATH": os.environ.get("PATH", ""),
                 "STATE_FILE": str(override_root / "state.json"),
                 "INTERVAL": "1",
             },
+            clear=True,
         ):
             monitor = CommentMonitor(self.ctx)
 

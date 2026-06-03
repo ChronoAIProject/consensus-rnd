@@ -518,7 +518,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "git branch -D",
         )
         allowed_history = "must not run `gh pr create`"
-        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        runtime_retention = section_between(
+            self.skill,
+            r"^## Named runtime exception - RuntimeRetention\(per #437\)$",
+            r"^## Large issue decomposition",
+        )
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "").replace(runtime_retention, "")
+        skill_without_forbidden_history = re.sub(
+            r"(?m)^.*(?:RuntimeRetention|runtime-retention).*\n?",
+            "",
+            skill_without_forbidden_history,
+        )
         for needle in forbidden:
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, skill_without_forbidden_history)

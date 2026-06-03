@@ -24,7 +24,7 @@ from .pr_checks import main as pr_checks_main
 from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
-from .retention import main as retention_main
+from .runtime_retention import main as runtime_retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
@@ -81,7 +81,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "restart-daemons": CommandSpec(
         restart_main,
         "run the Python daemon restart helper",
-        ("spawn-daemon", "write-state", "delete-log"),
+        ("spawn-daemon", "write-state", "delete-runtime"),
     ),
     "daemon-status": CommandSpec(
         daemon_status_main,
@@ -167,7 +167,16 @@ COMMANDS: dict[str, CommandSpec] = {
         ("read-source", "read-state"),
     ),
     "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
-    "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
+    "runtime-retention": CommandSpec(
+        runtime_retention_main,
+        "run canonical RuntimeRetention for skill-private generated artifacts",
+        ("delete-runtime", "git-worktree"),
+    ),
+    "log-retention": CommandSpec(
+        runtime_retention_main,
+        "one-release compatibility alias for runtime-retention",
+        ("delete-runtime", "git-worktree"),
+    ),
     "check-project-rules": CommandSpec(
         project_rules.main,
         "check host project rules fixed points and write patch artifact when needed",
