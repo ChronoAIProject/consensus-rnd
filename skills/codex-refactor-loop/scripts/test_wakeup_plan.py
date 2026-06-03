@@ -1188,6 +1188,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only"))
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
 
+    def test_implement_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        # An implement worker can exit clean (EXIT=0) but emit IMPLEMENT_DONE only
+        # into its run artifact, not the log tail (codex stdout marker placement is
+        # not reliable). The publish predicate must still detect completion via the
+        # run artifact, mirroring the review verdict artifact-first pattern.
+        log = self.logs / "implement-issue-421.log"
+        log.write_text(
+            "worker chatter, no standalone marker here\nEXIT=0\nDONE_AT=2026-06-03T19:06:35Z\n",
+            encoding="utf-8",
+        )
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "implement-issue-421.md").write_text(
+            "## summary\nimplemented\n\n## SCOPE_EXTEND 记录\n- none.\n\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-421:ok\n",
+            encoding="utf-8",
+        )
+        # log-only scan misses it (markerless log)
+        self.assertIsNone(marker_from_completed_log(log))
+        # completed_marker_actions recovers it via artifact fallback -> publish action
+        actions = completed_marker_actions(self.repo)
+        pub = [a for a in actions if a.get("marker") == "IMPLEMENT_DONE:issue-421:ok"]
+        self.assertTrue(pub, "expected publish action recovered from implement run artifact")
+        self.assertEqual(pub[0]["phase"], "publish")
+
+    def test_implement_artifact_fallback_scoped_to_clean_exit_implement_logs(self) -> None:
+        # Fallback is scoped: a non-implement log, or an implement log without
+        # EXIT=0, must not pull an IMPLEMENT_DONE marker from any artifact.
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (self.logs / "audit-iter-9.log").write_text("chatter\nEXIT=0\n", encoding="utf-8")
+        (runs / "audit-iter-9.md").write_text("\nIMPLEMENT_DONE:issue-9:ok\n", encoding="utf-8")
+        (self.logs / "implement-issue-777.log").write_text("crashed\nEXIT=1\n", encoding="utf-8")
+        (runs / "implement-issue-777.md").write_text("\nIMPLEMENT_DONE:issue-777:ok\n", encoding="utf-8")
+        actions = completed_marker_actions(self.repo)
+        recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
+        self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
+
     def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
 

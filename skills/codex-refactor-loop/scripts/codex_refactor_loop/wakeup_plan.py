@@ -681,6 +681,28 @@ def _extract_completed_marker_line(text: str) -> str | None:
     return None
 
 
+def _implement_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
+    """Recover an IMPLEMENT_DONE marker from an implement worker's run artifact
+    when the worker exited clean (EXIT=0) but emitted the marker only into the
+    artifact instead of the log tail. Codex stdout marker placement is not
+    reliable across runs (some implement workers echo IMPLEMENT_DONE in the log,
+    others write it only into runs/implement-issue-<id>.md), so the durable run
+    artifact is read as a companion surface, mirroring the review verdict
+    artifact-first pattern. Scoped to clean-exit implement-issue logs only; the
+    marker must still be a standalone IMPLEMENT_DONE line."""
+    name = log_path.name
+    if not (name.startswith("implement-issue-") and name.endswith(".log")):
+        return None
+    if not is_clean_exit(log_path):
+        return None
+    artifact = repo_root / ".refactor-loop" / "runs" / f"{name[: -len('.log')]}.md"
+    for line in reversed(tail_lines(artifact, MARKER_TAIL_LINES)):
+        marker = _extract_completed_marker_line(line.strip())
+        if marker and marker.startswith("IMPLEMENT_DONE"):
+            return marker
+    return None
+
+
 def completed_marker_actions(
     repo_root: Path,
     open_targets: set[tuple[str, int]] | None = None,
@@ -693,6 +715,8 @@ def completed_marker_actions(
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = marker_from_completed_log(log_path)
+        if not marker:
+            marker = _implement_artifact_marker_fallback(repo_root, log_path)
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
