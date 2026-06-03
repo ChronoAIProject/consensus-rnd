@@ -940,10 +940,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             RunnerResult("harness-spawn-intent:phase9-router:493:1:delete", "applied", ""),
         ]
 
-        self.assertEqual(
-            _wakeup_tick_action(results),
-            "dispatched harness-spawn-intent:phase9-router:493:1:minimal+2",
-        )
+        action = _wakeup_tick_action(results)
+        # still reports the dispatched spawn as the headline
+        self.assertIn("dispatched harness-spawn-intent:phase9-router:493:1:minimal+2", action)
+        # and now also surfaces the blocked lifecycle action that used to be hidden
+        self.assertIn("blocked:publish_implementation_missing_precondition", action)
+        # and the per-status counts for the whole tick
+        self.assertIn("[applied=3,blocked=1]", action)
 
     def test_wakeup_runner_blocked_non_spawn_can_continue_to_one_later_lifecycle_action(self) -> None:
         blocked = self.implementation_output_action(

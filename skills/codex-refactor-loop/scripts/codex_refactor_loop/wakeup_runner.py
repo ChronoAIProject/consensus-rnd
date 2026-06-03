@@ -1232,6 +1232,32 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if not results:
         return "noop:no-actions"
+    by_status: dict[str, int] = {}
+    for result in results:
+        by_status[result.status] = by_status.get(result.status, 0) + 1
+    counts = ",".join(f"{key}={by_status[key]}" for key in sorted(by_status))
+    # Surface blocked/skipped actions that would otherwise be hidden behind a
+    # successful dispatch, so a single tick line shows what was applied AND what
+    # was rejected (and why) without grepping the ledger. graphql-backoff is a
+    # whole-tick gate, not a per-action reject, so it is reported on its own.
+    notable = [
+        result
+        for result in results
+        if result.status in ("blocked", "skipped")
+        and result.reason != "graphql-backoff"
+        and (result.reason or result.action_id)
+    ]
+
+    def _notable_suffix() -> str:
+        if not notable:
+            return ""
+        head = notable[0]
+        detail = f"{head.status}:{head.reason}" if head.reason else f"{head.status}:{head.action_id}"
+        if head.reason and head.action_id:
+            detail += f"({head.action_id[:56]})"
+        more = f"+{len(notable) - 1}" if len(notable) > 1 else ""
+        return f" | {detail}{more}"
+
     applied_spawns = [
         result
         for result in results
@@ -1245,17 +1271,22 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if applied_spawns:
         first_spawn = applied_spawns[0]
         suffix = f"+{len(applied_spawns) - 1}" if len(applied_spawns) > 1 else ""
-        return f"dispatched {first_spawn.action_id or 'spawn'}{suffix}"
+        return f"dispatched {first_spawn.action_id or 'spawn'}{suffix}{_notable_suffix()} [{counts}]"
     first = results[0]
     if first.status == "applied":
-        return f"dispatched {first.action_id or 'action'}"
+        return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
-        return "skip:graphql-backoff remaining=unknown"
+        return f"skip:graphql-backoff [{counts}]"
     if first.status == "noop":
-        return f"noop:{first.reason or 'idle'}"
+        return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":
-        return f"blocked:{first.reason or first.action_id or 'unknown'}"
-    return f"noop:{first.status}"
+        head = notable[0] if notable else first
+        detail = f"blocked:{head.reason or head.action_id or 'unknown'}"
+        if head.reason and head.action_id:
+            detail += f"({head.action_id[:56]})"
+        more = f"+{len(notable) - 1}" if len(notable) > 1 else ""
+        return f"{detail}{more} [{counts}]"
+    return f"noop:{first.status} [{counts}]"
 
 
 def _log_tick_status(daemon: str, action: str) -> None:
