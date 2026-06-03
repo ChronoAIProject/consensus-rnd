@@ -1412,6 +1412,29 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, meta_judge)
 
+    def test_wakeup_plan_release_rollup_freshness_prunes_superseded_local_evidence(self) -> None:
+        wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
+        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        for needle in (
+            "prunes stale, terminal, or superseded local evidence",
+            "release-rollup freshness may use read-only local `refs/remotes/origin/<review_base>..refs/remotes/origin/<integration>` evidence",
+            "local ref probe failure fails open",
+            "does not weaken #396 revalidation or create standalone authorization",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, wakeup_runner)
+        for token in (
+            "latest_by_integration_sha",
+            "_release_rollup_event_is_fresh",
+            "refs/remotes/origin/{review_base_branch}",
+            "refs/remotes/origin/{integration_branch}",
+            "rev-parse",
+            "rev-list",
+            "return True",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, wakeup_plan)
+
     def test_wakeup_plan_closed_projection_is_not_standalone_authorization(self) -> None:
         section = section_after_heading(self.skill, "Wakeup Skeleton")
         for needle in (
