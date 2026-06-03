@@ -205,6 +205,38 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_run_command_injects_gh_repo_only_in_valid_subcommand_position(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append(list(command))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(self.ctx)
+        with mock.patch("codex_refactor_loop.wakeup_runner.subprocess.run", side_effect=fake_run):
+            runner._run_command(["gh", "api", "repos/owner/repo/pulls/77"])
+            runner._run_command(["gh", "pr", "view", "77", "--json", "mergeable,isDraft"])
+            runner._run_command(["gh", "issue", "view", "53", "--json", "state"])
+
+        self.assertEqual(calls[0], ["gh", "api", "repos/owner/repo/pulls/77"])
+        self.assertEqual(calls[1], ["gh", "pr", "view", "77", "--repo", "owner/repo", "--json", "mergeable,isDraft"])
+        self.assertEqual(calls[2], ["gh", "issue", "view", "53", "--repo", "owner/repo", "--json", "state"])
+        for command in calls:
+            self.assertNotEqual(command[:2], ["gh", "--repo"])
+
+    def test_run_command_preserves_existing_gh_repo_flag(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            calls.append(list(command))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(self.ctx)
+        with mock.patch("codex_refactor_loop.wakeup_runner.subprocess.run", side_effect=fake_run):
+            runner._run_command(["gh", "pr", "view", "77", "--repo", "other/repo", "--json", "state"])
+
+        self.assertEqual(calls, [["gh", "pr", "view", "77", "--repo", "other/repo", "--json", "state"]])
+
     def run_result(
         self,
         plan: dict,

@@ -983,8 +983,9 @@ class WakeupRunner:
 
     def _run_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         full = [str(part) for part in command]
-        if full and full[0] == "gh" and self.ctx.gh_repo_slug and "--repo" not in full:
-            full[1:1] = ["--repo", self.ctx.gh_repo_slug]
+        if len(full) >= 3 and full[0] == "gh" and full[1] in {"pr", "issue"} and self.ctx.gh_repo_slug and "--repo" not in full:
+            insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
+            full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
         return subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
 
     def _ledger_has(self, action: Mapping[str, Any]) -> bool:

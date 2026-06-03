@@ -155,6 +155,55 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertEqual(self.actions.merged, ["480"])
         launch.assert_not_called()
 
+    def test_review_gate_e2e_all_approve_uses_valid_run_command_argv_and_merges(self) -> None:
+        self.write_review_set({"architect": "approve", "tests": "approve", "quality": "approve"})
+        action = self.project_review_gate_action()
+        calls: list[list[str]] = []
+
+        def fake_run(command, **kwargs):
+            command = list(command)
+            calls.append(command)
+            if command[:2] == ["gh", "--repo"]:
+                return subprocess.CompletedProcess(command, 1, "", "unknown flag: --repo")
+            if command == ["gh", "api", "rate_limit"]:
+                payload = {"resources": {"graphql": {"remaining": 5000}}}
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "state", "--jq", ".state"]:
+                return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
+            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "headRefOid", "--jq", ".headRefOid"]:
+                return subprocess.CompletedProcess(command, 0, HEAD_SHA + "\n", "")
+            if command == ["gh", "api", "repos/owner/repo/pulls/480"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
+            if command == ["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"]:
+                payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command == ["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft"]:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+            return subprocess.CompletedProcess(command, 1, "", f"unexpected command: {command!r}")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: {
+                "schema": "wakeup-plan",
+                "mode": "closed-action-projection",
+                "apply_authority": "wakeup-runner-396-only",
+                "no_lifecycle_authority": True,
+                "actions": [action],
+            },
+            actions=self.actions,
+        )
+        with mock.patch("codex_refactor_loop.wakeup_runner.subprocess.run", side_effect=fake_run):
+            result = runner.run_once()[0]
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.rendered_fixes, [])
+        self.assertEqual(self.actions.merged, ["480"])
+        self.assertIn(["gh", "api", "repos/owner/repo/pulls/480"], calls)
+        self.assertIn(["gh", "api", f"repos/owner/repo/commits/{HEAD_SHA}/check-runs", "--paginate", "--slurp"], calls)
+        self.assertIn(["gh", "pr", "view", "480", "--repo", "owner/repo", "--json", "mergeable,isDraft"], calls)
+        for command in calls:
+            self.assertNotEqual(command[:2], ["gh", "--repo"])
+
     def test_review_gate_e2e_transient_pull_read_still_merges(self) -> None:
         self.write_review_set({"architect": "approve", "tests": "approve", "quality": "approve"})
         action = self.project_review_gate_action()
