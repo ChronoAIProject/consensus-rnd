@@ -1324,6 +1324,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_fix_done_explicit_escalation_allows_unresolved_review_thread(self) -> None:
         completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
         completion_dir.mkdir(parents=True)
+        (self.logs / "judge-pr77-r1.log").write_text(
+            "META_RESOLVED:escalate-human:conflicting-review-thread\nEXIT=0\n",
+            encoding="utf-8",
+        )
         (completion_dir / "pr77.json").write_text(
             json.dumps(
                 {
@@ -1344,6 +1348,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertNotIn("status_only", action)
+
+    def test_fix_done_local_escalation_without_clean_marker_source_blocks_unresolved_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": False,
+                    "resolved": False,
+                    "escalation_evidence": "META_RESOLVED:escalate-human:conflicting-review-thread",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
 
     def test_fix_done_blocks_when_original_review_thread_live_state_is_unknown(self) -> None:
         completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"

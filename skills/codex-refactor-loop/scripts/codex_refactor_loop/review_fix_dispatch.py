@@ -10,6 +10,7 @@ from typing import Mapping
 
 _POSITIVE_INT_RE = re.compile(r"^[1-9][0-9]*$")
 _FIX_OUTPUT_RE = re.compile(r"^\.refactor-loop/runs/fix-pr[1-9][0-9]*-round-[1-9][0-9]*-report\.md$")
+_ESCALATION_EVIDENCE_RE = re.compile(r"^META_RESOLVED:escalate-human:[A-Za-z0-9._-]+$")
 
 
 @dataclass(frozen=True)
@@ -71,7 +72,10 @@ def validate_review_thread_completion(evidence: ReviewThreadCompletionEvidence) 
 
     if not evidence.review_thread_driven:
         return
-    if evidence.escalation_evidence.strip():
+    escalation_evidence = evidence.escalation_evidence.strip()
+    if escalation_evidence:
+        if not _ESCALATION_EVIDENCE_RE.fullmatch(escalation_evidence):
+            raise ReviewThreadCompletionError("review-thread escalation evidence must be META_RESOLVED:escalate-human:<short>")
         return
     if not evidence.thread_id.strip():
         raise ReviewThreadCompletionError("review-thread-driven fix requires original thread_id evidence")

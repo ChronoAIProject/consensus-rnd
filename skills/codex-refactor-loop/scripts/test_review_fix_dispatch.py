@@ -3,10 +3,13 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -28,7 +31,10 @@ class ReviewFixDispatchTests(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp(prefix="review-fix-dispatch-test-"))
         (self.tmp / ".refactor-loop").mkdir(parents=True)
         (self.tmp / ".refactor-loop" / "host.env").write_text(
-            f'export REPO_ROOT="{self.tmp}"\n',
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export INTEGRATION_BRANCH="dev"\n'
+            'export REVIEW_BASE_BRANCH="dev"\n',
             encoding="utf-8",
         )
         self.actions = ControllerActions(
@@ -65,25 +71,45 @@ class ReviewFixDispatchTests(unittest.TestCase):
                     ReviewFixDispatchSpec.validate_fix_output_path(value)
 
     def test_controller_render_review_fix_prompt_injects_fix_output_path(self) -> None:
-        spec = self.actions.render_review_fix_prompt(
-            269,
-            1,
-            env={
-                "PR_NUMBER": "269",
-                "PR_TITLE": "Review fix render",
-                "FIX_ROUND": "1",
-                "MAX_FIX_ROUNDS": "3",
-                "BASE_BRANCH": "dev",
-                "HEAD_BRANCH": "impl/issue269",
-                "REVIEW_ARCHITECT_PATH": ".refactor-loop/runs/review-pr269-architect-r1.md",
-                "REVIEW_TESTS_PATH": ".refactor-loop/runs/review-pr269-tests-r1.md",
-                "REVIEW_QUALITY_PATH": ".refactor-loop/runs/review-pr269-quality-r1.md",
-                "AUDIT_PATH": ".refactor-loop/runs/audit.md",
-                "IMPLEMENT_SUMMARY_PATH": ".refactor-loop/runs/implement.md",
-                "PROJECT_RULES": "CLAUDE.md",
-                "HOST_REFACTOR_COMMENT_POLICY": "self-doc-comment",
-            },
-        )
+        with patch("codex_refactor_loop.controller_actions.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+            spec = self.actions.render_review_fix_prompt(
+                269,
+                1,
+                env={
+                    "PR_NUMBER": "269",
+                    "PR_TITLE": "Review fix render",
+                    "FIX_ROUND": "1",
+                    "MAX_FIX_ROUNDS": "3",
+                    "BASE_BRANCH": "dev",
+                    "HEAD_BRANCH": "impl/issue269",
+                    "REVIEW_ARCHITECT_PATH": ".refactor-loop/runs/review-pr269-architect-r1.md",
+                    "REVIEW_TESTS_PATH": ".refactor-loop/runs/review-pr269-tests-r1.md",
+                    "REVIEW_QUALITY_PATH": ".refactor-loop/runs/review-pr269-quality-r1.md",
+                    "AUDIT_PATH": ".refactor-loop/runs/audit.md",
+                    "IMPLEMENT_SUMMARY_PATH": ".refactor-loop/runs/implement.md",
+                    "PROJECT_RULES": "CLAUDE.md",
+                    "HOST_REFACTOR_COMMENT_POLICY": "self-doc-comment",
+                },
+            )
 
         self.assertEqual(spec.fix_output_path, ".refactor-loop/runs/fix-pr269-round-1-report.md")
         prompt = self.tmp / ".refactor-loop" / "prompts" / "fixes" / "fix-pr269-round-1.md"
@@ -91,6 +117,150 @@ class ReviewFixDispatchTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/fix-pr269-round-1-report.md", rendered)
         self.assertNotIn("${FIX_OUTPUT_PATH}", rendered)
         self.assertTrue(prompt.exists())
+
+    def test_controller_render_review_fix_prompt_writes_review_thread_seed(self) -> None:
+        with patch("codex_refactor_loop.controller_actions.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [{"id": "PRRT_kwDOExample", "isResolved": False}],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+            self.actions.render_review_fix_prompt(269, 1)
+
+        seed = self.tmp / ".refactor-loop" / "state" / "review-thread-completion" / "pr269.json"
+        self.assertTrue(seed.exists())
+        data = json.loads(seed.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data,
+            {
+                "review_thread_driven": True,
+                "thread_id": "PRRT_kwDOExample",
+                "replied": False,
+                "resolved": False,
+                "source": "live-pr-review-thread",
+            },
+        )
+
+    def test_controller_render_review_fix_prompt_removes_stale_seed_when_no_unresolved_threads_remain(self) -> None:
+        state_dir = self.tmp / ".refactor-loop" / "state" / "review-thread-completion"
+        state_dir.mkdir(parents=True)
+        seed = state_dir / "pr269.json"
+        seed.write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "",
+                    "replied": False,
+                    "resolved": False,
+                    "source": "live-pr-review-thread-unknown",
+                }
+            ),
+            encoding="utf-8",
+        )
+        with patch("codex_refactor_loop.controller_actions.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            )
+            self.actions.render_review_fix_prompt(269, 1)
+
+        self.assertFalse(seed.exists())
+
+    def test_controller_render_review_fix_prompt_writes_unknown_seed_on_review_thread_lookup_failure(self) -> None:
+        with patch("codex_refactor_loop.controller_actions.subprocess.run") as run:
+            run.return_value = subprocess.CompletedProcess(["gh"], 1, stdout="", stderr="boom")
+            self.actions.render_review_fix_prompt(269, 1)
+
+        seed = self.tmp / ".refactor-loop" / "state" / "review-thread-completion" / "pr269.json"
+        self.assertTrue(seed.exists())
+        data = json.loads(seed.read_text(encoding="utf-8"))
+        self.assertEqual(
+            data,
+            {
+                "review_thread_driven": True,
+                "thread_id": "",
+                "replied": False,
+                "resolved": False,
+                "source": "live-pr-review-thread-unknown",
+            },
+        )
+
+    def test_controller_render_review_fix_prompt_paginates_review_thread_seed(self) -> None:
+        responses = [
+            subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [{"id": "PRRT_kwDOOther", "isResolved": True}],
+                                        "pageInfo": {"hasNextPage": True, "endCursor": "cursor1"},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                ["gh"],
+                0,
+                stdout=json.dumps(
+                    {
+                        "data": {
+                            "repository": {
+                                "pullRequest": {
+                                    "reviewThreads": {
+                                        "nodes": [{"id": "PRRT_kwDOExample", "isResolved": False}],
+                                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                                    }
+                                }
+                            }
+                        }
+                    }
+                ),
+                stderr="",
+            ),
+        ]
+        with patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=responses) as run:
+            self.actions.render_review_fix_prompt(269, 1)
+
+        seed = self.tmp / ".refactor-loop" / "state" / "review-thread-completion" / "pr269.json"
+        self.assertTrue(seed.exists())
+        self.assertIn("after=cursor1", " ".join(str(arg) for arg in run.call_args_list[1].args[0]))
 
     def test_review_thread_completion_ignores_non_thread_driven_fix(self) -> None:
         validate_review_thread_completion(
@@ -121,6 +291,18 @@ class ReviewFixDispatchTests(unittest.TestCase):
                 escalation_evidence="META_RESOLVED:escalate-human:conflicting-review-thread",
             )
         )
+
+    def test_review_thread_completion_rejects_malformed_escalation_evidence(self) -> None:
+        with self.assertRaisesRegex(ReviewThreadCompletionError, "escalation evidence"):
+            validate_review_thread_completion(
+                ReviewThreadCompletionEvidence(
+                    review_thread_driven=True,
+                    thread_id="PRRT_kwDOExample",
+                    replied=False,
+                    resolved=False,
+                    escalation_evidence="anything nonempty",
+                )
+            )
 
     def test_review_thread_completion_blocks_missing_original_thread_evidence(self) -> None:
         with self.assertRaisesRegex(ReviewThreadCompletionError, "thread_id"):

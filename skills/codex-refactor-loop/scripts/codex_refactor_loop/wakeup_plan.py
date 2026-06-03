@@ -729,7 +729,12 @@ def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_num
             data = loaded
     review_thread_driven = bool(data.get("review_thread_driven"))
     thread_id = str(data.get("thread_id") or "")
-    escalation_evidence = str(data.get("escalation_evidence") or "")
+    raw_escalation_evidence = str(data.get("escalation_evidence") or "")
+    escalation_evidence = (
+        raw_escalation_evidence
+        if _has_clean_escalation_marker_source(repo_root, raw_escalation_evidence)
+        else ""
+    )
     live_original_thread_resolved = True
     if review_thread_driven and not escalation_evidence.strip():
         live_original_thread_resolved = _original_review_thread_is_resolved(ctx, pr_number, thread_id)
@@ -740,6 +745,19 @@ def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_num
         resolved=bool(data.get("resolved")) and live_original_thread_resolved,
         escalation_evidence=escalation_evidence,
     )
+
+
+def _has_clean_escalation_marker_source(repo_root: Path, escalation_evidence: str) -> bool:
+    marker = escalation_evidence.strip()
+    if not marker.startswith("META_RESOLVED:escalate-human:"):
+        return False
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    if not logs_dir.exists():
+        return False
+    for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if marker_from_completed_log(log_path) == marker:
+            return True
+    return False
 
 
 def _original_review_thread_is_resolved(ctx: LoopContext, pr_number: int, thread_id: str) -> bool:
