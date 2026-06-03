@@ -1596,9 +1596,10 @@ class Phase9Router:
                 continue
             except OSError:
                 continue
+            scanned = self._peer_reference_scan_region(prompt)
             for peer_role in sorted(set(self._solver_roles()) - {role}):
                 for token in self._peer_solver_reference_tokens(issue, round_no, peer_role):
-                    if token in prompt:
+                    if token in scanned:
                         return {
                             "role": role,
                             "peer_role": peer_role,
@@ -1606,6 +1607,24 @@ class Phase9Router:
                             "matched_token": token,
                         }
         return None
+
+    def _peer_reference_scan_region(self, prompt: str) -> str:
+        """Return only the router-controlled regions of a solver prompt for
+        peer-isolation scanning. The router-injected issue source snapshot is
+        issue-author content and may legitimately quote prior-round peer solver
+        log/run paths (e.g. a previous round's audit trail that was posted back
+        onto the GitHub issue body/comments). Quoting those paths inside the
+        snapshot is not an isolation breach and must not block judge dispatch;
+        only a peer reference the router itself emits into the header or the
+        solver template is a real violation, so the snapshot region between
+        '## Issue source snapshot' and '## Full solver template' is excluded."""
+        start = prompt.find("## Issue source snapshot")
+        if start == -1:
+            return prompt
+        end = prompt.find("## Full solver template", start)
+        if end == -1:
+            return prompt[:start]
+        return prompt[:start] + prompt[end:]
 
     def _peer_solver_reference_tokens(self, issue: str, round_no: int, peer_role: str) -> tuple[str, ...]:
         return (

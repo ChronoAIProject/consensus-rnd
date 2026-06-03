@@ -292,6 +292,65 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", router_header)
         self.assertNotIn("cluster spec", router_header)
 
+    def test_peer_reference_check_excludes_issue_source_snapshot(self) -> None:
+        # A solver prompt whose injected issue source snapshot quotes a peer
+        # solver's prior-round audit-trail log path is NOT an isolation breach:
+        # the snapshot is issue-author content (a prior round's consensus record
+        # echoed onto the GitHub issue), and blocking judge dispatch on it wedges
+        # every design-consensus whose issue body echoes a prior round.
+        issue, round_no = "777", 1
+        peer_token = f".refactor-loop/logs/phase9-issue{issue}-r{round_no}-minimal.log"
+        for role in sorted(self.router._solver_roles()):
+            path = self.router._solver_prompt_path(issue, round_no, role)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if role == "delete":
+                body = (
+                    "# design-consensus delete solver\n\n"
+                    f"Issue: #{issue}\nRole: delete\n\n"
+                    "## Issue source snapshot\n\n"
+                    f"source: gh-issue-{issue}\n\n"
+                    "## Round audit trail (links to local artifacts)\n"
+                    f"- solver-minimal: {peer_token}\n\n"
+                    "## Full solver template\n\n"
+                    "# Role: Solver - delete framing\nDo your own analysis.\n"
+                )
+            else:
+                body = (
+                    f"# {role} solver\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            path.write_text(body, encoding="utf-8")
+        self.assertIsNone(self.router._peer_solver_reference_violation(issue, round_no))
+
+    def test_peer_reference_check_flags_router_controlled_region(self) -> None:
+        # A peer reference leaked into a router-controlled region (before the
+        # snapshot) is still a real isolation violation and must block dispatch.
+        issue, round_no = "778", 1
+        peer_token = f".refactor-loop/logs/phase9-issue{issue}-r{round_no}-minimal.log"
+        for role in sorted(self.router._solver_roles()):
+            path = self.router._solver_prompt_path(issue, round_no, role)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if role == "delete":
+                body = (
+                    "# design-consensus delete solver\n"
+                    f"leaked peer evidence: {peer_token}\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            else:
+                body = (
+                    f"# {role} solver\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            path.write_text(body, encoding="utf-8")
+        violation = self.router._peer_solver_reference_violation(issue, round_no)
+        self.assertIsNotNone(violation)
+        self.assertEqual(violation["role"], "delete")
+        self.assertEqual(violation["peer_role"], "minimal")
+        self.assertEqual(violation["matched_token"], peer_token)
+
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")
 
