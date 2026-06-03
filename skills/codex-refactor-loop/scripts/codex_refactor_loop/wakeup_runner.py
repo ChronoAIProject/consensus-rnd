@@ -376,7 +376,7 @@ class WakeupRunner:
         if not isinstance(preconditions, list) or "target_log_absent" not in preconditions:
             return "spawn_missing_precondition:target_log_absent"
         log = Path(str(action.get("log") or ""))
-        if log.exists():
+        if _spawn_log_suppresses_retry(log):
             return "target_log_exists"
         return None
 
@@ -633,16 +633,20 @@ class WakeupRunner:
         stall = int(action.get("stall") or 5400)
         if not prompt.is_file():
             return 2
-        exit_code = launch_spawn_codex_supervisor(
+        exit_code = self._launch_spawn_codex_supervisor(cd=cd, prompt=prompt, log=log, stall=stall)
+        if exit_code != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
+        return exit_code
+
+    def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
+        return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
             cd=cd,
             prompt=prompt,
             log=log,
             stall=stall,
+            env=self.ctx.env_for_subprocess(),
         )
-        if exit_code != 0:
-            self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
-        return exit_code
 
     def _dispatch_design_consensus(self, action: Mapping[str, Any]) -> int:
         marker = self._design_consensus_marker(action)
@@ -1021,6 +1025,20 @@ def _log_has_exit_zero(path: Path) -> bool:
         return False
 
 
+def _spawn_log_suppresses_retry(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-10:]
+    except OSError:
+        return True
+    for line in reversed(lines):
+        if not line.startswith("EXIT="):
+            continue
+        return line.strip() == "EXIT=0"
+    return True
+
+
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
 
@@ -1113,6 +1131,20 @@ def main(argv: Sequence[str] | None = None) -> int:
 def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if not results:
         return "noop:no-actions"
+    applied_spawns = [
+        result
+        for result in results
+        if result.status == "applied"
+        and (
+            result.action_id.startswith("harness-spawn-intent:")
+            or result.action_id.startswith("design-consensus-spawn:")
+            or result.action_id.startswith("spawn:")
+        )
+    ]
+    if applied_spawns:
+        first_spawn = applied_spawns[0]
+        suffix = f"+{len(applied_spawns) - 1}" if len(applied_spawns) > 1 else ""
+        return f"dispatched {first_spawn.action_id or 'spawn'}{suffix}"
     first = results[0]
     if first.status == "applied":
         return f"dispatched {first.action_id or 'action'}"

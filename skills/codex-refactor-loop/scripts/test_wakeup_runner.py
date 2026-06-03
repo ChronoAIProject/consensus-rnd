@@ -23,7 +23,14 @@ REAL_THREAD = real_threading.Thread
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
-from codex_refactor_loop.wakeup_runner import WakeupRunner, _log_tick_status, _run_once_with_periodic_heartbeat, main as wakeup_runner_main
+from codex_refactor_loop.wakeup_runner import (
+    WakeupRunner,
+    RunnerResult,
+    _log_tick_status,
+    _run_once_with_periodic_heartbeat,
+    _wakeup_tick_action,
+    main as wakeup_runner_main,
+)
 
 
 class FakeSupervisor:
@@ -720,6 +727,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_missing_precondition:verified_pr_head",
         )
 
+    def test_wakeup_runner_tick_reports_later_solver_launch_after_blocked_lifecycle(self) -> None:
+        results = [
+            RunnerResult(
+                "publish-implementation:missing-verified-head-before-spawn",
+                "blocked",
+                "publish_implementation_missing_precondition:verified_pr_head",
+            ),
+            RunnerResult("harness-spawn-intent:phase9-router:493:1:minimal", "applied", ""),
+            RunnerResult("harness-spawn-intent:phase9-router:493:1:structural", "applied", ""),
+            RunnerResult("harness-spawn-intent:phase9-router:493:1:delete", "applied", ""),
+        ]
+
+        self.assertEqual(
+            _wakeup_tick_action(results),
+            "dispatched harness-spawn-intent:phase9-router:493:1:minimal+2",
+        )
+
     def test_wakeup_runner_blocked_non_spawn_does_not_batch_later_lifecycle_action(self) -> None:
         blocked = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-close",
@@ -823,6 +847,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(self.base_plan(action), actions=actions)
 
         self.assert_blocked_before_dispatch(results, "spawn:target-log-exists", "target_log_exists", actions)
+
+    def test_harness_spawn_failed_target_log_retries_supervisor(self) -> None:
+        action = self.spawn_action(action_id="spawn:failed-target-log")
+        Path(action["log"]).write_text("SPAWN_FAILED=codex missing\nEXIT=127\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [("spawn:failed-target-log", "applied", "")])
+        launch.assert_called_once()
 
     def test_forbidden_fields_fail_closed(self) -> None:
         for field in ("argv", "command_line", "lifecycle_authority", "lifecycle_owner", "target_ref"):

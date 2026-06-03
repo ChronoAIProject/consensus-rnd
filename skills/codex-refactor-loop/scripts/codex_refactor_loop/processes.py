@@ -91,6 +91,7 @@ def launch_spawn_codex_supervisor(
     log: Path,
     stall: int,
     add_dirs: Sequence[Path] = (),
+    env: Mapping[str, str] | None = None,
     stdout_to_log: bool = False,
 ) -> int:
     """Launch the blocking spawn-codex supervisor outside the daemon process."""
@@ -127,6 +128,7 @@ def launch_spawn_codex_supervisor(
                 stdout=handle,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
+                env=dict(env) if env is not None else None,
             )
         finally:
             handle.close()
@@ -137,6 +139,7 @@ def launch_spawn_codex_supervisor(
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
+            env=dict(env) if env is not None else None,
         )
     return 0
 

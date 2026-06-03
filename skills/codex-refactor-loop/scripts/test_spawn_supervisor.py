@@ -106,6 +106,7 @@ class SpawnSupervisorTests(unittest.TestCase):
                 prompt=self.prompt,
                 log=self.log,
                 stall=30,
+                env={"REPO_ROOT": str(repo.resolve()), "GH_REPO_SLUG": "owner/repo"},
             )
 
         self.assertEqual(exit_code, 0)
@@ -118,6 +119,8 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
         self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(kwargs["env"]["REPO_ROOT"], str(repo.resolve()))
+        self.assertEqual(kwargs["env"]["GH_REPO_SLUG"], "owner/repo")
         fake_proc.wait.assert_not_called()
         fake_proc.poll.assert_not_called()
 

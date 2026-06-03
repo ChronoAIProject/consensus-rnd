@@ -889,6 +889,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         actions = [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
         self.assertEqual([action["intent_id"] for action in actions], ["duplicate"])
 
+    def test_harness_spawn_intent_retries_after_failed_target_log(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="failed-log-retry",
+            task_id="phase9-issue453-r1-minimal",
+            log=".refactor-loop/logs/phase9-issue453-r1-minimal.log",
+        )
+        (self.logs / "phase9-issue453-r1-minimal.log").write_text(
+            "SPAWN_FAILED=codex missing\nEXIT=127\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_issue_453")
+
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["failed-log-retry"])
+
     def test_harness_spawn_intent_suppresses_terminal_closed_blocked_marker(self) -> None:
         self.append_harness_spawn_intent(intent_id="closed-intent")
         pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"

@@ -256,7 +256,7 @@ def harness_spawn_intent_actions(
         except Exception as exc:
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
-        if log_path.exists() or _canonical_in_flight_for_log(log_path, monitor):
+        if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
         if _suppress_harness_spawn_intent(
             intent,
@@ -298,6 +298,20 @@ def harness_spawn_intent_actions(
             }
         )
     return actions
+
+
+def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
+    if not log_path.exists():
+        return False
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-10:]
+    except OSError:
+        return True
+    for line in reversed(lines):
+        if not line.startswith("EXIT="):
+            continue
+        return line.strip() == "EXIT=0"
+    return True
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
