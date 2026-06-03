@@ -304,19 +304,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     fi
                     case "$fixture" in
                       review_thread_unresolved)
-                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_unresolved_unrelated)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
                         ;;
                       review_thread_unresolved_outdated)
-                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
                         ;;
                       review_thread_resolved)
-                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
                         ;;
                       review_thread_paginated_unresolved)
                         if [[ "$args" == *"after=cursor1"* ]]; then
-                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
                         else
-                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"}}}}}}\n'
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"}}}}}}\n'
                         fi
                         ;;
                       review_thread_graphql_failure)
@@ -1230,7 +1233,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
-    def test_fix_done_with_unresolved_review_thread_blocks_dispatch_reviewers(self) -> None:
+    def test_fix_done_without_review_thread_artifact_ignores_unrelated_unresolved_threads(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_with_unresolved_original_review_thread_blocks_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
         plan = self.run_plan(fixture="review_thread_unresolved")
@@ -1318,7 +1345,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertNotIn("status_only", action)
 
-    def test_fix_done_blocks_when_review_thread_live_state_is_unknown(self) -> None:
+    def test_fix_done_blocks_when_original_review_thread_live_state_is_unknown(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
         for fixture in (
             "review_thread_graphql_failure",
             "review_thread_malformed",
@@ -1328,6 +1357,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(fixture=fixture):
                 self.logs.joinpath("fix-pr77-r3.log").unlink(missing_ok=True)
+                (completion_dir / "pr77.json").write_text(
+                    json.dumps(
+                        {
+                            "review_thread_driven": True,
+                            "thread_id": "PRRT_kwDOExample",
+                            "replied": True,
+                            "resolved": True,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
                 self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
                 plan = self.run_plan(fixture=fixture)
@@ -1337,7 +1377,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 self.assertTrue(action["status_only"])
                 self.assertNotIn("controller_action", action)
 
-    def test_fix_done_blocks_unresolved_outdated_review_thread(self) -> None:
+    def test_fix_done_blocks_unresolved_outdated_original_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
         plan = self.run_plan(fixture="review_thread_unresolved_outdated")
@@ -1347,7 +1400,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["status_only"])
         self.assertNotIn("controller_action", action)
 
-    def test_fix_done_checks_paginated_review_threads_before_dispatch_reviewers(self) -> None:
+    def test_fix_done_checks_paginated_original_review_thread_before_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
         plan = self.run_plan(fixture="review_thread_paginated_unresolved")
@@ -1360,7 +1426,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("api graphql", query_log)
         self.assertIn("after=cursor1", query_log)
 
-    def test_fix_done_blocks_when_review_thread_repo_slug_is_missing(self) -> None:
+    def test_fix_done_blocks_when_original_review_thread_repo_slug_is_missing(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
         (self.repo / ".refactor-loop" / "host.env").write_text(
             f"REPO_ROOT={self.repo}\nCODEX_FLOOR=5\n",
             encoding="utf-8",

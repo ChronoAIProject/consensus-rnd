@@ -727,26 +727,33 @@ def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_num
             loaded = {}
         if isinstance(loaded, dict):
             data = loaded
-    live_unresolved_or_unknown = _pr_has_unresolved_review_threads(ctx, pr_number)
+    review_thread_driven = bool(data.get("review_thread_driven"))
+    thread_id = str(data.get("thread_id") or "")
+    escalation_evidence = str(data.get("escalation_evidence") or "")
+    live_original_thread_resolved = True
+    if review_thread_driven and not escalation_evidence.strip():
+        live_original_thread_resolved = _original_review_thread_is_resolved(ctx, pr_number, thread_id)
     return ReviewThreadCompletionEvidence(
-        review_thread_driven=bool(data.get("review_thread_driven")) or live_unresolved_or_unknown,
-        thread_id=str(data.get("thread_id") or ""),
+        review_thread_driven=review_thread_driven,
+        thread_id=thread_id,
         replied=bool(data.get("replied")),
-        resolved=bool(data.get("resolved")) and not live_unresolved_or_unknown,
-        escalation_evidence=str(data.get("escalation_evidence") or ""),
+        resolved=bool(data.get("resolved")) and live_original_thread_resolved,
+        escalation_evidence=escalation_evidence,
     )
 
 
-def _pr_has_unresolved_review_threads(ctx: LoopContext, pr_number: int) -> bool:
+def _original_review_thread_is_resolved(ctx: LoopContext, pr_number: int, thread_id: str) -> bool:
+    if not thread_id.strip():
+        return False
     slug = str(ctx.host_env.get("GH_REPO_SLUG") or "").strip()
     owner, _, repo = slug.partition("/")
     if not owner or not repo:
-        return True
+        return False
     query = (
         "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
         "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
         "reviewThreads(first:100, after:$after){ "
-        "nodes{ isResolved isOutdated } pageInfo{ hasNextPage endCursor } "
+        "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
         "} } } }"
     )
     after = ""
@@ -769,35 +776,34 @@ def _pr_has_unresolved_review_threads(ctx: LoopContext, pr_number: int) -> bool:
         payload = run_json(cmd, cwd=ctx.repo_root)
         repository = ((payload or {}).get("data") or {}).get("repository")
         if not isinstance(repository, dict):
-            return True
+            return False
         pull_request = repository.get("pullRequest")
         if not isinstance(pull_request, dict):
-            return True
+            return False
         review_threads = pull_request.get("reviewThreads")
         if not isinstance(review_threads, dict):
-            return True
+            return False
         nodes = review_threads.get("nodes")
         if not isinstance(nodes, list):
-            return True
+            return False
         for node in nodes:
             if not isinstance(node, dict):
-                return True
+                return False
+            if node.get("id") != thread_id:
+                continue
             is_resolved = node.get("isResolved")
-            if not isinstance(is_resolved, bool):
-                return True
-            if not is_resolved:
-                return True
+            return is_resolved if isinstance(is_resolved, bool) else False
         page_info = review_threads.get("pageInfo")
         if not isinstance(page_info, dict):
-            return True
+            return False
         has_next_page = page_info.get("hasNextPage")
         if not isinstance(has_next_page, bool):
-            return True
+            return False
         if not has_next_page:
             return False
         end_cursor = page_info.get("endCursor")
         if not isinstance(end_cursor, str) or not end_cursor:
-            return True
+            return False
         after = end_cursor
 
 
