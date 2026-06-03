@@ -1263,6 +1263,34 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["cluster_id"], "issue-449")
         self.assertIn("project implementation only from the consensus judge artifact", action["new_principle"])
 
+    def test_consensus_projection_accepts_verdict_consensus_frontmatter(self) -> None:
+        artifact = self.write_consensus_artifact(issue=451, round_no=3, frontmatter="verdict: consensus")
+        self.write_completed_log("phase9-issue451-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        actions = completed_marker_actions(self.repo)
+
+        action = next(
+            item for item in actions
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual(artifact.relative_to(self.repo).as_posix(), action["consensus_artifact"])
+        self.assertEqual("issue-451", action["cluster_id"])
+        self.assertFalse(action.get("status_only"))
+
+    def test_consensus_projection_allows_empty_optional_verification_hints(self) -> None:
+        self.write_consensus_artifact(issue=452, round_no=3, verification_hints="")
+        self.write_completed_log("phase9-issue452-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
+
+        actions = completed_marker_actions(self.repo)
+
+        action = next(
+            item for item in actions
+            if item.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertEqual("", action["verification_hints"])
+        self.assertIn("wakeup_plan.py", action["scope_paths"])
+        self.assertFalse(action.get("status_only"))
+
     def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
 

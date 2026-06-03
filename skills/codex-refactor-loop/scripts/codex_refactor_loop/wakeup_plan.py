@@ -745,23 +745,6 @@ def _consensus_facts_complete(facts: dict[str, str]) -> bool:
     )
 
 
-def _extract_scope_paths(text: str) -> str:
-    bullet_paths: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("- `"):
-            continue
-        match = re.match(r"- `([^`]+)`:", stripped)
-        if match:
-            bullet_paths.append(match.group(1))
-    if bullet_paths:
-        return "\n".join(f"- {path}" for path in bullet_paths)
-    match = re.search(r"(?ims)^scope_paths\s*:\s*(.+?)(?:\n\n|^old_pattern\s*:|^new_principle\s*:|^verification)", text)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-
 def _extract_section_text(text: str, heading: str) -> str:
     pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(.+?)(?=^##\s+|\Z)")
     match = pattern.search(text)
