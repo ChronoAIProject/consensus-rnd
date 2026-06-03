@@ -627,7 +627,10 @@ def _extract_completed_marker_line(text: str) -> str | None:
     return None
 
 
-def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
+def completed_marker_actions(
+    repo_root: Path,
+    open_targets: set[tuple[str, int]] | None = None,
+) -> list[dict[str, Any]]:
     logs_dir = repo_root / ".refactor-loop" / "logs"
     if not logs_dir.exists():
         return []
@@ -659,6 +662,9 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
         }
+        target = _action_target_key(action)
+        if open_targets is not None and target is not None and target not in open_targets:
+            continue
         route = route_from_marker(marker)
         if route:
             action["route"] = route
@@ -681,6 +687,14 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
                 action.pop("no_generic_command", None)
         actions.append(action)
     return actions
+
+
+def _action_target_key(action: dict[str, Any]) -> tuple[str, int] | None:
+    kind = action.get("target_kind")
+    number = action.get("target_number")
+    if kind in {"PR", "issue"} and isinstance(number, int):
+        return kind, number
+    return None
 
 
 def consensus_implementation_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
@@ -1686,7 +1700,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor, gh_items, gh_items_loaded))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
-    actions.extend(completed_marker_actions(repo_root))
+    completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
+    actions.extend(completed_marker_actions(repo_root, completed_marker_open_targets))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
