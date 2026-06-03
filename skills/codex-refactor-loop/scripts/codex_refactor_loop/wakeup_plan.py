@@ -127,6 +127,7 @@ DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
+DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge)\.log$")
 
 
 @dataclass(frozen=True)
@@ -145,6 +146,14 @@ class GhItem:
     @property
     def milestone(self) -> bool:
         return label_catalog.MILESTONE_CURRENT in label_catalog.normalize_label_set(self.labels).canonical
+
+
+@dataclass(frozen=True)
+class CompletedMarkerCandidate:
+    log_path: Path
+    marker: str
+    action: dict[str, Any]
+    mtime: float
 
 
 def run_json(cmd: list[str], *, cwd: Path) -> Any:
@@ -634,7 +643,7 @@ def completed_marker_actions(
     logs_dir = repo_root / ".refactor-loop" / "logs"
     if not logs_dir.exists():
         return []
-    actions: list[dict[str, Any]] = []
+    candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = marker_from_completed_log(log_path)
         if not marker:
@@ -685,8 +694,84 @@ def completed_marker_actions(
                 action["no_lifecycle_authority"] = True
                 action.pop("runner_authority", None)
                 action.pop("no_generic_command", None)
-        actions.append(action)
-    return actions
+        candidates.append(
+            CompletedMarkerCandidate(
+                log_path=log_path,
+                marker=marker,
+                action=action,
+                mtime=_marker_mtime(log_path),
+            )
+        )
+    return [candidate.action for candidate in _latest_completed_marker_candidates(candidates)]
+
+
+def _marker_mtime(log_path: Path) -> float:
+    try:
+        return log_path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def _latest_completed_marker_candidates(candidates: list[CompletedMarkerCandidate]) -> list[CompletedMarkerCandidate]:
+    latest_keys: dict[tuple[Any, ...], tuple[int, float]] = {}
+    keyed: list[tuple[CompletedMarkerCandidate, tuple[Any, ...], tuple[int, float]] | None] = []
+    for candidate in candidates:
+        key = _completed_marker_latest_key(candidate)
+        if key is None:
+            keyed.append(None)
+            continue
+        rank = _completed_marker_latest_rank(candidate)
+        keyed.append((candidate, key, rank))
+        if key not in latest_keys or rank > latest_keys[key]:
+            latest_keys[key] = rank
+
+    kept: list[CompletedMarkerCandidate] = []
+    for candidate, record in zip(candidates, keyed, strict=True):
+        if record is None:
+            kept.append(candidate)
+            continue
+        _, key, rank = record
+        if rank == latest_keys.get(key):
+            kept.append(candidate)
+    return kept
+
+
+def _completed_marker_latest_key(candidate: CompletedMarkerCandidate) -> tuple[Any, ...] | None:
+    design_key = _design_consensus_marker_issue_key(candidate)
+    if design_key is not None:
+        return design_key
+    action = candidate.action
+    target = _action_target_key(action)
+    if target is not None:
+        return ("target", *target)
+    return None
+
+
+def _design_consensus_marker_issue_key(candidate: CompletedMarkerCandidate) -> tuple[str, str, int] | None:
+    if phase_from_marker(candidate.marker) != "design-consensus":
+        return None
+    match = DESIGN_CONSENSUS_LOG_RE.fullmatch(candidate.log_path.name)
+    if match is None:
+        return None
+    issue = int(match.group(1))
+    target = _action_target_key(candidate.action)
+    if target is not None and target != ("issue", issue):
+        return None
+    return ("design-consensus", "issue", issue)
+
+
+def _completed_marker_latest_rank(candidate: CompletedMarkerCandidate) -> tuple[int, float]:
+    round_no = _design_consensus_marker_round(candidate)
+    if round_no is not None:
+        return (round_no, candidate.mtime)
+    return (0, candidate.mtime)
+
+
+def _design_consensus_marker_round(candidate: CompletedMarkerCandidate) -> int | None:
+    if phase_from_marker(candidate.marker) != "design-consensus":
+        return None
+    match = DESIGN_CONSENSUS_LOG_RE.fullmatch(candidate.log_path.name)
+    return int(match.group(2)) if match else None
 
 
 def _action_target_key(action: dict[str, Any]) -> tuple[str, int] | None:

@@ -578,6 +578,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def set_log_mtime(self, name: str, mtime: float) -> None:
+        os.utime(self.logs / name, (mtime, mtime))
+
     def write_consensus_artifact(
         self,
         issue: int = 20,
@@ -1057,6 +1060,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 467)
         self.assertFalse(action.get("status_only"))
 
+    def test_completed_marker_keeps_latest_non_design_target_marker_only(self) -> None:
+        self.write_completed_log("fix-pr77-r2.log", "FIX_DONE")
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+        self.set_log_mtime("fix-pr77-r2.log", 100.0)
+        self.set_log_mtime("fix-pr77-r3.log", 200.0)
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:fix-pr77-r2.log", rendered)
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+
+    def test_completed_marker_keeps_marker_without_target_when_latest_filter_cannot_key_it(self) -> None:
+        self.write_completed_log("implement-worker-old.log", "IMPLEMENT_DONE")
+        self.write_completed_log("implement-worker-new.log", "IMPLEMENT_DONE")
+
+        actions = completed_marker_actions(self.repo)
+
+        action_ids = {action["action_id"] for action in actions}
+        self.assertTrue(any(action_id.startswith("completed-marker:implement-worker-old.log") for action_id in action_ids))
+        self.assertTrue(any(action_id.startswith("completed-marker:implement-worker-new.log") for action_id in action_ids))
+
     def test_decompose_consensus_visible_only_as_generic_completed_marker(self) -> None:
         self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
 
@@ -1155,6 +1183,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_solver_triplet_completed_marker_projects_executable_design_consensus(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
+            self.set_log_mtime(f"phase9-issue453-r1-{role}.log", {"delete": 100.0, "structural": 200.0, "minimal": 300.0}[role])
 
         plan = self.run_plan(fixture="open_issue_453")
 
@@ -1175,6 +1204,46 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target"], {"kind": "issue", "number": 453})
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
+
+    def test_design_consensus_completed_marker_keeps_latest_round_only(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
+            self.set_log_mtime(f"phase9-issue453-r1-{role}.log", 100.0)
+        self.write_completed_log("phase9-issue453-r2-judge.log", "META_JUDGE_DONE:continue")
+        self.set_log_mtime("phase9-issue453-r2-judge.log", 200.0)
+        self.write_completed_log("phase9-issue453-r3-minimal.log", "SOLVER_DONE:minimal:ready")
+        self.write_completed_log("phase9-issue453-r3-structural.log", "SOLVER_DONE:structural:ready")
+        self.set_log_mtime("phase9-issue453-r3-minimal.log", 300.0)
+        self.set_log_mtime("phase9-issue453-r3-structural.log", 400.0)
+
+        plan = self.run_plan(fixture="open_issue_453")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("phase9-issue453-r1-minimal.log", rendered)
+        self.assertNotIn("phase9-issue453-r1-structural.log", rendered)
+        self.assertNotIn("phase9-issue453-r1-delete.log", rendered)
+        self.assertNotIn("phase9-issue453-r2-judge.log", rendered)
+        self.assertNotIn("SOLVER_DONE:minimal:ready:real", rendered)
+        action = next(
+            item for item in plan["actions"]
+            if item["action_id"].startswith("completed-marker:phase9-issue453-r3-structural")
+        )
+        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 453)
+
+    def test_design_consensus_latest_round_filter_stacks_with_closed_target_filter(self) -> None:
+        self.write_completed_log("phase9-issue330-r1-minimal.log", "SOLVER_DONE:minimal:ready")
+        self.write_completed_log("phase9-issue330-r2-judge.log", "META_JUDGE_DONE:continue")
+        self.set_log_mtime("phase9-issue330-r1-minimal.log", 100.0)
+        self.set_log_mtime("phase9-issue330-r2-judge.log", 200.0)
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("phase9-issue330-r1-minimal.log", rendered)
+        self.assertNotIn("phase9-issue330-r2-judge.log", rendered)
+        self.assertNotIn("dispatch_design_consensus", rendered)
 
     def test_solver_triplet_completed_marker_suppressed_for_terminal_design_target(self) -> None:
         for role in ("minimal", "structural", "delete"):
