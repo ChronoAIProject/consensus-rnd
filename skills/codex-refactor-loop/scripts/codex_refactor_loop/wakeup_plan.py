@@ -674,35 +674,29 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
                     *action["preconditions"],
                     "durable_consensus_artifact",
                 ]
+            else:
+                action["status_only"] = True
+                action["no_lifecycle_authority"] = True
+                action.pop("runner_authority", None)
+                action.pop("no_generic_command", None)
         actions.append(action)
     return actions
 
 
 def consensus_implementation_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
-    match = CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)
-    if match is None:
+    log_match = CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)
+    if log_match is None:
         return {}
-    issue, round_no = match.groups()
+    issue, round_no = log_match.groups()
     if item and _target_number_from_item(item) != int(issue):
         return {}
     artifact = repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue}-r{round_no}-judge.md"
     if not artifact.is_file():
         return {}
-    facts = _consensus_artifact_facts(repo_root, artifact)
-    if not _consensus_artifact_has_marker(artifact):
+    artifact_match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if artifact_match is None or artifact_match.groups() != log_match.groups():
         return {}
-    if not _consensus_facts_complete(facts):
-        return {}
-    return {
-        "consensus_artifact": artifact.relative_to(repo_root).as_posix(),
-        "design_decision_path": artifact.relative_to(repo_root).as_posix(),
-        "consensus_issue": int(issue),
-        "consensus_round": int(round_no),
-        "cluster_id": f"issue-{issue}",
-        "iteration": issue,
-        "source_ref": f"gh-issue-{issue}",
-        **facts,
-    }
+    return _consensus_projection_from_artifact(repo_root, artifact, int(issue), int(round_no))
 
 
 def _consensus_artifact_has_marker(path: Path) -> bool:
@@ -718,19 +712,25 @@ def _consensus_artifact_facts(repo_root: Path, path: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return {}
-    scope_paths = _extract_scope_paths(text)
-    old_pattern = _extract_section_text(text, "PROJECT_RULES clause violated") or _extract_section_text(text, "Recommended framing")
-    new_principle = _extract_section_text(text, "Concrete plan")
-    verification_hints = _extract_section_text(text, "Tests to add") or _extract_section_text(text, "Concrete plan")
-    if not scope_paths:
-        issue_match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(path.name)
-        if issue_match:
-            solver_paths = [
-                repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md"
-                for role in ("minimal", "structural", "delete")
-            ]
-            scope_paths = _extract_solver_scope_paths(solver_paths)
+    rel_path = path.relative_to(repo_root).as_posix()
+    if not _frontmatter_is_consensus(text):
+        return {}
+    if_consensus = _extract_section_text(text, "If consensus")
+    if not if_consensus:
+        return {}
+    owner = _extract_implementation_owner(if_consensus)
+    if owner is None:
+        return {}
+    cluster_id, design_decision_path = owner
+    if design_decision_path != rel_path:
+        return {}
+    scope_paths = _extract_structured_consensus_field(if_consensus, "scope_paths")
+    old_pattern = _extract_structured_consensus_field(if_consensus, "old_pattern")
+    new_principle = _extract_structured_consensus_field(if_consensus, "new_principle")
+    verification_hints = _extract_structured_consensus_field(if_consensus, "verification_hints")
     return {
+        "cluster_id": cluster_id,
+        "design_decision_path": design_decision_path,
         "scope_paths": scope_paths,
         "old_pattern": old_pattern,
         "new_principle": new_principle,
@@ -739,45 +739,95 @@ def _consensus_artifact_facts(repo_root: Path, path: Path) -> dict[str, str]:
 
 
 def _consensus_facts_complete(facts: dict[str, str]) -> bool:
-    return all(str(facts.get(field) or "").strip() for field in ("scope_paths", "old_pattern", "new_principle"))
-
-
-def _extract_scope_paths(text: str) -> str:
-    bullet_paths: list[str] = []
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped.startswith("- `"):
-            continue
-        match = re.match(r"- `([^`]+)`:", stripped)
-        if match:
-            bullet_paths.append(match.group(1))
-    if bullet_paths:
-        return "\n".join(f"- {path}" for path in bullet_paths)
-    match = re.search(r"(?ims)^scope_paths\s*:\s*(.+?)(?:\n\n|^old_pattern\s*:|^new_principle\s*:|^verification)", text)
-    if match:
-        return match.group(1).strip()
-    return ""
-
-
-def _extract_solver_scope_paths(paths: list[Path]) -> str:
-    values: list[str] = []
-    seen: set[str] = set()
-    for path in paths:
-        if not path.is_file():
-            continue
-        extracted = _extract_scope_paths(path.read_text(encoding="utf-8", errors="replace"))
-        for line in extracted.splitlines():
-            value = line.removeprefix("- ").strip()
-            if value and value not in seen:
-                seen.add(value)
-                values.append(value)
-    return "\n".join(f"- {value}" for value in values)
+    return all(
+        str(facts.get(field) or "").strip()
+        for field in ("cluster_id", "design_decision_path", "scope_paths", "old_pattern", "new_principle")
+    )
 
 
 def _extract_section_text(text: str, heading: str) -> str:
     pattern = re.compile(rf"(?ims)^##\s+{re.escape(heading)}\s*\n(.+?)(?=^##\s+|\Z)")
     match = pattern.search(text)
     return match.group(1).strip() if match else ""
+
+
+def _frontmatter_is_consensus(text: str) -> bool:
+    if not text.startswith("---\n"):
+        return False
+    end = text.find("\n---", 4)
+    if end < 0:
+        return False
+    values: dict[str, str] = {}
+    for line in text[4:end].splitlines():
+        key, sep, value = line.partition(":")
+        if sep:
+            values[key.strip()] = value.strip()
+    return values.get("decision") == "consensus" or values.get("verdict") == "consensus"
+
+
+def _extract_implementation_owner(section: str) -> tuple[str, str] | None:
+    match = re.search(
+        r"(?im)^\s*-\s*Implementation owner:\s*dispatch implement codex with "
+        r"cluster_id=([^,\s]+),\s*design_decision_path=([^\s]+)\s*$",
+        section,
+    )
+    if not match:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _extract_structured_consensus_field(section: str, field: str) -> str:
+    field_names = {"scope_paths", "old_pattern", "new_principle", "verification_hints"}
+    lines = section.splitlines()
+    start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
+    other_re = re.compile(
+        r"^\s*(?:-\s*)?(?:" + "|".join(re.escape(name) for name in sorted(field_names - {field})) + r")\s*:\s*"
+    )
+    collected: list[str] = []
+    collecting = False
+    for line in lines:
+        if not collecting:
+            match = start_re.match(line)
+            if not match:
+                continue
+            remainder = match.group(1).strip()
+            if remainder:
+                collected.append(remainder)
+            collecting = True
+            continue
+        if other_re.match(line) or re.match(r"^\s*-\s*(?:Implementation owner|Add `|For large-issue)\b", line):
+            break
+        if re.match(r"^\s*-\s+[A-Za-z][A-Za-z0-9 _/-]*:", line):
+            break
+        collected.append(line.rstrip())
+    return "\n".join(line.strip() for line in collected if line.strip())
+
+
+def _consensus_projection_from_artifact(repo_root: Path, artifact: Path, issue: int, round_no: int) -> dict[str, Any]:
+    match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if match is None or int(match.group(1)) != issue or int(match.group(2)) != round_no:
+        return {}
+    if not _consensus_artifact_has_marker(artifact):
+        return {}
+    facts = _consensus_artifact_facts(repo_root, artifact)
+    if not _consensus_facts_complete(facts):
+        return {}
+    rel = artifact.relative_to(repo_root).as_posix()
+    if facts.get("design_decision_path") != rel:
+        return {}
+    return {
+        "consensus_artifact": rel,
+        "design_decision_path": rel,
+        "consensus_issue": issue,
+        "consensus_round": round_no,
+        "cluster_id": facts["cluster_id"],
+        "iteration": str(issue),
+        "source_ref": f"gh-issue-{issue}",
+        "scope_paths": facts["scope_paths"],
+        "old_pattern": facts["old_pattern"],
+        "new_principle": facts["new_principle"],
+        "verification_hints": facts.get("verification_hints", ""),
+    }
 
 
 def infer_item_from_text(text: str) -> str | None:
@@ -1286,20 +1336,9 @@ def latest_consensus_implementation_for_issue(repo_root: Path | None, issue: int
         if match:
             candidates.append((int(match.group(2)), path))
     for round_no, artifact in sorted(candidates, reverse=True):
-        facts = _consensus_artifact_facts(repo_root, artifact)
-        if not _consensus_artifact_has_marker(artifact) or not _consensus_facts_complete(facts):
-            continue
-        rel = artifact.relative_to(repo_root).as_posix()
-        return {
-            "consensus_artifact": rel,
-            "design_decision_path": rel,
-            "consensus_issue": issue,
-            "consensus_round": round_no,
-            "cluster_id": f"issue-{issue}",
-            "iteration": str(issue),
-            "source_ref": f"gh-issue-{issue}",
-            **facts,
-        }
+        projection = _consensus_projection_from_artifact(repo_root, artifact, issue, round_no)
+        if projection:
+            return projection
     return {}
 
 

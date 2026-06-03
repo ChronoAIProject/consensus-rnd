@@ -14,6 +14,7 @@ SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
+META_JUDGE_PROMPT = SKILL_ROOT / "prompts" / "meta-judge.md"
 MIRROR_RELATIVE = "skills/codex-refactor-loop/authorizations/runtime-exceptions.md"
 MIRROR = REPO_ROOT / MIRROR_RELATIVE
 REPO_RULES = REPO_ROOT / "CLAUDE.md"
@@ -553,6 +554,15 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
         self.assertIn("all required reviewer heads equal live PR head", entry)
         self.assertIn("all required reviewer heads equal live PR head", self.skill)
+        self.assertIn(
+            "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
+            self.skill,
+        )
+        meta_judge = read(META_JUDGE_PROMPT)
+        self.assertIn(
+            "structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text",
+            meta_judge,
+        )
 
         for forbidden in (
             "no arbitrary git/gh command",

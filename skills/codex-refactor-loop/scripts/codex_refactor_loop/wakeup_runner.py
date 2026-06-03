@@ -48,6 +48,7 @@ REVIEW_DONE_RE = re.compile(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
+CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 TARGET_TEXT_PATTERNS = (
     (re.compile(r"(?i)\bPR\s*#([1-9][0-9]*)\b"), "PR"),
     (re.compile(r"(?i)\bissue\s*#([1-9][0-9]*)\b"), "issue"),
@@ -392,10 +393,12 @@ class WakeupRunner:
         for field in ("design_decision_path", "scope_paths", "old_pattern", "new_principle", "cluster_id", "iteration"):
             if not str(action.get(field) or "").strip():
                 return f"consensus_implementation_missing_field:{field}"
+        if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
+            return "consensus_implementation_design_path_mismatch"
         return None
 
     def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
-        raw_artifact = str(action.get("consensus_artifact") or action.get("design_decision_path") or "")
+        raw_artifact = str(action.get("consensus_artifact") or "")
         if not raw_artifact:
             return "consensus_artifact_missing"
         try:
@@ -412,7 +415,8 @@ class WakeupRunner:
             return "consensus_artifact_identity_missing"
         if action.get("target_kind") != "issue" or action.get("target_number") != issue:
             return "consensus_artifact_target_mismatch"
-        if f"issue{issue}" not in artifact.name or f"r{round_no}" not in artifact.name:
+        identity = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+        if identity is None or int(identity.group(1)) != issue or int(identity.group(2)) != round_no:
             return "consensus_artifact_identity_mismatch"
         try:
             lines = artifact.read_text(encoding="utf-8", errors="replace").splitlines()
