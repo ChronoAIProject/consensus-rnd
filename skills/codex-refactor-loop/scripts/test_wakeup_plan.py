@@ -102,6 +102,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    open_issue_20)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     consensus_issue_330)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":330,"title":"consensus target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:consensus-reached"},{"name":"crnd:human:auto"}]}]\n'
@@ -112,6 +119,48 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     open_issue_331)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":331,"title":"different open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_453)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":453,"title":"solver target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_403)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":403,"title":"decompose target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_53)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":53,"title":"drop target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_54)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":54,"title":"judge target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_issue_449)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":449,"title":"consensus target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:consensus-reached"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    ci_red_issue20)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -247,6 +296,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     ci_red)
                       if [[ "$label" == "auto-loop" ]]; then
                         printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    ci_red_issue20)
+                      if [[ "$label" == "auto-loop" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_pr_123)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":123,"title":"open PR target","headRefName":"impl/pr123","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    open_pr_77)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":77,"title":"open PR target","headRefName":"impl/pr77","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -867,7 +937,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_completed_marker_routes_before_ci_red(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE")
 
-        plan = self.run_plan(fixture="ci_red")
+        plan = self.run_plan(fixture="ci_red_issue20")
 
         self.assertEqual(plan["actions"][0]["kind"], "completed-marker")
         self.assertEqual(plan["actions"][0]["actor"], "controller")
@@ -948,10 +1018,52 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("raw reviewer prose", rendered)
         self.assertNotIn("target issue", rendered)
 
+    def test_completed_marker_suppresses_closed_target_from_open_managed_read_model(self) -> None:
+        self.write_completed_log("review-pr467-architect-r1.log", "REVIEW_DONE:467:architect:approve")
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:review-pr467-architect-r1.log", rendered)
+        self.assertNotIn("REVIEW_DONE:467:architect:approve", rendered)
+
+    def test_completed_marker_keeps_open_target_from_open_managed_read_model(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 77)
+        self.assertFalse(action.get("status_only"))
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+
+    def test_completed_marker_keeps_marker_without_target_when_open_managed_read_model_is_loaded(self) -> None:
+        self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
+
+        plan = self.run_plan(fixture="open_issue_331")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-worker"))
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertIsNone(action["target_kind"])
+        self.assertIsNone(action["target_number"])
+        self.assertFalse(action.get("status_only"))
+
+    def test_completed_marker_keeps_legacy_projection_without_open_managed_read_model(self) -> None:
+        self.write_completed_log("review-pr467-architect-r1.log", "REVIEW_DONE:467:architect:approve")
+
+        actions = completed_marker_actions(self.repo)
+
+        action = next(item for item in actions if item["action_id"].startswith("completed-marker:review-pr467"))
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 467)
+        self.assertFalse(action.get("status_only"))
+
     def test_decompose_consensus_visible_only_as_generic_completed_marker(self) -> None:
         self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_403")
 
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "completed-marker")
@@ -994,7 +1106,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_pr_123")
 
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "completed-marker")
@@ -1018,7 +1130,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_53")
 
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "completed-marker")
@@ -1036,7 +1148,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_non_drop_meta_resolved_still_routes_design_consensus(self) -> None:
         self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_54")
 
         action = plan["actions"][0]
         self.assertEqual(action["controller_action"], "dispatch_design_consensus")
@@ -1047,7 +1159,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for role in ("minimal", "structural", "delete"):
             self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_453")
 
         action = next(
             item for item in plan["actions"]
@@ -1175,7 +1287,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_fix_done_completed_marker_projects_executable_dispatch_reviewers(self) -> None:
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_pr_77")
 
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
         self.assertEqual(action["kind"], "completed-marker")
@@ -1253,7 +1365,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         with (self.logs / "phase9-issue449-r2-judge.log").open("a", encoding="utf-8") as handle:
             handle.write("DONE_AT=2026-06-02T12:00:00Z\n")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_449")
 
         action = next(
             item for item in plan["actions"]
@@ -1297,7 +1409,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_consensus_completed_marker_without_durable_artifact_is_not_executable(self) -> None:
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
 
-        plan = self.run_plan()
+        plan = self.run_plan(fixture="open_issue_20")
 
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:phase9-issue20"))
         self.assertTrue(action["status_only"])
@@ -2225,7 +2337,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 for action in plan["actions"]:
                     assert_stage_slug(action["phase"])
 
-        plan = self.run_plan(fixture="ci_red")
+        plan = self.run_plan(fixture="ci_red_issue20")
         by_kind = {action["kind"]: action for action in plan["actions"]}
         self.assertEqual(by_kind["completed-marker"]["phase"], "publish")
         self.assertEqual(by_kind["completed-marker"]["route"], "publish-or-review-gate")
