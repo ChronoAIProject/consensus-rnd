@@ -64,6 +64,8 @@ def classify_implement_attempt(
         return ImplementAttemptState("redispatch", "nonzero_exit")
     marker = clean_implement_done_marker(lines)
     if not marker:
+        marker = _implement_run_artifact_done_marker(log_path)
+    if not marker:
         return ImplementAttemptState("redispatch", "markerless")
     identity = canonical_implementation_identity(repo_root, action, marker)
     if identity is None:
@@ -97,6 +99,25 @@ def canonical_implement_log_path(repo_root: Path, action: Mapping[str, object]) 
 
 def is_implement_log(path: Path) -> bool:
     return IMPLEMENT_LOG_RE.fullmatch(path.name) is not None
+
+
+def _implement_run_artifact_done_marker(log_path: Path) -> str:
+    """Recover IMPLEMENT_DONE:<id>:ok from the run artifact when a clean-exit
+    implement worker emitted it only into runs/implement-<cluster>.md instead of
+    the log tail. Mirrors the detection (wakeup_plan) and revalidation
+    (wakeup_runner) artifact fallbacks so the success-aware lifecycle predicate
+    does not re-dispatch and overwrite an already-complete implement merely
+    because its marker went to the artifact (the root cause of readiness churn,
+    e.g. an :ok implement being re-implemented into :partial). Only :ok markers
+    are accepted, so partial/failed attempts still re-dispatch for recovery."""
+    match = IMPLEMENT_LOG_RE.fullmatch(log_path.name)
+    if not match:
+        return ""
+    artifact = log_path.parent.parent / "runs" / f"implement-{match.group('cluster')}.md"
+    try:
+        return clean_implement_done_marker(artifact.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
+        return ""
 
 
 def terminal_exit_line(lines: list[str]) -> str | None:
