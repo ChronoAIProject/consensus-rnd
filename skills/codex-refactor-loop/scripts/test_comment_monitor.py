@@ -56,6 +56,7 @@ class CommentMonitorTests(unittest.TestCase):
             {
                 "STATE_FILE": str(override_root / "state.json"),
                 "INTERVAL": "1",
+                "COMMENT_MONITOR_INTERVAL": "",
             },
         ):
             monitor = CommentMonitor(self.ctx)

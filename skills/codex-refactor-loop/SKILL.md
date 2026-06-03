@@ -1042,7 +1042,7 @@ Refactor (iter6/issue-118):
 Posting rules:
 
 1. Controller posts lifecycle banners directly.
-2. A worker prompt is direct-post only when its own body contains `## GitHub post` and references `prompts/_github-post-rules.md`.
+2. A worker prompt is direct-post only when its own body contains `## GitHub post` and the fixed token `{{GITHUB_POST_RULES_CONTRACT}}`; `_github-post-rules.md` is the template-time source, and the rendered worker prompt inlines its shared rules body. The rules file is not a worker runtime path.
 3. Every GitHub body uses the sentinel final line.
 4. Avoid plain-text unverified human names or handles.
 5. `SKILL.md` must not maintain a posting-mode prompt filename roster; inventory tests derive posting mode from prompt bodies.
@@ -2220,7 +2220,7 @@ Refactor (iter6/issue-118):
   New principle: prompt-self-declaration posting mode is owned by the GitHub Posting Contract, prompts/_github-post-rules.md, prompt body self-declaration, test_marker_only_prompts_gh_ban.py, and test_marker_emission_contract.py; no SKILL-maintained prompt filename roster.
 -->
 
-- A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
+- A prompt is direct-post only when its own body contains a `## GitHub post` section with fixed token `{{GITHUB_POST_RULES_CONTRACT}}`; prompts without that self-declaration are marker/artifact-only. `_github-post-rules.md` is the template-time source only, and rendered worker prompts inline the shared rules body instead of relying on a worker runtime path.
 - `SKILL.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
 - Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(consensus-rnd-cli comment-monitor 据此识别 controller-post 跳 react)
