@@ -107,7 +107,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 <!--
 Refactor (iter6/issue-118):
   Old pattern: SKILL.md 维护 posting-mode prompt filename roster,会漂移
-  New principle: prompt-self-declaration consensus: 删 roster,posting mode 由 prompt body 派生 + inventory tests 强制。详见 .refactor-loop/runs/phase9-issue118-r3-judge.md
+  New principle: prompt-local GitHub post self-declaration plus prompts/_github-post-rules.md and marker/posting inventory tests own posting mode; SKILL.md does not keep a prompt filename roster.
 -->
 
 - You do NOT write code; you propose a plan.
