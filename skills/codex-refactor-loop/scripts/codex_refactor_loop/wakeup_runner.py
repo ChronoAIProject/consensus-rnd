@@ -10,6 +10,7 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
@@ -21,7 +22,7 @@ from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
 from .phase9.router import Marker, Phase9Router, Phase9SourceIssueDecision
 from .pr_checks import PrChecksProjection
-from .processes import ProcessSupervisor
+from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .wakeup_plan import build_plan
@@ -569,7 +570,13 @@ class WakeupRunner:
         stall = int(action.get("stall") or 5400)
         if not prompt.is_file():
             return 2
-        return self.supervisor.supervise(["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(cd), "-"], stdin=prompt, log=log, stall=stall)
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=cd,
+            prompt=prompt,
+            log=log,
+            stall=stall,
+        )
 
     def _dispatch_design_consensus(self, action: Mapping[str, Any]) -> int:
         marker = self._design_consensus_marker(action)
@@ -641,9 +648,10 @@ class WakeupRunner:
     def _dispatch_review_fix(self, pr_number: int) -> int:
         round_number = self._next_fix_round(pr_number)
         spec = self.actions.render_review_fix_prompt(pr_number, round_number)
-        return self.supervisor.supervise(
-            ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(self.ctx.repo_root), "-"],
-            stdin=self.ctx.repo_root / spec.prompt_path,
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=self.ctx.repo_root,
+            prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
             stall=5400,
         )
@@ -1000,11 +1008,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            results = _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
             lease.sleep_with_lease(interval)
     results = runner.run_once()
+    _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
     blocked = [result for result in results if result.status == "blocked"]
     return 3 if blocked else 0
+
+
+def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
+    if not results:
+        return "noop:no-actions"
+    first = results[0]
+    if first.status == "applied":
+        return f"dispatched {first.action_id or 'action'}"
+    if first.status == "skipped" and first.reason == "graphql-backoff":
+        return "skip:graphql-backoff remaining=unknown"
+    if first.status == "noop":
+        return f"noop:{first.reason or 'idle'}"
+    if first.status == "blocked":
+        return f"blocked:{first.reason or first.action_id or 'unknown'}"
+    return f"noop:{first.status}"
+
+
+def _log_tick_status(daemon: str, action: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{ts}] {daemon}: tick {action}", flush=True)
 
 
 if __name__ == "__main__":

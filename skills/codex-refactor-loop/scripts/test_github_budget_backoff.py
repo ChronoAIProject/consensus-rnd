@@ -237,8 +237,8 @@ class GraphqlBudgetSourceRegressionTests(unittest.TestCase):
         checks = {
             "monitors/comment.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("comment-monitor")\n            return\n        self._poll_once()',
             "monitors/progress.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("progress-reporter")\n            return\n        for log in sorted(self.log_dir.glob("*.log")):',
-            "closed_label_reconciler.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("closed-label-reconciler")\n            return 0\n        decision = require_active_controller',
-            "phase9/router.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("phase9-router")\n            return\n        decision = require_active_controller',
+            "closed_label_reconciler.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("closed-label-reconciler")\n            _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")\n            return 0\n        decision = require_active_controller',
+            "phase9/router.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("phase9-router")\n            self._log_tick_status("skip:graphql-backoff remaining=unknown")\n            return\n        decision = require_active_controller',
             "wakeup_runner.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("wakeup-runner")\n            return [RunnerResult("", "skipped", "graphql-backoff")]\n        owner = require_active_controller',
         }
         for rel_path, needle in checks.items():

@@ -62,6 +62,10 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}", flush=True)
 
 
+def log_tick_status(action: str) -> None:
+    log(f"concurrency: tick {action}")
+
+
 def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(cmd), capture_output=True, text=True, check=False)
 
@@ -125,6 +129,7 @@ class ConcurrencyMonitor:
         self.dispatch_dispatched = ctx.paths.dispatch_dispatched
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
+        self._last_top_up_dispatches = 0
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -498,6 +503,7 @@ class ConcurrencyMonitor:
         return None
 
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
+        self._last_top_up_dispatches = 0
         if actual >= floor:
             return actual
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
@@ -505,13 +511,16 @@ class ConcurrencyMonitor:
             log_graphql_backoff("concurrency-monitor")
             return actual
         max_dispatches = floor - actual
+        dispatched = 0
         for _ in range(max_dispatches):
             fired = self.dispatch_one_from_queue()
             if fired is None:
                 break
+            dispatched += 1
             actual = self.count_in_flight_codex()
             if actual >= floor:
                 break
+        self._last_top_up_dispatches = dispatched
         return actual
 
     def tick(self) -> None:
@@ -545,8 +554,14 @@ class ConcurrencyMonitor:
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
+            dispatched = 0
             if owner_allowed and not self.dispatch_queue_empty():
                 actual = self.top_up_from_dispatch_queue(actual, max(expected, self.configured_floor()))
+                dispatched = self._last_top_up_dispatches
+            if dispatched:
+                log_tick_status(f"dispatched {dispatched} spawn-intent")
+            else:
+                log_tick_status(f"blocked:p0-no-gap-violation expected={expected}")
             self.write_statusline_snapshot(
                 actual=actual,
                 expected=expected,
@@ -560,6 +575,7 @@ class ConcurrencyMonitor:
 
         state["zero_streak"] = 0
         target = max(expected, floor)
+        tick_action = "noop:at-or-above-floor"
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
@@ -573,19 +589,26 @@ class ConcurrencyMonitor:
                     )
                     self.write_pending_event(event)
                     log(event)
+                    tick_action = f"blocked:single-active-audit deficit={deficit}"
                 elif owner_allowed:
                     self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                    tick_action = f"blocked:dispatch-required deficit={deficit}"
                 else:
                     log(
                         "active_controller=noop:not-owner "
                         f"action=concurrency-tick dispatch_required={deficit} owner={decision.owner_device}"
                     )
+                    tick_action = f"noop:not-owner deficit={deficit}"
             else:
                 if owner_allowed:
                     actual = self.top_up_from_dispatch_queue(actual, target)
+                    dispatched = self._last_top_up_dispatches
+                    tick_action = f"dispatched {dispatched} spawn-intent" if dispatched else "blocked:dispatch-queue-present-no-dispatch"
                 else:
                     log(f"active_controller=noop:not-owner action=concurrency-top-up owner={decision.owner_device}")
+                    tick_action = "noop:not-owner"
+        log_tick_status(tick_action)
 
         self.write_statusline_snapshot(
             actual=actual,

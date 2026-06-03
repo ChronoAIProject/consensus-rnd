@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import datetime, timezone
 from typing import Callable, Mapping, Sequence
 
 from . import labels as label_catalog
@@ -37,14 +38,17 @@ class ClosedLabelReconciler:
     def run_once(self, beat: Callable[[], None] | None = None) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             log_graphql_backoff("closed-label-reconciler")
+            _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")
             return 0
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             print(f"closed-label-reconciler noop: active-controller {decision.status} owner={decision.owner_device}")
+            _log_tick_status("closed-label-reconciler", f"noop:not-owner:{decision.status}")
             return 0
         if not self.ctx.gh_repo_slug:
             print("closed-label-reconciler noop: GH_REPO_SLUG unset")
+            _log_tick_status("closed-label-reconciler", "noop:gh-repo-slug-unset")
             return 0
         plans = self.collect_plans()
         if beat is not None:
@@ -73,6 +77,9 @@ class ClosedLabelReconciler:
                     beat()
         if changed == 0:
             print("closed-label-reconciler noop: no closed managed phase-label drift")
+            _log_tick_status("closed-label-reconciler", "noop:no-closed-managed-phase-label-drift")
+        else:
+            _log_tick_status("closed-label-reconciler", f"dispatched {changed} reconciliation")
         return 0
 
     def collect_plans(self) -> tuple[ClosedPhaseLabelPlan, ...]:
@@ -274,6 +281,11 @@ def _format_plan(plan: ClosedPhaseLabelPlan, *, dry_run: bool) -> str:
         f"terminal={plan.terminal_phase} add={','.join(plan.add_labels) or '-'} "
         f"remove={','.join(plan.remove_labels) or '-'} reason={plan.reason}"
     )
+
+
+def _log_tick_status(daemon: str, action: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{ts}] {daemon}: tick {action}", flush=True)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -133,12 +134,16 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.write_review("tests", "reject")
         self.write_review("quality", "comment")
 
-        result = self.run_action()
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.run_action()
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, [])
         self.assertEqual(self.actions.rendered, [(12, 1)])
-        self.assertEqual(self.supervisor.calls, 1)
+        launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["prompt"]).resolve(), (self.repo / ".refactor-loop/prompts/fix.md").resolve())
+        self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), (self.repo / ".refactor-loop/logs/fix.log").resolve())
+        self.assertEqual(self.supervisor.calls, 0)
 
     def test_missing_reviewer_fails_closed(self) -> None:
         self.write_review("architect", "approve")
