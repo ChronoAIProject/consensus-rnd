@@ -80,17 +80,14 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 - Open the actual files, not just hunks.
 - "I don't like this style" without an objective heuristic = approve (taste is the author's, not yours).
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - No bilingual requirement (internal artifact).
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
 
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+{{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---

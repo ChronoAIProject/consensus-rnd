@@ -22,12 +22,14 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from string import Template
 from typing import Any, Callable, Iterable, Literal, cast
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
 from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
+from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
 from .. import labels as label_catalog
@@ -213,7 +215,7 @@ class MetaJudgePromptRenderer:
         rendered = template
         for key in self.PLACEHOLDERS:
             rendered = rendered.replace("${" + key + "}", values[key])
-        return rendered
+        return inline_prompt_contracts(rendered, skill_root=self.template_path.parents[1])
 
 
 PHASE9_LOG_RE = re.compile(
@@ -1400,12 +1402,25 @@ class Phase9Router:
         )
 
     def _solver_prompt(self, issue: str, round_no: int, role: str, marker: str) -> str:
+        prompt = self._issue_snapshot_preferred_text(issue, self._render_solver_template(issue, round_no, role))
         return (
             f"# {format_stage('design-consensus')} {role} solver\n\n"
             f"{self._solver_work_unit_header(issue, round_no, role)}\n\n"
             f"{self._issue_source_snapshot_markdown(issue)}\n\n"
-            f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
+            f"Convergence marker: {marker}\n\n"
+            f"## Full solver template\n\n{prompt}\n"
         )
+
+    def _render_solver_template(self, issue: str, round_no: int, role: str) -> str:
+        template_path = self.skill_root / "prompts" / f"solver-{role}.md"
+        template = template_path.read_text(encoding="utf-8")
+        values = {
+            "ISSUE_NUMBER": issue,
+            "CLUSTER_ID": f"issue-{issue}",
+            "CONVERGENCE_ROUND": str(round_no),
+            "SOLVER_OUTPUT_PATH": f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md",
+        }
+        return inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.skill_root)
 
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"

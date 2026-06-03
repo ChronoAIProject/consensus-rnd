@@ -14,6 +14,7 @@ PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
 sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.cli import COMMANDS
+from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
 DENIAL_OR_CONTROLLER_OWNER_RE = re.compile(
     r"禁止|不可调|不得|不能|不要|Forbidden|forbidden|Do NOT|do not|must not|"
@@ -211,7 +212,8 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
             body = path.read_text(encoding="utf-8")
             section = github_post_section(body)
             with self.subTest(prompt=path.name):
-                self.assertIn("prompts/_github-post-rules.md", section)
+                self.assertIn(GITHUB_POST_RULES_CONTRACT_TOKEN, section)
+                self.assertNotIn("prompts/_github-post-rules.md", body)
                 for snippet in LOCAL_COMMAND_ROSTER_SNIPPETS:
                     self.assertNotIn(snippet, section)
 
@@ -259,7 +261,8 @@ class MarkerOnlyPromptsGhBanTests(unittest.TestCase):
         body = (PROMPTS_DIR / "design-issue-reply.md").read_text(encoding="utf-8")
         section = github_post_section(body)
         self.assertIn("## GitHub post", body)
-        self.assertIn("prompts/_github-post-rules.md", section)
+        self.assertIn(GITHUB_POST_RULES_CONTRACT_TOKEN, section)
+        self.assertNotIn("prompts/_github-post-rules.md", body)
         self.assertNotIn("controller 会读这个文件", body)
         self.assertNotIn("DESIGN_REPLY_READY", body)
         self.assertIn("POSTED:design-reply", body)

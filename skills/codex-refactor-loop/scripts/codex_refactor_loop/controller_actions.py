@@ -19,6 +19,7 @@ from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .issue_decomposition import load_issue_decomposition_plan
+from .prompt_contracts import inline_prompt_contracts
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
 from .triage import apply_decision, load_triage_apply_config
@@ -907,7 +908,7 @@ class ControllerActions:
         template = template_path.read_text(encoding="utf-8")
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
-        rendered = Template(template).safe_substitute(values)
+        rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
         Path(output_path).write_text(rendered, encoding="utf-8")
 
     def render_review_fix_prompt(
