@@ -532,7 +532,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "release #322 preflight",
             "helper-specific precondition",
             "spawn codex",
-            "named helper `dispatch_design_consensus` through phase9-router deterministic routes",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
             "named helper `open_release_rollup_pr_from_action`",
@@ -583,7 +582,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
         self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
-        self.assertIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
+        self.assertNotIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
         self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
 
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
@@ -720,9 +719,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`gh api repos/<slug>/issues/<N> --jq .state`",
             "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
-            "four built-in phase9 direct routes",
+            "five built-in phase9 direct routes",
             "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
             "existing evidence/log/in-flight for one solver role suppresses only that role",
+            "`META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet",
             "source-OPEN gate",
             "labels-only live read",
             "clean consensus judge log",
@@ -794,7 +794,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn('"[.labels[].name]"', router)
         self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
         self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
-        self.assertIn("suppress_terminal_design_consensus_actions", wakeup_plan)
+        self.assertIn("_design_consensus_marker_is_router_owned", wakeup_plan)
         self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
         for token in (
             "phase9-terminal-eligibility:",
@@ -931,7 +931,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for required in (
             "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
-            "\"spawn_codex_harness_background\", \"dispatch_design_consensus\"",
+            "{\"spawn_codex_harness_background\"}",
             "class WakeupApplyBudget",
             "hard_gate.dispatch_required/concurrency.deficit",
             "return cls.legacy()",
@@ -939,16 +939,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
             "budget = WakeupApplyBudget.from_plan(plan)",
             "result = self.apply_action(action)",
-            "if result.status in {\"blocked\", \"skipped\"} and not is_spawn_action:",
-            "if is_spawn_action and applied_spawns >= budget.spawn_budget:",
-            "if result.status == \"blocked\" and is_spawn_action and not _spawn_launch_failure(result):",
+            "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
+            "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
+            "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
             "is_spawn_action = budget.is_spawn_action(action)",
-            "if applied_spawns > 0 and not is_spawn_action:",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
-        self.assertIn("if applied_spawns < budget.spawn_budget:", run_once)
         self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",

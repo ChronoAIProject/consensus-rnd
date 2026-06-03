@@ -86,7 +86,6 @@ READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtim
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
-    "dispatch_design_consensus",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
@@ -2069,31 +2068,6 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
-def suppress_terminal_design_consensus_actions(
-    actions: list[dict[str, Any]],
-    gh_items: list[GhItem],
-    gh_items_loaded: bool,
-) -> list[dict[str, Any]]:
-    if not gh_items_loaded:
-        return actions
-    terminal_targets = _terminal_design_consensus_targets(gh_items)
-    if not terminal_targets:
-        return actions
-    kept: list[dict[str, Any]] = []
-    for action in actions:
-        target_kind = action.get("target_kind")
-        target_number = action.get("target_number")
-        if (
-            action.get("controller_action") == "dispatch_design_consensus"
-            and isinstance(target_kind, str)
-            and isinstance(target_number, int)
-            and (target_kind, target_number) in terminal_targets
-        ):
-            continue
-        kept.append(action)
-    return kept
-
-
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish_implementation_output"
@@ -2107,8 +2081,6 @@ def controller_action_from_marker(marker: str) -> str:
         return "close_managed_item_from_drop_marker"
     if marker.startswith("META_JUDGE_DONE:consensus"):
         return "dispatch_consensus_implementation"
-    if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "dispatch_design_consensus"
     if marker.startswith("AUDIT_DONE"):
         return "dispatch_work_intake"
     if marker.startswith("VERIFY_DONE"):
@@ -2154,7 +2126,8 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         closed.pop("runner_authority", None)
         closed.pop("no_generic_command", None)
         return closed
-    if closed.get("controller_action") == "dispatch_design_consensus" and str(closed.get("source_marker") or "").startswith("META_RESOLVED:"):
+    source_marker = str(closed.get("source_marker") or "")
+    if _design_consensus_marker_is_router_owned(source_marker):
         closed["status_only"] = True
         closed["no_lifecycle_authority"] = True
         closed.pop("runner_authority", None)
@@ -2183,6 +2156,16 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         closed.setdefault("status_only", True)
         closed.setdefault("no_lifecycle_authority", True)
     return closed
+
+
+def _design_consensus_marker_is_router_owned(marker: str) -> bool:
+    if marker.startswith("SOLVER_DONE"):
+        return True
+    if marker.startswith("META_JUDGE_DONE") and not marker.startswith("META_JUDGE_DONE:consensus"):
+        return True
+    if marker.startswith("META_RESOLVED") and not marker.startswith("META_RESOLVED:drop:"):
+        return True
+    return False
 
 
 def suppress_stale_unexecutable_actions(
@@ -2448,7 +2431,6 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
-    actions = suppress_terminal_design_consensus_actions(actions, gh_items, gh_items_loaded)
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.sort(key=lambda action: action["priority"])
     serialize_conflicting_consensus_implementation_actions(actions)

@@ -71,10 +71,11 @@ class ControllerActions:
         return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *args])
+        argv = [str(a) for a in args]
+        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *argv])
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(args)} failed")
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(argv)} failed")
         return result
 
     def git(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -647,7 +648,7 @@ class ControllerActions:
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"Implement issue #{issue_target}"], check=False)
+        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
         if commit.returncode != 0:
             if commit.stderr:
                 sys.stderr.write(commit.stderr)
@@ -656,7 +657,7 @@ class ControllerActions:
         if pushed != 0:
             return pushed
         body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        title = str(action.get("title") or f"实现 issue #{issue_target}")
         pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
@@ -723,6 +724,9 @@ class ControllerActions:
         if readiness_reason:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
+        phase_result = self._move_issue_to_implementing_phase(number)
+        if phase_result != 0:
+            return phase_result
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
@@ -758,6 +762,17 @@ class ControllerActions:
             reason=f"issue #{number} consensus implementation",
         )
         return 0
+
+    def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
+        args = ["issue", "edit", issue_target]
+        for label in ISSUE_LABELS_REMOVE:
+            args.extend(["--remove-label", label])
+        args.extend(["--add-label", ",".join((labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO))])
+        result = self.gh(args, check=False)
+        if result.returncode != 0:
+            self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}")
+            sys.stderr.write("dispatch_consensus_implementation: failed to move issue to implementing phase\n")
+        return result.returncode
 
     def _clear_stale_implement_log_for_fresh_dispatch(self, log: Path, action: Mapping[str, object] | None = None) -> None:
         clear_redispatchable_implement_log(
@@ -984,7 +999,7 @@ class ControllerActions:
         path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"## Implementation for issue #{issue_target}\n\n"
+            f"## issue #{issue_target} 实现\n\n"
             f"Closes #{issue_target}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",

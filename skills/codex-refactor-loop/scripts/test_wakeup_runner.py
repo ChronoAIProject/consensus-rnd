@@ -363,9 +363,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"
         prompt.write_text("hello\n", encoding="utf-8")
-        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
         marker = "intent-marker"
-        pending.write_text(marker + "\n", encoding="utf-8")
         action = {
             "kind": "harness-spawn-intent",
             "action_id": "spawn:1",
@@ -384,12 +382,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "stall": 30,
         }
         action.update(overrides)
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(marker + "\n")
         return action
 
     def review_gate_action(self, **overrides) -> dict:
         marker = "REVIEW_GATE_READY:77"
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
-        pending.write_text(marker + "\n", encoding="utf-8")
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(marker + "\n")
         action = {
             "kind": "review-gate",
             "action_id": "review-gate:77:sha",
@@ -619,33 +621,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
-    def dispatch_design_consensus_action(self, **overrides) -> dict:
-        issue = int(overrides.pop("issue", 453))
-        round_number = int(overrides.pop("round_number", 1))
-        source_marker = str(overrides.pop("source_marker", "SOLVER_DONE:minimal:ready"))
-        for role in ("minimal", "structural", "delete"):
-            marker = source_marker if role == "minimal" else f"SOLVER_DONE:{role}:ready"
-            (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-{role}.log").write_text(
-                f"{marker}\nEXIT=0\n",
-                encoding="utf-8",
-            )
-        source_artifact = f".refactor-loop/logs/phase9-issue{issue}-r{round_number}-minimal.log"
-        action = {
-            "kind": "completed-marker",
-            "action_id": f"completed-marker:phase9-issue{issue}-r{round_number}-minimal.log:{source_marker}",
-            "runner_authority": "wakeup-runner-396",
-            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target"],
-            "source_artifact": source_artifact,
-            "source_marker": source_marker,
-            "target_kind": "issue",
-            "target_number": issue,
-            "target": {"kind": "issue", "number": issue},
-            "controller_action": "dispatch_design_consensus",
-            "no_generic_command": True,
-        }
-        action.update(overrides)
-        return action
-
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
         with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
             results = self.run_result(self.base_plan(self.spawn_action()))
@@ -816,24 +791,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_missing_precondition:canonical_implementation_identity",
         )
 
-    def test_wakeup_runner_design_consensus_no_intents_does_not_dead_stop_later_spawn_batch(self) -> None:
-        # An incomplete/markerless solver triplet makes dispatch_design_consensus
-        # produce no spawn intents (helper_exit:3). dispatch_design_consensus is a
-        # spawn-batch action, but a no-intents result is a routing no-op, not a
-        # codex launch failure, so it must skip-and-continue and let the rest of
-        # the spawn batch launch instead of dead-stopping the tick.
+    def test_wakeup_runner_rejects_design_consensus_redispatch_actions(self) -> None:
         issue = 496
         (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-delete.log").write_text(
             "SOLVER_DONE:delete:abstain:genuine-gap\nEXIT=0\n", encoding="utf-8"
         )
-        # minimal and structural exited cleanly but never emitted a SOLVER_DONE marker.
-        (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-minimal.log").write_text(
-            "No source code or runtime files were changed.\nEXIT=0\n", encoding="utf-8"
-        )
-        (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-structural.log").write_text(
-            "conclusion is propose\nEXIT=0\n", encoding="utf-8"
-        )
-        no_intents = {
+        action = {
             "kind": "completed-marker",
             "action_id": f"completed-marker:phase9-issue{issue}-r1-delete.log:SOLVER_DONE:delete:abstain:genuine-gap",
             "runner_authority": "wakeup-runner-396",
@@ -846,23 +809,20 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "controller_action": "dispatch_design_consensus",
             "no_generic_command": True,
         }
-        later = self.spawn_action(
-            action_id="spawn:after-no-intents",
-            log=str(self.repo / ".refactor-loop/logs/after-no-intents.log"),
-        )
         actions = FakeActions()
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(
-                self.batch_plan([no_intents, later], dispatch_required=2, deficit=2),
+                self.batch_plan([action], dispatch_required=1, deficit=1),
                 gh_state="OPEN",
                 actions=actions,
             )
 
-        statuses = {result.action_id: result.status for result in results}
-        self.assertEqual(statuses.get(no_intents["action_id"]), "blocked")
-        self.assertEqual(statuses.get("spawn:after-no-intents"), "applied")
-        launch.assert_called_once()
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].action_id, action["action_id"])
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "unsupported_controller_action:dispatch_design_consensus")
+        launch.assert_not_called()
 
     def test_wakeup_runner_blocked_non_spawn_actions_do_not_dead_stop_spawn_batch(self) -> None:
         blocked_publish = self.implementation_output_action(
@@ -988,8 +948,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
                 encoding="utf-8",
             )
-        first = self.dispatch_design_consensus_action(action_id="design-consensus:before-review-gate:1", issue=453, round_number=1)
-        second = self.dispatch_design_consensus_action(action_id="design-consensus:before-review-gate:2", issue=454, round_number=1)
+        first = self.spawn_action(action_id="spawn:before-review-gate:1", log=str(self.repo / ".refactor-loop/logs/spawn-before-review-1.log"))
+        second = self.spawn_action(action_id="spawn:before-review-gate:2", log=str(self.repo / ".refactor-loop/logs/spawn-before-review-2.log"))
         gate = self.review_gate_action(action_id="review-gate:77:after-spawns")
         actions = FakeActions()
 
@@ -999,8 +959,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(
             [(result.action_id, result.status) for result in results],
             [
-                ("design-consensus:before-review-gate:1", "applied"),
-                ("design-consensus:before-review-gate:2", "applied"),
+                ("spawn:before-review-gate:1", "applied"),
+                ("spawn:before-review-gate:2", "applied"),
                 ("review-gate:77:after-spawns", "applied"),
             ],
         )
@@ -1045,29 +1005,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:spawn:supervisor-exit-3:3", pending)
         self.assertIn("WAKEUP_RUNNER_HELPER_EXIT:spawn:supervisor-exit-3:spawn_codex_harness_background:3", pending)
-
-    def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
-        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
-            results = self.run_result(self.base_plan(self.dispatch_design_consensus_action()))
-
-        self.assertEqual(results[0].status, "applied")
-        launch.assert_called_once()
-        self.assertEqual(
-            Path(launch.call_args.kwargs["prompt"]).resolve(),
-            (self.repo / ".refactor-loop/prompts/phase9/phase9-issue453-r1-judge.md").resolve(),
-        )
-        self.assertEqual(
-            Path(launch.call_args.kwargs["log"]).resolve(),
-            (self.repo / ".refactor-loop/logs/phase9-issue453-r1-judge.log").resolve(),
-        )
-
-    def test_dispatch_design_consensus_closed_target_blocks_before_spawn(self) -> None:
-        actions = FakeActions()
-        action = self.dispatch_design_consensus_action(action_id="design-consensus:closed")
-
-        results = self.run_result(self.base_plan(action), gh_state="CLOSED", actions=actions)
-
-        self.assert_blocked_before_dispatch(results, "design-consensus:closed", "target_not_open:CLOSED", actions)
 
     def test_harness_spawn_existing_target_log_blocks_before_supervisor(self) -> None:
         actions = FakeActions()

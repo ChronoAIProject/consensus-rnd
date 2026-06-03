@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Narrow design-consensus deterministic router daemon.
 
-This daemon owns only four design-consensus direct-dispatch routes:
+This daemon owns only five design-consensus direct-dispatch routes:
 design-consensus issue intake -> r1 solver triplet, solver triplet ->
-meta-judge, converge -> next solver triplet, and valid stalled -> reflector.
-Every other marker is forwarded to the existing controller pending-event file
-without spawning.
+meta-judge, converge -> next solver triplet, valid stalled -> reflector,
+and re-design reflector decisions -> next solver triplet. Every other marker
+is forwarded to the existing controller pending-event file without spawning.
 """
 
 from __future__ import annotations
@@ -269,7 +269,7 @@ class Phase9Router:
         if ctx is None:
             if repo_root is None:
                 raise ValueError("repo_root or ctx is required")
-            ctx = LoopContext.load(repo_root=repo_root)
+            ctx = LoopContext.load(repo_root=repo_root, env={"REPO_ROOT": str(repo_root)})
         self.ctx = ctx
         self.repo_root = ctx.repo_root
         self.skill_root = ctx.skill_root
@@ -312,6 +312,7 @@ class Phase9Router:
         self._dispatch_design_issue_intake(ledger)
         self._dispatch_solver_triplets(markers, ledger)
         self._dispatch_meta_judge_routes(markers, ledger)
+        self._dispatch_reflector_routes(markers, ledger)
         self._append_fallbacks(markers, ledger)
         dispatched = self._tick_dispatch_count
         fallbacks = len(self._fallback_seen) - before_fallbacks
@@ -696,6 +697,52 @@ class Phase9Router:
             self._fallback_seen.add(event_key)
             self._append_pending_event(marker)
 
+    def _dispatch_reflector_routes(self, markers: list[Marker], ledger: set[str]) -> None:
+        for marker in markers:
+            if not marker.marker.startswith("META_RESOLVED:re-design:"):
+                continue
+            if marker.role != "reflector":
+                continue
+            target_round = marker.round + 1
+            for role in self._solver_roles():
+                key = self._key(marker.issue, target_round, role)
+                log_path = self._log_path(marker.issue, target_round, role)
+                if key in ledger or self._in_flight(log_path):
+                    continue
+                terminal_decision = self._solver_dispatch_terminal_decision(marker.issue)
+                if not terminal_decision.allowed:
+                    self._append_terminal_fallback_event(
+                        marker.issue,
+                        target_round,
+                        "redesign_to_next_solvers",
+                        marker.marker,
+                        marker.log_path,
+                        terminal_decision,
+                    )
+                    continue
+                if not self._require_open_source_issue(
+                    marker.issue,
+                    target_round,
+                    "redesign_to_next_solvers",
+                    marker.marker,
+                    marker.log_path,
+                ):
+                    continue
+                prompt = self._write_prompt(
+                    marker.issue,
+                    target_round,
+                    role,
+                    self._solver_prompt(marker.issue, target_round, role, marker.marker),
+                )
+                if self._spawn(
+                    prompt,
+                    log_path,
+                    route="redesign_to_next_solvers",
+                    reason="phase9-router re-design continuation",
+                ):
+                    self._append_ledger(key, marker.marker, log_path)
+                    ledger.add(key)
+
     def _directly_handled(self, marker: Marker, ledger: set[str]) -> bool:
         if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
             if marker.role != self._judge_role():
@@ -718,6 +765,15 @@ class Phase9Router:
             if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
                 return True
             return self._key(marker.issue, marker.round, "reflector") in ledger
+        if marker.marker.startswith("META_RESOLVED:re-design:"):
+            if marker.role != "reflector":
+                return False
+            target_round = marker.round + 1
+            if f"phase9-terminal-eligibility:{marker.issue}-{target_round}-redesign_to_next_solvers" in self._fallback_seen:
+                return True
+            if f"phase9-source-eligibility:{marker.issue}-{target_round}-redesign_to_next_solvers" in self._fallback_seen:
+                return True
+            return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
         return False
 
     def _round_from_converge(self, marker: str) -> int | None:

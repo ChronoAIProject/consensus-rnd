@@ -229,6 +229,10 @@ if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json isDraft"* ]]; then
   printf '%s\\n' {json.dumps(is_draft)}
   exit 0
 fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json labels,body"* ]]; then
+  printf '%s\\n' {json.dumps(json.dumps({"labels": [{"name": "crnd:lifecycle:managed"}], "body": body}))}
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr ready 55" ]]; then
   exit {ready_exit}
 fi

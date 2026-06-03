@@ -1832,23 +1832,33 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         for marker in markers:
             self.assertIn(marker, events)
 
-    def test_phase9_router_persists_fallback_dedup_across_restart(self) -> None:
-        """Restart must not re-emit fallback events already in pending-events log."""
-        self.write_log("phase9-issue42-r1-judge.log", "META_RESOLVED:re-design:scope-too-broad")
+    def test_phase9_router_redesign_routes_source_adjacent_next_round_solvers(self) -> None:
+        self.write_log("phase9-issue42-r4-reflector.log", "META_RESOLVED:re-design:scope-too-broad")
 
         self.router.tick()
-        first_events = self.pending_events()
-        self.assertEqual(first_events.count("META_RESOLVED:re-design:scope-too-broad"), 1)
+
+        rendered = " ".join(self.intent_text(command) for command in self.commands)
+        for role in ("minimal", "structural", "delete"):
+            self.assertIn(f"phase9-issue42-r5-{role}.log", rendered)
+        self.assertNotIn("phase9-issue42-r6", rendered)
+        entries = self.ledger_entries()
+        self.assertEqual(
+            {"42-5-minimal", "42-5-structural", "42-5-delete"},
+            {entry["key"] for entry in entries},
+        )
+        self.assertTrue(all(entry["marker"] == "META_RESOLVED:re-design:scope-too-broad" for entry in entries))
+
+    def test_phase9_router_persists_redesign_ledger_across_restart(self) -> None:
+        self.write_log("phase9-issue42-r1-reflector.log", "META_RESOLVED:re-design:scope-too-broad")
+
+        self.router.tick()
+        first_intents = list(self.commands)
+        self.assertEqual(len(first_intents), 3)
 
         fresh_router = self.new_router()
         fresh_router.tick()
 
-        second_events = self.pending_events()
-        self.assertEqual(
-            second_events.count("META_RESOLVED:re-design:scope-too-broad"),
-            1,
-            "fallback event must not re-emit after daemon restart",
-        )
+        self.assertEqual(self.commands, first_intents)
 
     def test_phase9_router_rejects_junk_markers_with_regex_special_chars(self) -> None:
         """Markers containing pipe/quote/backslash/template chars are prompt/regex echoes, not real markers."""
