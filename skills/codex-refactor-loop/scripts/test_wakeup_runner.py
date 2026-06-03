@@ -30,7 +30,38 @@ from codex_refactor_loop.wakeup_runner import (
     _run_once_with_periodic_heartbeat,
     _wakeup_tick_action,
     main as wakeup_runner_main,
+    _source_log_has_clean_marker,
 )
+
+
+class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
+    def test_revalidation_falls_back_to_implement_run_artifact_for_markerless_log(self) -> None:
+        # Symmetric to wakeup_plan's detection fallback: a clean-exit implement
+        # worker may emit IMPLEMENT_DONE only into its run artifact, so source-
+        # marker revalidation must accept it from runs/implement-issue-<id>.md
+        # rather than rejecting publish as clean_exit_marker_missing.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            runs = repo / ".refactor-loop" / "runs"
+            logs.mkdir(parents=True)
+            runs.mkdir(parents=True)
+            log = logs / "implement-issue-421.log"
+            log.write_text("chatter, no standalone marker\nEXIT=0\nDONE_AT=x\n", encoding="utf-8")
+            (runs / "implement-issue-421.md").write_text(
+                "body\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-421:ok\n", encoding="utf-8"
+            )
+            self.assertTrue(_source_log_has_clean_marker(log, "IMPLEMENT_DONE:issue-421:ok"))
+            # scope guard: a non-implement log must not fall back to an artifact
+            other = logs / "audit-iter-9.log"
+            other.write_text("x\nEXIT=0\n", encoding="utf-8")
+            (runs / "audit-iter-9.md").write_text("IMPLEMENT_DONE:issue-9:ok\n", encoding="utf-8")
+            self.assertFalse(_source_log_has_clean_marker(other, "IMPLEMENT_DONE:issue-9:ok"))
+            # scope guard: an unclean implement log must not fall back
+            unclean = logs / "implement-issue-777.log"
+            unclean.write_text("crash\nEXIT=1\n", encoding="utf-8")
+            (runs / "implement-issue-777.md").write_text("IMPLEMENT_DONE:issue-777:ok\n", encoding="utf-8")
+            self.assertFalse(_source_log_has_clean_marker(unclean, "IMPLEMENT_DONE:issue-777:ok"))
 
 
 class FakeSupervisor:

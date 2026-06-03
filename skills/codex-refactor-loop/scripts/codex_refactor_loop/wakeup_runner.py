@@ -1087,16 +1087,36 @@ def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
+        lines = None
+    if lines is not None:
+        try:
+            marker_index = max(index for index, line in enumerate(lines) if marker in line)
+            exit_index = max(index for index, line in enumerate(lines) if line == "EXIT=0")
+            if marker_index < exit_index:
+                return True
+        except ValueError:
+            pass
+    return _implement_run_artifact_has_marker(path, marker)
+
+
+def _implement_run_artifact_has_marker(log_path: Path, marker: str) -> bool:
+    """Revalidation fallback mirroring wakeup_plan's implement artifact-marker
+    recovery: a clean-exit implement worker may emit its IMPLEMENT_DONE marker
+    only into the run artifact (runs/implement-issue-<id>.md) instead of the log
+    tail, because codex stdout marker placement is not reliable. Accept the
+    marker from the artifact for clean-exit implement-issue logs only, so the
+    detection (wakeup_plan) and revalidation (wakeup_runner) sides stay
+    consistent and a markerless-log implement does not block publish."""
+    name = log_path.name
+    if not (name.startswith("implement-issue-") and name.endswith(".log")):
         return False
+    if not _log_has_exit_zero(log_path):
+        return False
+    artifact = log_path.parent.parent / "runs" / f"{name[: -len('.log')]}.md"
     try:
-        marker_index = max(index for index, line in enumerate(lines) if marker in line)
-    except ValueError:
+        return any(marker in line for line in artifact.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError:
         return False
-    try:
-        exit_index = max(index for index, line in enumerate(lines) if line == "EXIT=0")
-    except ValueError:
-        return False
-    return marker_index < exit_index
 
 
 def _log_has_exit_zero(path: Path) -> bool:
