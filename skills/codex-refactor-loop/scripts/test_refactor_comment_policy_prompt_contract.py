@@ -37,11 +37,10 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
 
         self.assertIn("Close review-thread completion evidence when seeded", review_fix)
         self.assertIn(".refactor-loop/state/review-thread-completion/pr${PR_NUMBER}.json", review_fix)
-        self.assertIn("reply to that original PR review thread", review_fix)
-        self.assertIn("resolve the thread", review_fix)
+        self.assertIn("reply to and resolve the seeded original PR review thread", review_fix)
         self.assertIn("set `replied=true` and `resolved=true`", review_fix)
         self.assertIn("FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:review-thread-completion", review_fix)
-        self.assertIn("separate clean-exit `.refactor-loop/logs/*.log` meta-layer artifact", review_fix)
+        self.assertIn("exact clean-exit `.refactor-loop/logs/*.log`", review_fix)
         self.assertIn("META_RESOLVED:escalate-human:<short>", review_fix)
 
     def test_default_policy_is_none_and_external_rationale(self) -> None:

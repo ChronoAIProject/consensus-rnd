@@ -62,12 +62,7 @@ Pick the test projects whose code you changed; do NOT run the full solution test
 
 ### Step 4 — Close review-thread completion evidence when seeded
 
-If `$REPO_ROOT/.refactor-loop/state/review-thread-completion/pr${PR_NUMBER}.json` exists with `review_thread_driven=true`:
-- Treat it as part of the blocking completion contract, not optional metadata.
-- If `thread_id` is nonempty, reply to that original PR review thread with the concise fix summary and resolve the thread via GitHub API/CLI before emitting `FIX_DONE`.
-- After the reply+resolve succeeds, update the same JSON artifact to set `replied=true` and `resolved=true`, preserving `review_thread_driven`, `thread_id`, and `source`.
-- If `thread_id` is empty or GitHub reply/resolve cannot be completed, do not mark it done; record the reason in `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:review-thread-completion`.
-- Only use `escalation_evidence` when a separate clean-exit `.refactor-loop/logs/*.log` meta-layer artifact emits the exact `META_RESOLVED:escalate-human:<short>` marker; do not invent this marker yourself.
+If `$REPO_ROOT/.refactor-loop/state/review-thread-completion/pr${PR_NUMBER}.json` exists with `review_thread_driven=true`, treat it as blocking completion evidence: reply to and resolve the seeded original PR review thread, then update the artifact to set `replied=true` and `resolved=true`. If `thread_id` is empty, GitHub closure fails, or escalation lacks an exact clean-exit `.refactor-loop/logs/*.log` `META_RESOLVED:escalate-human:<short>` source, record the reason in `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:review-thread-completion`.
 
 ### Step 5 — Write fix artifact
 
