@@ -213,18 +213,27 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        blocked_non_spawn_before_spawn = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
-            if applied_spawns > 0 and not budget.is_spawn_action(action):
+            is_spawn_action = budget.is_spawn_action(action)
+            if applied_spawns > 0 and not is_spawn_action:
                 break
+            if blocked_non_spawn_before_spawn and not is_spawn_action:
+                continue
             result = self.apply_action(action)
             results.append(result)
-            if result.status == "skipped" and budget.is_spawn_action(action):
+            if result.status == "skipped" and is_spawn_action:
                 continue
             if result.status != "applied":
+                if result.status in {"blocked", "skipped"} and not is_spawn_action:
+                    blocked_non_spawn_before_spawn = True
+                    continue
+                if result.status == "blocked" and is_spawn_action and not _spawn_launch_failure(result):
+                    continue
                 break
-            if budget.is_spawn_action(action):
+            if is_spawn_action:
                 applied_spawns += 1
                 if applied_spawns < budget.spawn_budget:
                     continue
@@ -1031,6 +1040,10 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _spawn_launch_failure(result: RunnerResult) -> bool:
+    return result.reason.startswith("helper_exit:") or result.reason.startswith("exception:")
 
 
 def _positive_int(value: Any) -> int | None:

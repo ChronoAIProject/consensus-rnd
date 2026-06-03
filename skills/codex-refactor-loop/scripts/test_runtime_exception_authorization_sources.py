@@ -938,14 +938,19 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "min(dispatch_required, deficit)",
             "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
             "budget = WakeupApplyBudget.from_plan(plan)",
+            "blocked_non_spawn_before_spawn = False",
             "result = self.apply_action(action)",
-            "if result.status != \"applied\":",
-            "if applied_spawns > 0 and not budget.is_spawn_action(action):",
+            "if result.status in {\"blocked\", \"skipped\"} and not is_spawn_action:",
+            "blocked_non_spawn_before_spawn = True",
+            "if result.status == \"blocked\" and is_spawn_action and not _spawn_launch_failure(result):",
+            "is_spawn_action = budget.is_spawn_action(action)",
+            "if applied_spawns > 0 and not is_spawn_action:",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
         self.assertIn("if applied_spawns < budget.spawn_budget:", run_once)
+        self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",
             "dispatch_required = int(",

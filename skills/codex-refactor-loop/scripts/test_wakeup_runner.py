@@ -684,6 +684,63 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
 
+    def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:
+        blocked = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-spawn",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "clean_scoped_diff",
+                "host_checks_green",
+                "single_linked_managed_issue",
+                "no_duplicate_open_pr",
+            ],
+        )
+        later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([blocked, later], dispatch_required=2, deficit=2), actions=actions)
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                (
+                    "publish-implementation:missing-verified-head-before-spawn",
+                    "blocked",
+                    "publish_implementation_missing_precondition:verified_pr_head",
+                ),
+                ("spawn:after-blocked-lifecycle", "applied", ""),
+            ],
+        )
+        self.assertEqual(actions.calls, [])
+        launch.assert_called_once()
+        self.assert_blocked_event(
+            "publish-implementation:missing-verified-head-before-spawn",
+            "publish_implementation_missing_precondition:verified_pr_head",
+        )
+
+    def test_wakeup_runner_blocked_non_spawn_does_not_batch_later_lifecycle_action(self) -> None:
+        blocked = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-close",
+            preconditions=[
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "clean_scoped_diff",
+                "host_checks_green",
+                "single_linked_managed_issue",
+                "no_duplicate_open_pr",
+            ],
+        )
+        close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
+        actions = FakeActions()
+
+        results = self.run_result(self.batch_plan([blocked, close], dispatch_required=2, deficit=2), actions=actions)
+
+        self.assertEqual([result.action_id for result in results], ["publish-implementation:missing-verified-head-before-close"])
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(actions.calls, [])
+
     def test_wakeup_runner_does_not_apply_non_spawn_after_spawn_batch(self) -> None:
         close = self.close_action(action_id="close-managed-item:53:after-spawn")
         spawn = self.spawn_action(action_id="spawn:first")
@@ -696,7 +753,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 1)
         self.assertEqual(actions.calls, [])
 
-    def test_wakeup_runner_stops_on_blocked_spawn_without_scanning_later_actions(self) -> None:
+    def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
         blocked = self.spawn_action(action_id="spawn:blocked", log=str(self.repo / ".refactor-loop/logs/blocked.log"))
         later = self.spawn_action(action_id="spawn:later", log=str(self.repo / ".refactor-loop/logs/later.log"))
@@ -705,11 +762,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             results = self.run_result(self.batch_plan([first, blocked, later], dispatch_required=3, deficit=3))
 
-        self.assertEqual([result.action_id for result in results], ["spawn:first", "spawn:blocked"])
-        self.assertEqual([result.status for result in results], ["applied", "blocked"])
+        self.assertEqual([result.action_id for result in results], ["spawn:first", "spawn:blocked", "spawn:later"])
+        self.assertEqual([result.status for result in results], ["applied", "blocked", "applied"])
         self.assertEqual(results[1].reason, "target_log_exists")
-        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(launch.call_count, 2)
         self.assert_blocked_event("spawn:blocked", "target_log_exists")
+
+    def test_wakeup_runner_stops_on_spawn_launch_failure_without_scanning_later_actions(self) -> None:
+        first = self.spawn_action(action_id="spawn:launch-fails", log=str(self.repo / ".refactor-loop/logs/launch-fails.log"))
+        later = self.spawn_action(action_id="spawn:after-launch-failure", log=str(self.repo / ".refactor-loop/logs/after-launch-failure.log"))
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=3) as launch:
+            results = self.run_result(self.batch_plan([first, later], dispatch_required=2, deficit=2))
+
+        self.assertEqual([result.action_id for result in results], ["spawn:launch-fails"])
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "helper_exit:3")
+        self.assertEqual(launch.call_count, 1)
 
     def test_wakeup_runner_records_helper_exit_source_for_spawn_supervisor_failure(self) -> None:
         action = self.spawn_action(action_id="spawn:supervisor-exit-3")
