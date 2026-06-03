@@ -26,21 +26,23 @@ class CommentMonitorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="comment-monitor-test-"))
         (self.tmp / ".refactor-loop").mkdir()
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.tmp)
+        self.ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_fails_closed_without_maintainer_whitelist(self) -> None:
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
-        ctx = LoopContext.load(repo_root=self.tmp)
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         with self.assertRaisesRegex(RuntimeError, "MAINTAINER_WHITELIST"):
             CommentMonitor(ctx)
 

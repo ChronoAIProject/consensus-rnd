@@ -148,8 +148,10 @@ def _resolve_repo_root(
         if root:
             return root, "git"
     raise LoopContextError(
-        "REPO_ROOT is unset; source a host-owned consensus-rnd host.env or set "
-        "CONSENSUS_RND_HOST_ENV, or set ALLOW_GIT_ROOT_FALLBACK=1 for read-only use"
+        "REPO_ROOT is unset; set CONSENSUS_RND_HOST_ENV to a host-owned "
+        ".config/consensus-rnd/host.env or source that file before running; "
+        "legacy .refactor-loop/host.env is not read. "
+        "Set ALLOW_GIT_ROOT_FALLBACK=1 only for read-only use"
     )
 
 
@@ -157,7 +159,6 @@ class HostEnvLocator:
     """Locate only the consensus-rnd loop runtime injection file."""
 
     EXPLICIT_ENV = "CONSENSUS_RND_HOST_ENV"
-    LEGACY_PATHS = (Path(".refactor-loop") / "host.env",)
 
     @classmethod
     def resolve(cls, repo_root: Path, env: Mapping[str, str], cwd: Path | None = None) -> HostEnvLocation | None:
@@ -168,10 +169,6 @@ class HostEnvLocator:
                 path=cls._resolve_explicit(root, raw_explicit),
             )
 
-        for relative in cls.LEGACY_PATHS:
-            path = (root / relative).resolve()
-            if path.is_file():
-                return HostEnvLocation(path=path)
         return None
 
     @classmethod

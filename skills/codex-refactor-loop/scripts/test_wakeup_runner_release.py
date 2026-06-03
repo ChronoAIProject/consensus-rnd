@@ -32,8 +32,9 @@ class WakeupRunnerReleaseTests(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         for rel in (".refactor-loop/state", ".refactor-loop/logs"):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
-        (self.repo / ".refactor-loop/host.env").write_text(f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config/consensus-rnd/host.env").write_text(f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
+        self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         log = self.repo / ".refactor-loop/logs/release.log"
         log.write_text("release-ready\nEXIT=0\n", encoding="utf-8")
         self.action = {

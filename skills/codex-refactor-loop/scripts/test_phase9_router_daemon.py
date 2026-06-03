@@ -1275,16 +1275,43 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         )
 
     def test_phase9_router_converge_suppresses_when_live_label_is_implementing(self) -> None:
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True, exist_ok=True)
+        host_env.write_text(
             f"REPO_ROOT={self.repo}\nGH_REPO_SLUG={self.TEST_GH_REPO_SLUG}\n",
             encoding="utf-8",
         )
-        self.router = self.new_router()
+        self.router = Phase9Router(
+            ctx=LoopContext.load(
+                repo_root=self.repo,
+                env={
+                    "GH_REPO_SLUG": self.TEST_GH_REPO_SLUG,
+                    "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                },
+            ),
+            command_runner=self.commands.append,
+        )
         self.router._read_source_issue_decision = self.original_source_issue_reader.__get__(self.router, Phase9Router)  # type: ignore[method-assign]
         self.write_log("phase9-issue37-r4-judge.log", "META_JUDGE_DONE:converge:round-5:need-more")
 
         def fake_run(command, **kwargs):
             if command[:2] == ["gh", "api"]:
+                if "--jq" not in command:
+                    return mock.Mock(
+                        returncode=0,
+                        stdout=json.dumps(
+                            {
+                                "state": "OPEN",
+                                "title": "issue title",
+                                "body": "",
+                                "labels": [
+                                    {"name": "crnd:lifecycle:managed"},
+                                    {"name": "crnd:phase:implementing"},
+                                ],
+                            }
+                        ),
+                        stderr="",
+                    )
                 jq_arg = command[command.index("--jq") + 1]
                 if jq_arg == ".state":
                     return mock.Mock(returncode=0, stdout=json.dumps("OPEN"), stderr="")
@@ -1299,7 +1326,16 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
             self.router.tick()
-            fresh_router = self.new_router()
+            fresh_router = Phase9Router(
+                ctx=LoopContext.load(
+                    repo_root=self.repo,
+                    env={
+                        "GH_REPO_SLUG": self.TEST_GH_REPO_SLUG,
+                        "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                    },
+                ),
+                command_runner=self.commands.append,
+            )
             fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
             fresh_router.tick()
 

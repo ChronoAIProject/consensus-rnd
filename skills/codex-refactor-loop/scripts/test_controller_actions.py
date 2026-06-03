@@ -34,7 +34,8 @@ class ControllerActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
         (self.tmp / ".refactor-loop" / "state").mkdir(parents=True)
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
             'export INTEGRATION_BRANCH="canonical-integration"\n'
             'export REVIEW_BASE_BRANCH="canonical-review"\n'
@@ -43,7 +44,7 @@ class ControllerActionsTests(unittest.TestCase):
             'export HOST_REFACTOR_COMMENT_POLICY="none"\n',
             encoding="utf-8",
         )
-        self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp))
+        self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}))
         self.pr_body = self.tmp / "pr-body.md"
         self.pr_body.write_text("## 🤖 PR ready\n\nSelf-contained body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
@@ -66,29 +67,31 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_branch_configuration_ignores_legacy_alias_env(self) -> None:
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
 
     def test_branch_configuration_fails_closed_without_canonical_env(self) -> None:
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "missing required host branch env"):
-                ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+                ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
 
     def test_branch_configuration_prefers_host_env_canonical_over_legacy_env(self) -> None:
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n'
             'export INTEGRATION_BRANCH="canonical-integration"\n'
             'export REVIEW_BASE_BRANCH="canonical-review"\n',
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
@@ -108,7 +111,7 @@ class ControllerActionsTests(unittest.TestCase):
         body = self.tmp / "body.md"
         body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp))
+            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
         gh_calls: list[list[str]] = []
         git_calls: list[list[str]] = []
 
@@ -850,7 +853,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertRegex(pending, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z HARNESS_SPAWN_INTENT ")
         self.assertIn(" HARNESS_SPAWN_INTENT ", pending)
 
-        ctx = LoopContext.load(repo_root=self.tmp, env={}, cwd=self.tmp, read_only=True)
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp, read_only=True)
         projected = harness_spawn_intent_actions(self.tmp, ctx, monitor=None, gh_items=[], gh_items_loaded=False)
 
         self.assertEqual(1, len(projected), projected)

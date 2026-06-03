@@ -109,13 +109,13 @@ class LabelGithubCheckTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            refactor_loop = repo / ".refactor-loop"
-            refactor_loop.mkdir()
-            (refactor_loop / "host.env").write_text(
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True)
+            host_env.write_text(
                 f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
                 encoding="utf-8",
             )
-            source_env = {"PATH": "/usr/bin"}
+            source_env = {"PATH": "/usr/bin", "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             with mock.patch("codex_refactor_loop.labels.subprocess.run", return_value=completed) as run:
                 with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
                     with mock.patch("codex_refactor_loop.labels.os.environ", source_env):
@@ -133,10 +133,10 @@ class LabelGithubCheckTests(unittest.TestCase):
     def test_load_gh_labels_fails_closed_when_repo_slug_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            refactor_loop = repo / ".refactor-loop"
-            refactor_loop.mkdir()
-            (refactor_loop / "host.env").write_text(f'export REPO_ROOT="{repo}"\n', encoding="utf-8")
-            source_env = {"PATH": "/usr/bin"}
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True)
+            host_env.write_text(f'export REPO_ROOT="{repo}"\n', encoding="utf-8")
+            source_env = {"PATH": "/usr/bin", "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             with mock.patch("codex_refactor_loop.labels.subprocess.run") as run:
                 with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
                     with mock.patch("codex_refactor_loop.labels.os.environ", source_env):

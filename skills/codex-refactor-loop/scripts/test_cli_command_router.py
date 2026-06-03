@@ -276,7 +276,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             repo = Path(raw_tmp) / "repo"
             for rel in (".refactor-loop/locks", ".refactor-loop/heartbeats", ".refactor-loop/state"):
                 (repo / rel).mkdir(parents=True, exist_ok=True)
-            (repo / ".refactor-loop" / "host.env").write_text(
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True, exist_ok=True)
+            host_env.write_text(
                 f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="example/repo"\n',
                 encoding="utf-8",
             )
@@ -290,7 +292,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "--json"],
                 cwd=repo,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+                env={
+                    "PATH": os.environ.get("PATH", ""),
+                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                    "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                },
                 capture_output=True,
                 text=True,
                 check=False,
@@ -310,7 +316,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             unknown = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],
                 cwd=repo,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+                env={
+                    "PATH": os.environ.get("PATH", ""),
+                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                    "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                },
                 capture_output=True,
                 text=True,
                 check=False,

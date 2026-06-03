@@ -38,13 +38,14 @@ class UpdateCheckTests(unittest.TestCase):
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def write_host_env(self, body: str) -> None:
-        (self.repo / ".refactor-loop/host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config/consensus-rnd/host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\n' + body,
             encoding="utf-8",
         )
 
     def ctx(self) -> LoopContext:
-        return LoopContext.load(repo_root=self.repo, skill_root=self.skill)
+        return LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
     def read_state(self) -> dict[str, object]:
         return json.loads((self.repo / ".refactor-loop/state/update-check.json").read_text(encoding="utf-8"))

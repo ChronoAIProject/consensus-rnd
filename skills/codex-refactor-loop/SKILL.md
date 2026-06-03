@@ -17,7 +17,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 ## Controller Contract Index
 | Contract | Keep-local invariant | Controller action | Reference anchor | Prompt/script surface |
 |---|---|---|---|---|
-| Host config | Loop runtime facts come only from host-owned `host.env`; skill text remains host-agnostic. | `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before running actors; fail closed if required vars are absent. `.refactor-loop/` is skill-private runtime/cache/log state, not host production SSOT. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
+| Host config | Loop runtime facts come only from host-owned `host.env`; skill text remains host-agnostic. | Require non-empty `CONSENSUS_RND_HOST_ENV`, then `source "$CONSENSUS_RND_HOST_ENV"` before running actors; fail closed if the locator or required vars are absent. `.refactor-loop/` is skill-private runtime/cache/log state, not host production SSOT. | [host runtime details](#host-runtime-details) | `host.env.example`, controller-internal `ControllerActions` |
 | GitHub state | GitHub 是系统状态唯一显示面. Maintainer must see current state without local logs. | Post status banners and labels in the same turn as every spawn, completion, consensus, merge, block, or escalation. | [status and escalation templates](#status-and-escalation-templates) | `ControllerActions.post_status_banner`, GitHub labels |
 | Active controller | 跨设备时 GitHub/已 push git 面只承载一个 `ActiveControllerLease`; local `.refactor-loop` is owner-machine cache/log only. | Owner may run controller write paths and seven write daemons; non-owner may peek/statusline or restart-daemons noop only. | [active controller lease](#named-runtime-exception--active-controller-leaseper-191) | `active_controller.py`, `ACTIVE_CONTROLLER_*` |
 | Pure orchestration | Controller execution may be interactive or #396 `wakeup-runner`; all reasoning remains in codex workers / consensus gates. `phase9-router` handles only deterministic design-consensus routes; `wakeup-runner` consumes only `wakeup-plan` evidence-bound closed action projection and existing controller helpers. | Never implement product/refactor code in the controller conversation. Dispatch a codex for implementation, verification, fixing, review, and design solving; let `consensus-rnd-cli phase9-router` handle only its allowlisted deterministic routes and `consensus-rnd-cli wakeup-runner` mechanically apply only closed projection actions. | [controller contract details](#controller-contract-details) | `consensus-rnd-cli spawn-codex`, prompt files |
@@ -85,13 +85,13 @@ Owner map:
   that matrix.
 -->
 These variables are injected by the host project. The skill must not hardcode project facts.
-`CONSENSUS_RND_HOST_ENV` locates the host-owned `host.env` loop runtime injection file; it is locator-only and not a host production config schema.
+`CONSENSUS_RND_HOST_ENV` locates the host-owned `host.env` loop runtime injection file; it is the only runtime locator for host facts and is not a host production config schema.
 ### Host env surface matrix
 This matrix is the only manually maintained host.env contract. `host.env.example` is a copyable template view; tests derive its expected exports, categories, defaults, and prompt placeholders from this table.
 
 | Variable | Category | Owner | Default/example | Missing/empty behavior | Consumer | Test owner |
 |---|---|---|---|---|---|---|
-| `$CONSENSUS_RND_HOST_ENV` | compatibility | HostEnvLocator | repo-relative host-owned path, e.g. `.config/consensus-rnd/host.env` | optional locator only; when set it must be repo-relative or repo-contained absolute and is read before legacy paths; it is not host production config schema | LoopContext locator | `test_loop_context.py`, `test_host_env_surface_matrix.py` |
+| `$CONSENSUS_RND_HOST_ENV` | required | HostEnvLocator | repo-relative host-owned path, e.g. `.config/consensus-rnd/host.env` | required for host fact loading; when set it must be repo-relative or repo-contained absolute; missing, empty, unreadable, or invalid locators fail closed; no `.refactor-loop/host.env` fallback is read; it is not host production config schema | LoopContext locator | `test_loop_context.py`, `test_host_env_surface_matrix.py` |
 | `$REPO_ROOT` | required | LoopContext | host absolute repo path | fail closed; do not infer from cwd unless an explicit read-only fallback test allows it | LoopContext | `test_loop_context.py` |
 | `$GH_REPO_SLUG` | required | LoopContext | `OWNER/REPO` | fail closed for GitHub operations when absent or not `OWNER/REPO`; preferred slug | LoopContext, release-gate | `test_loop_context.py`, `test_auto_release_gate.py` |
 | `$GH_OWNER` | compatibility | LoopContext | optional owner fallback | noop when `$GH_REPO_SLUG` is present; used only with `$GH_REPO_NAME` compatibility construction | LoopContext | `test_loop_context.py` |
@@ -135,9 +135,9 @@ Host config rules:
 1. `host.env` is the only loop runtime fact injection point. It is not host production configuration schema.
 2. `GH_REPO` must not be exported as a bare repo name; use `GH_REPO_SLUG`.
 3. `CI_GUARDS` is optional. Use `[ -n "${CI_GUARDS:-}" ]` before invoking it and report `guards skipped: CI_GUARDS unset` when absent.
-4. Source host-owned `$CONSENSUS_RND_HOST_ENV` before daemon or codex supervision commands; if unset, legacy `.refactor-loop/host.env` remains a read fallback for current installs.
+4. Source host-owned `$CONSENSUS_RND_HOST_ENV` before daemon or codex supervision commands; if unset, fail closed and ask the host to set the explicit locator.
 5. `$BUILD_CMD` and `$TEST_CMD` are shell command strings. They may contain `cd`, `&&`, pipes, and host script invocations; callers must run `bash -lc "$BUILD_CMD"` / `bash -lc "$TEST_CMD"` or an equivalent sourced shell invocation, never split them into argv.
-6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec` pattern and why `env $(grep ...)` is unsafe.
+6. Detailed daemon start examples live in [daemon command bodies](#daemon-command-bodies), including the `bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec'` pattern and why `env $(grep ...)` is unsafe.
 7. Runtime scripts must consume host.env through LoopContext or the shared parser in context.py; root host.env and unlisted aliases such as INTEGRATION, REVIEW_BASE, and WORKTREE are not compatibility inputs.
 8. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` is host-owned read-only evidence. `consensus-rnd-cli check-project-rules` may inspect the sentinel block and write `.refactor-loop/runs/project-rules-fixed-point.patch`; it must never apply host policy edits.
 9. Multi-device mode is safe only after all devices run a version that honors the #191 active-controller lease. Mixed old/new versions are not safe for multi-device mode.
@@ -185,7 +185,7 @@ $EDITOR .config/consensus-rnd/host.env
 export CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env
 ```
 
-Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. Legacy `.refactor-loop/host.env` remains a compatibility read fallback only.
+Fill the host-owned `host.env` according to the Host env surface matrix: required values must be set, defaulted values may keep their template defaults, optional/noop values may stay empty, and conditional fail-closed surfaces such as `MAINTAINER_WHITELIST` are required only when their surface is enabled. The optional `HOST_*` language-policy variables are empty by default and may stay empty unless the host has explicit policy text to inject. `CONSENSUS_RND_HOST_ENV` must point at this host-owned file before loop runtime commands run.
 
 <a id="github-workflow-portability-checklist"></a>
 ### GitHub workflow portability checklist
@@ -204,7 +204,7 @@ Forbidden setup actions: no host `.github` edits, no label mutation, no issue/PR
 
 When a host user asks for guided setup, do not add a renderer, CLI command, setup skill, installer, template directory, or root install document. Follow this walkthrough and write advisory artifacts by hand under `.refactor-loop/runs/github-workflow-setup/<timestamp>/`:
 
-- `host-env.patch.md`: derive a suggested host-owned `.config/consensus-rnd/host.env` patch from the Host env surface matrix and `host.env.example`; `.refactor-loop/host.env` remains only a legacy/runtime read fallback.
+- `host-env.patch.md`: derive a suggested host-owned `.config/consensus-rnd/host.env` patch from the Host env surface matrix and `host.env.example`; include the explicit `CONSENSUS_RND_HOST_ENV=.config/consensus-rnd/host.env` locator setup.
 - `labels-plan.json`: derive the label plan from `scripts/codex_refactor_loop/labels.py`; do not run `gh label create`, `gh label edit`, or `gh label delete`.
 - `scheduler.md`: point at the existing cron/launchd `consensus-rnd-cli restart-daemons` examples below; do not install a scheduler.
 - `statusline.json`: point at the existing read-only `consensus-rnd-cli statusline`; do not write Claude Code settings.
@@ -215,9 +215,8 @@ Do not produce `summary.json` or `host-workflow-spec.example.json`. These artifa
 
 ### Keep existing daemons alive
 
-Install exactly one user-level scheduler. The command must `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` before it execs the checked-in helper; this preserves values with spaces and keeps all loop runtime facts in the host env file.
-Legacy installed schedulers that still run `source .refactor-loop/host.env` are compatibility readers only; new installs should set `CONSENSUS_RND_HOST_ENV` to the host-owned file.
-The legacy command fragment `source .refactor-loop/host.env && exec` is accepted only for existing scheduler entries during migration.
+Install exactly one user-level scheduler. The command must require non-empty `CONSENSUS_RND_HOST_ENV` and `source "$CONSENSUS_RND_HOST_ENV"` before it execs the checked-in helper; this preserves values with spaces and keeps all loop runtime facts in the host env file.
+Existing scheduler entries must be updated to set `CONSENSUS_RND_HOST_ENV` to the host-owned file; `.refactor-loop/host.env` is not a runtime fallback.
 
 Cron example:
 
@@ -433,7 +432,7 @@ Every `/loop`, task notification, ScheduleWakeup resume, or daemon pending-event
 
 1. Run `python3 <skill-root>/scripts/consensus-rnd-cli wakeup-plan --repo-root "$REPO_ROOT"` first and follow its prioritized `actions` / `recommendation` output.
 2. Run `python3 <skill-root>/scripts/consensus-rnd-cli peek | tail -80` as the status lens.
-3. Load host config with `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"`; if missing or malformed, fail closed and post a status explaining the blocked bootstrap.
+3. Load host config with `test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"`; if the locator is missing or malformed, fail closed and post a status explaining the blocked bootstrap.
 4. Arm or confirm the persistent daemon-event Monitor bridge for `.refactor-loop/.controller-pending-events.log` and `.refactor-loop/.concurrency-alert.log`; then read daemon status with `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`;任 owner daemon `stale` / `dead` → 调 `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons` repair/reload;无 progress >10 min(检 `.refactor-loop/runs/` + `.refactor-loop/logs/` mtime)→ 写 `STALE_CONTROLLER:freeze_minutes=N` 到 `.refactor-loop/.controller-pending-events.log`(no lifecycle authority,仅 alert).
 5. Sweep GitHub comments and pending events, excluding sentinel comments, AI banner prefixes, and bot authors.
 6. Sweep all recent logs. A worker is complete only when `tail -5 <log>` contains `^EXIT=0`.
@@ -476,7 +475,7 @@ The workflow stage index is the local routing map. It intentionally links to hea
 
 Consensus-rnd Phase bootstrap is mandatory and ordered for each controller session bootstrap. Do not spawn normal actors before it completes.
 
-1. `source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` from `$REPO_ROOT`; if it is absent, unreadable, or lacks required values, fail closed.
+1. `test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"` from `$REPO_ROOT`; if the locator is absent, unreadable, or lacks required values, fail closed.
 2. Validate `REPO_ROOT`, `GH_REPO_SLUG`, `INTEGRATION_BRANCH`, `REVIEW_BASE_BRANCH`, `BUILD_CMD`, `TEST_CMD`, and `SOURCE_GLOBS` according to host policy.
 3. Run `ProjectRulesFixedPointProbe(强制,先于任何 actor 派发)` through `consensus-rnd-cli check-project-rules` against `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}`.
 4. If the probe exits non-zero, including `patch-required` with `.refactor-loop/runs/project-rules-fixed-point.patch`, bootstrap fail closed; post the failure and stop before actors, 不得派 audit / solver / reviewer / implement actor.
@@ -1118,7 +1117,7 @@ The following excerpts preserve the detailed controller runbook in the single SK
 <a id="release-decision-schema"></a>
 ### Release decision schema
 
-`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads host.env through `LoopContext` or the shared parser in `context.py`: explicit `CONSENSUS_RND_HOST_ENV` first, then legacy `$REPO_ROOT/.refactor-loop/host.env`; root `host.env` is not a migration read. Only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight. Controller scheduling order is fixed: first run `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then run `consensus-rnd-cli release-gate`.
+`consensus-rnd-cli release-gate` is a one-shot controller helper, not a daemon. It reads host.env through `LoopContext` or the shared parser in `context.py`: `CONSENSUS_RND_HOST_ENV` is the only runtime locator for host facts, and root `host.env` or `.refactor-loop/host.env` are not migration reads. Only `RELEASE_AUTO_ENABLE=true` enables decision writes or `--dispatch` candidate writes. `--score-only` prints the same stability calculation without requiring opt-in and without writing state. A controller-side pre-gate producer writes `.refactor-loop/state/release-commits.json` before the decider runs; the decider is decision-artifact-only and does not run `git`, and the controller-owned publisher owns any manifest bump, commit, push, tag, or release action after publish preflight. Controller scheduling order is fixed: first run `consensus-rnd-cli release-commits --target-ref origin/$REVIEW_BASE_BRANCH`, then run `consensus-rnd-cli release-gate`.
 
 Stability score is the percentage of the eight boolean signals that pass. `ready=true` requires score 100 plus the release interval and at least one commit since the last release. Live signal inputs are intentionally narrow:
 
@@ -1170,9 +1169,9 @@ Forbidden: no source mutation, git operations, GitHub issue/PR/body/label lifecy
 
 ### Daemon 启动(强制 pattern — 必须注入 host.env)
 
-**禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD` 含空格时 `env` 会把后续 token 当命令崩)。**唯一正确**:用 `bash -c 'source host.env && exec'` 注入后再 exec:
+**禁止** 裸 `nohup python3 <daemon> &`(拿不到 host 配置)与 `nohup env $(grep ... host.env) <daemon> &`(`BUILD_CMD` 含空格时 `env` 会把后续 token 当命令崩)。**唯一正确**:用 `bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec'` 注入后再 exec:
 ```bash
-nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli <operation> --daemon' \
+nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli <operation> --daemon' \
   >> .refactor-loop/logs/<daemon>.log 2>&1 & disown
 ```
 Integration sync uses integration sync operation artifacts; the daemon writes `.refactor-loop/runs/integration-sync-operation-<kind>-<ts>.json` and records `.refactor-loop/runs/integration-sync-executions/<operation-stem>.(applied|rejected).json` after live-state validation.
@@ -1441,7 +1440,7 @@ controller 严格按 judge marker 判 escalate,**不允许**自己以"累了/rou
 
 启动:
 ```bash
-nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli concurrency' \
+nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli concurrency' \
   >> .refactor-loop/logs/concurrency-monitor.log 2>&1 &
 disown
 ```
@@ -1564,7 +1563,7 @@ You are the **Controller**. You never edit production code yourself. You orchest
 
 > 这是 first wakeup 唯一合法路径。baseline 测试证明:不把以下步骤钉成强制有序首步,controller 会只 bootstrap state + 派 audit,**漏起全部 7 daemon、漏建 labels**(把 daemon / label 误当成「别处已起好」的 steady-state 检查)。下面把它们钉成不可跳过的有序步骤。
 
-0. **host.env 自检(缺失即停,绝不臆造)**:`source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
+0. **host.env 自检(缺失即停,绝不臆造)**:`test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"` 取 `$REPO_ROOT/$GH_REPO_SLUG/$BUILD_CMD/$TEST_CMD/...`。
    - 不存在 → 从 `skills/codex-refactor-loop/host.env.example` 复制到 host-owned `.config/consensus-rnd/host.env` 并设置 `CONSENSUS_RND_HOST_ENV` 并填必填项;无法确定必填值(REPO_ROOT/GH_REPO_SLUG/BUILD_CMD/TEST_CMD)→ **PushNotification 请 maintainer 填,end turn,不 spawn 任何东西**。
    - ❌ 严禁用 `git rev-parse` / `gh repo view` 猜值后带空 BUILD_CMD/TEST_CMD 硬跑。
 0b. **ProjectRulesFixedPointProbe(强制,先于任何 actor 派发)**:在 `host.env` 注入后立即运行:
@@ -2000,7 +1999,7 @@ Consensus-rnd Phase integration-sync is owned by the singleton daemon, not by co
 **`<skill-root>/scripts/consensus-rnd-cli dev-sync`** 是独立 daemon,**600s 周期**自主跑 sync,不依赖 controller wakeup:
 
 ```bash
-nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli dev-sync' \
+nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli dev-sync' \
   >> .refactor-loop/logs/dev-sync-daemon.log 2>&1 &
 disown
 ```
@@ -2019,7 +2018,7 @@ Ambiguous adoption metadata, failed adoption operation construction, or adoption
 
 ### Consensus-rnd Phase design-consensus router daemon command body
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#phase9-router-open-state-gate-229`.
-`consensus-rnd-cli phase9-router` 是单例 daemon,只读 open managed issue list、clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/intent/ledger side-effect 前的 source-OPEN gate GitHub issue read:`gh api repos/<slug>/issues/<N>`。That REST issue read is allowed to consume issue state/title/body only for the source-OPEN gate and router-injected issue source snapshot; comments may be read with `gh api repos/<slug>/issues/<N>/comments?per_page=20` only for bounded recent comments in the same router-local prompt-source projection. The state-only mirror token for the same source-OPEN gate is `gh api repos/<slug>/issues/<N> --jq .state`. The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority; this does not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority. DesignConsensusIssueIntake 只可用 `gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels` 发现 open managed `crnd:phase:design-solving` issue;该 read-gh 只读取 issue list/issue state;非 OPEN 或 state 不可证明时 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。Before DesignConsensusIssueIntake or converge-to-next-solvers queues solver intents, the terminal design-consensus gate suppresses solver dispatch when a clean consensus judge log exists (`META_JUDGE_DONE:consensus:*` from `phase9-issue<N>-r*-judge.log` or `meta-judge-issue<N>-r*.log`) or when the already-loaded/open issue labels or labels-only live read `gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'` show terminal design-consensus phase labels `crnd:phase:consensus-reached`, `crnd:phase:implementing`, `crnd:phase:merged`, or `crnd:phase:closed`; it appends existing-format `phase9-router-fallback` pending events with key prefix `phase9-terminal-eligibility:` and reason `phase9-already-consensus`, without writing spawn intent or dispatch ledger. solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/producer/source-ref/round、三个 scoped solver paths 和 judge output path;manual issue provenance uses `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>`. missing template 或 scope 校验失败 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}" && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
+`consensus-rnd-cli phase9-router` 是单例 daemon,只读 open managed issue list、clean-exit logs、私有 ledger,以及每条 direct route 在 prompt/intent/ledger side-effect 前的 source-OPEN gate GitHub issue read:`gh api repos/<slug>/issues/<N>`。That REST issue read is allowed to consume issue state/title/body only for the source-OPEN gate and router-injected issue source snapshot; comments may be read with `gh api repos/<slug>/issues/<N>/comments?per_page=20` only for bounded recent comments in the same router-local prompt-source projection. The state-only mirror token for the same source-OPEN gate is `gh api repos/<slug>/issues/<N> --jq .state`. The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority; this does not grant daemon process-spawn, durable schema, host production SSOT, or lifecycle authority. DesignConsensusIssueIntake 只可用 `gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels` 发现 open managed `crnd:phase:design-solving` issue;该 read-gh 只读取 issue list/issue state;非 OPEN 或 state 不可证明时 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 existing-format `phase9-router-fallback` pending event,reason ∈ `phase9-source-not-open` / `phase9-source-state-unavailable`。Before DesignConsensusIssueIntake or converge-to-next-solvers queues solver intents, the terminal design-consensus gate suppresses solver dispatch when a clean consensus judge log exists (`META_JUDGE_DONE:consensus:*` from `phase9-issue<N>-r*-judge.log` or `meta-judge-issue<N>-r*.log`) or when the already-loaded/open issue labels or labels-only live read `gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'` show terminal design-consensus phase labels `crnd:phase:consensus-reached`, `crnd:phase:implementing`, `crnd:phase:merged`, or `crnd:phase:closed`; it appends existing-format `phase9-router-fallback` pending events with key prefix `phase9-terminal-eligibility:` and reason `phase9-already-consensus`, without writing spawn intent or dispatch ledger. solver-triplet-to-judge route 必须渲染完整 `prompts/meta-judge.md` template,绑定 issue/work-unit/producer/source-ref/round、三个 scoped solver paths 和 judge output path;manual issue provenance uses `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>`. missing template 或 scope 校验失败 fail closed,不写 spawn intent、不写 dispatch ledger,只追加 `phase9-router-fallback`,reason ∈ `phase9-meta-judge-template-unavailable` / `phase9-meta-judge-scope-invalid`。启动:`nohup bash -c 'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV" && exec python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --daemon --repo-root "$REPO_ROOT"' >> .refactor-loop/logs/phase9-router-daemon.log 2>&1 & disown`
 Verification: `test_phase9_router_open_state_gate.py`, `test_phase9_router_daemon.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 One-shot:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --repo-root "$REPO_ROOT"`; dry-run:`python3 <skill-root>/scripts/consensus-rnd-cli phase9-router --once --dry-run --repo-root "$REPO_ROOT"`; monitor:`tail -50 .refactor-loop/logs/phase9-router-daemon.log`。
 Allowlist(唯一 direct spawn-intent authority):
@@ -2331,7 +2330,7 @@ Refactor (iter364/issue364):
 
 Solver scope comes from the prompt header `WORK_UNIT_SOURCE_REF`, the work-unit `source_ref`, or a local source artifact explicitly pointed to by either field. For issue-driven / Path A work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` and `WORK_UNIT_SOURCE_REF=gh-issue-<N>` mean the router-injected issue source snapshot is the preferred scope source when no local audit artifact is provided. The snapshot contains bounded issue title/body and recent comments read by the router for prompt projection only; it is not durable schema, host production SSOT, lifecycle authority, or a replacement for GitHub as the visible state surface. `gh issue view <N>` issue body/comments are fallback-only when the router-injected snapshot is unavailable. If an issue body, snapshot body, or source_ref points to an existing audit artifact, solvers may read and verify that artifact; otherwise missing audit artifacts are valid for issue-driven work and must not be fabricated. For Path A greenfield identity, absence of existing local code to delete is neutral evidence for the delete solver and is compatible with `SOLVER_DONE:delete:abstain:<reason>` when deletion/collapse is not justified.
 
-For Path A issue body/comments that cite files absent from the current checkout, solvers must not directly emit a generic `no-plan`. The issue body/comments may carry a read-only source locator: `git show <ref>:<path>` for a named ref/path, a raw URL, `gh api` for a GitHub object, or a host-provided path from `.refactor-loop/host.env`. Use the locator only to read the cited source; do not fetch, checkout, switch, merge, rebase, reset, create a source worktree, or add a source directory. If the locator is missing or invalid and the current checkout cannot verify the cited source, classify the no-plan reason precisely as `source-location-missing-or-invalid`.
+For Path A issue body/comments that cite files absent from the current checkout, solvers must not directly emit a generic `no-plan`. The issue body/comments may carry a read-only source locator: `git show <ref>:<path>` for a named ref/path, a raw URL, `gh api` for a GitHub object, or a host-provided path from the explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`. Use the locator only to read the cited source; do not fetch, checkout, switch, merge, rebase, reset, create a source worktree, or add a source directory. If the locator is missing or invalid and the current checkout cannot verify the cited source, classify the no-plan reason precisely as `source-location-missing-or-invalid`.
 
 Audit-backed sources require verification of the audit `evidence:` file:line. Issue-driven sources require verification of the cited files, symbols, problem statement, or repo rules present in the issue body/comments. A missing audit `evidence:` block is not by itself a defect for manual issues. The router renders the same producer/source-ref provenance into meta-judge prompts so the judge can recognize Path A greenfield framing instead of treating delete-solver abstain as a failed deletion proof.
 
@@ -2763,7 +2762,7 @@ codex 偶发 `ERROR: stream disconnected before completion` 且 exit 1,尤其同
 
 <!-- Refactor (issue-275): Old pattern: SKILL.md fenced shell 探针含 raw positional $0/$1/$2,skill 带参加载被 clobber。 New principle: 删可执行探针改指 canonical CLI(wakeup-plan ci-red + concurrency --count-only),不在文档放可被位置参数 clobber 的 inline shell。 -->
 ```bash
-source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"                              # 取 REPO_ROOT / CODEX_FLOOR
+test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"                # 取 REPO_ROOT / CODEX_FLOOR
 FLOOR=$(( ${CODEX_FLOOR:-5} < 2 ? 2 : ${CODEX_FLOOR:-5} ))   # 硬下限 2
 # 只数本仓库 codex:使用 canonical CLI 计数;diagnostic 明细可用 --list-codex
 ACTIVE=$(python3 <skill-root>/scripts/consensus-rnd-cli concurrency --count-only)

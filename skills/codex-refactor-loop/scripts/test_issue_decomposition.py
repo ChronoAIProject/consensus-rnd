@@ -25,11 +25,12 @@ class IssueDecompositionTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="issue-decomposition-test-"))
         (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True)
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.tmp)
+        self.ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         self.consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
         (self.tmp / self.consensus).write_text("consensus artifact\n", encoding="utf-8")
 

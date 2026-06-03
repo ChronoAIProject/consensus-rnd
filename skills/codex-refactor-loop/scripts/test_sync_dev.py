@@ -591,8 +591,9 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertTrue(Path(argv[argv.index("--prompt") + 1]).is_absolute())
 
     def test_load_dev_sync_config_ignores_legacy_aliases_and_derives_worktree(self) -> None:
-        (self.repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True, exist_ok=True)
+        host_env.write_text(
             "export INTEGRATION_BRANCH=canonical-integration\nexport REVIEW_BASE_BRANCH=canonical-review\n",
             encoding="utf-8",
         )
@@ -600,6 +601,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         config = load_dev_sync_config(
             env={
                 "REPO_ROOT": str(self.repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "INTEGRATION": "legacy-integration",
                 "REVIEW_BASE": "legacy-review",
                 "WORKTREE": str(self.repo / "legacy-wt"),
