@@ -70,6 +70,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "review_gate",
     "publish_release_candidate",
 }
+SPAWN_BATCH_CONTROLLER_ACTION = "spawn_codex_harness_background"
 
 
 @dataclass(frozen=True)
@@ -77,6 +78,37 @@ class RunnerResult:
     action_id: str
     status: str
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class WakeupApplyBudget:
+    spawn_budget: int
+    source: str
+
+    @classmethod
+    def from_plan(cls, plan: Mapping[str, Any]) -> "WakeupApplyBudget":
+        hard_gate = plan.get("hard_gate")
+        if not isinstance(hard_gate, Mapping):
+            concurrency_hard_gate = plan.get("concurrency")
+            if isinstance(concurrency_hard_gate, Mapping):
+                hard_gate = concurrency_hard_gate.get("hard_gate")
+        concurrency = plan.get("concurrency")
+        if not isinstance(hard_gate, Mapping) or not isinstance(concurrency, Mapping):
+            return cls.legacy()
+        if hard_gate.get("active") is not True:
+            return cls.legacy()
+        dispatch_required = _positive_int(hard_gate.get("dispatch_required"))
+        deficit = _positive_int(concurrency.get("deficit"))
+        if dispatch_required is None or deficit is None:
+            return cls.legacy()
+        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit")
+
+    @classmethod
+    def legacy(cls) -> "WakeupApplyBudget":
+        return cls(1, "legacy-single-apply")
+
+    def is_spawn_action(self, action: Mapping[str, Any]) -> bool:
+        return action.get("controller_action") == SPAWN_BATCH_CONTROLLER_ACTION
 
 
 @dataclass(frozen=True)
@@ -172,14 +204,23 @@ class WakeupRunner:
             result = RunnerResult("", "blocked", plan_error)
             self._record(result, action=None)
             return [result]
+        budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
+        applied_spawns = 0
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
+            if applied_spawns > 0 and not budget.is_spawn_action(action):
+                break
             result = self.apply_action(action)
             results.append(result)
-            if result.status == "applied":
+            if result.status != "applied":
                 break
+            if budget.is_spawn_action(action):
+                applied_spawns += 1
+                if applied_spawns < budget.spawn_budget:
+                    continue
+            break
         return results
 
     def apply_action(self, action: Mapping[str, Any]) -> RunnerResult:
@@ -960,6 +1001,12 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def _run_once_with_periodic_heartbeat(
