@@ -111,7 +111,11 @@ decision: consensus | converge
 
 ## If consensus
 - Chosen framing: <minimal | structural | delete | hybrid-A+B>
-- Implement plan (verbatim copy from the winning solver's "Concrete plan" section)
+- Implement plan (structured fields read by wakeup-plan from this judge artifact only, not from solver artifacts or prompt-body free text):
+  - scope_paths: <newline list of repo-relative files/directories allowed for implementation>
+  - old_pattern: <concise statement of the rejected pattern>
+  - new_principle: <concise statement of the replacement principle>
+  - verification_hints: <optional test/guard commands or empty>
 - Philosophy/CLAUDE.md/SPEC/Tier changes included: <none OR exact agreed clause/file changes from the winning plan>
 - Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>
 - Add `crnd:triage:resume-requested` label to issue ${ISSUE_NUMBER}
