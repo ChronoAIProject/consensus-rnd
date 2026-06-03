@@ -95,8 +95,11 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertEqual(action["head_sha"], HEAD_SHA)
         return action
 
-    def apply_action(self, action: dict):
+    def apply_action(self, action: dict, transient_pull_failure: bool = False):
+        pull_attempts = 0
+
         def command_runner(command):
+            nonlocal pull_attempts
             command = list(command)
             if command[:3] == ["gh", "pr", "view"] and ".state" in command:
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
@@ -105,6 +108,9 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
+                pull_attempts += 1
+                if transient_pull_failure and pull_attempts == 2:
+                    return subprocess.CompletedProcess(command, 1, "", "temporary pull read failure")
                 return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": HEAD_SHA}}), "")
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{HEAD_SHA}/check-runs":
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
@@ -143,6 +149,18 @@ class ReviewGateEndToEndTests(unittest.TestCase):
 
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
             result = self.apply_action(action)
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.rendered_fixes, [])
+        self.assertEqual(self.actions.merged, ["480"])
+        launch.assert_not_called()
+
+    def test_review_gate_e2e_transient_pull_read_still_merges(self) -> None:
+        self.write_review_set({"architect": "approve", "tests": "approve", "quality": "approve"})
+        action = self.project_review_gate_action()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            result = self.apply_action(action, transient_pull_failure=True)
 
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.rendered_fixes, [])

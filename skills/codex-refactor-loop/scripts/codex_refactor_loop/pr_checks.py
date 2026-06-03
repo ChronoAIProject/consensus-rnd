@@ -11,6 +11,9 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 
+API_READ_ATTEMPTS = 3
+
+
 def run_command(cmd: Sequence[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(list(cmd), cwd=str(cwd) if cwd else None, capture_output=True, text=True, check=False)
 
@@ -105,6 +108,14 @@ class PrChecksProjection:
             return self._runner(cmd)
         return run_command(cmd, cwd=self.cwd)
 
+    def _run_api_read(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        result = self._run(cmd)
+        for _attempt in range(1, API_READ_ATTEMPTS):
+            if result.returncode == 0:
+                break
+            result = self._run(cmd)
+        return result
+
     def check_pr(self, repo_slug: str, pr_number: int | str) -> PrChecksStatus:
         try:
             pr = int(pr_number)
@@ -113,7 +124,7 @@ class PrChecksProjection:
         if not repo_slug or "/" not in repo_slug:
             return self._failed(repo_slug, pr, "", "invalid_repo")
 
-        pull = self._run(["gh", "api", f"repos/{repo_slug}/pulls/{pr}"])
+        pull = self._run_api_read(["gh", "api", f"repos/{repo_slug}/pulls/{pr}"])
         if pull.returncode != 0:
             return self._failed(repo_slug, pr, "", "pull_api_failure")
         try:
@@ -125,7 +136,7 @@ class PrChecksProjection:
         if not isinstance(head_sha, str) or not head_sha.strip():
             return self._failed(repo_slug, pr, "", "missing_head_sha")
 
-        checks = self._run(["gh", "api", f"repos/{repo_slug}/commits/{head_sha}/check-runs", "--paginate", "--slurp"])
+        checks = self._run_api_read(["gh", "api", f"repos/{repo_slug}/commits/{head_sha}/check-runs", "--paginate", "--slurp"])
         if checks.returncode != 0:
             return self._failed(repo_slug, pr, head_sha, "checks_api_failure")
         try:
