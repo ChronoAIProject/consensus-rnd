@@ -21,6 +21,7 @@ from codex_refactor_loop.phase9.router import (
     main,
     parse_phase9_log_identity,
 )
+from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -284,6 +285,9 @@ class Phase9RouterPackageTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
+        self.assertIn("# GitHub post rules", prompt)
+        self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, prompt)
+        self.assertNotIn("prompts/_github-post-rules.md", prompt)
         router_header = prompt.split("## Issue source snapshot", 1)[0]
         self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", router_header)
         self.assertNotIn("cluster spec", router_header)

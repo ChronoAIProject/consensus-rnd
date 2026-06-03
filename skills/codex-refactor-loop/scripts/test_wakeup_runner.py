@@ -9,6 +9,8 @@ import sys
 import tempfile
 import threading as real_threading
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -21,7 +23,7 @@ REAL_THREAD = real_threading.Thread
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels
-from codex_refactor_loop.wakeup_runner import WakeupRunner, _run_once_with_periodic_heartbeat, main as wakeup_runner_main
+from codex_refactor_loop.wakeup_runner import WakeupRunner, _log_tick_status, _run_once_with_periodic_heartbeat, main as wakeup_runner_main
 
 
 class FakeSupervisor:
@@ -532,23 +534,35 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         return action
 
     def test_valid_harness_spawn_executes_through_checked_supervisor(self) -> None:
-        results = self.run_result(self.base_plan(self.spawn_action()))
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
+            results = self.run_result(self.base_plan(self.spawn_action()))
 
         self.assertEqual(results[0].status, "applied")
-        self.assertEqual(len(self.supervisor.calls), 1)
-        self.assertEqual(self.supervisor.calls[0]["stdin"], self.repo / ".refactor-loop/prompts/task.md")
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        command = args[0]
+        self.assertIn("spawn-codex", command)
+        self.assertIn(str(self.repo.resolve()), command[0])
+        self.assertEqual(command[command.index("--cd") + 1], str(self.repo))
+        self.assertEqual(command[command.index("--prompt") + 1], str(self.repo / ".refactor-loop/prompts/task.md"))
+        self.assertEqual(command[command.index("--log") + 1], str(self.repo / ".refactor-loop/logs/task.log"))
+        self.assertEqual(command[command.index("--stall") + 1], "30")
+        self.assertTrue(kwargs["start_new_session"])
+        popen.return_value.wait.assert_not_called()
+        popen.return_value.poll.assert_not_called()
 
     def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
-        results = self.run_result(self.base_plan(self.dispatch_design_consensus_action()))
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(self.dispatch_design_consensus_action()))
 
         self.assertEqual(results[0].status, "applied")
-        self.assertEqual(len(self.supervisor.calls), 1)
+        launch.assert_called_once()
         self.assertEqual(
-            Path(self.supervisor.calls[0]["stdin"]).resolve(),
+            Path(launch.call_args.kwargs["prompt"]).resolve(),
             (self.repo / ".refactor-loop/prompts/phase9/phase9-issue453-r1-judge.md").resolve(),
         )
         self.assertEqual(
-            Path(self.supervisor.calls[0]["log"]).resolve(),
+            Path(launch.call_args.kwargs["log"]).resolve(),
             (self.repo / ".refactor-loop/logs/phase9-issue453-r1-judge.log").resolve(),
         )
 
@@ -785,10 +799,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def test_open_issue_design_consensus_spawn_still_applies(self) -> None:
         action = self.design_consensus_spawn_action(action_id="harness-spawn-intent:phase9-router:104:2:judge-open")
 
-        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=FakeActions())
 
         self.assertEqual(results[0].status, "applied")
-        self.assertEqual(len(self.supervisor.calls), 1)
+        launch.assert_called_once()
 
     def test_terminal_closed_target_block_suppresses_next_tick_retry(self) -> None:
         actions = FakeActions()
@@ -1233,7 +1248,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, helper)
-        self.assertIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
+        self.assertIn("results = _run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
+        self.assertIn("_log_tick_status(\"wakeup-runner\", _wakeup_tick_action(results))", daemon_branch)
         self.assertIn("lease.sleep_with_lease(interval)", daemon_branch)
         self.assertNotIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", source[source.index("    results = runner.run_once()") :])
 
@@ -1271,12 +1287,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def test_idempotency_ledger_suppresses_duplicate_apply(self) -> None:
         plan = self.base_plan(self.spawn_action())
-        first = self.run_result(plan)
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen") as popen:
+            first = self.run_result(plan)
         second = self.run_result(plan)
 
         self.assertEqual(first[0].status, "applied")
         self.assertEqual(second[0].status, "skipped")
-        self.assertEqual(len(self.supervisor.calls), 1)
+        popen.assert_called_once()
+
+    def test_wakeup_runner_tick_status_line_format(self) -> None:
+        out = StringIO()
+        with redirect_stdout(out):
+            _log_tick_status("wakeup-runner", "dispatched spawn:1")
+
+        self.assertRegex(
+            out.getvalue().strip(),
+            r"^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] wakeup-runner: tick dispatched spawn:1$",
+        )
 
     def test_refactor_loop_host_env_is_not_production_topology_ssot(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")

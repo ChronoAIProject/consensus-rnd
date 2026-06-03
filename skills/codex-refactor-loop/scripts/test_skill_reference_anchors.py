@@ -140,6 +140,18 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 self.assertIn(stage.slug, index)
                 self.assertIn(stage.detail_anchor, available)
 
+    def test_github_posting_contract_documents_render_time_inline_rules(self) -> None:
+        contract = section_after_heading(self.skill, "GitHub Posting Contract")
+        for needle in (
+            "contains `## GitHub post` and the fixed token `{{GITHUB_POST_RULES_CONTRACT}}`",
+            "`_github-post-rules.md` is the template-time source",
+            "rendered worker prompt inlines",
+            "not a worker runtime path",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, contract)
+        self.assertNotIn("references `prompts/_github-post-rules.md`", contract)
+
     def test_skill_is_the_single_heavy_manual_after_merge(self) -> None:
         available = reference_anchors(self.skill)
         for anchor in (

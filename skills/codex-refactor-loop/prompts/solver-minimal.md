@@ -107,13 +107,13 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 <!--
 Refactor (iter6/issue-118):
   Old pattern: SKILL.md 维护 posting-mode prompt filename roster,会漂移
-  New principle: prompt-local GitHub post self-declaration plus prompts/_github-post-rules.md and marker/posting inventory tests own posting mode; SKILL.md does not keep a prompt filename roster.
+  New principle: prompt-local GitHub post self-declaration plus render-time shared post rules and marker/posting inventory tests own posting mode; SKILL.md does not keep a prompt filename roster.
 -->
 
 - You do NOT write code; you propose a plan.
 - You do NOT commit / push / open PRs.
 - You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - You do NOT dispatch other codexes.
 - "Minimal" means smallest code change; it does NOT mean "ignore architectural correctness". If the minimum is still wrong, abstain.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is the minimum viable fix and is written as a concrete plan.
@@ -123,12 +123,9 @@ Refactor (iter6/issue-118):
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
 
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+{{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---

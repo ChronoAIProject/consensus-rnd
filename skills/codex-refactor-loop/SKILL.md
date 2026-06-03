@@ -1042,7 +1042,7 @@ Refactor (iter6/issue-118):
 Posting rules:
 
 1. Controller posts lifecycle banners directly.
-2. A worker prompt is direct-post only when its own body contains `## GitHub post` and references `prompts/_github-post-rules.md`.
+2. A worker prompt is direct-post only when its own body contains `## GitHub post` and the fixed token `{{GITHUB_POST_RULES_CONTRACT}}`; `_github-post-rules.md` is the template-time source, and the rendered worker prompt inlines its shared rules body. The rules file is not a worker runtime path.
 3. Every GitHub body uses the sentinel final line.
 4. Avoid plain-text unverified human names or handles.
 5. `SKILL.md` must not maintain a posting-mode prompt filename roster; inventory tests derive posting mode from prompt bodies.
@@ -1375,6 +1375,8 @@ gh issue view <N> --json comments --jq '
 3. 如果所有 active issue/PR 都真在等 maintainer(全是 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),那 0 codex 才 OK — 但仍要在 status 报告中说明 "0 codex by design:N issue 全等人"
 
 **consensus-rnd-cli concurrency** P0 alert:`expected > 0 AND actual == 0` → IMMEDIATE(streak=1 即写 alert + pending event,不等 2 tick)。controller 看到 alert → 立即 wake 自查。
+
+**无观察模式豁免(强制,airtight)**:controller 任何时刻——无论 wakeup、task-notification、还是 Monitor 事件——一旦观察到本 loop codex `actual == 0` 且存在 active phase issue/PR(非全 `crnd:human:maintainer-decision` / `crnd:phase:blocked`),**必须在同一 turn 内立即派出真实下一步 codex**,把并发拉回 floor。**禁止**以下任何理由 defer、end-turn、或转入被动等待:"观察 daemon 自驱 / 验证 headless"、"等 daemon 1/tick 自己爬"、"floor 会自己回升"、"router/wakeup_runner 会接管"、"等 cascade / fix 完会派"、"backoff 是已知症状"。daemon 自驱达稳态(批量派 + worker 解耦落地)**之前**,维持 floor 是 controller 不可让渡、不可暂缓的职责;`actual == 0 + active work` 永远是必须当 turn 修复的 P0,不是可观察的状态。唯一例外是上面 point 3(所有 active item 真在等 maintainer),且必须在 status 显式说明。
 
 ### Controller 每 wakeup 必派"下一步"(no gap policy)
 
@@ -2218,7 +2220,7 @@ Refactor (iter6/issue-118):
   New principle: prompt-self-declaration posting mode is owned by the GitHub Posting Contract, prompts/_github-post-rules.md, prompt body self-declaration, test_marker_only_prompts_gh_ban.py, and test_marker_emission_contract.py; no SKILL-maintained prompt filename roster.
 -->
 
-- A prompt is direct-post only when its own body contains a `## GitHub post` section referencing `prompts/_github-post-rules.md`; prompts without that self-declaration are marker/artifact-only.
+- A prompt is direct-post only when its own body contains a `## GitHub post` section with fixed token `{{GITHUB_POST_RULES_CONTRACT}}`; prompts without that self-declaration are marker/artifact-only. `_github-post-rules.md` is the template-time source only, and rendered worker prompts inline the shared rules body instead of relying on a worker runtime path.
 - `SKILL.md` 不维护 posting-mode prompt filename roster,也不引入 JSON manifest 或 helper contract; inventory coverage 由 prompt body + tests 承担。
 - Direct-post prompts keep to GitHub comments, PR body edits, reactions, and temp files. Lifecycle/label/create/close/merge/push/release authority remains controller-owned.
 - body 必须 `## 🤖 <headline>` 开头(consensus-rnd-cli comment-monitor 据此识别 controller-post 跳 react)

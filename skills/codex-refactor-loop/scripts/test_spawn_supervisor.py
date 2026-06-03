@@ -12,11 +12,12 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.processes import ProcessSupervisor, prompt_file_from_text
+from codex_refactor_loop.processes import ProcessSupervisor, launch_spawn_codex_supervisor, prompt_file_from_text
 
 
 class SpawnSupervisorTests(unittest.TestCase):
@@ -90,6 +91,35 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertIn("EXIT=137", text)
         child_pid = int(marker.read_text(encoding="utf-8"))
         self.assert_process_dead(child_pid)
+
+    def test_launch_spawn_codex_supervisor_detaches_without_wait_or_poll(self) -> None:
+        repo = self.tmp_root
+        cli = repo / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_proc = mock.Mock()
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=fake_proc) as popen:
+            exit_code = launch_spawn_codex_supervisor(
+                repo_root=repo,
+                cd=repo / ".worktrees" / "task",
+                prompt=self.prompt,
+                log=self.log,
+                stall=30,
+            )
+
+        self.assertEqual(exit_code, 0)
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        command = args[0]
+        self.assertIn("spawn-codex", command)
+        self.assertIn(str(repo.resolve()), command[0])
+        self.assertEqual(kwargs["cwd"], str(repo.resolve()))
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
+        fake_proc.wait.assert_not_called()
+        fake_proc.poll.assert_not_called()
 
     def assert_process_dead(self, pid: int) -> None:
         deadline = time.time() + 3

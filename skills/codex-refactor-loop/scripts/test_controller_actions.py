@@ -26,6 +26,7 @@ from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import ControllerActions
 from codex_refactor_loop.git import Git
+from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
 
@@ -1675,6 +1676,19 @@ class ControllerActionsTests(unittest.TestCase):
         )
 
         self.assertEqual(output.read_text(encoding="utf-8"), "Host example-host handles issue-219 from cluster-219.\n")
+
+    def test_render_template_inlines_github_post_rules_contract(self) -> None:
+        template = self.tmp / "template.md"
+        output = self.tmp / "rendered.md"
+        template.write_text(f"## GitHub post\n\n{GITHUB_POST_RULES_CONTRACT_TOKEN}\n", encoding="utf-8")
+
+        self.actions.render_template(str(template), str(output))
+
+        rendered = output.read_text(encoding="utf-8")
+        self.assertIn("# GitHub post rules", rendered)
+        self.assertIn("## Body 结构", rendered)
+        self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, rendered)
+        self.assertNotIn("prompts/_github-post-rules.md", rendered)
 
     def test_render_template_rejects_unknown_host_prompt_binding(self) -> None:
         actions = self.write_host_workflow_spec(self.valid_host_prompt_spec())
