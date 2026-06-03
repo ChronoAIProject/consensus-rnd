@@ -924,6 +924,35 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, self.skill)
                 self.assertIn(required, observability_entry)
 
+    def test_wakeup_runner_batch_budget_is_spawn_only_and_per_action_validated(self) -> None:
+        runner = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        run_once = runner[runner.index("    def run_once(self)") : runner.index("    def apply_action(self,")]
+        budget = runner[runner.index("class WakeupApplyBudget") : runner.index("@dataclass(frozen=True)", runner.index("class WakeupApplyBudget"))]
+
+        for required in (
+            "SPAWN_BATCH_CONTROLLER_ACTION = \"spawn_codex_harness_background\"",
+            "class WakeupApplyBudget",
+            "hard_gate.dispatch_required/concurrency.deficit",
+            "return cls.legacy()",
+            "min(dispatch_required, deficit)",
+            "return action.get(\"controller_action\") == SPAWN_BATCH_CONTROLLER_ACTION",
+            "budget = WakeupApplyBudget.from_plan(plan)",
+            "result = self.apply_action(action)",
+            "if result.status != \"applied\":",
+            "if applied_spawns > 0 and not budget.is_spawn_action(action):",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, runner)
+        self.assertIn("applied_spawns += 1", run_once)
+        self.assertIn("if applied_spawns < budget.spawn_budget:", run_once)
+        for forbidden in (
+            "for action in plan.get(\"actions\", [])[:",
+            "dispatch_required = int(",
+            "controller_action in SUPPORTED_CONTROLLER_ACTIONS",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, budget + run_once)
+
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"
         start = self.skill.index(heading)

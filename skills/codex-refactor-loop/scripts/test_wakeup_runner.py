@@ -254,6 +254,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "actions": [action],
         }
 
+    def batch_plan(self, actions: list[dict], *, dispatch_required: object, deficit: object, active: bool = True) -> dict:
+        return {
+            "schema": "wakeup-plan",
+            "mode": "closed-action-projection",
+            "apply_authority": "wakeup-runner-396-only",
+            "no_lifecycle_authority": True,
+            "concurrency": {"deficit": deficit},
+            "hard_gate": {"active": active, "dispatch_required": dispatch_required},
+            "actions": actions,
+        }
+
     def spawn_action(self, **overrides) -> dict:
         prompt = self.repo / ".refactor-loop/prompts/task.md"
         prompt.write_text("hello\n", encoding="utf-8")
@@ -556,6 +567,96 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertTrue(kwargs["start_new_session"])
         popen.return_value.wait.assert_not_called()
         popen.return_value.poll.assert_not_called()
+
+    def test_wakeup_runner_batches_spawn_actions_up_to_hard_gate_dispatch_required(self) -> None:
+        actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(3)]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan(actions, dispatch_required=3, deficit=5))
+
+        self.assertEqual([result.status for result in results], ["applied", "applied", "applied"])
+        self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1", "spawn:2"])
+        self.assertEqual(launch.call_count, 3)
+
+    def test_wakeup_runner_spawn_batch_does_not_overshoot_dispatch_required(self) -> None:
+        actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(4)]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan(actions, dispatch_required=2, deficit=4))
+
+        self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1"])
+        self.assertEqual([result.status for result in results], ["applied", "applied"])
+        self.assertEqual(launch.call_count, 2)
+
+    def test_wakeup_runner_spawn_batch_uses_deficit_as_upper_bound(self) -> None:
+        actions = [self.spawn_action(action_id=f"spawn:{index}", log=str(self.repo / f".refactor-loop/logs/task-{index}.log")) for index in range(3)]
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan(actions, dispatch_required=5, deficit=2))
+
+        self.assertEqual([result.action_id for result in results], ["spawn:0", "spawn:1"])
+        self.assertEqual(launch.call_count, 2)
+
+    def test_wakeup_runner_missing_or_invalid_budget_keeps_single_apply_compatibility(self) -> None:
+        cases = (
+            ("missing", self.base_plan),
+            ("inactive", lambda actions: self.batch_plan(actions, dispatch_required=2, deficit=2, active=False)),
+            ("zero", lambda actions: self.batch_plan(actions, dispatch_required=0, deficit=2)),
+            ("non-int", lambda actions: self.batch_plan(actions, dispatch_required="2", deficit=2)),
+            ("missing-deficit", lambda actions: self.batch_plan(actions, dispatch_required=2, deficit=None)),
+        )
+        for name, plan_factory in cases:
+            with self.subTest(name=name):
+                actions = [
+                    self.spawn_action(action_id=f"{name}:spawn:0", log=str(self.repo / f".refactor-loop/logs/{name}-0.log")),
+                    self.spawn_action(action_id=f"{name}:spawn:1", log=str(self.repo / f".refactor-loop/logs/{name}-1.log")),
+                ]
+                plan = plan_factory(actions) if name != "missing" else self.base_plan(actions[0])
+                if name == "missing":
+                    plan["actions"] = actions
+                with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+                    results = self.run_result(plan)
+
+                self.assertEqual([result.action_id for result in results], [actions[0]["action_id"]])
+                self.assertEqual(launch.call_count, 1)
+
+    def test_wakeup_runner_non_spawn_action_does_not_consume_batch_budget(self) -> None:
+        first = self.close_action(action_id="close-managed-item:53:first")
+        second = self.close_action(action_id="close-managed-item:53:second")
+        actions = FakeActions()
+
+        results = self.run_result(self.batch_plan([first, second], dispatch_required=3, deficit=3), actions=actions)
+
+        self.assertEqual([result.action_id for result in results], ["close-managed-item:53:first"])
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
+
+    def test_wakeup_runner_does_not_apply_non_spawn_after_spawn_batch(self) -> None:
+        close = self.close_action(action_id="close-managed-item:53:after-spawn")
+        spawn = self.spawn_action(action_id="spawn:first")
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([spawn, close], dispatch_required=3, deficit=3), actions=actions)
+
+        self.assertEqual([result.action_id for result in results], ["spawn:first"])
+        self.assertEqual(launch.call_count, 1)
+        self.assertEqual(actions.calls, [])
+
+    def test_wakeup_runner_stops_on_blocked_spawn_without_scanning_later_actions(self) -> None:
+        first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
+        blocked = self.spawn_action(action_id="spawn:blocked", log=str(self.repo / ".refactor-loop/logs/blocked.log"))
+        later = self.spawn_action(action_id="spawn:later", log=str(self.repo / ".refactor-loop/logs/later.log"))
+        Path(blocked["log"]).write_text("already claimed\n", encoding="utf-8")
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.batch_plan([first, blocked, later], dispatch_required=3, deficit=3))
+
+        self.assertEqual([result.action_id for result in results], ["spawn:first", "spawn:blocked"])
+        self.assertEqual([result.status for result in results], ["applied", "blocked"])
+        self.assertEqual(results[1].reason, "target_log_exists")
+        self.assertEqual(launch.call_count, 1)
+        self.assert_blocked_event("spawn:blocked", "target_log_exists")
 
     def test_dispatch_design_consensus_solver_triplet_renders_and_spawns_judge(self) -> None:
         with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
