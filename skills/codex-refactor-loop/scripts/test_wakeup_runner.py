@@ -727,6 +727,54 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_missing_precondition:verified_pr_head",
         )
 
+    def test_wakeup_runner_design_consensus_no_intents_does_not_dead_stop_later_spawn_batch(self) -> None:
+        # An incomplete/markerless solver triplet makes dispatch_design_consensus
+        # produce no spawn intents (helper_exit:3). dispatch_design_consensus is a
+        # spawn-batch action, but a no-intents result is a routing no-op, not a
+        # codex launch failure, so it must skip-and-continue and let the rest of
+        # the spawn batch launch instead of dead-stopping the tick.
+        issue = 496
+        (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-delete.log").write_text(
+            "SOLVER_DONE:delete:abstain:genuine-gap\nEXIT=0\n", encoding="utf-8"
+        )
+        # minimal and structural exited cleanly but never emitted a SOLVER_DONE marker.
+        (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-minimal.log").write_text(
+            "No source code or runtime files were changed.\nEXIT=0\n", encoding="utf-8"
+        )
+        (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-structural.log").write_text(
+            "conclusion is propose\nEXIT=0\n", encoding="utf-8"
+        )
+        no_intents = {
+            "kind": "completed-marker",
+            "action_id": f"completed-marker:phase9-issue{issue}-r1-delete.log:SOLVER_DONE:delete:abstain:genuine-gap",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target"],
+            "source_artifact": f".refactor-loop/logs/phase9-issue{issue}-r1-delete.log",
+            "source_marker": "SOLVER_DONE:delete:abstain:genuine-gap",
+            "target_kind": "issue",
+            "target_number": issue,
+            "target": {"kind": "issue", "number": issue},
+            "controller_action": "dispatch_design_consensus",
+            "no_generic_command": True,
+        }
+        later = self.spawn_action(
+            action_id="spawn:after-no-intents",
+            log=str(self.repo / ".refactor-loop/logs/after-no-intents.log"),
+        )
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([no_intents, later], dispatch_required=2, deficit=2),
+                gh_state="OPEN",
+                actions=actions,
+            )
+
+        statuses = {result.action_id: result.status for result in results}
+        self.assertEqual(statuses.get(no_intents["action_id"]), "blocked")
+        self.assertEqual(statuses.get("spawn:after-no-intents"), "applied")
+        launch.assert_called_once()
+
     def test_wakeup_runner_blocked_non_spawn_actions_do_not_dead_stop_spawn_batch(self) -> None:
         blocked_publish = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-spawns",

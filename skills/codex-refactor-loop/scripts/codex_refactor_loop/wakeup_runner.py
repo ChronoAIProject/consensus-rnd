@@ -228,6 +228,17 @@ class WakeupRunner:
             if result.status != "applied":
                 if result.status in {"blocked", "skipped"} and not is_spawn_action:
                     continue
+                # A blocked dispatch_design_consensus produced no spawn intents
+                # (e.g. an incomplete/markerless solver triplet) or an invalid
+                # marker. That is a routing no-op, not a codex launch failure,
+                # so skip it and keep launching the rest of the spawn batch
+                # instead of dead-stopping the whole tick.
+                if (
+                    result.status == "blocked"
+                    and is_spawn_action
+                    and action.get("controller_action") != "spawn_codex_harness_background"
+                ):
+                    continue
                 if result.status == "blocked" and is_spawn_action and not _spawn_launch_failure(result):
                     continue
                 break
