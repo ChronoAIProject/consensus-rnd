@@ -121,6 +121,21 @@ class FakeActions:
         raise AssertionError("release publish should not be dispatched")
 
 
+class FakeReviewFixActions(FakeActions):
+    def __init__(self, repo: Path) -> None:
+        super().__init__()
+        self.repo = repo
+        self.rendered: list[tuple[int, int]] = []
+
+    def render_review_fix_prompt(self, pr_number: int, round_number: int):
+        self.rendered.append((pr_number, round_number))
+        prompt_path = ".refactor-loop/prompts/fixes/fix-pr77-round-1.md"
+        log_path = ".refactor-loop/logs/fix-pr77-round-1.log"
+        (self.repo / prompt_path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / prompt_path).write_text("headless rendered prompt\n", encoding="utf-8")
+        return type("Spec", (), {"prompt_path": prompt_path, "log_path": log_path})()
+
+
 class FakeHeartbeatLease:
     heartbeat_interval = 7
 
@@ -321,7 +336,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "pr77")]:
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
-                if command[3:] == ["diff", "--quiet"]:
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, git_diff_code, "", "")
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
@@ -967,6 +982,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
 
+    def test_wakeup_runner_headless_review_fix_dispatch_uses_fully_rendered_prompt(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:77:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        gate = self.review_gate_action(action_id="review-gate:77:headless-fix")
+        actions = FakeReviewFixActions(self.repo)
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(gate), gh_state="OPEN", actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.rendered, [(77, 1)])
+        launch.assert_called_once()
+        prompt = Path(launch.call_args.kwargs["prompt"])
+        self.assertEqual(prompt.resolve(), (self.repo / ".refactor-loop/prompts/fixes/fix-pr77-round-1.md").resolve())
+        self.assertNotIn("${", prompt.read_text(encoding="utf-8"))
+
     def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
         blocked = self.spawn_action(action_id="spawn:blocked", log=str(self.repo / ".refactor-loop/logs/blocked.log"))
@@ -1134,6 +1176,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "helper_exit:7")
+
+    def test_publish_implementation_output_delegated_fallback_is_retryable(self) -> None:
+        actions = FakeActions(publish_code=75)
+        action = self.implementation_output_action(action_id="publish-implementation:delegated-fallback")
+
+        first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual(first[0].status, "delegated")
+        self.assertEqual(first[0].reason, "publish_implementation_fallback_delegated")
+        self.assertEqual(second[0].status, "delegated")
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
+        ledger_rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual([row["status"] for row in ledger_rows], ["delegated", "delegated"])
+        pending_path = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending = pending_path.read_text(encoding="utf-8") if pending_path.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_HELPER_EXIT", pending)
 
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
@@ -1420,6 +1484,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
         self.assertNotIn("merge-base", publish_validator + worktree_validator)
         self.assertNotIn("publish_implementation_duplicate_open_pr", duplicate_validator)
+        self.assertIn('["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]', worktree_validator)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -1701,7 +1766,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, "old-base\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
                     return subprocess.CompletedProcess(command, 0, "new-base\n", "")
-                if command[3:] == ["diff", "--quiet"]:
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
