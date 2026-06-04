@@ -28,6 +28,7 @@ TARGET_ANCHORS = {
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
     "closed-label-reconciler-238": "## Named runtime exception — closed-label-reconciler(per #238)",
     "wakeup-runner-396": "## Named runtime exception - wakeup-runner(per #396)",
+    "task-spawn-claim-490": "## Task spawn claim(per #490)",
     "issue-decomposition-403": "## Large issue decomposition(per #403)",
     "update-check-231": "## Notify-only update check(per #231)",
     "integration-sync-daemon-53": "## Named runtime exception — integration sync daemon(per #53)",
@@ -579,6 +580,61 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
                 self.assertIn(forbidden, self.skill)
+
+    def test_task_spawn_claim_490_preserves_local_spawn_claim_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "task-spawn-claim-490")
+        spawn_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "spawn.py")
+        claim_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "task_spawn_claim.py")
+
+        for required in (
+            "#490",
+            "consensus-rnd-cli spawn-codex",
+            "spawn.py",
+            "same-device per-codex-task mutual exclusion only",
+            "TaskSpawnClaimStore.acquire(...)",
+            ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "O_CREAT|O_EXCL",
+            "ProcessSupervisor.supervise(...)",
+            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "returns 0 skip/noop",
+            "metadata matches the task/log path",
+            "`EXIT=` marker",
+            "test_task_spawn_claim.py",
+            "test_spawn_claim.py",
+            "test_spawn_supervisor.py",
+            "test_runtime_exception_authorization_sources.py",
+            "test_skill_reference_anchors.py",
+            "no_new_runtime_authority",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no upstream read-lock preflight",
+            "no standalone authorization from the lock artifact",
+            "no cross-device per-work claim",
+            "no lifecycle authority",
+            "no host-defined lease scope",
+            "no generic distributed lock",
+            "no `ActiveControllerLease` replacement",
+            "no host production SSOT",
+            "no issue/PR lifecycle",
+            "no label mutation",
+            "no commit",
+            "push",
+            "merge",
+            "tag",
+            "release",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
+        self.assertIn("TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)", spawn_source)
+        self.assertLess(spawn_source.index("TaskSpawnClaimStore(repo_root).acquire"), spawn_source.index("ProcessSupervisor().supervise"))
+        self.assertIn("os.O_CREAT | os.O_EXCL", claim_source)
+        self.assertIn('return any(line.startswith("EXIT=") for line in tail)', claim_source)
 
         self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
         self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)

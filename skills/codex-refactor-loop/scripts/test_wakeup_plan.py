@@ -884,7 +884,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan = self.run_plan()
 
-                action = plan["actions"][0]
+                action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], f"forbidden-fields:{field}")
 

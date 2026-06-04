@@ -207,6 +207,20 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
+<a id="task-spawn-claim-490"></a>
+## task-spawn-claim-490
+
+- surface: `consensus-rnd-cli spawn-codex` / `spawn.py` local task-spawn claim
+- source_issue: `#490`
+- source_round: `r4 structural`
+- source_marker: `META_JUDGE_DONE:consensus:structural:TaskSpawnClaimStore at spawn-codex with SPAWN_CLAIM_HELD and skill-local governance`
+- skill_anchor: `#task-spawn-claim-490`
+- allowed: same-device per-codex-task mutual exclusion only; before `ProcessSupervisor.supervise(...)`, `TaskSpawnClaimStore.acquire(...)` creates `.refactor-loop/locks/spawn-tasks/<safe-task-id>.lock` using `O_CREAT|O_EXCL`; only successful acquisition may call the supervisor; a live conflict prints `SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>` and returns 0 skip/noop; matching completed-log locks may be recycled only when metadata matches the task/log path and the log has an `EXIT=` marker.
+- forbidden: no upstream read-lock preflight, no standalone authorization from the lock artifact, no cross-device per-work claim, no lifecycle authority, no host-defined lease scope, no generic distributed lock, no `ActiveControllerLease` replacement, no host production SSOT, no issue/PR lifecycle, no label mutation, no commit, push, merge, tag, release, or generic lifecycle actor.
+- fact_source: `skills/codex-refactor-loop/scripts/codex_refactor_loop/task_spawn_claim.py` owns safe task-id validation, lock path, atomic create, metadata validation, and recycle policy; `spawn.py` is the only long-term enforcement caller before `ProcessSupervisor.supervise(...)`.
+- verification: `test_task_spawn_claim.py`, `test_spawn_claim.py`, `test_spawn_supervisor.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This is local spawn mutual exclusion only and does not grant lifecycle authority or distributed ownership.
+
 <a id="issue-decomposition-403"></a>
 ## issue-decomposition-403
 
