@@ -831,6 +831,69 @@ def _implement_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str 
     return marker if marker and marker.startswith("IMPLEMENT_DONE") else None
 
 
+def _synthetic_markerless_implement_marker(
+    repo_root: Path,
+    log_path: Path,
+    open_targets: set[tuple[str, int]] | None,
+    gh_items: list[GhItem] | None,
+) -> str | None:
+    if not is_implement_log(log_path) or not is_clean_exit(log_path):
+        return None
+    issue = _issue_number_from_implement_log(log_path)
+    if issue is None:
+        return None
+    if open_targets is not None and ("issue", issue) not in open_targets:
+        return None
+    if not _open_managed_implementable_issue(issue, gh_items):
+        return None
+    canonical_worktree = repo_root / ".worktrees" / f"iter{issue}-issue-{issue}"
+    if not canonical_worktree.is_dir():
+        return None
+    worktree = canonical_worktree.resolve()
+    head_ref = safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")
+    if not head_ref:
+        return None
+    if not _canonical_markerless_implement_has_output(worktree, _integration_branch_from_env()):
+        return None
+    return f"IMPLEMENT_DONE:issue-{issue}:ok"
+
+
+def _issue_number_from_implement_log(log_path: Path) -> int | None:
+    match = re.fullmatch(r"implement-issue-?([1-9][0-9]*)\.log", log_path.name)
+    return int(match.group(1)) if match else None
+
+
+def _open_managed_implementable_issue(issue: int, gh_items: list[GhItem] | None) -> bool:
+    if gh_items is None:
+        return False
+    for item in gh_items:
+        if item.kind != "issue" or item.number != issue:
+            continue
+        labels = label_catalog.normalize_label_set(item.labels)
+        if label_catalog.MANAGED not in labels.canonical:
+            return False
+        return labels.phase in {label_catalog.PHASE_IMPLEMENTING, label_catalog.PHASE_CONSENSUS_REACHED}
+    return False
+
+
+def _canonical_markerless_implement_has_output(worktree: Path, integration_branch: str) -> bool:
+    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
+    if diff.returncode == 1:
+        return True
+    if diff.returncode != 0:
+        return False
+    integration = safe_head_ref(integration_branch)
+    if not integration:
+        return False
+    ahead = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"origin/{integration}..HEAD"], cwd=worktree)
+    if ahead.returncode != 0:
+        return False
+    try:
+        return int(ahead.stdout.strip()) > 0
+    except ValueError:
+        return False
+
+
 def completed_marker_actions(
     repo_root: Path,
     open_targets: set[tuple[str, int]] | None = None,
@@ -845,6 +908,8 @@ def completed_marker_actions(
         marker = marker_from_completed_log(log_path)
         if not marker:
             marker = _completed_artifact_marker_fallback(repo_root, log_path)
+        if not marker:
+            marker = _synthetic_markerless_implement_marker(repo_root, log_path, open_targets, gh_items)
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -2433,7 +2498,7 @@ def _stale_publish_implementation_reason(
 
 
 def _worktree_has_non_empty_diff(worktree: Path) -> bool:
-    diff = git_text(["git", "-C", str(worktree), "diff", "--quiet"], cwd=worktree)
+    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
     return diff.returncode == 1
 
 

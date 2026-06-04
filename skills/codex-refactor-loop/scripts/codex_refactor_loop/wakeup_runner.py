@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
-from .controller_actions import ControllerActions
+from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
@@ -265,6 +265,11 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
+        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
+            return self._record(
+                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
+                action,
+            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code != 0:
@@ -601,7 +606,7 @@ class WakeupRunner:
         identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
         if identity_error:
             return identity_error
-        diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
