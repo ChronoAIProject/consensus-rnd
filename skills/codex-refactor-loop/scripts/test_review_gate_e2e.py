@@ -61,6 +61,8 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"}, cwd=self.repo)
+        self.pr_worktree = self.repo / ".worktrees" / "pr480"
+        self.pr_worktree.mkdir(parents=True, exist_ok=True)
         self.actions = FakeActions(self.repo)
 
     def tearDown(self) -> None:
@@ -106,10 +108,13 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         def command_runner(command):
             nonlocal pull_attempts
             command = list(command)
+            repo_root = self.ctx.repo_root
             if command[:3] == ["gh", "pr", "view"] and ".state" in command:
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
             if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
                 return subprocess.CompletedProcess(command, 0, HEAD_SHA + "\n", "")
+            if command[:3] == ["gh", "pr", "view"] and "headRefName" in command and "--jq" not in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "impl/pr480"}), "")
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": is_draft}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/480":
@@ -120,6 +125,14 @@ class ReviewGateEndToEndTests(unittest.TestCase):
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{HEAD_SHA}/check-runs":
                 payload = {"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {repo_root}\nbranch refs/heads/canonical-integration\n\n"
+                    f"worktree {self.pr_worktree.resolve()}\nbranch refs/heads/impl/pr480\n\n",
+                    "",
+                )
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -147,6 +160,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         self.assertEqual(self.actions.rendered_fixes, [(480, 1)])
         self.assertEqual(self.actions.merged, [])
         launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), self.pr_worktree.resolve())
 
     def test_review_gate_e2e_all_approve_projects_head_and_merges(self) -> None:
         self.write_review_set({"architect": "approve", "tests": "approve", "quality": "approve"})

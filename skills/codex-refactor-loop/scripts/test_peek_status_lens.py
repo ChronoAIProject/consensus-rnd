@@ -217,6 +217,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 "GH_REPO_SLUG": "owner/repo",
             }
         )
+        env.pop("CONSENSUS_RND_HOST_ENV", None)
         if pr is not None:
             env["PEEK_TEST_PR"] = str(pr)
         if milestone_fixtures:
@@ -289,6 +290,17 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn("phase9-router-fallback unknown marker fact", result.stdout)
         self.assertNotIn("推荐下一步", result.stdout)
         self.assertNotIn("→ implement codex", result.stdout)
+
+    def test_peek_reuses_holistic_status_summary_renderer(self) -> None:
+        result = self.run_peek(represented_parent=True)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("▍Holistic status:", result.stdout)
+        self.assertIn("workers actual=", result.stdout)
+        self.assertIn("issue #239 reason=represented-by-open-pr", result.stdout)
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+        self.assertIn("render_peek_summary", source)
+        self.assertIn("collect_holistic_status", source)
 
     def test_peek_does_not_render_degradation_alert_tail(self) -> None:
         alert = self.root / ".refactor-loop" / ".degradation-alert.log"
