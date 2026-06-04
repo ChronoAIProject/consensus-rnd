@@ -121,6 +121,21 @@ class FakeActions:
         raise AssertionError("release publish should not be dispatched")
 
 
+class FakeReviewFixActions(FakeActions):
+    def __init__(self, repo: Path) -> None:
+        super().__init__()
+        self.repo = repo
+        self.rendered: list[tuple[int, int]] = []
+
+    def render_review_fix_prompt(self, pr_number: int, round_number: int):
+        self.rendered.append((pr_number, round_number))
+        prompt_path = ".refactor-loop/prompts/fixes/fix-pr77-round-1.md"
+        log_path = ".refactor-loop/logs/fix-pr77-round-1.log"
+        (self.repo / prompt_path).parent.mkdir(parents=True, exist_ok=True)
+        (self.repo / prompt_path).write_text("headless rendered prompt\n", encoding="utf-8")
+        return type("Spec", (), {"prompt_path": prompt_path, "log_path": log_path})()
+
+
 class FakeHeartbeatLease:
     heartbeat_interval = 7
 
@@ -966,6 +981,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
+
+    def test_wakeup_runner_headless_review_fix_dispatch_uses_fully_rendered_prompt(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:77:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        gate = self.review_gate_action(action_id="review-gate:77:headless-fix")
+        actions = FakeReviewFixActions(self.repo)
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(gate), gh_state="OPEN", actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.rendered, [(77, 1)])
+        launch.assert_called_once()
+        prompt = Path(launch.call_args.kwargs["prompt"])
+        self.assertEqual(prompt.resolve(), (self.repo / ".refactor-loop/prompts/fixes/fix-pr77-round-1.md").resolve())
+        self.assertNotIn("${", prompt.read_text(encoding="utf-8"))
 
     def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
