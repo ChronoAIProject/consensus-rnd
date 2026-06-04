@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 import tempfile
@@ -291,6 +292,40 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertNotIn("推荐下一步", result.stdout)
         self.assertNotIn("→ implement codex", result.stdout)
 
+    def test_peek_activity_timeline_merges_existing_tick_pending_and_ledger_facts(self) -> None:
+        (self.logs / "concurrency-monitor.log").write_text(
+            "[2026-06-01T00:00:01Z] concurrency: tick skip:graphql-backoff remaining=unknown\n",
+            encoding="utf-8",
+        )
+        (self.root / ".refactor-loop" / ".controller-pending-events.log").write_text(
+            "2026-06-01T00:00:02Z DISPATCH_BACKOFF:graphql-headroom-low\n",
+            encoding="utf-8",
+        )
+        (self.root / ".refactor-loop" / "phase9-router-ledger.jsonl").write_text(
+            json.dumps(
+                {
+                    "key": "491-4-judge",
+                    "marker": "SOLVER_DONE:triplet",
+                    "dispatched_at": "2026-06-01T00:00:03Z",
+                    "route": "solver_triplet_to_judge",
+                    "target_actor": "judge",
+                },
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_peek()
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("▍Activity timeline (read-only facts):", result.stdout)
+        self.assertIn("2026-06-01T00:00:01Z concurrency: skip:graphql-backoff remaining=unknown", result.stdout)
+        self.assertIn("2026-06-01T00:00:02Z pending-events: DISPATCH_BACKOFF:graphql-headroom-low", result.stdout)
+        self.assertIn("2026-06-01T00:00:03Z phase9-ledger: key=491-4-judge route=solver_triplet_to_judge target=judge marker=SOLVER_DONE:triplet", result.stdout)
+        self.assertNotIn("controller_action", result.stdout)
+        self.assertNotIn("routing authorization", result.stdout)
+
     def test_peek_reuses_holistic_status_summary_renderer(self) -> None:
         result = self.run_peek(represented_parent=True)
 
@@ -420,6 +455,16 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn('"concurrency", "--list-codex"', text)
         self.assertNotIn("ps -ef | awk", text)
         self.assertNotIn("ps -eo command= | awk", text)
+
+    def test_peek_activity_timeline_is_status_lens_only(self) -> None:
+        text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+
+        self.assertIn("_activity_timeline", text)
+        self.assertIn("Activity timeline (read-only facts)", text)
+        self.assertIn("_phase9_ledger_facts", text)
+        self.assertIn("_pending_event_facts", text)
+        self.assertNotIn("routing authorization", text)
+        self.assertNotIn("controller_action", text[text.index("def _activity_timeline") : text.index("def _maintainer_comments")])
 
     def test_peek_lists_milestone_items_before_ordinary_open_issues(self) -> None:
         result = self.run_peek(milestone_fixtures=True)
