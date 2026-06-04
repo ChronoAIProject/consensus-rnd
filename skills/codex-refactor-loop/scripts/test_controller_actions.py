@@ -750,7 +750,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-            if args == ["git", "-C", str(worktree), "commit", "-m", "Implement issue #77"]:
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -762,11 +762,11 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_open(title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
             sequence.append("open_pr")
-            self.assertEqual("Implement issue #77", title)
+            self.assertEqual("实现 issue #77", title)
             self.assertEqual("canonical-integration", base)
             self.assertEqual("refactor/iter77-issue-77", head)
             body = Path(body_file).read_text(encoding="utf-8")
-            self.assertIn("## Implementation for issue #77", body)
+            self.assertIn("## issue #77 实现", body)
             self.assertIn("Closes #77", body)
             self.assertTrue(body.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
             return 414, "https://github.com/owner/repo/pull/414"
@@ -858,12 +858,25 @@ class ControllerActionsTests(unittest.TestCase):
             render_calls.append(dict(env))
             Path(output_path).write_text("rendered prompt\n", encoding="utf-8")
 
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(list(args))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")) as safe_worktree:
                 with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
-                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
 
         safe_worktree.assert_called_once_with("413", "issue-413", "canonical-integration")
+        issue_edit = gh_calls[0]
+        self.assertEqual(["issue", "edit", "413"], issue_edit[:3])
+        self.assertEqual(
+            ",".join((labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)),
+            issue_edit[issue_edit.index("--add-label") + 1],
+        )
         self.assertEqual(render_calls[0]["DESIGN_DECISION_PATH"], ".refactor-loop/runs/phase9-issue413-r5-judge.md")
         self.assertEqual(render_calls[0]["SCOPE_PATHS"], "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py")
         self.assertEqual(render_calls[0]["OLD_PATTERN"], "old")
@@ -872,6 +885,36 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("HARNESS_SPAWN_INTENT", pending)
         self.assertIn('"intent_id": "dispatch-consensus-implementation:413"', pending)
         self.assertIn('"task_id": "implement-issue-413"', pending)
+
+    def test_dispatch_consensus_implementation_phase_transition_failure_blocks_before_worktree(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        action = {
+            "target_kind": "issue",
+            "target_number": 413,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+            "verification_hints": "python3 -m unittest",
+            "cluster_id": "issue-413",
+            "iteration": "413",
+            "source_ref": "gh-issue-413",
+        }
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(["issue", "edit", "413"], list(args)[:3])
+            return mock.Mock(returncode=7, stdout="", stderr="label update failed")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
+                    with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                        self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
+
+        pending = self.pending_events()
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413", pending)
+        self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
@@ -896,7 +939,8 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")):
                 with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
-                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+                    with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                        self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
 
         pending = self.pending_events()
         self.assertRegex(pending, r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z HARNESS_SPAWN_INTENT ")
@@ -982,7 +1026,8 @@ class ControllerActionsTests(unittest.TestCase):
                     with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git_text):
                         with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
                             with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
-                                self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
+                                with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not run")):
+                                    self.assertEqual(2, self.actions.dispatch_consensus_implementation(action))
 
                 self.assertEqual(pending_before, self.pending_events())
 
@@ -1012,7 +1057,8 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter413-issue-413")) as fresh_safe_worktree:
                 with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
-                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+                    with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                        self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
 
         fresh_safe_worktree.assert_called_once_with("413", "issue-413", "canonical-integration")
         self.assertIn("HARNESS_SPAWN_INTENT", self.pending_events())
@@ -1043,7 +1089,8 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "fresh_safe_worktree", return_value=(worktree, "refactor/iter493-issue-493")):
                 with mock.patch.object(self.actions, "render_template", side_effect=fake_render):
-                    self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
+                    with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="", stderr="")):
+                        self.assertEqual(0, self.actions.dispatch_consensus_implementation(action))
 
         self.assertFalse(log.exists())
         projected = harness_spawn_intent_actions(

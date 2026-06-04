@@ -765,7 +765,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`", self.skill)
         self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
-        self.assertIn("wakeup-plan design-consensus issue evidence is status-only", self.skill)
+        self.assertIn("wakeup-plan design-consensus completed-marker evidence is status-only", self.skill)
         self.assertIn("design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only", self.skill)
         self.assertIn("state-only", self.skill)
         self.assertIn("labels-only terminal gate", self.skill)
@@ -1042,12 +1042,12 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
-            "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_runner.py"},
+            "review-pr": {"controller_actions.py", "monitors/progress.py", "monitors/concurrency.py", "peek.py", "wakeup_plan.py", "wakeup_runner.py"},
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
-            "refactor/iter": {"controller_actions.py", "git.py"},
+            "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
-            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py"},
+            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():
@@ -1151,6 +1151,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
             "suppress next solvers",
+            "`META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet",
+            "source-adjacent `marker.round + 1`",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, contract_section)

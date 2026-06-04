@@ -1442,17 +1442,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target"], {"kind": "issue", "number": 53})
         self.assertNotIn("status_only", action)
 
-    def test_non_drop_meta_resolved_still_routes_design_consensus(self) -> None:
+    def test_non_drop_meta_resolved_is_status_only_for_phase9_router(self) -> None:
         self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")
 
         plan = self.run_plan(fixture="open_issue_54")
 
         action = plan["actions"][0]
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
 
-    def test_solver_triplet_completed_marker_projects_executable_design_consensus(self) -> None:
+    def test_solver_triplet_completed_marker_is_status_only_for_phase9_router(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
             self.set_log_mtime(f"phase9-issue453-r1-{role}.log", {"delete": 100.0, "structural": 200.0, "minimal": 300.0}[role])
@@ -1464,10 +1464,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             if item["action_id"].startswith("completed-marker:phase9-issue453-r1-minimal")
         )
         self.assertEqual(action["kind"], "completed-marker")
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
-        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
-        self.assertTrue(action["no_generic_command"])
-        self.assertNotIn("status_only", action)
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
         self.assertIn("clean_exit_source_marker", action["preconditions"])
         self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue453-r1-minimal.log")
         self.assertEqual(action["source_marker"], "SOLVER_DONE:minimal:ready:real")
@@ -1500,7 +1501,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             item for item in plan["actions"]
             if item["action_id"].startswith("completed-marker:phase9-issue453-r3-structural")
         )
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertTrue(action["status_only"])
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 453)
 
@@ -1525,13 +1527,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         rendered = json.dumps(plan, sort_keys=True)
         self.assertNotIn("dispatch_design_consensus", rendered)
-        self.assertFalse(
-            [
-                action
-                for action in plan["actions"]
-                if action.get("source_artifact", "").startswith(".refactor-loop/logs/phase9-issue330-r1-")
-            ]
-        )
+        actions = [
+            action
+            for action in plan["actions"]
+            if action.get("source_artifact", "").startswith(".refactor-loop/logs/phase9-issue330-r1-")
+        ]
+        self.assertTrue(actions)
+        self.assertTrue(all(action.get("status_only") is True for action in actions))
+        self.assertTrue(all("runner_authority" not in action for action in actions))
 
     def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
@@ -2258,10 +2261,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "PHASE_IMPLEMENTING",
             "PHASE_MERGED",
             "PHASE_CLOSED",
-            "suppress_terminal_design_consensus_actions",
             "_terminal_design_consensus_targets",
             "_is_design_consensus_solver_dispatch_intent",
-            "dispatch_design_consensus",
+            "source_marker = str(closed.get(\"source_marker\") or \"\")",
+            "_design_consensus_marker_is_router_owned(source_marker)",
+            "\"status_only\"",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
