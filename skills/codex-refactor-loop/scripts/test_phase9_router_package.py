@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -30,17 +31,22 @@ PACKAGE_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "cod
 
 class Phase9RouterPackageTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_host_env_locator = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
         self.commands: list[dict[str, object]] = []
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.ctx = LoopContext.load(repo_root=self.repo, env={})
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+        if self.original_host_env_locator is None:
+            os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
+        else:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self.original_host_env_locator
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name
@@ -198,7 +204,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
             f"--prompt {self.repo.resolve()}/{command['prompt']} "
             f"--log {self.repo.resolve()}/{command['log']}\n"
         )
-        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo))
+        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo, env={}))
         with mock.patch.object(monitor, "run", return_value=mock.Mock(stdout=fake_ps, returncode=0)):
             self.assertEqual(monitor.count_in_flight_codex(), 1)
 

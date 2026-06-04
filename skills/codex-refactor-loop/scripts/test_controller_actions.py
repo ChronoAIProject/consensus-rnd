@@ -102,6 +102,7 @@ class ControllerActionsTests(unittest.TestCase):
         for helper in (
             "def dispatch_consensus_implementation",
             "def publish_implementation_output",
+            "def render_release_rollup_body_prompt",
             "def open_release_rollup_pr_from_action",
             "HARNESS_SPAWN_INTENT",
         ):
@@ -1498,6 +1499,20 @@ class ControllerActionsTests(unittest.TestCase):
         with mock.patch.object(self.actions, "open_release_rollup_pr_from_pending_event", side_effect=RuntimeError("stale sha")):
             with self.assertRaisesRegex(RuntimeError, "stale sha"):
                 self.actions.open_release_rollup_pr_from_action({"event": {"integration_sha": "abc123"}, "body_file": "body.md"})
+
+    def test_render_release_rollup_body_prompt_binds_event_and_output_path(self) -> None:
+        prompt = self.actions.render_release_rollup_body_prompt(
+            {
+                "event": {"integration_sha": "abc123", "ahead_count": 2},
+                "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+            }
+        )
+
+        self.assertEqual(prompt.resolve(), (self.tmp / ".refactor-loop/prompts/release-rollup-body.md").resolve())
+        body = prompt.read_text(encoding="utf-8")
+        self.assertIn('"integration_sha": "abc123"', body)
+        self.assertIn(".refactor-loop/runs/release-rollup-pr-body.md", body)
+        self.assertIn("Do not run `gh`.", body)
 
     def test_close_managed_item_from_drop_marker_closes_issue_and_pr_with_drop_marker(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")

@@ -106,6 +106,13 @@ class FakeActions:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
 
+    def render_release_rollup_body_prompt(self, action: dict) -> Path:
+        self.calls.append(("render_release_rollup_body_prompt", dict(action)))
+        prompt = Path(action["prompt"])
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("release rollup body prompt\n", encoding="utf-8")
+        return prompt
+
     def close_managed_item_from_drop_marker(self, action: dict) -> int:
         self.calls.append(("close_managed_item_from_drop_marker", dict(action)))
         return self.close_code
@@ -528,6 +535,39 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
             "event": {"integration_sha": "abc123"},
             "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+        }
+        action.update(overrides)
+        return action
+
+    def release_rollup_body_action(self, **overrides) -> dict:
+        marker = 'DEV_SYNC_PENDING:release-rollup-needed:{"integration_sha":"abc123"}'
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "release-rollup-needed",
+            "action_id": "release-rollup-body:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "source_artifact_contains_evidence",
+                "release_rollup_event",
+                "target_log_absent",
+                "target_body_absent",
+            ],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "codex",
+            "target_number": None,
+            "target": {"kind": "codex", "task_id": "release-rollup-body"},
+            "controller_action": "spawn_codex_harness_background",
+            "capability": "release-rollup-body",
+            "no_generic_command": True,
+            "event": {"integration_sha": "abc123"},
+            "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+            "cd": str(self.repo),
+            "prompt": str(self.repo / ".refactor-loop/prompts/release-rollup-body.md"),
+            "log": str(self.repo / ".refactor-loop/logs/release-rollup-body.log"),
+            "stall": 1800,
         }
         action.update(overrides)
         return action
@@ -1784,6 +1824,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "open_release_rollup_pr_from_action")
+
+    def test_release_rollup_body_spawn_renders_prompt_and_does_not_open_pr(self) -> None:
+        action = self.release_rollup_body_action()
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "render_release_rollup_body_prompt")
+        self.assertEqual(len(actions.calls), 1)
+        launch.assert_called_once()
+        self.assertFalse((self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").exists())
+
+    def test_release_rollup_body_spawn_blocks_when_body_already_exists(self) -> None:
+        body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"
+        body.write_text("existing\n", encoding="utf-8")
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.release_rollup_body_action()), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "release-rollup-body:abc123", "release_rollup_body_exists", actions)
 
     def test_release_rollup_blocks_missing_event_fields_before_helper(self) -> None:
         body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"

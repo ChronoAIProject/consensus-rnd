@@ -876,7 +876,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["reason"], "command-not-spawn-codex")
 
     def test_harness_spawn_intent_rejects_generic_command_fields(self) -> None:
-        forbidden_fields = ("argv", "args", "shell", "cmd", "commands", "env", "git", "gh", "executor", "target_ref")
+        forbidden_fields = (
+            "argv",
+            "args",
+            "shell",
+            "cmd",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "target_ref",
+        )
         for field in forbidden_fields:
             with self.subTest(field=field):
                 (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -1903,6 +1917,26 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("wakeup_plan.py", consensus_action["scope_paths"])
         self.assertIn("wakeup_runner.py", consensus_action["scope_paths"])
         self.assertIn("durable_consensus_artifact", consensus_action["preconditions"])
+
+    def test_release_rollup_missing_body_projects_body_worker_before_pr_helper(self) -> None:
+        event = self.append_release_rollup_event()
+
+        plan = self.run_plan(fixture="release_rollup")
+
+        rollup_actions = [action for action in plan["actions"] if action["kind"] == "release-rollup-needed"]
+        self.assertEqual(len(rollup_actions), 1)
+        action = rollup_actions[0]
+        self.assertEqual(action["action_id"], "release-rollup-body:integration-sha")
+        self.assertEqual(action["actor"], "release-rollup-body")
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["capability"], "release-rollup-body")
+        self.assertEqual(action["event"], event)
+        self.assertEqual(action["body_file"], ".refactor-loop/runs/release-rollup-pr-body.md")
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "release-rollup-body"})
+        self.assertIn("target_body_absent", action["preconditions"])
+        self.assertNotIn("argv", action)
+        self.assertNotIn("gh", action)
+        self.assertNotIn("open_release_rollup_pr_from_action", [item.get("controller_action") for item in rollup_actions])
 
     def test_release_rollup_projection_keeps_latest_event_per_integration_sha(self) -> None:
         self.append_release_rollup_event(reason="old", ahead_count=1)

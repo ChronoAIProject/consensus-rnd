@@ -894,6 +894,22 @@ class ControllerActions:
         self.open_release_rollup_pr_from_pending_event(event_json, body_file, title=title)
         return 0
 
+    def render_release_rollup_body_prompt(self, action: Mapping[str, object]) -> Path:
+        event = action.get("event")
+        event_json = json.dumps(event, ensure_ascii=False, sort_keys=True) if isinstance(event, dict) else str(action.get("event_json") or "")
+        body_file = str(action.get("body_file") or ".refactor-loop/runs/release-rollup-pr-body.md")
+        prompt = self.ctx.paths.prompts / "release-rollup-body.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "release-rollup-body.md"),
+            str(prompt),
+            env={
+                "RELEASE_ROLLUP_EVENT_JSON": event_json,
+                "RELEASE_ROLLUP_BODY_OUTPUT_PATH": body_file,
+            },
+        )
+        return prompt
+
     def _append_harness_spawn_intent(
         self,
         *,
