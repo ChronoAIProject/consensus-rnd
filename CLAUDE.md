@@ -117,6 +117,8 @@ Refactor (iter343/issue-343):
 - **测试按风险扩展**:窄文档改动可用 source-regression 覆盖;共享脚本或跨 skill 流程改动必须补 behavior test。
 - **生成物不当事实源**:临时日志、一次性报告、agent 草稿、运行输出不得成为长期规范来源;权威源永远在 SKILL.md / 脚本 / 测试里。
 - **历史由 git 保存**:需要追溯旧行为时查 git,不在工作树保留影子副本或归档目录。
+- **异常必抛出 + 必记日志,严禁吞掉/忽略**:任何错误、失败、fail-closed、skip、WAIT、budget 耗尽、分支不可达都必须抛出异常或写一条**可诊断、可 grep 的单行日志**(含目标 id、原因、关键计数),让问题在外部状态面立即可见。**禁止**空 `except`/`except: pass`、裸吞错、静默 `continue`/`return`、不记原因的跳过。诊断信息缺失即视为 bug —— 静默失败会让一个本可 5 分钟定位的问题拖成几小时。
+- **测试必须断言真实行为,禁无意义测试**:测试只为验证行为而存在,**禁止**无意义/同义反复测试 —— 断言常量、复述源码字面、纯为覆盖率而写、不实际触发被测行为的测试一律删除或重写为 behavior test。慢的真实-进程/真实-时序测试要 mock 成确定性快测试,不得让无价值测试拖慢验证回路。
 
 
 <!-- consensus-rnd:foundational-invariants:start version=1 sha256=f5c24b0c3515993a7b86c4ed78ce7386add665f8c8b84cc7275aedebd6c3e6af -->
