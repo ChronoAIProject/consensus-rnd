@@ -1894,19 +1894,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("HeadlessLifecycleAction", source)
         self.assertNotIn("headless_actions", source)
 
-    def test_wakeup_runner_source_locks_blocked_non_spawn_scan_invariant(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        run_once = source[source.index("    def run_once(self) -> list[RunnerResult]:") : source.index("    def apply_action", source.index("    def run_once(self) -> list[RunnerResult]:"))]
+    def test_wakeup_runner_continues_after_blocked_non_spawn_lifecycle_action(self) -> None:
+        blocked_lifecycle = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-reviewer-dispatch",
+            head_ref="",
+        )
+        reviewer_dispatch = self.reviewer_dispatch_action(action_id="dispatch-reviewers-after-blocked-lifecycle")
+        actions = FakeActions()
 
-        self.assertIn('if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:', run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)", run_once)
-        self.assertIn("if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:", run_once)
-        self.assertNotIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
-        self.assertIn('controller_action == "dispatch_reviewers"', run_once)
-        self.assertIn('controller_action == "review_gate"', run_once)
-        self.assertIn('.get("decision") == "FIX"', run_once)
-        self.assertNotIn("blocked_non_spawn_before_spawn", run_once)
+        results = self.run_result(
+            self.batch_plan([blocked_lifecycle, reviewer_dispatch], dispatch_required=1, deficit=1),
+            actions=actions,
+        )
+
+        self.assertEqual([result.action_id for result in results], [blocked_lifecycle["action_id"], reviewer_dispatch["action_id"]])
+        self.assertEqual([result.status for result in results], ["blocked", "applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_reviewers"])
+        self.assert_blocked_ledger(blocked_lifecycle["action_id"], "publish_implementation_invalid_head_ref")
 
     def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
