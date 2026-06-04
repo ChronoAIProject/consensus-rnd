@@ -886,6 +886,36 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn('"intent_id": "dispatch-consensus-implementation:413"', pending)
         self.assertIn('"task_id": "implement-issue-413"', pending)
 
+    def test_dispatch_consensus_implementation_phase_transition_failure_blocks_before_worktree(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
+        action = {
+            "target_kind": "issue",
+            "target_number": 413,
+            "consensus_artifact": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "design_decision_path": ".refactor-loop/runs/phase9-issue413-r5-judge.md",
+            "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
+            "old_pattern": "old",
+            "new_principle": "new",
+            "verification_hints": "python3 -m unittest",
+            "cluster_id": "issue-413",
+            "iteration": "413",
+            "source_ref": "gh-issue-413",
+        }
+
+        def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(["issue", "edit", "413"], list(args)[:3])
+            return mock.Mock(returncode=7, stdout="", stderr="label update failed")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
+                    with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                        self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
+
+        pending = self.pending_events()
+        self.assertIn("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413", pending)
+        self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
+
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
         worktree = self.tmp / ".worktrees" / "iter413-issue-413"
