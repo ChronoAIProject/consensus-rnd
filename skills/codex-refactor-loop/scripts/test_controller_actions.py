@@ -114,22 +114,14 @@ class ControllerActionsTests(unittest.TestCase):
             "def _recover_publish_implementation_base",
             '["fetch", "origin"]',
             '["merge", "--no-edit", f"origin/{integration}"]',
-<<<<<<< HEAD
-            '["merge", "--abort"]',
             '"publish_stale_base_merge_conflict"',
-            "def _exactly_one_matching_implementation_pr",
-            '"early_pr_missing"',
-            '"multiple_matching_open_pr"',
-            '"matching_pr_base_mismatch"',
-            '"matching_pr_issue_mismatch"',
-            "return self.dispatch_reviewers",
-=======
             "def _delegate_publish_implementation_fallback",
             "publish-implementation-fallback",
             "publish_implementation_output: delegated fallback resolver",
+            "def _open_pr_for_head",
             "existing_pr = self._open_pr_for_head(head_ref)",
             "pr_target = existing_pr",
->>>>>>> origin/auto-refact-dev
+            "return self.dispatch_reviewers",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
@@ -914,10 +906,11 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("safe_push", sequence)
         self.assertIn("dispatch_reviewers", sequence)
 
-    def test_publish_implementation_output_fails_closed_without_early_pr(self) -> None:
+    def test_publish_implementation_output_opens_pr_when_no_existing_pr(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
         action = {
             "source_marker": "IMPLEMENT_DONE:issue-77:ok",
             "target_kind": "issue",
@@ -935,25 +928,63 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
             if args[:2] == ["bash", "-lc"]:
+                sequence.append(f"host:{args[2]}")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                sequence.append("git:diff-head")
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                sequence.append("git:add")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+                sequence.append("git:commit")
+                return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "fetch", "origin"]:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
-            if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
-                return mock.Mock(returncode=1, stdout="", stderr="")
-            raise AssertionError(f"no commit/push should run without early PR: {args!r}")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        def fake_safe_push(*, branch: str, worktree: Path) -> int:
+            sequence.append("safe_push")
+            return 0
+
+        def fake_open_pr(title: str, body_file: str, *, base: str | None = None, head: str = "") -> tuple[int, str]:
+            sequence.append("open_pr")
+            self.assertEqual("canonical-integration", base)
+            self.assertEqual("refactor/iter77-issue-77", head)
+            return 414, "https://github.com/owner/repo/pull/414"
+
+        def fake_dispatch(review_action: Mapping[str, object]) -> int:
+            sequence.append("dispatch_reviewers")
+            self.assertEqual({"target_kind": "PR", "target_number": 414}, dict(review_action))
+            return 0
 
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
-                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
-                            self.assertEqual(2, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open_pr):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(
+            [
+                "git:diff-head",
+                "git:add",
+                "git:commit",
+                "host:true",
+                "host:python3 -m unittest discover -s skills/codex-refactor-loop/scripts -p 'test_*.py'",
+                "safe_push",
+                "open_pr",
+                "dispatch_reviewers",
+            ],
+            sequence,
+        )
 
     def test_publish_implementation_output_recovers_stale_base_then_updates_existing_draft_pr(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
@@ -1026,14 +1057,10 @@ class ControllerActionsTests(unittest.TestCase):
                             with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
                                 self.assertEqual(0, self.actions.publish_implementation_output(action))
 
-<<<<<<< HEAD
-        self.assertEqual(["git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration"], sequence)
-=======
         self.assertEqual(
-            ["git:diff-head", "git:add", "git:commit", "git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration", "open_pr"],
+            ["git:diff-head", "git:add", "git:commit", "git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration"],
             sequence,
         )
->>>>>>> origin/auto-refact-dev
 
     def test_publish_implementation_output_delegates_stale_base_merge_conflict_without_wedge(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"

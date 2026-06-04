@@ -639,40 +639,24 @@ class ControllerActions:
             return committed
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
-<<<<<<< HEAD
-            sys.stderr.write(f"publish_implementation_output: {base_error}\n")
-=======
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
         existing_pr = self._open_pr_for_head(head_ref)
         if existing_pr == 0:
             sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
->>>>>>> origin/auto-refact-dev
             return 2
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
             return 3
-<<<<<<< HEAD
-        if self._git_in(worktree, ["diff", "--quiet"], check=False).returncode == 0:
-            sys.stderr.write("publish_implementation_output: empty scoped diff\n")
-            return 2
-        pr_error, pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
-        if pr_error:
-            sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
-            return 2
-        add = self._git_in(worktree, ["add", "-A"], check=False)
-        if add.returncode != 0:
-            return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
-        if commit.returncode != 0:
-            if commit.stderr:
-                sys.stderr.write(commit.stderr)
-            return commit.returncode
-=======
->>>>>>> origin/auto-refact-dev
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
+        if existing_pr is None:
+            body_file = self._implementation_pr_body_file(action, issue_target)
+            title = str(action.get("title") or f"实现 issue #{issue_target}")
+            pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        else:
+            pr_target = existing_pr
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -749,42 +733,6 @@ class ControllerActions:
                 return "publish_stale_base_merge_conflict"
         return None
 
-<<<<<<< HEAD
-    def _exactly_one_matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int]:
-        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"], check=False)
-        if result.returncode != 0:
-            return "open PR head lookup unavailable", 0
-        try:
-            payload = json.loads(result.stdout or "[]")
-        except json.JSONDecodeError:
-            return "open PR head lookup invalid json", 0
-        if not isinstance(payload, list):
-            return "open PR head lookup invalid json", 0
-        if len(payload) == 0:
-            return "early_pr_missing", 0
-        if len(payload) > 1:
-            return "multiple_matching_open_pr", 0
-        pr = payload[0]
-        if not isinstance(pr, dict):
-            return "open PR head lookup invalid json", 0
-        number = pr.get("number")
-        if not isinstance(number, int) or number <= 0:
-            return "open PR head lookup invalid number", 0
-        if str(pr.get("headRefName") or "") != head_ref:
-            return "matching_pr_head_mismatch", 0
-        if str(pr.get("baseRefName") or "") != self.integration_branch:
-            return "matching_pr_base_mismatch", 0
-        raw_labels = pr.get("labels")
-        if not isinstance(raw_labels, list):
-            return "matching_pr_not_managed", 0
-        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
-        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
-            return "matching_pr_not_managed", 0
-        linked_issue = self._single_body_linked_issue_or_block(str(pr.get("body") or ""), action="publish-implementation-output")
-        if linked_issue != issue_target:
-            return "matching_pr_issue_mismatch", 0
-        return None, number
-=======
     def _delegate_publish_implementation_fallback(
         self,
         action: Mapping[str, object],
@@ -824,7 +772,6 @@ class ControllerActions:
         )
         sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
         return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
->>>>>>> origin/auto-refact-dev
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -1143,6 +1090,22 @@ class ControllerActions:
             return False
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
+
+    def _open_pr_for_head(self, head_ref: str) -> int | None:
+        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+        if result.returncode != 0:
+            return 0
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError:
+            return 0
+        if not isinstance(payload, list) or not payload:
+            return None
+        first = payload[0]
+        if not isinstance(first, dict):
+            return 0
+        number = first.get("number")
+        return number if isinstance(number, int) and number > 0 else 0
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()

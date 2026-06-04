@@ -620,15 +620,6 @@ class WakeupRunner:
         branch = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
         if branch.returncode != 0 or branch.stdout.strip() != head_ref:
             return "publish_implementation_noncanonical_identity"
-        integration_branch = str(getattr(self.actions, "integration_branch", "") or self.ctx.host_env.get("INTEGRATION_BRANCH", "")).strip()
-        if not integration_branch:
-            return "publish_implementation_base_unavailable"
-        merge_base = self.command_runner(["git", "-C", str(worktree), "merge-base", "HEAD", f"origin/{integration_branch}"])
-        current = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--verify", f"origin/{integration_branch}"])
-        if merge_base.returncode != 0 or current.returncode != 0:
-            return "publish_implementation_base_unavailable"
-        if merge_base.stdout.strip() != current.stdout.strip():
-            return "publish_implementation_refresh_needed:stale_base"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:

@@ -1498,24 +1498,11 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def test_wakeup_runner_source_locks_publish_refresh_needed_and_matching_pr_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         publish_validator = source[source.index("    def _validate_publish_implementation") : source.index("    def _validate_dispatch_reviewers")]
-<<<<<<< HEAD
-        worktree_validator = source[source.index("    def _validate_implementation_worktree") : source.index("    def _dispatch")]
-        matching_validator = source[source.index("    def _validate_exactly_one_matching_open_pr") : source.index("    def _validate_implementation_worktree")]
-        self.assertIn("publish_implementation_refresh_needed:stale_base", worktree_validator)
-        self.assertIn("merge-base", worktree_validator)
-        self.assertIn("publish_implementation_early_pr_missing", matching_validator)
-        self.assertIn("publish_implementation_multiple_matching_open_pr", matching_validator)
-        self.assertIn("publish_implementation_matching_pr_issue_mismatch", matching_validator)
-        self.assertIn("_validate_implementation_worktree(action)", publish_validator)
-        self.assertNotIn("publish_implementation_duplicate_open_pr", matching_validator)
-=======
         worktree_validator = source[source.index("    def _validate_implementation_worktree") : source.index("    def _validate_canonical_implementation_identity")]
-        duplicate_validator = source[source.index("    def _validate_no_duplicate_open_pr") : source.index("    def _validate_implementation_worktree")]
         self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
         self.assertNotIn("merge-base", publish_validator + worktree_validator)
-        self.assertNotIn("publish_implementation_duplicate_open_pr", duplicate_validator)
+        self.assertNotIn("def _validate_no_duplicate_open_pr", source)
         self.assertIn('["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]', worktree_validator)
->>>>>>> origin/auto-refact-dev
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -1764,7 +1751,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_clean_implementation_on_stale_base_blocks_before_publish_for_refresh_status(self) -> None:
+    def test_clean_implementation_on_stale_base_routes_to_publish_helper_for_fallback(self) -> None:
         actions = FakeActions()
 
         results = self.run_result(
@@ -1774,12 +1761,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             implementation_base=("old-base", "new-base"),
         )
 
-        self.assert_blocked_before_dispatch(
-            results,
-            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
-            "publish_implementation_refresh_needed:stale_base",
-            actions,
-        )
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
     def test_publish_implementation_output_blocks_missing_early_pr_before_helper(self) -> None:
         actions = FakeActions()
@@ -1797,16 +1780,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
-                if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
-                    return subprocess.CompletedProcess(command, 0, "base\n", "")
-                if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
-<<<<<<< HEAD
-                    return subprocess.CompletedProcess(command, 0, "base\n", "")
-                if command[3:] == ["diff", "--quiet"]:
-=======
-                    return subprocess.CompletedProcess(command, 0, "new-base\n", "")
                 if command[3:] == ["diff", "HEAD", "--quiet"]:
->>>>>>> origin/auto-refact-dev
                     return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
