@@ -2388,7 +2388,7 @@ def _stale_publish_implementation_reason(
 
 
 def _worktree_has_non_empty_diff(worktree: Path) -> bool:
-    diff = git_text(["git", "-C", str(worktree), "diff", "--quiet"], cwd=worktree)
+    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
     return diff.returncode == 1
 
 

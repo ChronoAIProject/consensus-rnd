@@ -3297,7 +3297,7 @@ class StaleRevivalTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "old-base\n", "")
             if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/auto-refact-dev"]:
                 return subprocess.CompletedProcess(command, 0, "new-base\n", "")
-            if command == ["git", "-C", str(worktree), "diff", "--quiet"]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 1, "", "unexpected")
 

@@ -321,7 +321,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "pr77")]:
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
-                if command[3:] == ["diff", "--quiet"]:
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, git_diff_code, "", "")
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
@@ -1135,6 +1135,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "helper_exit:7")
 
+    def test_publish_implementation_output_delegated_fallback_is_retryable(self) -> None:
+        actions = FakeActions(publish_code=75)
+        action = self.implementation_output_action(action_id="publish-implementation:delegated-fallback")
+
+        first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual(first[0].status, "delegated")
+        self.assertEqual(first[0].reason, "publish_implementation_fallback_delegated")
+        self.assertEqual(second[0].status, "delegated")
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
+        ledger_rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual([row["status"] for row in ledger_rows], ["delegated", "delegated"])
+        pending_path = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending = pending_path.read_text(encoding="utf-8") if pending_path.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_HELPER_EXIT", pending)
+
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
 
@@ -1420,6 +1442,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
         self.assertNotIn("merge-base", publish_validator + worktree_validator)
         self.assertNotIn("publish_implementation_duplicate_open_pr", duplicate_validator)
+        self.assertIn('["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]', worktree_validator)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -1701,7 +1724,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, "old-base\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
                     return subprocess.CompletedProcess(command, 0, "new-base\n", "")
-                if command[3:] == ["diff", "--quiet"]:
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 

@@ -51,6 +51,7 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
+PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
 
 
 class ControllerActions:
@@ -633,10 +634,12 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
+        if committed != 0:
+            return committed
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
-            sys.stderr.write(f"publish_implementation_output: {base_error}\n")
-            return 2
+            return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
         existing_pr = self._open_pr_for_head(head_ref)
         if existing_pr == 0:
             sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
@@ -645,17 +648,6 @@ class ControllerActions:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
             return 3
-        if self._git_in(worktree, ["diff", "--quiet"], check=False).returncode == 0:
-            sys.stderr.write("publish_implementation_output: empty scoped diff\n")
-            return 2
-        add = self._git_in(worktree, ["add", "-A"], check=False)
-        if add.returncode != 0:
-            return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
-        if commit.returncode != 0:
-            if commit.stderr:
-                sys.stderr.write(commit.stderr)
-            return commit.returncode
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
@@ -686,6 +678,46 @@ class ControllerActions:
             return "noncanonical branch"
         return None
 
+    def _commit_publish_implementation_diff(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+    ) -> int:
+        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
+        if diff.returncode == 0:
+            return 0
+        if diff.returncode != 1:
+            return self._delegate_publish_implementation_fallback(
+                action,
+                issue_target,
+                head_ref,
+                worktree,
+                "publish_diff_unavailable",
+            )
+        add = self._git_in(worktree, ["add", "-A"], check=False)
+        if add.returncode != 0:
+            return self._delegate_publish_implementation_fallback(
+                action,
+                issue_target,
+                head_ref,
+                worktree,
+                "publish_add_failed",
+            )
+        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
+        if commit.returncode == 0:
+            return 0
+        if commit.stderr:
+            sys.stderr.write(commit.stderr)
+        return self._delegate_publish_implementation_fallback(
+            action,
+            issue_target,
+            head_ref,
+            worktree,
+            "publish_commit_failed",
+        )
+
     def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
         integration, _review_base = self._require_branch_config()
         fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
@@ -698,9 +730,48 @@ class ControllerActions:
         if merge_base.stdout.strip() != current.stdout.strip():
             merge = self._git_in(worktree, ["merge", "--no-edit", f"origin/{integration}"], check=False)
             if merge.returncode != 0:
-                self._git_in(worktree, ["merge", "--abort"], check=False)
                 return "publish_stale_base_merge_conflict"
         return None
+
+    def _delegate_publish_implementation_fallback(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+        reason: str,
+    ) -> int:
+        prompt = self.ctx.paths.prompts / f"publish-implementation-fallback-{issue_target}.md"
+        log = self.ctx.paths.logs / f"publish-implementation-fallback-{issue_target}.log"
+        output = self.ctx.paths.runs / f"publish-implementation-fallback-{issue_target}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "publish-implementation-fallback.md"),
+            str(prompt),
+            env={
+                "ISSUE_NUMBER": issue_target,
+                "WORKTREE_PATH": str(worktree),
+                "BRANCH": head_ref,
+                "BASE_BRANCH": self.integration_branch,
+                "FALLBACK_REASON": reason,
+                "PUBLISH_FALLBACK_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
+                "SOURCE_MARKER": str(action.get("source_marker") or ""),
+            },
+        )
+        self._append_harness_spawn_intent(
+            intent_id=f"publish-implementation-fallback:{issue_target}",
+            task_id=f"publish-implementation-fallback-{issue_target}",
+            route="publish-implementation-fallback",
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            reason=f"publish implementation fallback for issue #{issue_target}: {reason}",
+        )
+        sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
+        return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
