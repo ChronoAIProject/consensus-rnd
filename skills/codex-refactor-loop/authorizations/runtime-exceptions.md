@@ -207,6 +207,7 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
+<<<<<<< HEAD
 <a id="repository-stalled-meta-reflector-506"></a>
 ## repository-stalled-meta-reflector-506
 
@@ -220,6 +221,21 @@ in `SKILL.md` and the tests.
 - fact_source: `wakeup-plan` consumes GitHub open managed issue/PR metadata plus `META_ESCALATION_STUCK_HOURS` / `STALE_REVIVAL_HOURS`; recommendation artifacts are advisory only and are not side-effect authorization. Handoffs must go through existing design-consensus, #403 validated `IssueDecompositionPlan`, normal narrow-fix/review gate, or #396 clean `META_RESOLVED:drop` close path.
 - verification: `test_wakeup_plan.py`, `test_marker_emission_contract.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror anchors #506 v1 as read-only, spawn-only, and recommendation-only; it adds no root CLAUDE lifecycle carveout, no public CLI, no validator module, and no lifecycle authority beyond existing #396 spawn projection plus existing downstream gates.
+=======
+<a id="global-dashboard-status-card-504"></a>
+## global-dashboard-status-card-504
+
+- surface: `global-dashboard-status-card`
+- source_issue: `#504`
+- source_round: `r2 structural`
+- source_marker: `META_JUDGE_DONE:consensus:structural`
+- skill_anchor: `#named-runtime-exception---global-dashboard-status-cardper-504`
+- allowed: active-controller owner only; collect the shared read-only `HolisticStatusProjection` from existing status producers; let local `consensus-rnd-cli holistic-status` render the full card and `peek` reuse only the summary renderer; when `$HOST_HOLISTIC_STATUS_ENABLE=true`, `$HOST_HOLISTIC_STATUS_ISSUE_NUMBER`, and `$HOST_HOLISTIC_STATUS_COMMENT_ID` are valid, the existing `progress-reporter` tick may, after GraphQL headroom, #191 owner, interval, and same-hash gates, PATCH exactly one host-configured issue comment id with the rendered status card.
+- forbidden: no new daemon, no public writer CLI, no create comment, no issue body edit, no PR body/title edit, no Discussions, no label mutation, no create/close/reopen/merge, no tag/release, no git, no generic GitHub writer, no prompt-body/prose decision reads, no multi-carrier grammar, no standalone dashboard truth source, no standalone dependency truth source, and no lifecycle authority.
+- fact_source: `HolisticStatusProjection` in `holistic_status.py` is the single status-card algorithm; it reads existing statusline snapshot, daemon-status projection, concurrency count/list surfaces, dispatch queue depth, managed issue/PR label/body closing-ref projection through `ManagedWorkProjection`, recent merge state, GitHub headroom, and progress-reporter state. Host opt-in and fixed target fields come only from the host env surface matrix.
+- verification: `test_holistic_status.py`, `test_work_item_projection.py`, `test_progress_reporter.py`, `test_cli_command_router.py`, `test_peek_status_lens.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This is a private progress-reporter issue-comment PATCH subpath plus a read-only local command; it grants no new daemon, public writer command, lifecycle authority, or dashboard/dependency ledger authority.
+>>>>>>> origin/auto-refact-dev
 
 <a id="issue-decomposition-403"></a>
 ## issue-decomposition-403

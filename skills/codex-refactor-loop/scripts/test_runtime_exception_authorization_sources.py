@@ -38,7 +38,11 @@ TARGET_ANCHORS = {
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
+<<<<<<< HEAD
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
+=======
+    "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
+>>>>>>> origin/auto-refact-dev
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -219,6 +223,69 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
+
+    def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
+        entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - global-dashboard-status-card(per #504)") :]
+        claude = self.repo_rules
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        progress_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py")
+        holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
+
+        for needle in (
+            "active-controller owner only",
+            "HolisticStatusProjection",
+            "consensus-rnd-cli holistic-status",
+            "peek` reuse only the summary renderer",
+            "$HOST_HOLISTIC_STATUS_ENABLE=true",
+            "$HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "$HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "GraphQL headroom",
+            "#191 owner",
+            "interval",
+            "same-hash",
+            "PATCH exactly one host-configured issue comment id",
+            "no new daemon",
+            "no public writer CLI",
+            "no create comment",
+            "no issue body edit",
+            "no PR body/title edit",
+            "no Discussions",
+            "no label mutation",
+            "no create/close/reopen/merge",
+            "no tag/release",
+            "no git",
+            "no generic GitHub writer",
+            "no prompt-body/prose decision reads",
+            "no standalone dashboard truth source",
+            "no standalone dependency truth source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
+        for needle in (
+            "#504 是唯一 global dashboard status-card writer carveout",
+            "PATCH exactly one host-configured issue comment",
+            "禁止 create comments",
+            "new daemon",
+            "public writer CLI",
+            "generic GitHub writer",
+            "standalone dashboard/dependency truth source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn('"holistic-status": CommandSpec(', cli_source)
+        for forbidden in ("dashboard-writer", "global-status-card", "write-holistic-status"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(f'"{forbidden}"', cli_source)
+        self.assertIn('"global-dashboard-status-card"', progress_source)
+        self.assertIn('"HOST_HOLISTIC_STATUS_COMMENT_ID"', progress_source)
+        self.assertIn("issues/comments/{config[", progress_source)
+        self.assertIn('"PATCH"', progress_source)
+        self.assertIn("class HolisticStatusProjection", holistic_source)
+        for forbidden in ("prompt.read_text", "worker prose", "discussion"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, holistic_source)
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)

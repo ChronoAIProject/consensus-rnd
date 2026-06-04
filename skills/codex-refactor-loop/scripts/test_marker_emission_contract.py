@@ -12,7 +12,10 @@ SCRIPT_PATH = Path(__file__)
 PROMPTS_DIR = SCRIPT_PATH.parents[1] / "prompts"
 
 CONTRACT_MARKER = "MarkerEmissionContract: single-valid-invalid-role-marker-source"
-SECTION_HEADING = "## Marker emission allowlist(强制)"
+SECTION_HEADING_PATTERNS = (
+    "## Marker emission allowlist(强制)",
+    "## Marker emission allowlist (required)",
+)
 REQUIRED_PROHIBITION = (
     "Only the markers listed above are valid role-routing markers for this prompt. "
     "Do not emit any other role-routing marker."
@@ -38,6 +41,8 @@ ROLE_MARKER_TOKENS = (
     "TRIAGE_DECISION_DONE",
     "REBASE_RESOLVE_DONE",
     "REBASE_RESOLVE_BLOCKED",
+    "PUBLISH_FALLBACK_DONE",
+    "PUBLISH_FALLBACK_BLOCKED",
 )
 
 PROMPT_ALLOWLISTS = {
@@ -116,6 +121,10 @@ PROMPT_ALLOWLISTS = {
         "REBASE_RESOLVE_DONE:${PR_NUMBER}:<status>",
         "REBASE_RESOLVE_BLOCKED:${PR_NUMBER}:<conflict|human-decision|build-broken|other>:<short>",
     ),
+    "publish-implementation-fallback.md": (
+        "PUBLISH_FALLBACK_DONE:${ISSUE_NUMBER}:<status>",
+        "PUBLISH_FALLBACK_BLOCKED:${ISSUE_NUMBER}:<conflict|human-decision|build-broken|other>:<short>",
+    ),
 }
 
 KNOWN_ARTIFACT_PROFILES = {
@@ -146,6 +155,7 @@ PROMPT_ARTIFACT_PROFILES = {
     "test-add.md": "marker-only-work-unit",
     "triage-external-issue.md": "marker-only-work-unit",
     "rebase-resolve.md": "marker-only-work-unit",
+    "publish-implementation-fallback.md": "marker-only-work-unit",
 }
 
 PROFILE_TERMINAL_MARKER_TOKENS = {
@@ -164,6 +174,8 @@ PROFILE_TERMINAL_MARKER_TOKENS = {
         "TRIAGE_DECISION_DONE",
         "REBASE_RESOLVE_DONE",
         "REBASE_RESOLVE_BLOCKED",
+        "PUBLISH_FALLBACK_DONE",
+        "PUBLISH_FALLBACK_BLOCKED",
     },
     "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
     "phase8-reviewer": {"REVIEW_DONE"},
@@ -174,14 +186,16 @@ PROFILE_TERMINAL_MARKER_TOKENS = {
 
 
 def allowlist_section(body: str) -> str:
-    start = body.find(SECTION_HEADING)
-    if start == -1:
+    starts = [(body.find(heading), heading) for heading in SECTION_HEADING_PATTERNS]
+    starts = [(start, heading) for start, heading in starts if start != -1]
+    if not starts:
         return ""
-    rest = body[start + len(SECTION_HEADING):]
+    start, heading = min(starts)
+    rest = body[start + len(heading):]
     next_heading = re.search(r"\n## (?!Marker emission allowlist)", rest)
     if next_heading:
         rest = rest[: next_heading.start()]
-    return SECTION_HEADING + rest
+    return heading + rest
 
 
 def marker_token(marker: str) -> str:
@@ -202,7 +216,7 @@ class MarkerEmissionContractTests(unittest.TestCase):
                 body = (PROMPTS_DIR / filename).read_text(encoding="utf-8")
                 section = allowlist_section(body)
 
-                self.assertIn(SECTION_HEADING, section)
+                self.assertTrue(any(heading in section for heading in SECTION_HEADING_PATTERNS))
                 self.assertIn(CONTRACT_MARKER, section)
                 self.assertIn("ALLOWED markers:", section)
                 self.assertIn(REQUIRED_PROHIBITION, section)
