@@ -1523,6 +1523,36 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, batching)
 
+    def test_touched_module_test_ratchet_is_skill_and_prompt_contract(self) -> None:
+        hard_rules = section_after_heading(self.skill, "Hard rules (controller-level, propagated into every codex prompt)")
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        verify = read(SKILL_ROOT / "prompts" / "verify.md")
+        guard = read(SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py")
+        combined = "\n".join((hard_rules, implement, verify, guard))
+
+        for needle in (
+            "Touched-module test ratchet",
+            "fast / hermetic / behavior-first",
+            "owner-local fact source",
+            "observable behavior or contracts",
+            "No suite-level host-wide process-table daemon guard",
+            "daemon leak / duplicate coverage belongs in the responsible helper's local fact source",
+            "must not scan the current machine with `ps -eo pid=,command=`",
+            "不得新增 suite-level host-wide process-table guard",
+            "不得新增或保留 suite-level host-wide process-table guard",
+            "helper-local fact source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+        forbidden_tokens = (
+            "subprocess" + ".run",
+            '["' + "ps" + '"',
+            "pid=," + "command=",
+        )
+        for forbidden in forbidden_tokens:
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, guard)
+
     def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
         source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")
         for needle in (
