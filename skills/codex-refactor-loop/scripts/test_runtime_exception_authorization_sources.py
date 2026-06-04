@@ -811,6 +811,47 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(authority_token=token):
                 self.assertIn(token, combined_authority)
 
+    def test_phase9_router_actor_health_recovery_stays_router_private(self) -> None:
+        entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
+        router = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
+        combined_authority = "\n".join((entry, self.skill))
+
+        for token in (
+            "Phase9ActorHealth",
+            "_recover_actor_health",
+            "_quarantine_markerless_solver_logs",
+            "_recover_stale_ledgered_actors",
+            "_actor_recovery_allowed",
+            "_read_pending_spawn_intent_logs",
+            "phase9-actor-markerless-quarantine",
+            "actor_health_recovery",
+            "STALE_REVIVAL_HOURS",
+        ):
+            with self.subTest(router_token=token):
+                self.assertIn(token, router)
+        for token in (
+            "router-private `Phase9ActorHealth`",
+            "markerless clean solver logs",
+            "quarantine",
+            "phase9-actor-markerless-quarantine",
+            "actor_health_recovery",
+            "STALE_REVIVAL_HOURS",
+            "source issue is OPEN",
+            "terminal gate is open",
+            "no valid actor marker",
+            "no target log",
+            "no equivalent legacy log",
+            "no pending `HARNESS_SPAWN_INTENT`",
+            "no live in-flight `spawn-codex --log <target>`",
+            "append-only ledger row",
+            "no public revive command",
+            "no new runtime exception",
+        ):
+            with self.subTest(authority_token=token):
+                self.assertIn(token, combined_authority)
+        self.assertNotIn("revive-design-consensus", self.skill)
+        self.assertNotIn("revive-design-consensus", entry)
+
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
         # Refactor (iter193/issue-193):
         #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
