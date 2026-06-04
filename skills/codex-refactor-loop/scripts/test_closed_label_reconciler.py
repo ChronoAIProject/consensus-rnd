@@ -20,8 +20,12 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
 from codex_refactor_loop.closed_phase_labels import (
     ClosedPhaseLabelPlan,
+    RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
+    closed_reconcile_candidate_queries,
+    closed_reconcile_candidate_query_labels,
     has_exactly_one_terminal_phase,
     labels_after_plan,
+    plan_closed_reconcile_candidate,
     plan_closed_phase_labels,
 )
 from codex_refactor_loop.context import LoopContext
@@ -171,6 +175,46 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
             )
         )
 
+    def test_closed_reconcile_candidate_projection_filters_terminal_complete_history(self) -> None:
+        terminal_complete = {
+            "number": 41,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_CLOSED},
+                {"name": labels.HUMAN_AUTO},
+            ],
+        }
+        dirty = {
+            "number": 42,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_CLOSED},
+                {"name": labels.STUCK},
+                {"name": labels.HUMAN_AUTO},
+            ],
+        }
+
+        self.assertIsNone(plan_closed_reconcile_candidate("issue", terminal_complete))
+        self.assertIsNotNone(plan_closed_reconcile_candidate("issue", dirty))
+        self.assertIn(labels.PHASE_REVIEWING, closed_reconcile_candidate_query_labels())
+        self.assertIn(labels.STUCK, closed_reconcile_candidate_query_labels())
+        self.assertNotIn(labels.PHASE_CLOSED, closed_reconcile_candidate_query_labels())
+        self.assertNotIn(labels.PHASE_MERGED, closed_reconcile_candidate_query_labels())
+        self.assertEqual("20", RECENT_CLOSED_MANAGED_WINDOW_LIMIT)
+
+    def test_closed_reconcile_candidate_queries_include_bounded_recent_managed_discovery(self) -> None:
+        queries = closed_reconcile_candidate_queries("issue", "closed")
+        managed_queries = [query for query in queries if query.label in labels.query_labels_for(labels.MANAGED)]
+        dirty_queries = [query for query in queries if query.label not in labels.query_labels_for(labels.MANAGED)]
+
+        self.assertEqual(len(labels.query_labels_for(labels.MANAGED)), len(managed_queries))
+        self.assertTrue(dirty_queries)
+        self.assertTrue(all(query.limit == RECENT_CLOSED_MANAGED_WINDOW_LIMIT for query in managed_queries))
+        self.assertTrue(all(query.limit == "100" for query in dirty_queries))
+        self.assertTrue(all(query.kind == "issue" and query.state == "closed" for query in queries))
+
     def test_closed_phase_plan_preserves_canonical_human_labels(self) -> None:
         source_labels = [
             labels.MANAGED,
@@ -240,6 +284,99 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
 
+    def test_collect_plans_filters_recent_managed_terminal_complete_before_view_or_link_probe(self) -> None:
+        dirty_row = {
+            "number": 35,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_REVIEWING},
+                {"name": labels.HUMAN_AUTO},
+            ],
+            "title": "dirty closed issue",
+        }
+        terminal_complete = {
+            "number": 36,
+            "state": "CLOSED",
+            "labels": [
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_CLOSED},
+                {"name": labels.HUMAN_AUTO},
+            ],
+            "title": "terminal complete closed issue",
+        }
+        calls: list[tuple[str, ...]] = []
+
+        def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
+            command = tuple(args)
+            calls.append(command)
+            if command == (
+                "issue",
+                "list",
+                "--label",
+                labels.MANAGED,
+                "--state",
+                "closed",
+                "--limit",
+                RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
+                "--json",
+                "number,state,labels,title",
+            ):
+                return CompletedProcess(["gh", *command], 0, json.dumps([dirty_row, terminal_complete]), "")
+            if command == (
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--search",
+                "in:body Closes #35",
+                "--limit",
+                "1",
+                "--json",
+                "number,mergedAt",
+            ):
+                return CompletedProcess(["gh", *command], 0, "[]", "")
+            if len(command) >= 2 and command[1] == "list":
+                return CompletedProcess(["gh", *command], 0, "[]", "")
+            return CompletedProcess(["gh", *command], 0, "{}", "")
+
+        reconciler = ClosedLabelReconciler(self.ctx)
+        with mock.patch.object(reconciler, "_gh", side_effect=fake_gh):
+            plans = reconciler.collect_plans()
+
+        self.assertEqual((35,), tuple(plan.number for plan in plans))
+        self.assertIn(
+            (
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--search",
+                "in:body Closes #35",
+                "--limit",
+                "1",
+                "--json",
+                "number,mergedAt",
+            ),
+            calls,
+        )
+        self.assertNotIn(
+            (
+                "pr",
+                "list",
+                "--state",
+                "merged",
+                "--search",
+                "in:body Closes #36",
+                "--limit",
+                "1",
+                "--json",
+                "number,mergedAt",
+            ),
+            calls,
+        )
+        self.assertFalse(any(command[:3] == ("issue", "view", "36") for command in calls), calls)
+
     def test_dry_run_prints_plan_without_apply_verify_or_gh_mutation(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
         plan = ClosedPhaseLabelPlan(
@@ -296,12 +433,8 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         }
         gh_json_responses = {
             ("label", "list", "--json", "name", "--limit", "1000"): [{"name": name} for name in labels.canonical_labels()],
-            ("issue", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
-            ("issue", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [pr_row],
-            ("pr", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [pr_row],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", "auto-loop", "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("issue", "list", "--label", labels.PHASE_REVIEWING, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
+            ("pr", "list", "--label", labels.PHASE_FIXING, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [pr_row],
             ("pr", "list", "--state", "merged", "--search", "in:body Closes #21", "--limit", "1", "--json", "number,mergedAt"): [{"number": 30, "mergedAt": "2026-05-31T00:00:00Z"}],
             ("issue", "view", "21", "--json", "number,state,labels"): {
                 "number": 21,
@@ -380,7 +513,7 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         status = json.loads((self.repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
 
-    def test_closed_managed_item_without_human_label_warns_skips_and_continues(self) -> None:
+    def test_closed_managed_item_without_human_label_reconciles_phase_and_preserves_human_labels(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
         missing_human_row = {
             "number": 31,
@@ -404,13 +537,18 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         }
         gh_json_responses = {
             ("label", "list", "--json", "name", "--limit", "1000"): [{"name": name} for name in labels.canonical_labels()],
-            ("issue", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row, normal_row],
-            ("issue", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row, normal_row],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", "auto-loop", "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("issue", "list", "--label", labels.PHASE_REVIEWING, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row, normal_row],
+            ("issue", "list", "--label", labels.STUCK, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [missing_human_row],
             ("pr", "list", "--state", "merged", "--search", "in:body Closes #32", "--limit", "1", "--json", "number,mergedAt"): [],
+            ("pr", "list", "--state", "merged", "--search", "in:body Closes #31", "--limit", "1", "--json", "number,mergedAt"): [],
+            ("issue", "view", "31", "--json", "number,state,labels"): {
+                "number": 31,
+                "state": "CLOSED",
+                "labels": [
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_CLOSED},
+                ],
+            },
             ("issue", "view", "32", "--json", "number,state,labels"): {
                 "number": 32,
                 "state": "CLOSED",
@@ -426,6 +564,11 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
 
         def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
             command = tuple(args)
+            if command == ("issue", "view", "31", "--json", "number,state,labels"):
+                count = view_counts.get(command, 0)
+                view_counts[command] = count + 1
+                item = missing_human_row if count == 0 else gh_json_responses[command]
+                return CompletedProcess(["gh", *command], 0, json.dumps(item), "")
             if command == ("issue", "view", "32", "--json", "number,state,labels"):
                 count = view_counts.get(command, 0)
                 view_counts[command] = count + 1
@@ -444,12 +587,21 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
                 with mock.patch("builtins.print") as print_mock:
                     self.assertEqual(0, reconciler.run_once())
 
-        print_mock.assert_any_call(
-            "closed-label-reconciler warn: issue #31 "
-            "expected exactly one canonical human label, got 0; skipping phase reconciliation"
-        )
+        printed = "\n".join(str(call.args[0]) for call in print_mock.call_args_list if call.args)
+        self.assertNotIn("expected exactly one canonical human label", printed)
         self.assertEqual(
             [
+                (
+                    "issue",
+                    "edit",
+                    "31",
+                    "--add-label",
+                    labels.PHASE_CLOSED,
+                    "--remove-label",
+                    labels.STUCK,
+                    "--remove-label",
+                    labels.PHASE_REVIEWING,
+                ),
                 (
                     "issue",
                     "edit",
@@ -462,7 +614,8 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
             ],
             edit_commands,
         )
-        self.assertNotIn(("issue", "view", "31", "--json", "number,state,labels"), view_counts)
+        for command in edit_commands:
+            self.assertFalse(any(str(part).startswith("crnd:human:") for part in command), command)
 
     def test_legacy_emoji_label_host_writes_existing_alias_without_canonical_retry_noise(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
@@ -492,12 +645,7 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
                 {"name": "🎉 phase:merged"},
                 {"name": "🤖 human:auto-推进"},
             ],
-            ("issue", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [],
-            ("issue", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", "auto-loop", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", labels.MANAGED, "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
-            ("pr", "list", "--label", "auto-loop", "--state", "merged", "--limit", "100", "--json", "number,state,labels,title,mergedAt"): [],
+            ("issue", "list", "--label", "🛠️ phase:implementing", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
             ("pr", "list", "--state", "merged", "--search", "in:body Closes #33", "--limit", "1", "--json", "number,mergedAt"): [{"number": 70, "mergedAt": "2026-05-31T00:00:00Z"}],
             ("issue", "view", "33", "--json", "number,state,labels"): after_row,
         }

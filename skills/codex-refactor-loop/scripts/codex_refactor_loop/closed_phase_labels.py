@@ -7,6 +7,14 @@ from typing import Mapping, Sequence
 
 from . import labels as label_catalog
 
+TERMINAL_PHASE_LABELS = (label_catalog.PHASE_CLOSED, label_catalog.PHASE_MERGED)
+NONTERMINAL_PHASE_LABELS = tuple(
+    label
+    for label in label_catalog.labels_for_group("phase")
+    if label not in TERMINAL_PHASE_LABELS
+)
+RECENT_CLOSED_MANAGED_WINDOW_LIMIT = "20"
+
 
 @dataclass(frozen=True)
 class ClosedPhaseLabelPlan:
@@ -22,6 +30,14 @@ class ClosedPhaseLabelPlan:
     @property
     def needs_edit(self) -> bool:
         return bool(self.add_labels or self.remove_labels)
+
+
+@dataclass(frozen=True)
+class ClosedReconcileCandidateQuery:
+    kind: str
+    state: str
+    label: str
+    limit: str
 
 
 def plan_closed_phase_labels(
@@ -76,6 +92,46 @@ def labels_after_plan(labels: Sequence[str], plan: ClosedPhaseLabelPlan) -> tupl
 def has_exactly_one_terminal_phase(labels: Sequence[str], terminal_phase: str) -> bool:
     projection = label_catalog.normalize_label_set(labels)
     return projection.labels_for_group("phase") == (terminal_phase,)
+
+
+def closed_reconcile_candidate_query_labels() -> tuple[str, ...]:
+    query_labels: set[str] = set()
+    for label in NONTERMINAL_PHASE_LABELS:
+        query_labels.update(label_catalog.query_labels_for(label))
+    query_labels.update(label_catalog.query_labels_for(label_catalog.STUCK))
+    query_labels.update(label_catalog.CLEANUP_ONLY_ALIASES)
+    return tuple(sorted(query_labels))
+
+
+def closed_reconcile_candidate_queries(kind: str, state: str) -> tuple[ClosedReconcileCandidateQuery, ...]:
+    managed_labels = set(label_catalog.query_labels_for(label_catalog.MANAGED))
+    labels: list[ClosedReconcileCandidateQuery] = []
+    for label in closed_reconcile_candidate_query_labels():
+        if label in managed_labels:
+            continue
+        labels.append(ClosedReconcileCandidateQuery(kind=kind, state=state, label=label, limit="100"))
+    labels.extend(
+        ClosedReconcileCandidateQuery(
+            kind=kind,
+            state=state,
+            label=label,
+            limit=RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
+        )
+        for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+    )
+    return tuple(labels)
+
+
+def plan_closed_reconcile_candidate(
+    kind: str,
+    item: Mapping[str, object],
+    *,
+    linked_merged: bool = False,
+) -> ClosedPhaseLabelPlan | None:
+    plan = plan_from_gh_item(kind, item, linked_merged=linked_merged)
+    if plan is None or not plan.needs_edit:
+        return None
+    return plan
 
 
 def _terminal_phase(
