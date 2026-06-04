@@ -1247,6 +1247,167 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
         self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
 
+    def test_markerless_clean_implement_with_diff_projects_synthetic_publish_marker(self) -> None:
+        log = self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "0\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        gh_items = [
+            GhItem(
+                "issue",
+                421,
+                "markerless implement",
+                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+            )
+        ]
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+
+        pub = [a for a in actions if a.get("controller_action") == "publish_implementation_output"]
+        self.assertEqual(1, len(pub))
+        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["marker"])
+        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["source_marker"])
+        self.assertEqual("issue", pub[0]["target_kind"])
+        self.assertEqual(421, pub[0]["target_number"])
+        self.assertEqual(str(log.relative_to(self.repo)), pub[0]["source_artifact"])
+
+    def test_markerless_clean_implement_without_diff_does_not_project_publish(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "0\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        gh_items = [
+            GhItem(
+                "issue",
+                421,
+                "empty markerless implement",
+                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+            )
+        ]
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+
+        self.assertFalse([a for a in actions if a.get("controller_action") == "publish_implementation_output"])
+
+    def test_markerless_clean_implement_keeps_existing_marker_paths(self) -> None:
+        self.write_completed_log("implement-issue-422.log", "IMPLEMENT_DONE:issue-422:ok")
+        self.write_markerless_clean_log("implement-issue-423.log")
+        self.write_run_artifact("implement-issue-423", "IMPLEMENT_DONE:issue-423:ok")
+
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("issue", 422), ("issue", 423)},
+            gh_items=[
+                GhItem(
+                    "issue",
+                    422,
+                    "clean marker",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                ),
+                GhItem(
+                    "issue",
+                    423,
+                    "artifact marker",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                ),
+            ],
+        )
+        markers = {a.get("marker") for a in actions}
+
+        self.assertIn("IMPLEMENT_DONE:issue-422:ok:real", markers)
+        self.assertIn("IMPLEMENT_DONE:issue-423:ok", markers)
+
+    def test_markerless_clean_implement_requires_open_managed_implementable_issue(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "1\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                not_open_actions = completed_marker_actions(
+                    self.repo,
+                    open_targets=set(),
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            421,
+                            "closed markerless implement",
+                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                )
+                not_managed_actions = completed_marker_actions(
+                    self.repo,
+                    open_targets={("issue", 421)},
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            421,
+                            "unmanaged markerless implement",
+                            (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                )
+
+        self.assertFalse([a for a in not_open_actions if a.get("controller_action") == "publish_implementation_output"])
+        self.assertFalse([a for a in not_managed_actions if a.get("controller_action") == "publish_implementation_output"])
+
+    def test_wakeup_plan_source_regression_has_markerless_implement_publish_fallback(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn("_synthetic_markerless_implement_marker", source)
+        self.assertIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
+        self.assertIn('f"iter{issue}-issue-{issue}"', source)
+        self.assertIn('safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")', source)
+        self.assertIn('"diff", "HEAD", "--quiet"', source)
+        self.assertIn('"rev-list", "--count"', source)
+        self.assertIn("label_catalog.PHASE_IMPLEMENTING", source)
+        self.assertIn("label_catalog.PHASE_CONSENSUS_REACHED", source)
+
     def test_solver_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
         log = self.write_markerless_clean_log("phase9-issue505-r1-minimal.log")
         self.write_run_artifact("phase9-issue505-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
@@ -3309,7 +3470,7 @@ class StaleRevivalTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "old-base\n", "")
             if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/auto-refact-dev"]:
                 return subprocess.CompletedProcess(command, 0, "new-base\n", "")
-            if command == ["git", "-C", str(worktree), "diff", "--quiet"]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 1, "", "unexpected")
 
