@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -62,6 +63,19 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         if command_runner is None:
             command_runner = self.commands.append
         return Phase9Router(ctx=self.loop_context(), command_runner=command_runner)
+
+    def test_production_repo_root_ctx_resolves_host_gh_repo_slug(self) -> None:
+        # Regression: Phase9Router(repo_root=...) (the daemon production path) must
+        # read the process environment so GH_REPO_SLUG resolves. Restricting env to
+        # {REPO_ROOT} left gh_repo_slug=None, so _open_design_consensus_issues
+        # returned [] and DesignConsensusIssueIntake silently never dispatched.
+        with mock.patch.dict(
+            os.environ,
+            {"REPO_ROOT": str(self.repo), "GH_REPO_SLUG": self.TEST_GH_REPO_SLUG},
+            clear=False,
+        ):
+            router = Phase9Router(repo_root=self.repo)
+        self.assertEqual(self.TEST_GH_REPO_SLUG, router.ctx.gh_repo_slug)
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name

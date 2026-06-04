@@ -269,7 +269,11 @@ class Phase9Router:
         if ctx is None:
             if repo_root is None:
                 raise ValueError("repo_root or ctx is required")
-            ctx = LoopContext.load(repo_root=repo_root, env={"REPO_ROOT": str(repo_root)})
+            # Read the process environment (the daemon is started after sourcing
+            # host.env) so GH_REPO_SLUG and other host facts resolve. Restricting
+            # env to {REPO_ROOT} drops the slug -> _open_design_consensus_issues
+            # returns [] and DesignConsensusIssueIntake silently never dispatches.
+            ctx = LoopContext.load(repo_root=repo_root)
         self.ctx = ctx
         self.repo_root = ctx.repo_root
         self.skill_root = ctx.skill_root
