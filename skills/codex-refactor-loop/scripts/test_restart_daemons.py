@@ -124,22 +124,19 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.skill = self.tmp_root / "skill"
         for rel in (".refactor-loop/logs", ".refactor-loop/locks", ".refactor-loop/heartbeats"):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.skill / "scripts").mkdir(parents=True)
         (self.skill / "scripts" / "consensus-rnd-cli").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
-<<<<<<< HEAD
-        self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={})
-=======
         self.env_patch = mock.patch.dict(
             os.environ,
-            {"CONSENSUS_RND_HOST_ENV": str(self.repo / ".refactor-loop" / "host.env")},
+            {"CONSENSUS_RND_HOST_ENV": str(self.repo / ".config" / "consensus-rnd" / "host.env")},
         )
         self.env_patch.start()
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
->>>>>>> origin/auto-refact-dev
         self.config = RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1)
         self.runtime = FakeRestartDaemonRuntime()
 
@@ -155,13 +152,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                 return helper
 
     def collect_status_with_fake_allowlist(self, inventory: DaemonProcessInventory | None = None):
-<<<<<<< HEAD
-        command = (sys.executable, "-c", FAKE_DAEMON)
-        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory or DaemonProcessInventory(())):
-                with mock.patch.dict(os.environ, {}, clear=True):
-                    return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
-=======
         collected = inventory or self.runtime.collect_inventory()
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=collected):
@@ -169,7 +159,6 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     with mock.patch("codex_refactor_loop.restart.pid_alive", self.runtime.pid_alive):
                         with mock.patch("codex_refactor_loop.restart.time.time", return_value=self.runtime.now()):
                             return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
->>>>>>> origin/auto-refact-dev
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
