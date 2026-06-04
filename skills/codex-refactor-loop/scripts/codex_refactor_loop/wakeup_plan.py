@@ -2245,6 +2245,32 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
+def action_priority_sort_key(action: dict[str, Any]) -> tuple[int, int]:
+    return (action_priority_class(action), int(action.get("priority", 99)))
+
+
+def action_priority_class(action: dict[str, Any]) -> int:
+    controller_action = action.get("controller_action")
+    kind = action.get("kind")
+    if kind == "maintainer-comment":
+        return 1
+    if kind == "unpushed-worker-output":
+        return 2
+    if kind == "completed-marker":
+        return 3
+    if kind == "ci-red":
+        return 4
+    if kind in {"no-gap-violation", "milestone"}:
+        return 5
+    if kind == "existing-issue":
+        return 6
+    if action.get("kind") == "harness-spawn-intent" and controller_action == "spawn_codex_harness_background":
+        return 7
+    if controller_action == "dispatch_consensus_implementation":
+        return 7
+    return 8
+
+
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish_implementation_output"
@@ -2648,7 +2674,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
-    actions.sort(key=lambda action: action["priority"])
+    actions.sort(key=action_priority_sort_key)
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 

@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Protocol, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
@@ -55,8 +55,6 @@ class RestartConfig:
 
 @dataclass(frozen=True)
 class DaemonTarget:
-    """refactor helper, no behavior change outside read-only status projection."""
-
     name: str
     command: tuple[str, ...]
     pid_file: Path
@@ -67,8 +65,6 @@ class DaemonTarget:
 
 @dataclass(frozen=True)
 class DaemonLaunchFingerprint:
-    """refactor helper, no behavior change outside restart skip eligibility."""
-
     daemon_name: str
     command: tuple[str, ...]
     entrypoint_sha256: str
@@ -146,16 +142,12 @@ class DaemonLaunchFingerprint:
 
 @dataclass(frozen=True)
 class DaemonProcess:
-    """refactor helper, no behavior change outside duplicate reconciliation."""
-
     pid: int
     command: str
 
 
 @dataclass(frozen=True)
 class DaemonProcessInventory:
-    """refactor helper, no behavior change outside restart helper duplicate detection."""
-
     processes: tuple[DaemonProcess, ...]
 
     @classmethod
@@ -174,11 +166,13 @@ class DaemonProcessInventory:
         pid_file: Path,
         died_file: Path,
         command: Sequence[str],
+        is_alive=None,
     ) -> tuple[int, ...]:
+        alive = is_alive or pid_alive
         expected_suffix = _normalize_process_command(" ".join([name, str(repo_root), str(pid_file), str(died_file), *command]))
         pids = []
         for process in self.processes:
-            if process.pid <= 0 or not pid_alive(process.pid):
+            if process.pid <= 0 or not alive(process.pid):
                 continue
             command_line = _normalize_process_command(process.command)
             if f"{sys.executable} -c " not in command_line:
@@ -243,12 +237,102 @@ def heartbeat_is_fresh(target: DaemonTarget, config: RestartConfig, *, now: int 
     return age is not None and age < config.heartbeat_fresh_seconds
 
 
+class RestartDaemonRuntime(Protocol):
+    def now(self) -> int:
+        ...
+
+    def getpid(self) -> int:
+        ...
+
+    def sleep(self, seconds: float) -> None:
+        ...
+
+    def pid_alive(self, pid: int) -> bool:
+        ...
+
+    def collect_inventory(self) -> DaemonProcessInventory:
+        ...
+
+    def terminate_pid(self, pid: int, grace: int) -> None:
+        ...
+
+    def launch_wrapper(
+        self,
+        *,
+        ctx: LoopContext,
+        target: DaemonTarget,
+        wrapper_code: str,
+        env: dict[str, str],
+        log_file: Path,
+    ) -> Any:
+        ...
+
+
+class RealRestartDaemonRuntime:
+    def now(self) -> int:
+        return int(time.time())
+
+    def getpid(self) -> int:
+        return os.getpid()
+
+    def sleep(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+    def pid_alive(self, pid: int) -> bool:
+        return pid_alive(pid)
+
+    def collect_inventory(self) -> DaemonProcessInventory:
+        return DaemonProcessInventory.collect()
+
+    def terminate_pid(self, pid: int, grace: int) -> None:
+        _terminate_pid(pid, grace)
+
+    def launch_wrapper(
+        self,
+        *,
+        ctx: LoopContext,
+        target: DaemonTarget,
+        wrapper_code: str,
+        env: dict[str, str],
+        log_file: Path,
+    ) -> subprocess.Popen[bytes]:
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_handle = log_file.open("ab", buffering=0)
+        try:
+            return subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    wrapper_code,
+                    target.name,
+                    str(ctx.repo_root),
+                    str(target.pid_file),
+                    str(target.died_file),
+                    *target.command,
+                ],
+                cwd=str(ctx.repo_root),
+                env=env,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
+            )
+        finally:
+            log_handle.close()
+
+
 class RestartDaemons:
-    def __init__(self, ctx: LoopContext, config: RestartConfig | None = None) -> None:
+    def __init__(
+        self,
+        ctx: LoopContext,
+        config: RestartConfig | None = None,
+        runtime: RestartDaemonRuntime | None = None,
+    ) -> None:
         self.ctx = ctx
         self.config = config or RestartConfig()
+        self.runtime = runtime or RealRestartDaemonRuntime()
         self.lock_dir = ctx.paths.refactor_loop / "locks" / "restart-daemons.lock"
-        self._wrappers: list[subprocess.Popen[bytes]] = []
+        self._wrappers: list[Any] = []
         self._package_digest_cache: tuple[str, int] | None = None
 
     def run(self) -> int:
@@ -277,7 +361,7 @@ class RestartDaemons:
         died_file = target.died_file
         command = list(target.command)
         current_fingerprint = self._current_fingerprint(name, command)
-        inventory = DaemonProcessInventory.collect()
+        inventory = self.runtime.collect_inventory()
         duplicates_remain = self._reconcile_duplicate_canonical_wrappers(
             name,
             command,
@@ -309,32 +393,18 @@ class RestartDaemons:
                 "PYTHONPATH": f"{self.ctx.skill_root / 'scripts'}{os.pathsep}{env.get('PYTHONPATH', '')}",
             }
         )
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        log_handle = log_file.open("ab", buffering=0)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                wrapper_code,
-                name,
-                str(self.ctx.repo_root),
-                str(pid_file),
-                str(died_file),
-                *command,
-            ],
-            cwd=str(self.ctx.repo_root),
+        proc = self.runtime.launch_wrapper(
+            ctx=self.ctx,
+            target=target,
+            wrapper_code=wrapper_code,
             env=env,
-            stdout=log_handle,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True,
+            log_file=log_file,
         )
         self._wrappers.append(proc)
-        log_handle.close()
         for _ in range(50):
             if _read_pid(pid_file) == proc.pid and hb_file.exists():
                 break
-            time.sleep(0.1)
+            self.runtime.sleep(0.1)
         current_fingerprint.write(fingerprint_file)
         self._log(f"{name} restarted: wrapper_pid={proc.pid} heartbeat={hb_file}")
 
@@ -367,11 +437,11 @@ class RestartDaemons:
         while True:
             try:
                 self.lock_dir.mkdir()
-                (self.lock_dir / "pid").write_text(f"{os.getpid()}\n", encoding="utf-8")
+                (self.lock_dir / "pid").write_text(f"{self.runtime.getpid()}\n", encoding="utf-8")
                 return
             except FileExistsError:
                 holder = _read_pid(self.lock_dir / "pid")
-                if holder is None or not pid_alive(holder):
+                if holder is None or not self.runtime.pid_alive(holder):
                     (self.lock_dir / "pid").unlink(missing_ok=True)
                     try:
                         self.lock_dir.rmdir()
@@ -381,10 +451,10 @@ class RestartDaemons:
                 attempts += 1
                 if attempts >= 30:
                     raise RuntimeError(f"restart-daemons lock held too long by pid={holder}")
-                time.sleep(1)
+                self.runtime.sleep(1)
 
     def _release_restart_lock(self) -> None:
-        if self.lock_dir.is_dir() and _read_pid(self.lock_dir / "pid") == os.getpid():
+        if self.lock_dir.is_dir() and _read_pid(self.lock_dir / "pid") == self.runtime.getpid():
             (self.lock_dir / "pid").unlink(missing_ok=True)
             try:
                 self.lock_dir.rmdir()
@@ -396,7 +466,7 @@ class RestartDaemons:
         stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
         return (
             pid is not None
-            and pid_alive(pid)
+            and self.runtime.pid_alive(pid)
             and self._heartbeat_is_fresh(name)
             and stored_fingerprint is not None
             and stored_fingerprint.matches(current_fingerprint)
@@ -418,6 +488,7 @@ class RestartDaemons:
             pid_file=pid_file,
             died_file=died_file,
             command=command,
+            is_alive=self.runtime.pid_alive,
         )
         if len(live) <= 1:
             return False
@@ -426,7 +497,7 @@ class RestartDaemons:
         current_fingerprint.write(self._fingerprint_path(name))
         for pid in live:
             if pid != keeper:
-                _terminate_pid(pid, self.config.stop_grace_seconds)
+                self.runtime.terminate_pid(pid, self.config.stop_grace_seconds)
         return True
 
     def _canonical_wrapper_keeper(self, name: str, live: Sequence[int]) -> int:
@@ -445,13 +516,13 @@ class RestartDaemons:
 
     def _heartbeat_is_fresh(self, name: str) -> bool:
         target = daemon_target(self.ctx, name, ())
-        return heartbeat_is_fresh(target, self.config)
+        return heartbeat_is_fresh(target, self.config, now=self.runtime.now())
 
     def _stop_existing_daemon(self, name: str) -> None:
         pid_file = self.ctx.paths.refactor_loop / "locks" / f"{name}.pid"
         pid = _read_pid(pid_file)
-        if pid is not None and pid_alive(pid):
-            _terminate_pid(pid, self.config.stop_grace_seconds)
+        if pid is not None and self.runtime.pid_alive(pid):
+            self.runtime.terminate_pid(pid, self.config.stop_grace_seconds)
         pid_file.unlink(missing_ok=True)
 
     def _fingerprint_path(self, name: str) -> Path:

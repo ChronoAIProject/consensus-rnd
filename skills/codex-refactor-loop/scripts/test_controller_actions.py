@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import ast
+import io
 import os
 import re
 import shutil
@@ -24,7 +25,11 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.banners import BannerRequest
 from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from codex_refactor_loop.controller_actions import (
+    ControllerActions,
+    ISSUE_LABELS_REMOVE,
+    PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT,
+)
 from codex_refactor_loop.git import Git
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
@@ -1335,16 +1340,30 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
             self.assertEqual(["issue", "edit", "413"], list(args)[:3])
-            return mock.Mock(returncode=7, stdout="", stderr="label update failed")
+            return mock.Mock(returncode=7, stdout="", stderr='label update failed\nmissing "phase" label')
 
+        stderr = io.StringIO()
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-                with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
-                    with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
-                        self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
+                with mock.patch("sys.stderr", stderr):
+                    with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
+                        with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                            self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
 
         pending = self.pending_events()
-        self.assertIn("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413", pending)
+        canonical_line = pending.strip()
+        self.assertEqual(canonical_line, stderr.getvalue().strip())
+        self.assertTrue(canonical_line.startswith("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413 "))
+        self.assertIn('controller_action="dispatch-consensus-implementation"', canonical_line)
+        self.assertIn('action="move-to-implementing"', canonical_line)
+        self.assertIn('target_kind="issue"', canonical_line)
+        self.assertIn('target_number="413"', canonical_line)
+        self.assertIn('issue="413"', canonical_line)
+        self.assertIn('helper="gh"', canonical_line)
+        self.assertIn('gh_rc="7"', canonical_line)
+        self.assertIn('gh_stderr="label update failed missing \\"phase\\" label"', canonical_line)
+        self.assertIn(f'add_labels="{labels.MANAGED},{labels.PHASE_IMPLEMENTING},{labels.HUMAN_AUTO}"', canonical_line)
+        self.assertIn(f'remove_labels="{",".join(ISSUE_LABELS_REMOVE)}"', canonical_line)
         self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
@@ -2631,6 +2650,27 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertIn("BODY_CLOSING_ISSUE_TARGET_RE", text)
         self.assertIn("source=\"body-link\"", text)
         self.assertIn("CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}", text)
+
+    def test_phase_transition_blocked_event_source_contract(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        for needle in (
+            "def _format_phase_transition_blocked_event",
+            "CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}",
+            '"controller_action": "dispatch-consensus-implementation"',
+            '"action": "move-to-implementing"',
+            '"target_kind": "issue"',
+            '"target_number": issue_target',
+            '"issue": issue_target',
+            '"helper": "gh"',
+            '"gh_rc": gh_rc',
+            '"gh_stderr": _single_line(gh_stderr)',
+            '"add_labels": ",".join(add_labels)',
+            '"remove_labels": ",".join(remove_labels)',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        self.assertIn("sys.stderr.write(f\"{line}\\n\")", text)
+        self.assertNotIn("failed to move issue to implementing phase", text)
 
     def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
