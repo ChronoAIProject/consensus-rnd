@@ -1134,6 +1134,67 @@ class ControllerActions:
         rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
         Path(output_path).write_text(rendered, encoding="utf-8")
 
+    def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
+        required = ("PR_TITLE", "HEAD_BRANCH", "BASE_BRANCH")
+        if all(str(existing.get(key) or "") for key in required):
+            return {key: str(existing.get(key) or "") for key in required}
+        pr_target = _normalize_lifecycle_target(pr_number, kind="pr", action="render-review-fix", source="argument")
+        result = self.gh(["pr", "view", pr_target, "--json", "title,headRefName,baseRefName"])
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"review-fix prompt render: invalid PR metadata for {pr_target}") from exc
+        return {
+            "PR_TITLE": str(payload.get("title") or f"PR {pr_target}"),
+            "HEAD_BRANCH": str(payload.get("headRefName") or ""),
+            "BASE_BRANCH": str(payload.get("baseRefName") or ""),
+        }
+
+    def _review_fix_review_paths(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
+        keys = tuple(f"REVIEW_{role.upper()}_PATH" for role in REVIEW_ROLES)
+        if all(str(existing.get(key) or "") for key in keys):
+            return {key: str(existing.get(key) or "") for key in keys}
+        latest = self._latest_review_fix_round_paths(pr_number)
+        result: dict[str, str] = {}
+        for role in REVIEW_ROLES:
+            key = f"REVIEW_{role.upper()}_PATH"
+            result[key] = latest.get(role, "")
+        return result
+
+    def _latest_review_fix_round_paths(self, pr_number: str) -> dict[str, str]:
+        by_round: dict[int, dict[str, str]] = {}
+        artifact_keys: set[tuple[str, int]] = set()
+        artifact_re = re.compile(rf"^review-pr{re.escape(pr_number)}-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
+        log_re = re.compile(rf"^review-pr{re.escape(pr_number)}-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
+        for path in sorted(self.ctx.paths.runs.glob(f"review-pr{pr_number}-*-r*.md")):
+            match = artifact_re.match(path.name)
+            if not match:
+                continue
+            role = match.group(1)
+            if role not in REVIEW_ROLES:
+                continue
+            round_number = int(match.group(2))
+            log_path = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
+            if not _review_fix_log_has_exit_zero(log_path):
+                continue
+            by_round.setdefault(round_number, {})[role] = self.ctx.durable_artifact_path(path)
+            artifact_keys.add((role, round_number))
+        for path in sorted(self.ctx.paths.logs.glob(f"review-pr{pr_number}-*-r*.log")):
+            match = log_re.match(path.name)
+            if not match:
+                continue
+            role = match.group(1)
+            if role not in REVIEW_ROLES:
+                continue
+            round_number = int(match.group(2))
+            if (role, round_number) in artifact_keys or not _review_fix_log_has_exit_zero(path):
+                continue
+            by_round.setdefault(round_number, {})[role] = self.ctx.durable_artifact_path(path)
+        complete_rounds = [round_number for round_number, paths in by_round.items() if all(role in paths for role in REVIEW_ROLES)]
+        if not complete_rounds:
+            return {}
+        return by_round[max(complete_rounds)]
+
     def render_review_fix_prompt(
         self,
         pr_number: int,
@@ -1141,7 +1202,15 @@ class ControllerActions:
         env: Mapping[str, str] | None = None,
     ) -> ReviewFixDispatchSpec:
         spec = ReviewFixDispatchSpec.for_round(pr_number, round_number)
-        render_env = dict(env or {})
+        render_env = {
+            "AUDIT_PATH": "",
+            "IMPLEMENT_SUMMARY_PATH": "",
+            "PROJECT_RULES": "CLAUDE.md",
+            "HOST_REFACTOR_COMMENT_POLICY": "none",
+        }
+        render_env.update(env or {})
+        render_env.update(self._review_fix_pr_facts(spec.pr_number, render_env))
+        render_env.update(self._review_fix_review_paths(spec.pr_number, render_env))
         render_env.update(spec.as_render_env())
         prompt_path = self.ctx.repo_root / spec.prompt_path
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1150,7 +1219,20 @@ class ControllerActions:
             str(prompt_path),
             env=render_env,
         )
+        self._replace_review_fix_shell_defaults(prompt_path, render_env)
+        self._ensure_review_fix_prompt_fully_rendered(prompt_path)
         return spec
+
+    def _replace_review_fix_shell_defaults(self, prompt_path: Path, render_env: Mapping[str, str]) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", render_env.get("PROJECT_RULES") or "CLAUDE.md")
+        prompt_path.write_text(text, encoding="utf-8")
+
+    def _ensure_review_fix_prompt_fully_rendered(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"review-fix prompt render left unresolved placeholders: {', '.join(unresolved)}")
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):
@@ -1263,6 +1345,14 @@ def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):
         raise ValueError(f"safe_worktree cluster must match [A-Za-z0-9._-]+: {cluster!r}")
+
+
+def _review_fix_log_has_exit_zero(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return any(line.strip() == "EXIT=0" for line in lines)
 
 
 def _safe_branch_name(value: str) -> bool:

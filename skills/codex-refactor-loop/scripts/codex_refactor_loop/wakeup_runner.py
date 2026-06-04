@@ -731,13 +731,58 @@ class WakeupRunner:
     def _dispatch_review_fix(self, pr_number: int) -> int:
         round_number = self._next_fix_round(pr_number)
         spec = self.actions.render_review_fix_prompt(pr_number, round_number)
+        worktree = self._review_fix_worktree(pr_number)
+        if worktree is None:
+            return 3
         return launch_spawn_codex_supervisor(
             repo_root=self.ctx.repo_root,
-            cd=self.ctx.repo_root,
+            cd=worktree,
             prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
             stall=5400,
+            add_dirs=(self.ctx.repo_root,),
         )
+
+    def _review_fix_worktree(self, pr_number: int) -> Path | None:
+        head_ref = self._pr_head_ref_from_json(pr_number)
+        if not head_ref:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_HEAD_REF_MISSING:{pr_number}")
+            return None
+        worktree = self._worktree_for_branch(head_ref)
+        if worktree is None:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:{pr_number}:{head_ref}")
+            return None
+        return worktree
+
+    def _pr_head_ref_from_json(self, pr_number: int) -> str:
+        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "headRefName"])
+        if result.returncode != 0:
+            return ""
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return ""
+        value = payload.get("headRefName") if isinstance(payload, dict) else None
+        return value.strip() if isinstance(value, str) else ""
+
+    def _worktree_for_branch(self, branch: str) -> Path | None:
+        result = self.command_runner(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"])
+        if result.returncode != 0:
+            return None
+        worktrees_root = (self.ctx.repo_root / ".worktrees").resolve()
+        current_path: Path | None = None
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current_path = Path(line.removeprefix("worktree ").strip())
+                continue
+            if line.startswith("branch ") and current_path is not None:
+                listed_branch = line.removeprefix("branch ").strip()
+                if listed_branch == f"refs/heads/{branch}":
+                    resolved = current_path.resolve()
+                    if _is_relative_to(resolved, worktrees_root) and resolved != worktrees_root:
+                        return resolved
+                current_path = None
+        return None
 
     def _review_gate_decision(self, action: Mapping[str, Any]) -> dict[str, Any]:
         target = action.get("target_number")
@@ -1086,6 +1131,14 @@ def _spawn_log_suppresses_retry(path: Path) -> bool:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def _extract_review_head_sha(text: str) -> str:
