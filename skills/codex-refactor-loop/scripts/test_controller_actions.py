@@ -108,6 +108,20 @@ class ControllerActionsTests(unittest.TestCase):
             with self.subTest(helper=helper):
                 self.assertIn(helper, source)
 
+    def test_publish_implementation_source_locks_stale_base_recovery(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        for token in (
+            "def _recover_publish_implementation_base",
+            '["fetch", "origin"]',
+            '["merge", "--no-edit", f"origin/{integration}"]',
+            '["merge", "--abort"]',
+            '"publish_stale_base_merge_conflict"',
+            "existing_pr = self._open_pr_for_head(head_ref)",
+            "pr_target = existing_pr",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, source)
+
     def test_pr_open_helpers_do_not_use_legacy_branch_alias_values(self) -> None:
         body = self.tmp / "body.md"
         body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
@@ -741,6 +755,9 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
                 sequence.append("git:branch")
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                sequence.append("git:fetch-origin")
+                return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
                 sequence.append("git:merge-base")
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
@@ -788,6 +805,7 @@ class ControllerActionsTests(unittest.TestCase):
             sequence,
             [
                 "git:branch",
+                "git:fetch-origin",
                 "git:merge-base",
                 "git:origin-base",
                 "host:true",
@@ -801,10 +819,11 @@ class ControllerActionsTests(unittest.TestCase):
             ],
         )
 
-    def test_publish_implementation_output_rejects_duplicate_pr_before_commit(self) -> None:
+    def test_publish_implementation_output_pushes_existing_open_pr_without_reopening(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             if args == ["issue", "view", "77", "--json", "labels,body"]:
@@ -821,18 +840,160 @@ class ControllerActionsTests(unittest.TestCase):
             "worktree": str(worktree),
         }
         def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args[:2] == ["bash", "-lc"]:
+                sequence.append(f"host:{args[2]}")
+                return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                sequence.append("git:branch")
                 return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                sequence.append("git:fetch-origin")
+                return mock.Mock(returncode=0, stdout="", stderr="")
             if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                sequence.append("git:merge-base")
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
             if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                sequence.append("git:origin-base")
                 return mock.Mock(returncode=0, stdout="base-sha\n", stderr="")
-            raise AssertionError(f"commit should not run: {args!r}")
+            if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
+                sequence.append("git:diff")
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                sequence.append("git:add")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+                sequence.append("git:commit")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        def fake_safe_push(*, branch: str, worktree: Path) -> int:
+            sequence.append("safe_push")
+            return 0
+
+        def fake_dispatch(review_action: Mapping[str, object]) -> int:
+            sequence.append("dispatch_reviewers")
+            self.assertEqual({"target_kind": "PR", "target_number": 414}, dict(review_action))
+            return 0
 
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
-                    self.assertEqual(2, self.actions.publish_implementation_output(action))
+                    with mock.patch.object(self.actions, "safe_push", side_effect=fake_safe_push):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("existing PR must not reopen")):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", side_effect=fake_dispatch):
+                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertIn("safe_push", sequence)
+        self.assertIn("dispatch_reviewers", sequence)
+
+    def test_publish_implementation_output_recovers_stale_base_then_opens_draft_pr(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(returncode=0, stdout="[]", stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args[:2] == ["bash", "-lc"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                sequence.append("git:fetch-origin")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                sequence.append("git:merge-base")
+                return mock.Mock(returncode=0, stdout="old-base\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                sequence.append("git:origin-base")
+                return mock.Mock(returncode=0, stdout="new-base\n", stderr="")
+            if args == ["git", "-C", str(worktree), "merge", "--no-edit", "origin/canonical-integration"]:
+                sequence.append("git:merge-integration")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "--quiet"]:
+                return mock.Mock(returncode=1, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "add", "-A"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"unexpected subprocess call: {args!r}")
+
+        def fake_open(title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
+            sequence.append("open_pr")
+            body = Path(body_file).read_text(encoding="utf-8")
+            self.assertIn("Closes #77", body)
+            self.assertEqual("canonical-integration", base)
+            self.assertEqual("refactor/iter77-issue-77", head)
+            return 414, "https://github.com/owner/repo/pull/414"
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", return_value=0):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=fake_open):
+                            with mock.patch.object(self.actions, "dispatch_reviewers", return_value=0):
+                                self.assertEqual(0, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(["git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-integration", "open_pr"], sequence)
+
+    def test_publish_implementation_output_aborts_stale_base_merge_conflict_without_pr(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        sequence: list[str] = []
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "fetch", "origin"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if args == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="old-base\n", stderr="")
+            if args == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/canonical-integration"]:
+                return mock.Mock(returncode=0, stdout="new-base\n", stderr="")
+            if args == ["git", "-C", str(worktree), "merge", "--no-edit", "origin/canonical-integration"]:
+                sequence.append("git:merge-conflict")
+                return mock.Mock(returncode=1, stdout="", stderr="conflict\n")
+            if args == ["git", "-C", str(worktree), "merge", "--abort"]:
+                sequence.append("git:merge-abort")
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"no publish side effect should run: {args!r}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                            self.assertEqual(2, self.actions.publish_implementation_output(action))
+
+        self.assertEqual(["git:merge-conflict", "git:merge-abort"], sequence)
 
     def test_dispatch_consensus_implementation_renders_prompt_from_durable_artifact_fields(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")

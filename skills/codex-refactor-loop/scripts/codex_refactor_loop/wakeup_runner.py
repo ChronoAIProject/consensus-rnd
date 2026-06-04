@@ -553,8 +553,6 @@ class WakeupRunner:
             return "publish_implementation_duplicate_pr_invalid_json"
         if not isinstance(payload, list):
             return "publish_implementation_duplicate_pr_invalid_json"
-        if payload:
-            return "publish_implementation_duplicate_open_pr"
         return None
 
     def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
@@ -571,9 +569,6 @@ class WakeupRunner:
         identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
         if identity_error:
             return identity_error
-        base_error = self._validate_fresh_implementation_base(worktree)
-        if base_error:
-            return base_error
         diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
@@ -595,18 +590,6 @@ class WakeupRunner:
         branch = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
         if branch.returncode != 0 or branch.stdout.strip() != head_ref:
             return "publish_implementation_noncanonical_identity"
-        return None
-
-    def _validate_fresh_implementation_base(self, worktree: Path) -> str | None:
-        integration = str(self.ctx.env_for_subprocess().get("INTEGRATION_BRANCH") or "").strip()
-        if not integration:
-            return "publish_implementation_integration_branch_missing"
-        merge_base = self.command_runner(["git", "-C", str(worktree), "merge-base", "HEAD", f"origin/{integration}"])
-        current = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--verify", f"origin/{integration}"])
-        if merge_base.returncode != 0 or current.returncode != 0:
-            return "publish_implementation_base_unavailable"
-        if merge_base.stdout.strip() != current.stdout.strip():
-            return "publish_implementation_stale_base"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:

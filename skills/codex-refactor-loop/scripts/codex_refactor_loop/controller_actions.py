@@ -633,12 +633,13 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
-        base_error = self._validate_publish_implementation_base(worktree)
+        base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             sys.stderr.write(f"publish_implementation_output: {base_error}\n")
             return 2
-        if self._open_pr_exists_for_head(head_ref):
-            sys.stderr.write("publish_implementation_output: duplicate open PR for head_ref\n")
+        existing_pr = self._open_pr_for_head(head_ref)
+        if existing_pr == 0:
+            sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
             return 2
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
@@ -658,9 +659,12 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"实现 issue #{issue_target}")
-        pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        if existing_pr is None:
+            body_file = self._implementation_pr_body_file(action, issue_target)
+            title = str(action.get("title") or f"实现 issue #{issue_target}")
+            pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        else:
+            pr_target = existing_pr
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -682,14 +686,20 @@ class ControllerActions:
             return "noncanonical branch"
         return None
 
-    def _validate_publish_implementation_base(self, worktree: Path) -> str | None:
+    def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
         integration, _review_base = self._require_branch_config()
+        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
+        if fetch.returncode != 0:
+            return "publish_stale_base_fetch_failed"
         merge_base = self._git_in(worktree, ["merge-base", "HEAD", f"origin/{integration}"], check=False)
         current = self._git_in(worktree, ["rev-parse", "--verify", f"origin/{integration}"], check=False)
         if merge_base.returncode != 0 or current.returncode != 0:
-            return "base unavailable"
+            return "publish_stale_base_unavailable"
         if merge_base.stdout.strip() != current.stdout.strip():
-            return "stale base"
+            merge = self._git_in(worktree, ["merge", "--no-edit", f"origin/{integration}"], check=False)
+            if merge.returncode != 0:
+                self._git_in(worktree, ["merge", "--abort"], check=False)
+                return "publish_stale_base_merge_conflict"
         return None
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
@@ -964,15 +974,21 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _open_pr_exists_for_head(self, head_ref: str) -> bool:
+    def _open_pr_for_head(self, head_ref: str) -> int | None:
         result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
         if result.returncode != 0:
-            return True
+            return 0
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return True
-        return isinstance(payload, list) and len(payload) > 0
+            return 0
+        if not isinstance(payload, list) or not payload:
+            return None
+        first = payload[0]
+        if not isinstance(first, dict):
+            return 0
+        number = first.get("number")
+        return number if isinstance(number, int) and number > 0 else 0
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()

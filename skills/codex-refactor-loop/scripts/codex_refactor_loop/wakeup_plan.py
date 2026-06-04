@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -353,8 +353,8 @@ def _revive_stale_redispatchable_implement_log(
     log_path: Path, *, now: float | None = None, monitor: Any | None = None, force: bool = False
 ) -> bool:
     """Re-trigger a stuck implement by clearing its blocking local log. Covers two
-    headless wedges: (1) a redispatchable attempt (partial/failed/markerless/
-    stale-base; the worker has a terminal EXIT so clearing is always safe), and
+    headless wedges: (1) a redispatchable attempt (partial/failed/markerless;
+    clean :ok stale-base belongs to publish recovery, not redispatch), and
     (2) a dead worker whose log is still 'in_flight' with no terminal EXIT (the
     codex or its supervisor died mid-run, e.g. when daemons are killed). Without
     this the queued spawn intent's target_log_absent precondition never clears
@@ -379,25 +379,32 @@ def _revive_stale_redispatchable_implement_log(
         return False
     repo_root = _repo_root_from_log(log_path)
     runner = lambda command: git_text(list(command), cwd=repo_root)  # noqa: E731
-    if clear_redispatchable_implement_log(
-        repo_root=repo_root,
-        log_path=log_path,
-        integration_branch=_integration_branch_from_env(),
-        command_runner=runner,
-    ):
-        return True
     state = classify_implement_attempt(
         repo_root=repo_root,
         log_path=log_path,
         integration_branch=_integration_branch_from_env(),
         command_runner=runner,
     )
+    if _publish_recoverable_stale_base_implement(state):
+        return False
+    if state.redispatch:
+        log_path.unlink(missing_ok=True)
+        return True
     if state.in_flight:
         if force and monitor is None:
             return False
         log_path.unlink(missing_ok=True)
         return True
     return False
+
+
+def _publish_recoverable_stale_base_implement(state: Any) -> bool:
+    return (
+        getattr(state, "redispatch", False)
+        and getattr(state, "reason", "") == "stale_base"
+        and str(getattr(state, "marker", "")).startswith("IMPLEMENT_DONE:")
+        and str(getattr(state, "marker", "")).endswith(":ok")
+    )
 
 
 def force_revive_stuck_implements(repo_root: Path, *, monitor: Any | None = None) -> list[dict[str, str]]:
@@ -2348,6 +2355,8 @@ def _stale_publish_implementation_reason(
         integration_branch=_integration_branch_from_env(),
         command_runner=lambda command: git_text(list(command), cwd=repo_root),
     )
+    if _publish_recoverable_stale_base_implement(state):
+        state = replace(state, status="publish_ready")
     if state.redispatch:
         clear_redispatchable_implement_log(
             repo_root=repo_root,

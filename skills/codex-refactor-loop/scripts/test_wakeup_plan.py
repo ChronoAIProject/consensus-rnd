@@ -12,6 +12,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -1326,7 +1327,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
-    def test_clean_implementation_marker_with_stale_base_redispatches_consensus_issue(self) -> None:
+    def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
         self.write_consensus_artifact()
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         log = self.logs / "implement-issue20.log"
@@ -1335,24 +1336,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="local_iter_branch_issue20_stale_base")
 
         publish = next(item for item in plan["actions"] if str(item.get("action_id") or "").startswith("completed-marker:implement-issue20"))
-        self.assertTrue(publish["status_only"])
-        self.assertEqual(publish["suppressed_reason"], "implementation_redispatch:stale_base")
-        self.assertFalse(log.exists())
-        dispatch_actions = existing_issue_actions(
-            [
-                GhItem(
-                    kind="issue",
-                    number=20,
-                    title="implementation issue",
-                    labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT),
-                )
-            ],
-            repo_root=self.repo,
+        self.assertFalse(publish.get("status_only"))
+        self.assertEqual(publish["controller_action"], "publish_implementation_output")
+        self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
+        self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertTrue(log.exists())
+        self.assertFalse(
+            any(
+                item.get("controller_action") == "dispatch_consensus_implementation"
+                and item.get("target_number") == 20
+                and not item.get("status_only")
+                for item in plan["actions"]
+            )
         )
-        dispatch = next(item for item in dispatch_actions if item.get("controller_action") == "dispatch_consensus_implementation")
-        self.assertEqual(dispatch["target_number"], 20)
-        self.assertFalse(dispatch.get("status_only"))
-        self.assertTrue(dispatch["consensus_implementation_ready"])
 
     def test_completed_marker_without_target_is_status_only_when_open_managed_read_model_is_loaded(self) -> None:
         self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
@@ -2322,6 +2318,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
 
+    def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertIn("clean :ok stale-base belongs to publish recovery, not redispatch", source)
+        self.assertIn("def _publish_recoverable_stale_base_implement", source)
+        self.assertIn('getattr(state, "reason", "") == "stale_base"', source)
+        self.assertIn('replace(state, status="publish_ready")', source)
+
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
@@ -3278,6 +3281,30 @@ class StaleRevivalTests(unittest.TestCase):
     def test_fresh_partial_implement_log_is_not_revived(self) -> None:
         log = self._write_partial(421)
         revived = _revive_stale_redispatchable_implement_log(log, now=time.time())
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_clean_ok_stale_base_implement_log_is_not_revived_for_churn(self) -> None:
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+        log = self.logs / "implement-issue-421.log"
+        log.write_text("IMPLEMENT_DONE:issue-421:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter421-issue-421\n", "")
+            if command == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/auto-refact-dev"]:
+                return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/auto-refact-dev"]:
+                return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            if command == ["git", "-C", str(worktree), "diff", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
+
         self.assertFalse(revived)
         self.assertTrue(log.exists())
 
