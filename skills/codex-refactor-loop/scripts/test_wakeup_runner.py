@@ -1912,6 +1912,60 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
+    def test_fix_done_dispatch_commits_and_pushes_fix_output_before_review(self) -> None:
+        # Headless gap fix: a FIX_DONE re-review must first commit+push the fix
+        # codex's uncommitted worktree output, else reviewers re-review the stale
+        # head forever and the reject never converges.
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, '{"headRefName": "refactor/iter77-issue-77"}', "")
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, actions=actions, command_runner=command_runner)
+        with mock.patch.object(runner, "_review_fix_worktree", return_value=worktree):
+            rc = runner._dispatch("dispatch_reviewers", self.reviewer_dispatch_action(target_number=77))
+
+        self.assertEqual(rc, 0)
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(len([call for call in actions.calls if call[0] == "safe_push"]), 1)
+        self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
+
+    def test_fix_done_dispatch_clean_worktree_skips_commit_and_reviews(self) -> None:
+        # A clean fix worktree (no uncommitted changes) is a no-op: re-review
+        # directly without an empty commit or push.
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, '{"headRefName": "refactor/iter77-issue-77"}', "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, actions=actions, command_runner=command_runner)
+        with mock.patch.object(runner, "_review_fix_worktree", return_value=worktree):
+            rc = runner._dispatch("dispatch_reviewers", self.reviewer_dispatch_action(target_number=77))
+
+        self.assertEqual(rc, 0)
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertNotIn("commit", git_subcmds)
+        self.assertEqual([call for call in actions.calls if call[0] == "safe_push"], [])
+        self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
+
     def test_release_rollup_routes_to_named_helper_after_event_body_validation(self) -> None:
         actions = FakeActions()
 
