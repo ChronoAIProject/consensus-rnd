@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import github_body, project_rules, spawn, statusline
+from . import github_body, holistic_status, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -52,6 +52,11 @@ class CommandSpec:
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
+    "holistic-status": CommandSpec(
+        holistic_status.main,
+        "render the shared read-only holistic status card",
+        ("read-state", "read-process", "read-gh"),
+    ),
     "gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",)),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
     "revive-implements": CommandSpec(revive_implements_main, "manual trigger: re-trigger stuck implement workers now (no age wait)", ("delete-log",)),

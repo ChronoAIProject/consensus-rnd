@@ -166,6 +166,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
             "COMMENT_MONITOR_INTERVAL": ("30", "unchanged `updatedAt` items skip comments queries"),
             "COMMENT_MONITOR_LOOKBACK": ("", "empty adds no lookback filter"),
+            "HOST_HOLISTIC_STATUS_ENABLE": ("false", "progress-reporter issue-comment PATCH subpath"),
+            "HOST_HOLISTIC_STATUS_INTERVAL_SECONDS": ("600", "unchanged rendered hash skips PATCH"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
         }
         for key, (default, behavior) in cases.items():
@@ -220,12 +222,24 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
                     self.assertIn("exact GitHub check-run names", row["Missing/empty behavior"])
                     self.assertIn("host-owned comma-separated exact check-run names", row["Default/example"])
                     self.assertEqual("ci,lint,typecheck", self.exports[key]["value"])
+                elif key.startswith("HOST_HOLISTIC_STATUS_"):
+                    self.assertIn(row["Category"], {"optional-noop", "defaulted"})
+                    self.assertIn("global-dashboard-status-card", row["Owner"])
                 else:
                     self.assertEqual("", self.exports[key]["value"])
                     self.assertEqual("prompt-empty-infer", row["Category"])
                     self.assertRegex(row["Missing/empty behavior"], r"infer|mirror|match|omit|diff")
         self.assertIn("do not invent a host language default", self.rows["HOST_CODE_FENCE_LANG"]["Missing/empty behavior"])
         self.assertIn("do not invent protobuf", self.rows["HOST_PROTO_POLICY"]["Missing/empty behavior"])
+
+        self.assertEqual("optional-noop", self.rows["HOST_HOLISTIC_STATUS_ENABLE"]["Category"])
+        self.assertEqual("global-dashboard-status-card", self.rows["HOST_HOLISTIC_STATUS_ENABLE"]["Owner"])
+        self.assertEqual("false", self.exports["HOST_HOLISTIC_STATUS_ENABLE"]["value"])
+        self.assertEqual("", self.exports["HOST_HOLISTIC_STATUS_ISSUE_NUMBER"]["value"])
+        self.assertEqual("", self.exports["HOST_HOLISTIC_STATUS_COMMENT_ID"]["value"])
+        self.assertEqual("600", self.exports["HOST_HOLISTIC_STATUS_INTERVAL_SECONDS"]["value"])
+        self.assertIn("PATCH this exact issue comment only", self.rows["HOST_HOLISTIC_STATUS_COMMENT_ID"]["Missing/empty behavior"])
+        self.assertIn("must not create a comment", self.rows["HOST_HOLISTIC_STATUS_COMMENT_ID"]["Missing/empty behavior"])
 
     def test_refactor_comment_policy_is_defaulted_and_registered(self) -> None:
         key = "HOST_REFACTOR_COMMENT_POLICY"
