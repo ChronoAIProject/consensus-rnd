@@ -38,11 +38,8 @@ TARGET_ANCHORS = {
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
-<<<<<<< HEAD
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
-=======
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
->>>>>>> origin/auto-refact-dev
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {

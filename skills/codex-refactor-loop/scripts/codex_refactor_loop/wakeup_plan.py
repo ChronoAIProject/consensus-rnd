@@ -14,12 +14,8 @@ import re
 import subprocess
 import sys
 import time
-<<<<<<< HEAD
-from dataclasses import dataclass
-from datetime import datetime, timezone
-=======
 from dataclasses import dataclass, replace
->>>>>>> origin/auto-refact-dev
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
