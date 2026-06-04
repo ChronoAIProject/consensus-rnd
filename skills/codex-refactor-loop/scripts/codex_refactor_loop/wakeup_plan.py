@@ -350,26 +350,31 @@ def stale_revival_seconds() -> float:
 
 
 def _revive_stale_redispatchable_implement_log(
-    log_path: Path, *, now: float | None = None, monitor: Any | None = None
+    log_path: Path, *, now: float | None = None, monitor: Any | None = None, force: bool = False
 ) -> bool:
-    """Re-trigger a stuck implement by clearing its blocking local log once the
-    log has not progressed for longer than stale_revival_seconds(). Covers two
+    """Re-trigger a stuck implement by clearing its blocking local log. Covers two
     headless wedges: (1) a redispatchable attempt (partial/failed/markerless/
-    stale-base), and (2) a dead worker whose log is still 'in_flight' with no
-    terminal EXIT (the codex or its supervisor died mid-run, e.g. when daemons
-    are killed). A live supervised codex cannot be silent past the no-output
-    stall window, so a >threshold-stale in_flight log with no live process is a
-    dead worker. Without this the queued spawn intent's target_log_absent
-    precondition never clears and the implement never re-dispatches. Age-gated
-    and live-process-gated, so a genuinely running codex is never cleared."""
+    stale-base; the worker has a terminal EXIT so clearing is always safe), and
+    (2) a dead worker whose log is still 'in_flight' with no terminal EXIT (the
+    codex or its supervisor died mid-run, e.g. when daemons are killed). Without
+    this the queued spawn intent's target_log_absent precondition never clears
+    and the implement never re-dispatches.
+
+    Automatic callers leave force=False: the log must be idle longer than
+    stale_revival_seconds() (a live supervised codex cannot be silent past the
+    no-output stall window, so a >threshold-stale in_flight log is a dead worker).
+    The manual trigger passes force=True to revive now without waiting, but then
+    an in_flight log is cleared only when a live-process check proves no codex is
+    running it, so a genuinely running worker is never cleared."""
     if not is_implement_log(log_path) or not log_path.exists():
         return False
-    try:
-        age = (now if now is not None else time.time()) - log_path.stat().st_mtime
-    except OSError:
-        return False
-    if age < stale_revival_seconds():
-        return False
+    if not force:
+        try:
+            age = (now if now is not None else time.time()) - log_path.stat().st_mtime
+        except OSError:
+            return False
+        if age < stale_revival_seconds():
+            return False
     if monitor is not None and _canonical_in_flight_for_log(log_path, monitor):
         return False
     repo_root = _repo_root_from_log(log_path)
@@ -388,9 +393,50 @@ def _revive_stale_redispatchable_implement_log(
         command_runner=runner,
     )
     if state.in_flight:
+        if force and monitor is None:
+            return False
         log_path.unlink(missing_ok=True)
         return True
     return False
+
+
+def force_revive_stuck_implements(repo_root: Path, *, monitor: Any | None = None) -> list[dict[str, str]]:
+    """Manual trigger: clear every stuck implement log now (redispatchable or
+    dead in_flight with no live worker), bypassing the stale_revival_seconds()
+    age gate, so the next wakeup-runner tick re-dispatches them. Returns the
+    revived targets with their pre-clear classification. A live codex (in the
+    process inventory) is never cleared."""
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    revived: list[dict[str, str]] = []
+    if not logs_dir.is_dir():
+        return revived
+    runner = lambda command: git_text(list(command), cwd=repo_root)  # noqa: E731
+    for log_path in sorted(logs_dir.glob("implement-issue-*.log")):
+        if not is_implement_log(log_path):
+            continue
+        before = classify_implement_attempt(
+            repo_root=repo_root,
+            log_path=log_path,
+            integration_branch=_integration_branch_from_env(),
+            command_runner=runner,
+        )
+        if _revive_stale_redispatchable_implement_log(log_path, monitor=monitor, force=True):
+            revived.append({"log": log_path.name, "was": f"{before.status}:{before.reason}".strip(":")})
+    return revived
+
+
+def revive_implements_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="consensus-rnd-cli revive-implements",
+        description="manual stale-revival: re-trigger stuck implement workers now (no age wait)",
+    )
+    parser.add_argument("--repo-root", default=None)
+    args = parser.parse_args(argv)
+    repo_root = resolve_repo_root(args.repo_root)
+    monitor = import_concurrency_monitor(repo_root)
+    revived = force_revive_stuck_implements(repo_root, monitor=monitor)
+    print(json.dumps({"revived": revived, "count": len(revived)}, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:

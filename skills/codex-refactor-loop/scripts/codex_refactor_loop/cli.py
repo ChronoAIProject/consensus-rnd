@@ -29,6 +29,7 @@ from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
 from .wakeup_plan import main as wakeup_plan_main
+from .wakeup_plan import revive_implements_main
 from .wakeup_runner import main as wakeup_runner_main
 
 
@@ -53,6 +54,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
     "gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",)),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
+    "revive-implements": CommandSpec(revive_implements_main, "manual trigger: re-trigger stuck implement workers now (no age wait)", ("delete-log",)),
     "wakeup-runner": CommandSpec(
         wakeup_runner_main,
         "apply the #396 wakeup-plan closed action projection",

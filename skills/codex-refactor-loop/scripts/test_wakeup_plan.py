@@ -26,6 +26,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     _revive_stale_redispatchable_implement_log,
     close_projection_actions,
+    force_revive_stuck_implements,
     completed_marker_actions,
     consensus_implementation_fields,
     consensus_implementation_suppressed_reason,
@@ -3246,6 +3247,48 @@ class StaleRevivalTests(unittest.TestCase):
         )
         self.assertFalse(revived)
         self.assertTrue(log.exists())
+
+    def test_force_revives_fresh_partial_without_age_wait(self) -> None:
+        # manual trigger: a just-finished partial (age 0) is NOT revived automatically
+        # but force=True clears it immediately.
+        log = self._write_partial(421)
+        self.assertFalse(_revive_stale_redispatchable_implement_log(log, now=time.time()))
+        self.assertTrue(log.exists())
+        self.assertTrue(_revive_stale_redispatchable_implement_log(log, now=time.time(), force=True))
+        self.assertFalse(log.exists())
+
+    def test_force_does_not_clear_inflight_without_monitor_proof(self) -> None:
+        # force has no age gate, so an in_flight log must be proven dead by a
+        # live-process check; with no monitor it is left alone (never orphan a codex).
+        log = self._write_inflight(421)
+        self.assertFalse(_revive_stale_redispatchable_implement_log(log, force=True, monitor=None))
+        self.assertTrue(log.exists())
+
+    def test_force_clears_inflight_when_monitor_proves_not_live(self) -> None:
+        log = self._write_inflight(421)
+
+        class _IdleMonitor:
+            def list_in_flight_codex_lines(self_inner) -> list[str]:
+                return []
+
+        self.assertTrue(
+            _revive_stale_redispatchable_implement_log(log, force=True, monitor=_IdleMonitor())
+        )
+        self.assertFalse(log.exists())
+
+    def test_force_revive_stuck_implements_scans_and_reports(self) -> None:
+        p493 = self._write_partial(493)
+        p494 = self._write_partial(494)
+        # an in_flight log (no terminal EXIT) with no monitor proof is left alone
+        inflight = self._write_inflight(490)
+        revived = force_revive_stuck_implements(self.repo, monitor=None)
+        names = {r["log"] for r in revived}
+        self.assertIn("implement-issue-493.log", names)
+        self.assertIn("implement-issue-494.log", names)
+        self.assertNotIn("implement-issue-490.log", names)
+        self.assertFalse(p493.exists())
+        self.assertFalse(p494.exists())
+        self.assertTrue(inflight.exists())
 
 
 if __name__ == "__main__":

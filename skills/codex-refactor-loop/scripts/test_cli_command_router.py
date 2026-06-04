@@ -139,6 +139,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
+                "revive-implements",
                 "update-check",
             },
             set(COMMANDS),
