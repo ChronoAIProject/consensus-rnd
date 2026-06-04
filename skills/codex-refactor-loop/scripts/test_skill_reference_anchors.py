@@ -952,7 +952,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "`require_active_controller(...)` gate on issue/PR target writes",
-            "`GitHubAuthenticatedActor` may read the current authenticated `gh` token login",
+            "`GitHubAuthenticatedActor` may read the current authenticated GitHub API caller/token login",
             "repo permission",
             "branch protection/ruleset/CODEOWNERS/required-review results",
             "only after the #191 owner gate and before the first GitHub API mutation",

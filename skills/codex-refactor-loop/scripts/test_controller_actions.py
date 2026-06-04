@@ -52,6 +52,16 @@ class SequencedGitHubActor:
         self.sequence.append(f"actor:{action}")
 
 
+class RejectingGitHubActor:
+    def __init__(self, reason: str = "github actor denied") -> None:
+        self.reason = reason
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> None:
+        self.actions.append(action)
+        raise RuntimeError(f"{self.reason}: action={action}")
+
+
 class ControllerActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
@@ -268,6 +278,29 @@ class ControllerActionsTests(unittest.TestCase):
 
         self.assertEqual(sequence, ["owner:post-banner", "actor:post-banner", "gh:pr:comment"])
 
+    def test_post_status_banner_actor_denial_blocks_tempfile_and_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch(
+                "codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile",
+                side_effect=AssertionError("tempfile should not be created"),
+            ):
+                with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "github actor denied: action=post-banner"):
+                        actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(actor.actions, ["post-banner"])
+
     def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
         cases = (
             ("stderr", "permission denied\n", "", "permission denied"),
@@ -361,6 +394,28 @@ class ControllerActionsTests(unittest.TestCase):
             "CONTROLLER_ACTION_BLOCKED:invalid-github-target:apply-human-label:pr:argument",
             self.pending_events(),
         )
+
+    def test_apply_human_label_actor_denial_returns_three_before_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="controller-label",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        stderr = io.StringIO()
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                with mock.patch("sys.stderr", stderr):
+                    result = actions.apply_human_label_or_skip("77", "META_RESOLVED:escalate-human:reason")
+
+        self.assertEqual(3, result)
+        self.assertEqual(actor.actions, ["controller-label"])
+        self.assertIn("github actor denied: action=controller-label", stderr.getvalue())
 
     def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
@@ -653,6 +708,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.publish_release_candidate(target_ref="abc")
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
 
@@ -2456,6 +2512,17 @@ class ControllerActionsTests(unittest.TestCase):
             candidate_path=".refactor-loop/state/custom-candidate.json",
             target_ref="explicit-ref",
         )
+
+    def test_publish_release_candidate_actor_denial_blocks_before_publisher(self) -> None:
+        class DenyingGitHubActor:
+            def require_admission(self, action: str) -> None:
+                raise RuntimeError(f"github-authenticated-actor:{action}: denied")
+
+        actions = ControllerActions(self.actions.ctx, github_actor=DenyingGitHubActor())
+
+        with mock.patch("codex_refactor_loop.controller_actions.ReleasePublisher", side_effect=AssertionError("publisher should not be constructed")):
+            with self.assertRaisesRegex(RuntimeError, "github-authenticated-actor:publish-release: denied"):
+                actions.publish_release_candidate(target_ref="abc123")
 
     def write_host_workflow_spec(self, data: dict) -> ControllerActions:
         (self.tmp / "workflow.json").write_text(json.dumps(data), encoding="utf-8")

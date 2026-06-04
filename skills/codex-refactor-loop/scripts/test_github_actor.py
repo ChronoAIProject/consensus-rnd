@@ -71,6 +71,12 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "authenticated login missing"):
             GitHubAuthenticatedActor(self.ctx, runner=self.runner).require_admission("merge-pr")
 
+    def test_admission_fails_closed_when_authenticated_user_api_fails(self) -> None:
+        self.user = subprocess.CompletedProcess(["gh", "api", "user"], 1, "", "bad credentials")
+
+        with self.assertRaisesRegex(RuntimeError, "gh api user failed: bad credentials"):
+            GitHubAuthenticatedActor(self.ctx, runner=self.runner).require_admission("merge-pr")
+
     def test_admission_fails_closed_without_write_permission(self) -> None:
         self.repo = subprocess.CompletedProcess(
             ["gh", "api", "repos/owner/repo/collaborators/controller-bot/permission"],
@@ -81,6 +87,17 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "lacks write permission"):
             GitHubAuthenticatedActor(self.ctx, runner=self.runner).require_admission("merge-pr")
+
+    def test_admission_fails_closed_when_repo_permission_api_fails(self) -> None:
+        self.repo = subprocess.CompletedProcess(
+            ["gh", "api", "repos/owner/repo/collaborators/controller-bot/permission"],
+            1,
+            "",
+            "permission denied",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "collaborators/controller-bot/permission failed: permission denied"):
+            GitHubAuthenticatedActor(self.ctx, runner=self.runner).require_admission("open-pr")
 
     def test_admission_accepts_collaborator_permission_values_at_or_above_write(self) -> None:
         for permission in ("write", "maintain", "admin"):
