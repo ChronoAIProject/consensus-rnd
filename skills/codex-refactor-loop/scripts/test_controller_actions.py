@@ -2131,6 +2131,20 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
                 self.assertIn(needle, text)
         self.assertIn("validate_self_contained_github_body", text)
 
+    def test_phase_label_remove_sets_are_canonical_only_no_legacy_aliases(self) -> None:
+        # gh issue/pr edit --remove-label hard-fails the whole edit when any name
+        # is absent from the repository. Legacy emoji/alias labels are not kept in
+        # the repo, so the removal sets must list only canonical crnd:* labels;
+        # historical labels are not managed by the loop.
+        from codex_refactor_loop import labels as labels_mod
+        from codex_refactor_loop.controller_actions import ISSUE_LABELS_REMOVE, PR_LABELS_REMOVE
+
+        aliases = set(labels_mod.cleanup_aliases())
+        for name in (*ISSUE_LABELS_REMOVE, *PR_LABELS_REMOVE):
+            with self.subTest(label=name):
+                self.assertTrue(name.startswith("crnd:"), name)
+                self.assertNotIn(name, aliases, name)
+
     def test_status_banner_action_is_owner_gated_and_uses_gh_comment_command(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         method = text[text.index("def post_status_banner") : text.index("    def safe_sync_main")]

@@ -345,7 +345,6 @@ exit 0
             *labels.labels_for_group("phase"),
             labels.HUMAN_MAINTAINER_DECISION,
             labels.STUCK,
-            *labels.cleanup_aliases(),
         ):
             expected_pr_edit.extend(["--remove-label", label])
         expected_pr_edit.extend(["--add-label", labels.PHASE_MERGED])
@@ -357,7 +356,6 @@ exit 0
             labels.HUMAN_AUTO,
             labels.HUMAN_MAINTAINER_DECISION,
             labels.STUCK,
-            *labels.cleanup_aliases(),
         ):
             expected_issue_edit.extend(["--remove-label", label])
         expected_issue_edit.extend(["--add-label", labels.PHASE_MERGED])

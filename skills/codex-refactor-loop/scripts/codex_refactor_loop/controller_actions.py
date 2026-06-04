@@ -31,18 +31,20 @@ from .wakeup_plan import consensus_implementation_suppressed_reason
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
+# Removal sets list only canonical crnd:* labels that exist in the repository.
+# gh issue/pr edit --remove-label hard-fails the whole edit on any name absent
+# from the repo, and legacy emoji/alias labels are not maintained there, so they
+# are intentionally excluded; historical labels are not managed by the loop.
 PR_LABELS_REMOVE = (
     *labels.labels_for_group("phase"),
     labels.HUMAN_MAINTAINER_DECISION,
     labels.STUCK,
-    *labels.cleanup_aliases(),
 )
 ISSUE_LABELS_REMOVE = (
     *labels.labels_for_group("phase"),
     labels.HUMAN_AUTO,
     labels.HUMAN_MAINTAINER_DECISION,
     labels.STUCK,
-    *labels.cleanup_aliases(),
 )
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
