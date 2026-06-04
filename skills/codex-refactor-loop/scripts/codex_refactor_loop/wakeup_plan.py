@@ -265,7 +265,7 @@ def harness_spawn_intent_actions(
         except Exception as exc:
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
-        _revive_stale_redispatchable_implement_log(log_path)
+        _revive_stale_redispatchable_implement_log(log_path, monitor=monitor)
         if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
         if _suppress_harness_spawn_intent(
@@ -349,14 +349,19 @@ def stale_revival_seconds() -> float:
     return hours * 3600.0
 
 
-def _revive_stale_redispatchable_implement_log(log_path: Path, *, now: float | None = None) -> bool:
+def _revive_stale_redispatchable_implement_log(
+    log_path: Path, *, now: float | None = None, monitor: Any | None = None
+) -> bool:
     """Re-trigger a stuck implement by clearing its blocking local log once the
-    attempt is redispatchable (partial/failed/markerless/stale-base) AND has not
-    progressed for longer than stale_revival_seconds(). Otherwise a partial
-    implement log permanently fails the queued spawn intent's target_log_absent
-    precondition and the implement re-dispatch never fires (headless wedge).
-    Age-gated and redispatch-gated, so an in-flight (no terminal EXIT) or freshly
-    finished attempt is never cleared; only genuinely idle stuck work revives."""
+    log has not progressed for longer than stale_revival_seconds(). Covers two
+    headless wedges: (1) a redispatchable attempt (partial/failed/markerless/
+    stale-base), and (2) a dead worker whose log is still 'in_flight' with no
+    terminal EXIT (the codex or its supervisor died mid-run, e.g. when daemons
+    are killed). A live supervised codex cannot be silent past the no-output
+    stall window, so a >threshold-stale in_flight log with no live process is a
+    dead worker. Without this the queued spawn intent's target_log_absent
+    precondition never clears and the implement never re-dispatches. Age-gated
+    and live-process-gated, so a genuinely running codex is never cleared."""
     if not is_implement_log(log_path) or not log_path.exists():
         return False
     try:
@@ -365,13 +370,27 @@ def _revive_stale_redispatchable_implement_log(log_path: Path, *, now: float | N
         return False
     if age < stale_revival_seconds():
         return False
+    if monitor is not None and _canonical_in_flight_for_log(log_path, monitor):
+        return False
     repo_root = _repo_root_from_log(log_path)
-    return clear_redispatchable_implement_log(
+    runner = lambda command: git_text(list(command), cwd=repo_root)  # noqa: E731
+    if clear_redispatchable_implement_log(
         repo_root=repo_root,
         log_path=log_path,
         integration_branch=_integration_branch_from_env(),
-        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+        command_runner=runner,
+    ):
+        return True
+    state = classify_implement_attempt(
+        repo_root=repo_root,
+        log_path=log_path,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=runner,
     )
+    if state.in_flight:
+        log_path.unlink(missing_ok=True)
+        return True
+    return False
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:

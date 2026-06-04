@@ -3213,10 +3213,37 @@ class StaleRevivalTests(unittest.TestCase):
         self.assertFalse(revived)
         self.assertTrue(log.exists())
 
-    def test_inflight_log_never_revived_even_when_old(self) -> None:
-        log = self.logs / "implement-issue-421.log"
-        log.write_text("still working, no terminal exit yet\n", encoding="utf-8")
+    def _write_inflight(self, issue: int) -> Path:
+        # no terminal EXIT line => classify() == in_flight (e.g. a codex/supervisor
+        # killed mid-run, the cut-off-daemon wedge)
+        log = self.logs / f"implement-issue-{issue}.log"
+        log.write_text(
+            "codex\nFocused suite 仍未结束，当前还是正常通过输出。\n", encoding="utf-8"
+        )
+        return log
+
+    def test_dead_inflight_log_revived_when_old_and_no_live_process(self) -> None:
+        log = self._write_inflight(421)
         revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 100 * 3600)
+        self.assertTrue(revived)
+        self.assertFalse(log.exists())
+
+    def test_inflight_log_not_revived_when_fresh(self) -> None:
+        log = self._write_inflight(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time())
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_inflight_log_not_revived_when_live_process_present(self) -> None:
+        log = self._write_inflight(421)
+
+        class _LiveMonitor:
+            def list_in_flight_codex_lines(self_inner) -> list[str]:
+                return [f"spawn-codex --log {log} --stall 5400"]
+
+        revived = _revive_stale_redispatchable_implement_log(
+            log, now=time.time() + 100 * 3600, monitor=_LiveMonitor()
+        )
         self.assertFalse(revived)
         self.assertTrue(log.exists())
 
