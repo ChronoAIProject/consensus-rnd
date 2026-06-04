@@ -44,6 +44,14 @@ class AllowingGitHubActor:
         self.actions.append(action)
 
 
+class SequencedGitHubActor:
+    def __init__(self, sequence: list[str]) -> None:
+        self.sequence = sequence
+
+    def require_admission(self, action: str) -> None:
+        self.sequence.append(f"actor:{action}")
+
+
 class ControllerActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
@@ -232,6 +240,34 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("post-banner", status["action"])
         self.assertEqual(self.actor.actions, ["post-banner"])
 
+    def test_post_status_banner_runs_github_actor_admission_after_owner_gate_before_mutation(self) -> None:
+        sequence: list[str] = []
+        actions = ControllerActions(self.actions.ctx, github_actor=SequencedGitHubActor(sequence))
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            sequence.append(f"gh:{args[0]}:{args[1]}")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77#issuecomment-1\n", stderr="")
+
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        def fake_owner(ctx: LoopContext, action: str) -> mock.Mock:
+            self.assertEqual(self.actions.ctx, ctx)
+            sequence.append(f"owner:{action}")
+            return decision
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", side_effect=fake_owner):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(sequence, ["owner:post-banner", "actor:post-banner", "gh:pr:comment"])
+
     def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
         cases = (
             ("stderr", "permission denied\n", "", "permission denied"),
@@ -282,6 +318,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner action=post-banner"):
                         self.actions.post_status_banner(self.banner_request())
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
         self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
@@ -795,11 +832,7 @@ class ControllerActionsTests(unittest.TestCase):
             if args == ["git", "-C", str(worktree), "add", "-A"]:
                 sequence.append("git:add")
                 return mock.Mock(returncode=0, stdout="", stderr="")
-<<<<<<< HEAD
-            if args == ["git", "-C", str(worktree), "commit", "-m", "实施 issue #77"]:
-=======
             if args == ["git", "-C", str(worktree), "commit", "-m", "实现 issue #77"]:
->>>>>>> origin/auto-refact-dev
                 sequence.append("git:commit")
                 return mock.Mock(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected subprocess call: {args!r}")
@@ -811,19 +844,11 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_open(title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
             sequence.append("open_pr")
-<<<<<<< HEAD
-            self.assertEqual("实施 issue #77", title)
-            self.assertEqual("canonical-integration", base)
-            self.assertEqual("refactor/iter77-issue-77", head)
-            body = Path(body_file).read_text(encoding="utf-8")
-            self.assertIn("## 实施 issue #77", body)
-=======
             self.assertEqual("实现 issue #77", title)
             self.assertEqual("canonical-integration", base)
             self.assertEqual("refactor/iter77-issue-77", head)
             body = Path(body_file).read_text(encoding="utf-8")
             self.assertIn("## issue #77 实现", body)
->>>>>>> origin/auto-refact-dev
             self.assertIn("Closes #77", body)
             self.assertTrue(body.splitlines()[-1] == "⟦AI:AUTO-LOOP⟧")
             return 414, "https://github.com/owner/repo/pull/414"

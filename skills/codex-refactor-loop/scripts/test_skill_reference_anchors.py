@@ -1091,11 +1091,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
-<<<<<<< HEAD
-            "COMMANDS": {"cli.py", "gh_accounting.py", "gh_invoke.py", "restart.py"},
-=======
             "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
->>>>>>> origin/auto-refact-dev
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():

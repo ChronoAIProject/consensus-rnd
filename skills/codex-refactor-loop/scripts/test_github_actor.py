@@ -63,6 +63,7 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
                 ["gh", "api", "repos/owner/repo"],
             ],
         )
+        self.assertFalse(any(command[1:3] in (["issue", "view"], ["pr", "view"], ["issue", "edit"], ["pr", "edit"]) for command in self.commands))
 
     def test_admission_fails_closed_without_authenticated_login(self) -> None:
         self.user = subprocess.CompletedProcess(["gh", "api", "user"], 0, "{}", "")

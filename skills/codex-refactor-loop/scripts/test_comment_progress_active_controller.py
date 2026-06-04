@@ -52,9 +52,13 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
         api_calls: list[list[str]] = []
 
         with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(False)):
-            with mock.patch.object(monitor, "gh", side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
-                with mock.patch.object(monitor, "gh_api", side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
-                    monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
+            with mock.patch(
+                "codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission",
+                side_effect=AssertionError("admission should not run for non-owner"),
+            ):
+                with mock.patch.object(monitor, "gh", side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
+                    with mock.patch.object(monitor, "gh_api", side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
+                        monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
 
         self.assertEqual(gh_calls, [])
         self.assertEqual(api_calls, [])
@@ -64,21 +68,28 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
         monitor = CommentMonitor(self.ctx)
         gh_calls: list[list[str]] = []
         api_calls: list[list[str]] = []
+        sequence: list[str] = []
 
         def fake_gh(args, check=True):
+            sequence.append(f"gh:{args[0]}:{args[1]}")
             gh_calls.append(list(args))
             return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
 
         def fake_api(args, check=True):
+            sequence.append(f"api:{args[0]}")
             api_calls.append(list(args))
             return subprocess.CompletedProcess(args, 0, "", "")
 
+        def fake_admission(_actor, action: str) -> None:
+            sequence.append(f"actor:{action}")
+
         with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(True)):
-            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission") as admission:
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission", fake_admission) as admission:
                 with mock.patch.object(monitor, "gh", side_effect=fake_gh), mock.patch.object(monitor, "gh_api", side_effect=fake_api):
                     monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
 
-        admission.assert_called_once_with("comment-monitor-write")
+        self.assertEqual(sequence[0], "actor:comment-monitor-write")
+        self.assertEqual(sequence[1], "api:repos/owner/repo/issues/comments/123/reactions")
         self.assertTrue(any("reactions" in call[0] for call in api_calls))
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls))
         self.assertTrue(monitor.seen("123"))

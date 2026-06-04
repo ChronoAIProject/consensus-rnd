@@ -1020,18 +1020,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
             "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
             "is_spawn_action = budget.is_spawn_action(action)",
-<<<<<<< HEAD
             "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
-=======
->>>>>>> origin/auto-refact-dev
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
-<<<<<<< HEAD
         self.assertIn("continue", run_once)
-=======
->>>>>>> origin/auto-refact-dev
         self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",

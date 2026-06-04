@@ -76,19 +76,11 @@ class ControllerActions:
         return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-<<<<<<< HEAD
-        coerced = [str(a) for a in args]
-        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *coerced])
-        result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
-        if check and result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(coerced)} failed")
-=======
         argv = [str(a) for a in args]
         full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *argv])
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(argv)} failed")
->>>>>>> origin/auto-refact-dev
         return result
 
     def git(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -592,7 +584,11 @@ class ControllerActions:
         issue, verdict, rel_path = match.groups()
         if not self._require_github_actor_or_return("apply-triage", code=3):
             return 3
-        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
+        triage_env = dict(self.ctx.host_env)
+        triage_env["REPO_ROOT"] = str(self.ctx.repo_root)
+        if self.ctx.gh_repo_slug:
+            triage_env["GH_REPO_SLUG"] = self.ctx.gh_repo_slug
+        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=triage_env, cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
@@ -669,25 +665,6 @@ class ControllerActions:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
             return 3
-<<<<<<< HEAD
-        if self._git_in(worktree, ["diff", "--quiet"], check=False).returncode == 0:
-            sys.stderr.write("publish_implementation_output: empty scoped diff\n")
-            return 2
-        add = self._git_in(worktree, ["add", "-A"], check=False)
-        if add.returncode != 0:
-            return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"实施 issue #{issue_target}"], check=False)
-        if commit.returncode != 0:
-            if commit.stderr:
-                sys.stderr.write(commit.stderr)
-            return commit.returncode
-        pushed = self.safe_push(branch=head_ref, worktree=worktree)
-        if pushed != 0:
-            return pushed
-        body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"实施 issue #{issue_target}")
-        pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-=======
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
@@ -697,7 +674,6 @@ class ControllerActions:
             pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         else:
             pr_target = existing_pr
->>>>>>> origin/auto-refact-dev
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -1179,11 +1155,7 @@ class ControllerActions:
         path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-<<<<<<< HEAD
-            f"## 实施 issue #{issue_target}\n\n"
-=======
             f"## issue #{issue_target} 实现\n\n"
->>>>>>> origin/auto-refact-dev
             f"Closes #{issue_target}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
