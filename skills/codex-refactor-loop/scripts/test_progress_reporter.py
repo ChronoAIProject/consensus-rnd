@@ -250,6 +250,101 @@ class ProgressReporterTests(unittest.TestCase):
         prompt.write_text("Discuss #80 then final target #81.\n", encoding="utf-8")
         self.assertEqual("81", reporter.parse_target(base))
 
+    def test_global_status_card_disabled_noops_without_github(self) -> None:
+        reporter = ProgressReporter(self.ctx)
+
+        with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("gh api should not be called")):
+            reporter.sync_global_status_card()
+
+        self.assertEqual({}, reporter._state())
+
+    def test_global_status_card_non_owner_noops_without_patch(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
+            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
+            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        reporter = ProgressReporter(ctx)
+        decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="global-dashboard-status-card", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("patch should not be called")):
+                reporter.sync_global_status_card()
+
+        self.assertEqual({}, reporter._state())
+
+    def test_global_status_card_same_hash_skip_does_not_patch(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
+            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
+            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n'
+            'export HOST_HOLISTIC_STATUS_INTERVAL_SECONDS="0"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        reporter = ProgressReporter(ctx)
+        body = "stable body\n"
+        state_file = self.tmp / ".refactor-loop" / "codex-progress-state.json"
+        state_file.write_text(
+            json.dumps({"__global_dashboard_status_card__": {"last_md5": "placeholder", "last_synced_at": 0}}),
+            encoding="utf-8",
+        )
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+        state["__global_dashboard_status_card__"]["last_md5"] = __import__(
+            "codex_refactor_loop.monitors.progress", fromlist=["hash_body"]
+        ).hash_body(body)
+        state_file.write_text(json.dumps(state), encoding="utf-8")
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="global-dashboard-status-card", lease_id="", expires_at="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "build_global_status_body", return_value=body):
+                with mock.patch.object(reporter, "gh_api", side_effect=AssertionError("same hash should not patch")):
+                    reporter.sync_global_status_card()
+
+        self.assertEqual("issue-comment", reporter._state()["__global_dashboard_status_card__"]["kind"])
+
+    def test_global_status_card_patches_fixed_issue_comment_only(self) -> None:
+        host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
+        host_env.write_text(
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export HOST_HOLISTIC_STATUS_ENABLE="true"\n'
+            'export HOST_HOLISTIC_STATUS_ISSUE_NUMBER="9"\n'
+            'export HOST_HOLISTIC_STATUS_COMMENT_ID="123"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        reporter = ProgressReporter(ctx)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="global-dashboard-status-card", lease_id="", expires_at="")
+        calls: list[list[str]] = []
+
+        def fake_gh_api(args, check=True):
+            del check
+            calls.append(list(args))
+            return mock.Mock(returncode=0, stdout="{}", stderr="")
+
+        with mock.patch("codex_refactor_loop.monitors.progress.require_active_controller", return_value=decision):
+            with mock.patch.object(reporter, "build_global_status_body", return_value="changed body\n"):
+                with mock.patch.object(reporter, "gh", side_effect=AssertionError("writer must not use gh comment create")):
+                    with mock.patch.object(reporter, "gh_api", side_effect=fake_gh_api):
+                        reporter.sync_global_status_card()
+
+        self.assertEqual(1, len(calls))
+        self.assertEqual(["-X", "PATCH", "repos/owner/repo/issues/comments/123"], calls[0][:3])
+        self.assertTrue(calls[0][3].startswith("-F"))
+        state = reporter._state()["__global_dashboard_status_card__"]
+        self.assertEqual("issue-comment", state["kind"])
+        self.assertEqual("9", state["target"])
+        self.assertEqual("123", state["comment_id"])
+
 
 class ProgressReporterSourceRegressionTests(unittest.TestCase):
     def test_forbidden_lifecycle_tokens_are_absent(self) -> None:
@@ -258,6 +353,26 @@ class ProgressReporterSourceRegressionTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertNotIn(token, text)
         self.assertIn("TEST_NO_LOOP", text)
+
+    def test_global_status_writer_source_boundary(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "progress.py").read_text(encoding="utf-8")
+
+        for token in (
+            "global-dashboard-status-card",
+            "HOST_HOLISTIC_STATUS_ENABLE",
+            "HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "HOST_HOLISTIC_STATUS_INTERVAL_SECONDS",
+            "require_active_controller",
+            '"-X", "PATCH"',
+            "issues/comments",
+            "render_holistic_markdown",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, text)
+        for forbidden in ("discussion", "gh issue comment", "gh pr comment", "issue/body", "pulls/comments"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, text.lower())
         executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
         self.assertNotIn(r"^phase9-issue([0-9]+).*", executable)
         for token in (

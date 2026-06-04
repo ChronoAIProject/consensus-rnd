@@ -279,6 +279,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
 
+<<<<<<< HEAD
     def test_task_spawn_claim_documents_spawn_boundary_not_distributed_authority(self) -> None:
         section = section_after_anchor(self.skill, "task-spawn-claim-490")
         spawn_pattern = self.skill
@@ -305,6 +306,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
         self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
         self.assertIn("not the enforcement point", spawn_pattern)
+=======
+    def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
+
+        for needle in (
+            "HolisticStatusProjection",
+            "single shared read-only algorithm",
+            "`consensus-rnd-cli holistic-status` renders the full local card",
+            "`peek` may only reuse `render_peek_summary(...)`",
+            "progress-reporter",
+            "$HOST_HOLISTIC_STATUS_ENABLE=true",
+            "$HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "$HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "PATCH exactly one host-configured issue comment id",
+            "no new daemon",
+            "no public writer CLI",
+            "no create comment",
+            "no issue body edit",
+            "no PR body/title edit",
+            "no Discussions",
+            "no labels",
+            "no create/close/reopen/merge",
+            "no tag/release",
+            "no git",
+            "no generic GitHub writer",
+            "no prompt-body/prose decision reads",
+            "no multi-carrier grammar",
+            "no standalone dashboard truth source",
+            "no standalone dependency truth source",
+            "test_holistic_status.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+>>>>>>> origin/auto-refact-dev
 
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
@@ -1471,6 +1506,26 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, batching)
+
+    def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
+        source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")
+        for needle in (
+            "class HeadlessDogfoodFixture",
+            "Phase9Router",
+            "build_plan",
+            "WakeupRunner",
+            "FakeControllerActions",
+            "dispatch_consensus_implementation",
+            "merge_pr",
+            "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, source)
+        self.assertNotIn("time.sleep", source)
+        self.assertNotIn("gh issue close", source)
+        self.assertNotIn("gh pr merge", source)
 
     def test_wakeup_plan_release_rollup_freshness_prunes_superseded_local_evidence(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")
