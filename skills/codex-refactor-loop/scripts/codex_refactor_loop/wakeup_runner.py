@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
-from .controller_actions import ControllerActions
+from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
@@ -263,6 +263,11 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
+        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
+            return self._record(
+                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
+                action,
+            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code != 0:
@@ -553,8 +558,6 @@ class WakeupRunner:
             return "publish_implementation_duplicate_pr_invalid_json"
         if not isinstance(payload, list):
             return "publish_implementation_duplicate_pr_invalid_json"
-        if payload:
-            return "publish_implementation_duplicate_open_pr"
         return None
 
     def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
@@ -571,10 +574,7 @@ class WakeupRunner:
         identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
         if identity_error:
             return identity_error
-        base_error = self._validate_fresh_implementation_base(worktree)
-        if base_error:
-            return base_error
-        diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
@@ -595,18 +595,6 @@ class WakeupRunner:
         branch = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
         if branch.returncode != 0 or branch.stdout.strip() != head_ref:
             return "publish_implementation_noncanonical_identity"
-        return None
-
-    def _validate_fresh_implementation_base(self, worktree: Path) -> str | None:
-        integration = str(self.ctx.env_for_subprocess().get("INTEGRATION_BRANCH") or "").strip()
-        if not integration:
-            return "publish_implementation_integration_branch_missing"
-        merge_base = self.command_runner(["git", "-C", str(worktree), "merge-base", "HEAD", f"origin/{integration}"])
-        current = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--verify", f"origin/{integration}"])
-        if merge_base.returncode != 0 or current.returncode != 0:
-            return "publish_implementation_base_unavailable"
-        if merge_base.stdout.strip() != current.stdout.strip():
-            return "publish_implementation_stale_base"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:

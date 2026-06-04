@@ -363,7 +363,7 @@ def review_fix_terminal_marker_section(body: str) -> str:
 
 def marker_allowlist_section(body: str) -> str:
     match = re.search(
-        r"## Marker emission allowlist\(强制\)\n(?P<section>.*?)\n## Hard rules",
+        r"## Marker emission allowlist(?:\(强制\)| \(required\))\n(?P<section>.*?)\n## Hard rules",
         body,
         flags=re.S,
     )
