@@ -321,7 +321,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "pr77")]:
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
-                if command[3:] == ["diff", "--quiet"]:
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, git_diff_code, "", "")
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
@@ -1135,6 +1135,28 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "helper_exit:7")
 
+    def test_publish_implementation_output_delegated_fallback_is_retryable(self) -> None:
+        actions = FakeActions(publish_code=75)
+        action = self.implementation_output_action(action_id="publish-implementation:delegated-fallback")
+
+        first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assertEqual(first[0].status, "delegated")
+        self.assertEqual(first[0].reason, "publish_implementation_fallback_delegated")
+        self.assertEqual(second[0].status, "delegated")
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
+        ledger_rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual([row["status"] for row in ledger_rows], ["delegated", "delegated"])
+        pending_path = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending = pending_path.read_text(encoding="utf-8") if pending_path.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_HELPER_EXIT", pending)
+
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
 
@@ -1378,13 +1400,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 None,
             ),
             (
-                "duplicate-pr",
-                self.implementation_output_action(action_id="publish-implementation:duplicate-pr"),
-                "publish_implementation_duplicate_open_pr",
-                1,
-                [{"number": 99}],
-            ),
-            (
                 "empty-diff",
                 self.implementation_output_action(action_id="publish-implementation:empty-diff"),
                 "publish_implementation_empty_scoped_diff",
@@ -1404,6 +1419,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     actions=actions,
                 )
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_publish_implementation_output_allows_existing_open_pr_for_helper_reuse(self) -> None:
+        actions = FakeActions()
+        action = self.implementation_output_action(action_id="publish-implementation:existing-pr")
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=1,
+            duplicate_prs=[{"number": 99}],
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_wakeup_runner_source_locks_publish_stale_base_recovery_delegation(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        publish_validator = source[source.index("    def _validate_publish_implementation") : source.index("    def _validate_dispatch_reviewers")]
+        worktree_validator = source[source.index("    def _validate_implementation_worktree") : source.index("    def _validate_canonical_implementation_identity")]
+        duplicate_validator = source[source.index("    def _validate_no_duplicate_open_pr") : source.index("    def _validate_implementation_worktree")]
+        self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
+        self.assertNotIn("merge-base", publish_validator + worktree_validator)
+        self.assertNotIn("publish_implementation_duplicate_open_pr", duplicate_validator)
+        self.assertIn('["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]', worktree_validator)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -1652,7 +1691,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_clean_implementation_on_stale_base_blocks_publish_for_redispatch(self) -> None:
+    def test_clean_implementation_on_stale_base_routes_to_publish_helper_for_recovery(self) -> None:
         actions = FakeActions()
 
         results = self.run_result(
@@ -1662,14 +1701,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             implementation_base=("old-base", "new-base"),
         )
 
-        self.assert_blocked_before_dispatch(
-            results,
-            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
-            "publish_implementation_stale_base",
-            actions,
-        )
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_blocks_stale_base_before_helper(self) -> None:
+    def test_publish_implementation_output_does_not_block_stale_base_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -1689,6 +1724,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, "old-base\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
                     return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+                if command[3:] == ["diff", "HEAD", "--quiet"]:
+                    return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(
@@ -1701,12 +1738,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assert_blocked_before_dispatch(
-            results,
-            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
-            "publish_implementation_stale_base",
-            actions,
-        )
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
