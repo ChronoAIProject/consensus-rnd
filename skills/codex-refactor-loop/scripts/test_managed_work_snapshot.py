@@ -153,6 +153,63 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertFalse(unavailable.loaded_ok)
         self.assertEqual("graphql-headroom-low", unavailable.reason)
 
+    def test_fetch_failure_with_headroom_uses_stale_cache(self) -> None:
+        path = self.tmp / STATE_RELATIVE_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "fetched_at_epoch": 1000,
+                    "items": [{"kind": "issue", "number": 3, "labels": [label_catalog.MANAGED]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        calls: list[list[str]] = []
+
+        def failed_runner(command):
+            calls.append(list(command))
+            return subprocess.CompletedProcess(command, 1, "", "gh unavailable")
+
+        snapshot = ManagedWorkSnapshot(self.ctx, ttl_seconds=300, stale_max_seconds=900, runner=failed_runner, now=lambda: 1600)
+        with mock.patch("codex_refactor_loop.managed_work_snapshot.graphql_headroom_ok", return_value=True):
+            result = snapshot.load()
+
+        self.assertTrue(result.loaded_ok)
+        self.assertEqual("cache:stale", result.source)
+        self.assertEqual(600, result.age_seconds)
+        self.assertEqual(({"kind": "issue", "number": 3, "labels": [label_catalog.MANAGED]},), result.items)
+        self.assertEqual(1, len(calls))
+        self.assertEqual(["gh", "api"], calls[0][:2])
+
+    def test_fetch_failure_without_usable_stale_cache_returns_fetch_failed(self) -> None:
+        path = self.tmp / STATE_RELATIVE_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "fetched_at_epoch": 1000,
+                    "items": [{"kind": "issue", "number": 4, "labels": [label_catalog.MANAGED]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        snapshot = ManagedWorkSnapshot(
+            self.ctx,
+            ttl_seconds=300,
+            stale_max_seconds=900,
+            runner=lambda command: subprocess.CompletedProcess(command, 1, "", "gh unavailable"),
+            now=lambda: 2001,
+        )
+        with mock.patch("codex_refactor_loop.managed_work_snapshot.graphql_headroom_ok", return_value=True):
+            result = snapshot.load()
+
+        self.assertFalse(result.loaded_ok)
+        self.assertEqual("unavailable", result.source)
+        self.assertEqual("fetch-failed", result.reason)
+
     def test_source_does_not_create_forbidden_budget_or_open_work_env_names(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "managed_work_snapshot.py").read_text(encoding="utf-8")
         for forbidden in ("MANAGED_WORK_GRAPHQL_", "GITHUB_OPEN_ITEMS_", "OPEN_MANAGED_WORK_"):
