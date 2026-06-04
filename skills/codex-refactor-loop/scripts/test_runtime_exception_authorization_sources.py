@@ -821,8 +821,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
-        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", entry)
         self.assertIn("`ManagedWorkSnapshot` open managed projection", self.skill)
+        self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
+        self.assertIn("snapshot unavailable 时 fail closed", self.skill)
         self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",

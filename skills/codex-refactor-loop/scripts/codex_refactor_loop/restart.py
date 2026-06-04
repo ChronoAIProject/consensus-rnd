@@ -29,10 +29,21 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("comment-monitor", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "comment-monitor", "--daemon")),
     ("codex-progress-reporter", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "progress-reporter", "--daemon")),
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
-    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")),
+    (
+        "phase9_router_daemon",
+        ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "{phase9_router_interval_seconds}"),
+    ),
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
-    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "120")),
+    (
+        "wakeup_runner_daemon",
+        ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "{wakeup_runner_interval_seconds}"),
+    ),
 )
+
+DAEMON_COMMAND_ENV_PLACEHOLDERS: dict[str, tuple[str, str]] = {
+    "{phase9_router_interval_seconds}": ("PHASE9_ROUTER_INTERVAL_SECONDS", "120"),
+    "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "120"),
+}
 
 def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
@@ -184,10 +195,7 @@ class DaemonProcessInventory:
 
 
 def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) -> DaemonTarget:
-    command = tuple(
-        part.replace("{skill_root}", str(ctx.skill_root)).replace("{repo_root}", str(ctx.repo_root))
-        for part in command_template
-    )
+    command = tuple(_resolve_daemon_command_part(ctx, part) for part in command_template)
     return DaemonTarget(
         name=name,
         command=command,
@@ -390,8 +398,6 @@ class RestartDaemons:
                 "RESTART_DAEMON_NAME": name,
                 "RESTART_DAEMON_HEARTBEAT_FILE": str(hb_file),
                 "RESTART_DAEMON_HEARTBEAT_INTERVAL": str(self.config.heartbeat_interval),
-                "PHASE9_ROUTER_INTERVAL_SECONDS": "120",
-                "WAKEUP_RUNNER_INTERVAL_SECONDS": "120",
                 "PYTHONPATH": f"{self.ctx.skill_root / 'scripts'}{os.pathsep}{env.get('PYTHONPATH', '')}",
             }
         )
@@ -508,10 +514,7 @@ class RestartDaemons:
             stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
             if stored_fingerprint is not None:
                 current_command = next((command for daemon, command in DAEMON_COMMANDS if daemon == name), ())
-                resolved = tuple(
-                    part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
-                    for part in current_command
-                )
+                resolved = daemon_target(self.ctx, name, current_command).command
                 if stored_fingerprint.matches(self._current_fingerprint(name, resolved)):
                     return pid
         return min(live)
@@ -545,6 +548,22 @@ class RestartDaemons:
     @staticmethod
     def _log(message: str) -> None:
         print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
+
+
+def _resolve_daemon_command_part(ctx: LoopContext, part: str) -> str:
+    if part in DAEMON_COMMAND_ENV_PLACEHOLDERS:
+        env_name, default = DAEMON_COMMAND_ENV_PLACEHOLDERS[part]
+        return _positive_env_int(ctx, env_name, default)
+    return part.replace("{skill_root}", str(ctx.skill_root)).replace("{repo_root}", str(ctx.repo_root))
+
+
+def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
+    raw = ctx.env_for_subprocess().get(env_name, default)
+    try:
+        parsed = int(str(raw))
+    except ValueError:
+        return default
+    return str(parsed) if parsed > 0 else default
 
 
 WRAPPER_CODE = r'''

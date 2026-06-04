@@ -22,6 +22,38 @@ DEFAULT_TTL_SECONDS = 300
 DEFAULT_STALE_MAX_SECONDS = 900
 STATE_RELATIVE_PATH = Path(".refactor-loop/state/managed-work-snapshot.json")
 LOCK_RELATIVE_PATH = Path(".refactor-loop/locks/managed-work-snapshot.lock")
+_SNAPSHOT_SEARCH_QUERY = """
+query($searchQuery: String!, $perPage: Int!) {
+  search(query: $searchQuery, type: ISSUE, first: $perPage) {
+    nodes {
+      __typename
+      ... on Issue {
+        number
+        title
+        updatedAt
+        labels(first: 30) {
+          nodes {
+            name
+          }
+        }
+      }
+      ... on PullRequest {
+        number
+        title
+        updatedAt
+        body
+        headRefName
+        headRefOid
+        labels(first: 30) {
+          nodes {
+            name
+          }
+        }
+      }
+    }
+  }
+}
+"""
 
 
 @dataclass(frozen=True)
@@ -82,7 +114,7 @@ class ManagedWorkSnapshot:
     def _fetch_open_managed_items(self) -> list[dict[str, Any]] | None:
         if not self.ctx.gh_repo_slug:
             return None
-        rows = self._open_managed_issue_rows()
+        rows = self._open_managed_rows()
         if rows is None:
             return None
         items: list[dict[str, Any]] = []
@@ -94,55 +126,42 @@ class ManagedWorkSnapshot:
                 number = int(row["number"])
             except (KeyError, TypeError, ValueError):
                 continue
-            kind = "PR" if row.get("pull_request") else "issue"
+            typename = str(row.get("__typename") or "")
+            kind = "PR" if typename == "PullRequest" else "issue"
             key = (kind, number)
             if key in seen:
                 continue
             seen.add(key)
             labels = tuple(
                 str(label.get("name") or "")
-                for label in row.get("labels", [])
+                for label in ((row.get("labels") or {}).get("nodes") or [])
                 if isinstance(label, dict) and label.get("name")
             )
             normalized = label_catalog.normalize_label_set(labels)
             if label_catalog.MANAGED not in normalized.canonical:
                 continue
-            body = ""
-            head_ref = None
-            head_sha = ""
-            if kind == "PR":
-                details = self._pr_details(number)
-                if details is None:
-                    return None
-                body = str(details.get("body") or "")
-                head_ref = str(details.get("headRefName") or "") or None
-                head_sha = str(details.get("headRefOid") or "")
             items.append(
                 {
                     "kind": kind,
                     "number": number,
                     "title": str(row.get("title") or ""),
                     "labels": list(labels),
-                    "head_ref": head_ref,
-                    "head_sha": head_sha,
-                    "body": body,
+                    "head_ref": (str(row.get("headRefName") or "") or None) if kind == "PR" else None,
+                    "head_sha": str(row.get("headRefOid") or "") if kind == "PR" else "",
+                    "body": str(row.get("body") or "") if kind == "PR" else "",
                     "state": "open",
-                    "updated_at": str(row.get("updated_at") or ""),
+                    "updated_at": str(row.get("updatedAt") or ""),
                     "snapshot_source": "github-open-managed-items",
                 }
             )
         return sorted(items, key=lambda item: (0 if item["kind"] == "issue" else 1, int(item["number"])))
 
-    def _open_managed_issue_rows(self) -> list[dict[str, Any]] | None:
-        rows_by_key: dict[tuple[bool, int], dict[str, Any]] = {}
+    def _open_managed_rows(self) -> list[dict[str, Any]] | None:
+        rows_by_key: dict[tuple[str, int], dict[str, Any]] = {}
         for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            endpoint = (
-                f"repos/{self.ctx.gh_repo_slug}/issues?state=open"
-                f"&labels={quote(query_label, safe='')}&per_page=100"
-            )
-            rows = self._gh_api_json(endpoint)
+            rows = self._graphql_search_rows(f'repo:{self.ctx.gh_repo_slug} is:open label:"{_escape_search_label(query_label)}"')
             if rows is None:
-                return None
+                return self._open_managed_rows_from_rest()
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -150,21 +169,56 @@ class ManagedWorkSnapshot:
                     number = int(row["number"])
                 except (KeyError, TypeError, ValueError):
                     continue
-                is_pr = bool(row.get("pull_request"))
-                current = rows_by_key.get((is_pr, number))
-                if current is None or str(row.get("updated_at") or "") > str(current.get("updated_at") or ""):
-                    rows_by_key[(is_pr, number)] = row
+                typename = str(row.get("__typename") or "")
+                if typename not in {"Issue", "PullRequest"}:
+                    continue
+                current = rows_by_key.get((typename, number))
+                if current is None or str(row.get("updatedAt") or "") > str(current.get("updatedAt") or ""):
+                    rows_by_key[(typename, number)] = row
         return list(rows_by_key.values())
 
-    def _gh_api_json(self, endpoint: str) -> list[dict[str, Any]] | None:
-        result = self._run(["gh", "api", endpoint])
-        if result.returncode != 0 or not result.stdout.strip():
-            return None
-        try:
-            data = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return None
-        return data if isinstance(data, list) else None
+    def _open_managed_rows_from_rest(self) -> list[dict[str, Any]] | None:
+        rows_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+            endpoint = (
+                f"repos/{self.ctx.gh_repo_slug}/issues?state=open"
+                f"&labels={quote(query_label, safe='')}&per_page=100"
+            )
+            result = self._run(["gh", "api", endpoint])
+            if result.returncode != 0 or not result.stdout.strip():
+                return None
+            try:
+                rows = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(rows, list):
+                return None
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                node = _legacy_rest_row_to_graphql_node(row)
+                try:
+                    number = int(node["number"])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                typename = str(node.get("__typename") or "")
+                if typename not in {"Issue", "PullRequest"}:
+                    continue
+                if typename == "PullRequest":
+                    details = self._pr_details(number)
+                    if details is None:
+                        return None
+                    node.update(
+                        {
+                            "body": str(details.get("body") or ""),
+                            "headRefName": str(details.get("headRefName") or ""),
+                            "headRefOid": str(details.get("headRefOid") or ""),
+                        }
+                    )
+                current = rows_by_key.get((typename, number))
+                if current is None or str(node.get("updatedAt") or "") > str(current.get("updatedAt") or ""):
+                    rows_by_key[(typename, number)] = node
+        return list(rows_by_key.values())
 
     def _pr_details(self, number: int) -> dict[str, Any] | None:
         result = self._run(
@@ -186,6 +240,31 @@ class ManagedWorkSnapshot:
         except json.JSONDecodeError:
             return None
         return data if isinstance(data, dict) else None
+
+    def _graphql_search_rows(self, search_query: str) -> list[dict[str, Any]] | None:
+        result = self._run(
+            [
+                "gh",
+                "api",
+                "graphql",
+                "-f",
+                f"query={_SNAPSHOT_SEARCH_QUERY}",
+                "-f",
+                f"searchQuery={search_query}",
+                "-F",
+                "perPage=100",
+            ]
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(data, list):
+            return [_legacy_rest_row_to_graphql_node(row) for row in data if isinstance(row, dict)]
+        nodes = (((data.get("data") or {}).get("search") or {}).get("nodes") if isinstance(data, dict) else None)
+        return nodes if isinstance(nodes, list) else None
 
     def _run(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
         if self.runner is not None:
@@ -262,3 +341,18 @@ def _positive_int(value: int | None, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _escape_search_label(label: str) -> str:
+    return label.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _legacy_rest_row_to_graphql_node(row: dict[str, Any]) -> dict[str, Any]:
+    node = dict(row)
+    node["__typename"] = "PullRequest" if row.get("pull_request") else "Issue"
+    if "updatedAt" not in node and "updated_at" in row:
+        node["updatedAt"] = row.get("updated_at")
+    labels = row.get("labels")
+    if isinstance(labels, list):
+        node["labels"] = {"nodes": labels}
+    return node

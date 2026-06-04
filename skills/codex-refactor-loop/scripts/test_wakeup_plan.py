@@ -2701,7 +2701,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, projection.string_literals)
         snapshot_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "managed_work_snapshot.py").read_text(encoding="utf-8")
-        self.assertIn('"body,headRefName,headRefOid"', snapshot_source)
+        for token in ("gh\",", "api\",", "graphql", "body", "headRefName", "headRefOid"):
+            with self.subTest(snapshot_token=token):
+                self.assertIn(token, snapshot_source)
+        caller_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertNotIn("issue list", caller_source)
+        self.assertNotIn("pr list", caller_source)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
 

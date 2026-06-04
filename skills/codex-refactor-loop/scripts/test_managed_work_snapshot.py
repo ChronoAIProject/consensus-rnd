@@ -43,43 +43,49 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
 
         def runner(command):
             calls.append(list(command))
-            text = " ".join(command)
-            if command[:2] == ["gh", "api"]:
+            if command[:3] == ["gh", "api", "graphql"]:
                 return subprocess.CompletedProcess(
                     command,
                     0,
                     json.dumps(
-                        [
-                            {
-                                "number": 516,
-                                "title": "snapshot",
-                                "updated_at": "2026-06-05T00:00:00Z",
-                                "labels": [
-                                    {"name": label_catalog.MANAGED},
-                                    {"name": label_catalog.PHASE_DESIGN_SOLVING},
-                                    {"name": label_catalog.HUMAN_AUTO},
-                                ],
-                            },
-                            {
-                                "number": 12,
-                                "title": "pr",
-                                "updated_at": "2026-06-05T00:01:00Z",
-                                "pull_request": {"url": "https://api.github.test/pr/12"},
-                                "labels": [
-                                    {"name": label_catalog.MANAGED},
-                                    {"name": label_catalog.PHASE_REVIEWING},
-                                    {"name": label_catalog.HUMAN_AUTO},
-                                ],
-                            },
-                        ]
+                        {
+                            "data": {
+                                "search": {
+                                    "nodes": [
+                                        {
+                                            "__typename": "Issue",
+                                            "number": 516,
+                                            "title": "snapshot",
+                                            "updatedAt": "2026-06-05T00:00:00Z",
+                                            "labels": {
+                                                "nodes": [
+                                                    {"name": label_catalog.MANAGED},
+                                                    {"name": label_catalog.PHASE_DESIGN_SOLVING},
+                                                    {"name": label_catalog.HUMAN_AUTO},
+                                                ]
+                                            },
+                                        },
+                                        {
+                                            "__typename": "PullRequest",
+                                            "number": 12,
+                                            "title": "pr",
+                                            "updatedAt": "2026-06-05T00:01:00Z",
+                                            "body": "Closes #516",
+                                            "headRefName": "refactor/iter516-issue-516",
+                                            "headRefOid": "abc1234",
+                                            "labels": {
+                                                "nodes": [
+                                                    {"name": label_catalog.MANAGED},
+                                                    {"name": label_catalog.PHASE_REVIEWING},
+                                                    {"name": label_catalog.HUMAN_AUTO},
+                                                ]
+                                            },
+                                        },
+                                    ]
+                                }
+                            }
+                        }
                     ),
-                    "",
-                )
-            if "pr view 12" in text:
-                return subprocess.CompletedProcess(
-                    command,
-                    0,
-                    json.dumps({"body": "Closes #516", "headRefName": "refactor/iter516-issue-516", "headRefOid": "abc1234"}),
                     "",
                 )
             return subprocess.CompletedProcess(command, 1, "", "unexpected")
@@ -93,6 +99,13 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertEqual((self.tmp / STATE_RELATIVE_PATH).resolve(), snapshot.state_path.resolve())
         self.assertEqual((self.tmp / LOCK_RELATIVE_PATH).resolve(), snapshot.lock_path.resolve())
         self.assertEqual([("issue", 516), ("PR", 12)], [(item["kind"], item["number"]) for item in result.items])
+        self.assertGreaterEqual(len(calls), 1)
+        for command in calls:
+            self.assertEqual(["gh", "api", "graphql"], command[:3])
+            self.assertIn("searchQuery=repo:owner/repo is:open label:", " ".join(command))
+            self.assertNotIn("issue list", " ".join(command))
+            self.assertNotIn("pr list", " ".join(command))
+            self.assertNotIn("pr view", " ".join(command))
         pr = next(item for item in result.items if item["kind"] == "PR")
         self.assertEqual("refactor/iter516-issue-516", pr["head_ref"])
         self.assertEqual("Closes #516", pr["body"])
@@ -180,8 +193,58 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertEqual("cache:stale", result.source)
         self.assertEqual(600, result.age_seconds)
         self.assertEqual(({"kind": "issue", "number": 3, "labels": [label_catalog.MANAGED]},), result.items)
-        self.assertEqual(1, len(calls))
-        self.assertEqual(["gh", "api"], calls[0][:2])
+        self.assertEqual(2, len(calls))
+        self.assertEqual(["gh", "api", "graphql"], calls[0][:3])
+        self.assertEqual(["gh", "api"], calls[1][:2])
+        self.assertIn("issues?state=open", calls[1][2])
+
+    def test_graphql_failure_can_use_snapshot_owned_rest_compatibility_fallback(self) -> None:
+        calls: list[list[str]] = []
+
+        def runner(command):
+            calls.append(list(command))
+            if command[:3] == ["gh", "api", "graphql"]:
+                return subprocess.CompletedProcess(command, 1, "", "graphql unavailable")
+            if command[:2] == ["gh", "api"] and "issues?state=open" in command[2]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        [
+                            {
+                                "number": 12,
+                                "title": "pr",
+                                "updated_at": "2026-06-05T00:01:00Z",
+                                "pull_request": {"url": "https://api.github.test/pr/12"},
+                                "labels": [
+                                    {"name": label_catalog.MANAGED},
+                                    {"name": label_catalog.PHASE_REVIEWING},
+                                    {"name": label_catalog.HUMAN_AUTO},
+                                ],
+                            }
+                        ]
+                    ),
+                    "",
+                )
+            if command[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps({"body": "Closes #516", "headRefName": "refactor/iter516-issue-516", "headRefOid": "abc1234"}),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+        snapshot = ManagedWorkSnapshot(self.ctx, runner=runner, now=lambda: 1000)
+        with mock.patch("codex_refactor_loop.managed_work_snapshot.graphql_headroom_ok", return_value=True):
+            result = snapshot.load()
+
+        self.assertTrue(result.loaded_ok)
+        self.assertEqual("live", result.source)
+        self.assertEqual([("PR", 12)], [(item["kind"], item["number"]) for item in result.items])
+        self.assertTrue(any(command[:3] == ["gh", "api", "graphql"] for command in calls))
+        self.assertTrue(any(command[:2] == ["gh", "api"] and "issues?state=open" in command[2] for command in calls))
+        self.assertTrue(any(command[:3] == ["gh", "pr", "view"] for command in calls))
 
     def test_fetch_failure_without_usable_stale_cache_returns_fetch_failed(self) -> None:
         path = self.tmp / STATE_RELATIVE_PATH
