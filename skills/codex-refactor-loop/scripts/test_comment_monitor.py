@@ -19,6 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
 
 
@@ -82,38 +83,42 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertEqual(state_file, monitor.state_file)
         self.assertEqual(9, monitor.interval)
 
-    def test_targets_queries_canonical_and_legacy_managed_labels_for_issues_and_prs(self) -> None:
+    def test_targets_use_managed_work_snapshot(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
-        responses = {
-            ("issue", label_catalog.MANAGED): "8\n2\n",
-            ("issue", "auto-loop"): "2\n11\n",
-            ("issue", "phase9-auto-solve"): "11\n",
-            ("issue", "refactor-design-needed"): "",
-            ("pr", label_catalog.MANAGED): "3\n8\n",
-            ("pr", "auto-loop"): "1\n3\n",
-            ("pr", "phase9-auto-solve"): "",
-            ("pr", "refactor-design-needed"): "8\n",
-        }
-        calls: list[tuple[str, str]] = []
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                {"kind": "issue", "number": 8, "updated_at": "2026-06-05T00:00:00Z"},
+                {"kind": "PR", "number": 3, "updated_at": "2026-06-05T00:01:00Z"},
+                {"kind": "issue", "number": 11, "updated_at": "2026-06-05T00:02:00Z"},
+            ),
+            True,
+            "cache:fresh",
+        )
+        with mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=snapshot):
+            self.assertEqual(monitor.targets(), ["3", "8", "11"])
 
-        def fake_run(command, cwd, *, check):
-            del cwd, check
-            self.assertEqual(command[0], "gh")
-            kind = command[1]
-            label = command[command.index("--label") + 1]
-            calls.append((kind, label))
-            return mock.Mock(returncode=0, stdout=responses[(kind, label)], stderr="")
+    def test_targets_fail_closed_when_managed_work_snapshot_unavailable(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low")
+        with mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=snapshot):
+            self.assertEqual(monitor.targets(), [])
 
-        with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
-            self.assertEqual(monitor.targets(), ["1", "2", "3", "8", "11"])
+    def active_snapshot(self, number: str = "42", updated_at: str = "2026-05-30T00:00:00Z") -> ManagedWorkSnapshotResult:
+        return ManagedWorkSnapshotResult(({"kind": "issue", "number": int(number), "updated_at": updated_at},), True, "cache:fresh")
 
-        expected_calls = {
-            (kind, label)
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-        }
-        self.assertEqual(set(calls), expected_calls)
-        self.assertEqual(len(calls), len(expected_calls))
+    def test_search_active_uses_snapshot_updated_at_projection(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                {"kind": "issue", "number": 8, "updated_at": "2026-06-05T00:00:00Z"},
+                {"kind": "PR", "number": 8, "updated_at": "2026-06-05T00:01:00Z"},
+                {"kind": "issue", "number": 3, "updated_at": "2026-06-05T00:02:00Z"},
+            ),
+            True,
+            "cache:fresh",
+        )
+        with mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=snapshot):
+            self.assertEqual(monitor._search_active(), {"3": "2026-06-05T00:02:00Z", "8": "2026-06-05T00:01:00Z"})
 
     def test_team_comment_reacts_appends_pending_event_and_marks_seen(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
@@ -189,7 +194,10 @@ class CommentMonitorTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
             return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
+        with (
+            mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot()),
+        ):
             monitor.tick()
 
         self.assertFalse(any(call.endswith("/comments?per_page=20") for call in calls))
@@ -223,6 +231,7 @@ class CommentMonitorTests(unittest.TestCase):
         with (
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
             mock.patch.object(monitor, "post_banner") as post_banner,
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot(updated_at="2026-05-30T00:02:00Z")),
         ):
             monitor.tick()
 
@@ -245,7 +254,10 @@ class CommentMonitorTests(unittest.TestCase):
                 return mock.Mock(returncode=0, stdout=json.dumps([]), stderr="")
             return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
+        with (
+            mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot()),
+        ):
             monitor.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
@@ -263,12 +275,18 @@ class CommentMonitorTests(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
         first = CommentMonitor(self.ctx, interval=1)
-        with mock.patch.object(first, "gh_api", side_effect=fake_gh_api):
+        with (
+            mock.patch.object(first, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot()),
+        ):
             first.tick()
         self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
 
         second = CommentMonitor(self.ctx, interval=1)
-        with mock.patch.object(second, "gh_api", side_effect=fake_gh_api):
+        with (
+            mock.patch.object(second, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot()),
+        ):
             second.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
@@ -284,7 +302,10 @@ class CommentMonitorTests(unittest.TestCase):
                 return mock.Mock(returncode=1, stdout="", stderr="rate limited")
             return mock.Mock(returncode=0, stdout=json.dumps([self._active_item("42", "2026-05-30T00:00:00Z")]), stderr="")
 
-        with mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api):
+        with (
+            mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot()),
+        ):
             monitor.tick()
 
         state = json.loads((self.tmp / ".refactor-loop" / "comment-monitor-state.json").read_text(encoding="utf-8"))
@@ -302,21 +323,22 @@ class CommentMonitorTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "2026-05-01"}),
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot(updated_at="2026-04-30T00:00:00Z")),
         ):
             monitor.tick()
 
-        self.assertTrue(captured)
-        self.assertTrue(all("/issues?state=open&labels=" in query for query in captured))
+        self.assertFalse(captured)
         self.assertEqual(monitor._last_updated_at(), {})
 
         captured.clear()
         with (
             mock.patch.dict(os.environ, {"COMMENT_MONITOR_LOOKBACK": "updated:>=2026-05-02"}),
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=self.active_snapshot(updated_at="2026-04-30T00:00:00Z")),
         ):
             monitor.tick()
 
-        self.assertTrue(captured)
+        self.assertFalse(captured)
         self.assertEqual(monitor._last_updated_at(), {})
 
     def _active_item(self, number: str, updated_at: str) -> dict[str, object]:

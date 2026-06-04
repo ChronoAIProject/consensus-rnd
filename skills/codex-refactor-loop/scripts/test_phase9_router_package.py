@@ -14,6 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
@@ -26,6 +27,26 @@ from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKE
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
+
+
+def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult:
+    items = []
+    for row in rows:
+        labels = [
+            label.get("name", "")
+            for label in row.get("labels", [])  # type: ignore[union-attr]
+            if isinstance(label, dict) and label.get("name")
+        ]
+        items.append(
+            {
+                "kind": "issue",
+                "number": row.get("number"),
+                "title": row.get("title", ""),
+                "labels": labels,
+                "state": "open",
+            }
+        )
+    return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
 
 
 class Phase9RouterPackageTests(unittest.TestCase):
@@ -140,10 +161,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
@@ -183,10 +201,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)

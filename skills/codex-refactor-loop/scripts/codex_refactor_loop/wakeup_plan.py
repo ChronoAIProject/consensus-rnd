@@ -25,6 +25,7 @@ from codex_refactor_loop.implement_lifecycle import (
     clear_redispatchable_implement_log,
     is_implement_log,
 )
+from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
@@ -1572,45 +1573,30 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
 
 
 def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
-    slug = github_repo_slug()
+    ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+    snapshot = load_open_managed_work_snapshot(ctx)
     items: list[GhItem] = []
-    loaded_ok = True
-    for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
-        rows: list[dict[str, Any]] = []
-        json_fields = "number,title,labels,headRefName,headRefOid,body" if kind == "PR" else "number,title,labels"
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
-            data = run_json(command, cwd=repo_root)
-            if isinstance(data, list):
-                rows.extend(item for item in data if isinstance(item, dict))
-            else:
-                loaded_ok = False
-        seen: set[int] = set()
-        for raw in rows:
-            try:
-                number = int(raw["number"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if number in seen:
-                continue
-            seen.add(number)
-            labels = tuple(
-                label.get("name", "")
-                for label in raw.get("labels", [])
-                if isinstance(label, dict) and label.get("name")
+    if not snapshot.loaded_ok:
+        return items, False
+    for raw in snapshot.items:
+        try:
+            number = int(raw["number"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        labels = tuple(str(label) for label in raw.get("labels", ()) if str(label))
+        kind = str(raw.get("kind") or "issue")
+        items.append(
+            GhItem(
+                kind=kind,
+                number=number,
+                title=str(raw.get("title") or ""),
+                labels=labels,
+                head_ref=(str(raw.get("head_ref") or "") or None) if kind == "PR" else None,
+                head_sha=str(raw.get("head_sha") or "") if kind == "PR" else "",
+                body=str(raw.get("body") or "") if kind == "PR" else "",
             )
-            items.append(
-                GhItem(
-                    kind=kind,
-                    number=number,
-                    title=str(raw.get("title") or ""),
-                    labels=labels,
-                    head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
-                    head_sha=str(raw.get("headRefOid") or "") if kind == "PR" else "",
-                    body=str(raw.get("body") or "") if kind == "PR" else "",
-                )
-            )
-    return items, loaded_ok
+        )
+    return items, True
 
 
 def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:

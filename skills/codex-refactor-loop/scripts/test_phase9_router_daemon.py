@@ -15,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
 from codex_refactor_loop.phase9.router import (
     IssueSourceSnapshot,
     Marker,
@@ -28,6 +29,26 @@ from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKE
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
+
+
+def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult:
+    items = []
+    for row in rows:
+        labels = [
+            label.get("name", "")
+            for label in row.get("labels", [])  # type: ignore[union-attr]
+            if isinstance(label, dict) and label.get("name")
+        ]
+        items.append(
+            {
+                "kind": "issue",
+                "number": row.get("number"),
+                "title": row.get("title", ""),
+                "labels": labels,
+                "state": "open",
+            }
+        )
+    return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
 
 
 class Phase9RouterDaemonTests(unittest.TestCase):
@@ -446,10 +467,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ],
         }
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
             self.router.tick()
 
@@ -497,10 +515,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         }
         self.write_log("phase9-issue416-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
             fresh_router = self.new_router()
             fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
@@ -537,11 +552,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 3600\n"
 
         def fake_run(command, **kwargs):
-            if command[:2] == ["gh", "issue"]:
-                return mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr="")
             return mock.Mock(returncode=0, stdout=ps_output, stderr="")
 
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run),
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])),
+        ):
             self.router.tick()
 
         self.assertEqual(self.commands, [])
@@ -560,10 +576,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         legacy_minimal = self.repo / ".refactor-loop" / "logs" / "solver-issue417-r1-minimal.log"
         legacy_minimal.write_text("legacy minimal already seeded\n", encoding="utf-8")
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
 
         self.assertEqual(
@@ -598,10 +611,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             },
         ]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(self.commands, [])

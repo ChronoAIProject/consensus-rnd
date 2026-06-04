@@ -29,6 +29,7 @@ from ..active_controller import require_active_controller, write_active_controll
 from ..context import LoopContext
 from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
@@ -595,54 +596,20 @@ class Phase9Router:
                     ledger.add(key)
 
     def _open_design_consensus_issues(self) -> list[DesignConsensusIssue]:
-        if not self.ctx.gh_repo_slug:
-            return []
-        command = [
-            "gh",
-            "issue",
-            "list",
-            "--repo",
-            self.ctx.gh_repo_slug,
-            "--state",
-            "open",
-            "--label",
-            label_catalog.MANAGED,
-            "--json",
-            "number,title,labels",
-        ]
-        try:
-            result = subprocess.run(
-                command,
-                cwd=str(self.repo_root),
-                capture_output=True,
-                text=True,
-                check=False,
-                env=self.ctx.env_for_subprocess(),
-                timeout=15,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return []
-        if result.returncode != 0:
-            return []
-        try:
-            rows = json.loads(result.stdout)
-        except json.JSONDecodeError:
-            return []
-        if not isinstance(rows, list):
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
             return []
         issues: list[DesignConsensusIssue] = []
-        for row in rows:
+        for row in snapshot.items:
             if not isinstance(row, dict):
                 continue
             try:
                 number = str(int(row["number"]))
             except (KeyError, TypeError, ValueError):
                 continue
-            labels = tuple(
-                label.get("name", "")
-                for label in row.get("labels", [])
-                if isinstance(label, dict) and isinstance(label.get("name"), str)
-            )
+            if str(row.get("kind") or "issue") != "issue":
+                continue
+            labels = tuple(str(label) for label in row.get("labels", []) if str(label))
             normalized = label_catalog.normalize_label_set(labels)
             if label_catalog.MANAGED not in normalized.canonical:
                 continue

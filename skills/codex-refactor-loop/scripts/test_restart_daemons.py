@@ -187,7 +187,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
         self.assertIn(("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")), DAEMON_COMMANDS)
-        self.assertIn(("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")), DAEMON_COMMANDS)
+        self.assertIn(
+            ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")),
+            DAEMON_COMMANDS,
+        )
+        self.assertIn(
+            ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "120")),
+            DAEMON_COMMANDS,
+        )
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
 
     def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
@@ -491,6 +498,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("heartbeat_file", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_FILE", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_INTERVAL", source)
+        self.assertIn("PHASE9_ROUTER_INTERVAL_SECONDS", source)
+        self.assertIn("WAKEUP_RUNNER_INTERVAL_SECONDS", source)
         history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
         for needle in history_forbidden:
             with self.subTest(needle=needle):

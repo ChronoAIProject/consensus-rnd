@@ -440,6 +440,130 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         gh.chmod(0o755)
 
+    def write_managed_work_snapshot_fixture(self, fixture: str) -> None:
+        path = self.repo / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if fixture == "gh_failure":
+            path.unlink(missing_ok=True)
+            return
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "managed-work-snapshot",
+                    "fetched_at_epoch": time.time(),
+                    "items": self.managed_work_snapshot_items(fixture),
+                    "not_live_state_fact_source": True,
+                    "not_host_production_ssot": True,
+                    "no_lifecycle_authority": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def managed_work_snapshot_items(self, fixture: str) -> list[dict[str, object]]:
+        def issue(number: int, title: str, labels: list[str]) -> dict[str, object]:
+            return {"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": "2026-06-05T00:00:00Z"}
+
+        def pr(
+            number: int,
+            title: str,
+            labels: list[str],
+            *,
+            head_ref: str = "",
+            head_sha: str = "",
+            body: str = "",
+        ) -> dict[str, object]:
+            return {
+                "kind": "PR",
+                "number": number,
+                "title": title,
+                "labels": labels,
+                "head_ref": head_ref or None,
+                "head_sha": head_sha,
+                "body": body,
+                "state": "open",
+                "updated_at": "2026-06-05T00:00:00Z",
+            }
+
+        managed = label_catalog.MANAGED
+        auto = label_catalog.HUMAN_AUTO
+        issue_rows: dict[str, list[dict[str, object]]] = {
+            "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue20_stale_base": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto, label_catalog.MILESTONE_CURRENT])],
+            "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "remote_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_331": [issue(331, "different open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issues_330_331_332": [
+                issue(330, "first target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(331, "overlap target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(332, "disjoint target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+            ],
+            "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "consensus_issue_330": [issue(330, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "managed_dual_read": [
+                issue(81, "canonical issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(82, "legacy issue", ["auto-loop", "🔧 phase:fixing", "🤖 human:codex"]),
+            ],
+            "milestone": [
+                issue(20, "milestone issue", ["auto-loop", "🎯 milestone", "🔍 phase:design-solving"]),
+                issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"]),
+            ],
+            "existing": [issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"])],
+            "transition_sort": [
+                issue(60, "unknown issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(61, "positive issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(62, "classifier issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(63, "confident classifier issue", ["auto-loop", "🔧 phase:fixing"]),
+            ],
+            "many_active": [issue(number, f"active issue {number}", ["auto-loop", "🔧 phase:fixing"]) for number in range(1, 7)],
+            "represented_parent": [issue(239, "represented parent", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "pr_open_parent": [issue(239, "parent issue with open PR", [managed, label_catalog.PHASE_PR_OPEN, auto])],
+            "non_action_statuses": [
+                issue(40, "blocked issue", ["auto-loop", "⏸️ phase:blocked"]),
+                issue(41, "merged issue", ["auto-loop", "🎉 phase:merged"]),
+                issue(44, "parent issue with child PR", ["auto-loop", "crnd:phase:pr-open"]),
+            ],
+        }
+        pr_rows: dict[str, list[dict[str, object]]] = {
+            "managed_dual_read": [
+                pr(91, "canonical PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/canonical"),
+                pr(92, "legacy PR", ["refactor-design-needed", "🔍 phase:design-solving", "🤖 human:auto-推进"], head_ref="impl/legacy"),
+            ],
+            "unpushed": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_fetch_fail": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_ahead": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_remote": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_worktree": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_head_dash": [pr(78, "unsafe dash head", ["auto-loop", "👀 phase:reviewing"], head_ref="-bad")],
+            "unpushed_head_space": [pr(79, "unsafe space head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad ref")],
+            "unpushed_head_control": [pr(80, "unsafe control head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad\u0001ref")],
+            "ci_red": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
+            "ci_red_issue20": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
+            "open_pr_123": [pr(123, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr123")],
+            "open_pr_480": [
+                pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            ],
+            "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "closing_pr_issue20": [
+                issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
+            "milestone": [pr(30, "milestone PR", ["auto-loop", "🎯 milestone", "👀 phase:reviewing"])],
+            "non_action_statuses": [
+                pr(42, "non-red CI PR", ["auto-loop", "⚙️ phase:ci-running"]),
+                pr(43, "merged PR", ["auto-loop", "🎉 phase:merged"]),
+            ],
+        }
+        return [*issue_rows.get(fixture, []), *pr_rows.get(fixture, [])]
+
     def write_fake_git(self) -> None:
         git = self.fakebin / "git"
         git.write_text(
@@ -601,6 +725,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -640,6 +765,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -2452,7 +2578,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_source_locks_reviewer_head_redispatch_contract(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
         for token in (
-            "headRefName,headRefOid,body",
+            "head_sha=str(raw.get(\"head_sha\") or \"\")",
             "def review_evidence_redispatch_actions(",
             "latest_reviewer_heads(repo_root, item.number)",
             "by_role: dict[str, tuple[int, str]]",
@@ -3038,13 +3164,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
         self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
         query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8").splitlines()
-        expected = [
-            f"{kind} {label}"
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-        ]
-        expected.append("api milestones")
-        self.assertEqual(query_log, expected)
+        self.assertEqual(query_log, ["api milestones"])
+        snapshot = json.loads((self.repo / ".refactor-loop/state/managed-work-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(snapshot["items"]), 4)
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
         plan = self.run_plan(fixture="non_action_statuses")
@@ -3080,7 +3202,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn('"--state", "open"', source)
+        self.assertIn("load_open_managed_work_snapshot(ctx)", source)
         self.assertNotIn('"--state", "closed"', source)
         self.assertNotIn('"--state", "merged"', source)
 

@@ -20,6 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels as label_catalog
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
 
 
 class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
@@ -66,129 +67,84 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
 
+    def fake_snapshot(self) -> ManagedWorkSnapshotResult:
+        return ManagedWorkSnapshotResult(
+            (
+                {
+                    "kind": "issue",
+                    "number": 51,
+                    "labels": ["auto-loop", "🛠️ phase:implementing", "🤖 human:codex"],
+                    "body": "",
+                },
+                {
+                    "kind": "issue",
+                    "number": 52,
+                    "labels": ["auto-loop", "⏸️ phase:blocked", "👤 human:需-maintainer-决策"],
+                    "body": "",
+                },
+                {
+                    "kind": "PR",
+                    "number": 9,
+                    "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"],
+                    "body": "",
+                },
+            ),
+            True,
+            "cache:fresh",
+        )
+
     def fake_gh(self, cmd: list[str]) -> SimpleNamespace:
-        if cmd[:3] == ["gh", "issue", "list"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    [
-                        {
-                            "number": 51,
-                            "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "🛠️ phase:implementing"},
-                                {"name": "🤖 human:codex"},
-                            ],
-                        },
-                        {
-                            "number": 52,
-                            "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "⏸️ phase:blocked"},
-                                {"name": "👤 human:需-maintainer-决策"},
-                            ],
-                        },
-                    ]
-                ),
-            )
-        if cmd[:3] == ["gh", "pr", "list"]:
-            return SimpleNamespace(
-                returncode=0,
-                stdout=json.dumps(
-                    [
-                        {
-                            "number": 9,
-                            "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "👀 phase:reviewing"},
-                                {"name": "🤖 human:codex"},
-                            ],
-                            "body": "",
-                        }
-                    ]
-                ),
-            )
         if cmd[:2] == ["ps", "-eo"]:
             return SimpleNamespace(returncode=0, stdout="")
         return SimpleNamespace(returncode=1, stdout="")
 
-    def test_list_auto_loop_issues_queries_canonical_and_legacy_managed_labels_once(self) -> None:
-        responses = {
-            ("issue", label_catalog.MANAGED): [
+    def test_list_auto_loop_issues_uses_managed_work_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult(
+            (
                 {
+                    "kind": "issue",
                     "number": 71,
                     "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_IMPLEMENTING},
-                        {"name": label_catalog.HUMAN_AUTO},
-                    ],
-                }
-            ],
-            ("issue", "auto-loop"): [
-                {
-                    "number": 71,
-                    "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_IMPLEMENTING},
-                        {"name": label_catalog.HUMAN_AUTO},
+                        label_catalog.MANAGED,
+                        label_catalog.PHASE_IMPLEMENTING,
+                        label_catalog.HUMAN_AUTO,
                     ],
                 },
                 {
+                    "kind": "issue",
                     "number": 72,
                     "labels": [
-                        {"name": "auto-loop"},
-                        {"name": "🔧 phase:fixing"},
-                        {"name": "🤖 human:codex"},
+                        "auto-loop",
+                        "🔧 phase:fixing",
+                        "🤖 human:codex",
                     ],
                 },
-            ],
-            ("issue", "phase9-auto-solve"): [],
-            ("issue", "refactor-design-needed"): [],
-            ("pr", label_catalog.MANAGED): [
                 {
+                    "kind": "PR",
                     "number": 73,
                     "body": "",
                     "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_REVIEWING},
-                        {"name": label_catalog.HUMAN_AUTO},
+                        label_catalog.MANAGED,
+                        label_catalog.PHASE_REVIEWING,
+                        label_catalog.HUMAN_AUTO,
                     ],
-                }
-            ],
-            ("pr", "auto-loop"): [
+                },
                 {
-                    "number": 73,
-                    "body": "",
-                    "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_REVIEWING},
-                        {"name": label_catalog.HUMAN_AUTO},
-                    ],
-                }
-            ],
-            ("pr", "phase9-auto-solve"): [],
-            ("pr", "refactor-design-needed"): [
-                {
+                    "kind": "PR",
                     "number": 74,
                     "body": "",
                     "labels": [
-                        {"name": "refactor-design-needed"},
-                        {"name": "🔍 phase:design-solving"},
-                        {"name": "🤖 human:auto-推进"},
+                        "refactor-design-needed",
+                        "🔍 phase:design-solving",
+                        "🤖 human:auto-推进",
                     ],
-                }
-            ],
-        }
-        calls: list[tuple[str, str]] = []
+                },
+            ),
+            True,
+            "cache:fresh",
+        )
 
-        def fake_by_label(cmd: list[str]) -> SimpleNamespace:
-            self.assertEqual(cmd[:2], ["gh", cmd[1]])
-            kind = cmd[1]
-            label = cmd[cmd.index("--label") + 1]
-            calls.append((kind, label))
-            return SimpleNamespace(returncode=0, stdout=json.dumps(responses[(kind, label)]))
-
-        with mock.patch.object(self.monitor, "run", side_effect=fake_by_label):
+        with mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=snapshot):
             items = self.monitor.list_auto_loop_issues()
 
         self.assertEqual(
@@ -200,16 +156,12 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                 ("pr", 74, label_catalog.PHASE_DESIGN_SOLVING),
             ],
         )
-        expected_calls = {
-            (kind, label)
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-        }
-        self.assertEqual(set(calls), expected_calls)
-        self.assertEqual(len(calls), len(expected_calls))
 
     def test_tick_writes_snapshot_json_with_required_fields(self) -> None:
-        with mock.patch.object(self.monitor, "run", side_effect=self.fake_gh):
+        with (
+            mock.patch.object(self.monitor, "run", side_effect=self.fake_gh),
+            mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=self.fake_snapshot()),
+        ):
             self.monitor.tick()
 
         data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
@@ -232,7 +184,10 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.assertEqual(data["open_issue_count"], 2)
 
     def test_snapshot_includes_last_p0_at_field(self) -> None:
-        with mock.patch.object(self.monitor, "run", side_effect=self.fake_gh):
+        with (
+            mock.patch.object(self.monitor, "run", side_effect=self.fake_gh),
+            mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=self.fake_snapshot()),
+        ):
             self.monitor.tick()
 
         data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
@@ -308,7 +263,17 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                 )
             return SimpleNamespace(returncode=1, stdout="")
 
-        with mock.patch.object(self.monitor, "run", side_effect=fake_non_p0):
+        non_p0_snapshot = ManagedWorkSnapshotResult(
+            (
+                {"kind": "PR", "number": 59, "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"], "body": ""},
+            ),
+            True,
+            "cache:fresh",
+        )
+        with (
+            mock.patch.object(self.monitor, "run", side_effect=fake_non_p0),
+            mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=non_p0_snapshot),
+        ):
             self.monitor.tick()
 
         data = json.loads(self.snapshot_path().read_text(encoding="utf-8"))
@@ -358,7 +323,10 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.assertEqual(data["actual"], 199)
 
     def test_snapshot_open_counts_match_peek(self) -> None:
-        with mock.patch.object(self.monitor, "run", side_effect=self.fake_gh):
+        with (
+            mock.patch.object(self.monitor, "run", side_effect=self.fake_gh),
+            mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=self.fake_snapshot()),
+        ):
             items = self.monitor.list_auto_loop_issues()
             expected_prs = sum(1 for item in items if item["kind"] == "pr")
             expected_issues = sum(1 for item in items if item["kind"] == "issue")

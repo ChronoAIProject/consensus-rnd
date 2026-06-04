@@ -12,13 +12,12 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-from urllib.parse import quote
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
-from .. import labels as label_catalog
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -88,34 +87,29 @@ class CommentMonitor:
     def _search_active(self) -> dict[str, str]:
         active: dict[str, str] = {}
         lookback = _lookback_minimum_updated_at()
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            endpoint = f"repos/{self.repo}/issues?state=open&labels={quote(query_label, safe='')}&per_page=100"
-            rows = self._gh_api_json(endpoint)
-            if not isinstance(rows, list):
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            return active
+        for row in snapshot.items:
+            number = str(row.get("number") or "")
+            updated_at = str(row.get("updated_at") or "")
+            if not number or not updated_at:
                 continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                number = str(row.get("number") or "")
-                updated_at = str(row.get("updated_at") or "")
-                if not number or not updated_at:
-                    continue
-                if lookback and updated_at < lookback:
-                    continue
-                if number not in active or updated_at > active[number]:
-                    active[number] = updated_at
+            if lookback and updated_at < lookback:
+                continue
+            if number not in active or updated_at > active[number]:
+                active[number] = updated_at
         return dict(sorted(active.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
 
     def targets(self) -> list[str]:
         numbers: set[str] = set()
-        for kind in ("issue", "pr"):
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                result = self.gh(
-                    [kind, "list", "--state", "open", "--label", query_label, "--json", "number", "-q", ".[].number"],
-                    check=False,
-                )
-                if result.returncode == 0:
-                    numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            return []
+        for item in snapshot.items:
+            number = str(item.get("number") or "")
+            if number:
+                numbers.add(number)
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:

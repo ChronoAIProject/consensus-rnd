@@ -29,9 +29,9 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("comment-monitor", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "comment-monitor", "--daemon")),
     ("codex-progress-reporter", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "progress-reporter", "--daemon")),
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
-    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
+    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "120")),
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
-    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")),
+    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "120")),
 )
 
 def restart_managed_daemon_names() -> tuple[str, ...]:
@@ -390,6 +390,8 @@ class RestartDaemons:
                 "RESTART_DAEMON_NAME": name,
                 "RESTART_DAEMON_HEARTBEAT_FILE": str(hb_file),
                 "RESTART_DAEMON_HEARTBEAT_INTERVAL": str(self.config.heartbeat_interval),
+                "PHASE9_ROUTER_INTERVAL_SECONDS": "120",
+                "WAKEUP_RUNNER_INTERVAL_SECONDS": "120",
                 "PYTHONPATH": f"{self.ctx.skill_root / 'scripts'}{os.pathsep}{env.get('PYTHONPATH', '')}",
             }
         )

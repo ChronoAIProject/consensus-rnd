@@ -772,7 +772,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
-            "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
             "`gh api repos/<slug>/issues/<N>`",
             "`gh api repos/<slug>/issues/<N>/comments?per_page=20`",
             "issue state/title/body",
@@ -812,6 +811,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
+        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", entry)
+        self.assertIn("`ManagedWorkSnapshot` open managed projection", self.skill)
         self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",
