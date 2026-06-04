@@ -38,6 +38,7 @@ TARGET_ANCHORS = {
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
+    "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -218,6 +219,69 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
+
+    def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
+        entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - global-dashboard-status-card(per #504)") :]
+        claude = self.repo_rules
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        progress_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "monitors" / "progress.py")
+        holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
+
+        for needle in (
+            "active-controller owner only",
+            "HolisticStatusProjection",
+            "consensus-rnd-cli holistic-status",
+            "peek` reuse only the summary renderer",
+            "$HOST_HOLISTIC_STATUS_ENABLE=true",
+            "$HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "$HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "GraphQL headroom",
+            "#191 owner",
+            "interval",
+            "same-hash",
+            "PATCH exactly one host-configured issue comment id",
+            "no new daemon",
+            "no public writer CLI",
+            "no create comment",
+            "no issue body edit",
+            "no PR body/title edit",
+            "no Discussions",
+            "no label mutation",
+            "no create/close/reopen/merge",
+            "no tag/release",
+            "no git",
+            "no generic GitHub writer",
+            "no prompt-body/prose decision reads",
+            "no standalone dashboard truth source",
+            "no standalone dependency truth source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
+        for needle in (
+            "#504 是唯一 global dashboard status-card writer carveout",
+            "PATCH exactly one host-configured issue comment",
+            "禁止 create comments",
+            "new daemon",
+            "public writer CLI",
+            "generic GitHub writer",
+            "standalone dashboard/dependency truth source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn('"holistic-status": CommandSpec(', cli_source)
+        for forbidden in ("dashboard-writer", "global-status-card", "write-holistic-status"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(f'"{forbidden}"', cli_source)
+        self.assertIn('"global-dashboard-status-card"', progress_source)
+        self.assertIn('"HOST_HOLISTIC_STATUS_COMMENT_ID"', progress_source)
+        self.assertIn("issues/comments/{config[", progress_source)
+        self.assertIn('"PATCH"', progress_source)
+        self.assertIn("class HolisticStatusProjection", holistic_source)
+        for forbidden in ("prompt.read_text", "worker prose", "discussion"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, holistic_source)
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
@@ -532,7 +596,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "release #322 preflight",
             "helper-specific precondition",
             "spawn codex",
-            "named helper `dispatch_design_consensus` through phase9-router deterministic routes",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
             "named helper `open_release_rollup_pr_from_action`",
@@ -583,7 +646,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         self.assertIn("#396 是唯一 unattended wakeup-runner carveout", self.repo_rules)
         self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
-        self.assertIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
+        self.assertNotIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
         self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
 
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
@@ -720,9 +783,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "`gh api repos/<slug>/issues/<N> --jq .state`",
             "`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`",
             "DesignConsensusIssueIntake",
-            "four built-in phase9 direct routes",
+            "five built-in phase9 direct routes",
             "queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`",
             "existing evidence/log/in-flight for one solver role suppresses only that role",
+            "`META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet",
             "source-OPEN gate",
             "labels-only live read",
             "clean consensus judge log",
@@ -794,7 +858,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn('"[.labels[].name]"', router)
         self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
         self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
-        self.assertIn("suppress_terminal_design_consensus_actions", wakeup_plan)
+        self.assertIn("_design_consensus_marker_is_router_owned", wakeup_plan)
         self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
         for token in (
             "phase9-terminal-eligibility:",
@@ -943,7 +1007,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for required in (
             "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
-            "\"spawn_codex_harness_background\", \"dispatch_design_consensus\"",
+            "{\"spawn_codex_harness_background\"}",
             "class WakeupApplyBudget",
             "hard_gate.dispatch_required/concurrency.deficit",
             "return cls.legacy()",
@@ -956,12 +1020,18 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
             "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
             "is_spawn_action = budget.is_spawn_action(action)",
+<<<<<<< HEAD
             "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
+=======
+>>>>>>> origin/auto-refact-dev
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
+<<<<<<< HEAD
         self.assertIn("continue", run_once)
+=======
+>>>>>>> origin/auto-refact-dev
         self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",

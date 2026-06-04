@@ -14,7 +14,7 @@ import re
 import subprocess
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -86,7 +86,6 @@ READ_ONLY_PLAN_AUTHORIZATION = "skills/codex-refactor-loop/authorizations/runtim
 RUNNER_NAMED_HELPER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
-    "dispatch_design_consensus",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
@@ -266,6 +265,7 @@ def harness_spawn_intent_actions(
         except Exception as exc:
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
+        _revive_stale_redispatchable_implement_log(log_path, monitor=monitor)
         if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
         if _suppress_harness_spawn_intent(
@@ -333,6 +333,117 @@ def _repo_root_from_log(log_path: Path) -> Path:
     except ValueError:
         return log_path.resolve().parent
     return Path(*parts[:index])
+
+
+def stale_revival_seconds() -> float:
+    """Host-tunable idle threshold (default 3 hours) after which a stuck managed
+    work item's blocking local evidence is treated as stale and re-triggered.
+    `STALE_REVIVAL_HOURS` in host.env overrides it; missing/invalid/<=0 -> 3h."""
+    raw = os.environ.get("STALE_REVIVAL_HOURS")
+    try:
+        hours = float(raw) if raw is not None and raw.strip() != "" else 3.0
+    except (TypeError, ValueError):
+        hours = 3.0
+    if hours <= 0:
+        hours = 3.0
+    return hours * 3600.0
+
+
+def _revive_stale_redispatchable_implement_log(
+    log_path: Path, *, now: float | None = None, monitor: Any | None = None, force: bool = False
+) -> bool:
+    """Re-trigger a stuck implement by clearing its blocking local log. Covers two
+    headless wedges: (1) a redispatchable attempt (partial/failed/markerless;
+    clean :ok stale-base belongs to publish recovery, not redispatch), and
+    (2) a dead worker whose log is still 'in_flight' with no terminal EXIT (the
+    codex or its supervisor died mid-run, e.g. when daemons are killed). Without
+    this the queued spawn intent's target_log_absent precondition never clears
+    and the implement never re-dispatches.
+
+    Automatic callers leave force=False: the log must be idle longer than
+    stale_revival_seconds() (a live supervised codex cannot be silent past the
+    no-output stall window, so a >threshold-stale in_flight log is a dead worker).
+    The manual trigger passes force=True to revive now without waiting, but then
+    an in_flight log is cleared only when a live-process check proves no codex is
+    running it, so a genuinely running worker is never cleared."""
+    if not is_implement_log(log_path) or not log_path.exists():
+        return False
+    if not force:
+        try:
+            age = (now if now is not None else time.time()) - log_path.stat().st_mtime
+        except OSError:
+            return False
+        if age < stale_revival_seconds():
+            return False
+    if monitor is not None and _canonical_in_flight_for_log(log_path, monitor):
+        return False
+    repo_root = _repo_root_from_log(log_path)
+    runner = lambda command: git_text(list(command), cwd=repo_root)  # noqa: E731
+    state = classify_implement_attempt(
+        repo_root=repo_root,
+        log_path=log_path,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=runner,
+    )
+    if _publish_recoverable_stale_base_implement(state):
+        return False
+    if state.redispatch:
+        log_path.unlink(missing_ok=True)
+        return True
+    if state.in_flight:
+        if force and monitor is None:
+            return False
+        log_path.unlink(missing_ok=True)
+        return True
+    return False
+
+
+def _publish_recoverable_stale_base_implement(state: Any) -> bool:
+    return (
+        getattr(state, "redispatch", False)
+        and getattr(state, "reason", "") == "stale_base"
+        and str(getattr(state, "marker", "")).startswith("IMPLEMENT_DONE:")
+        and str(getattr(state, "marker", "")).endswith(":ok")
+    )
+
+
+def force_revive_stuck_implements(repo_root: Path, *, monitor: Any | None = None) -> list[dict[str, str]]:
+    """Manual trigger: clear every stuck implement log now (redispatchable or
+    dead in_flight with no live worker), bypassing the stale_revival_seconds()
+    age gate, so the next wakeup-runner tick re-dispatches them. Returns the
+    revived targets with their pre-clear classification. A live codex (in the
+    process inventory) is never cleared."""
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    revived: list[dict[str, str]] = []
+    if not logs_dir.is_dir():
+        return revived
+    runner = lambda command: git_text(list(command), cwd=repo_root)  # noqa: E731
+    for log_path in sorted(logs_dir.glob("implement-issue-*.log")):
+        if not is_implement_log(log_path):
+            continue
+        before = classify_implement_attempt(
+            repo_root=repo_root,
+            log_path=log_path,
+            integration_branch=_integration_branch_from_env(),
+            command_runner=runner,
+        )
+        if _revive_stale_redispatchable_implement_log(log_path, monitor=monitor, force=True):
+            revived.append({"log": log_path.name, "was": f"{before.status}:{before.reason}".strip(":")})
+    return revived
+
+
+def revive_implements_main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="consensus-rnd-cli revive-implements",
+        description="manual stale-revival: re-trigger stuck implement workers now (no age wait)",
+    )
+    parser.add_argument("--repo-root", default=None)
+    args = parser.parse_args(argv)
+    repo_root = resolve_repo_root(args.repo_root)
+    monitor = import_concurrency_monitor(repo_root)
+    revived = force_revive_stuck_implements(repo_root, monitor=monitor)
+    print(json.dumps({"revived": revived, "count": len(revived)}, ensure_ascii=False, indent=2))
+    return 0
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
@@ -681,6 +792,102 @@ def _extract_completed_marker_line(text: str) -> str | None:
     return None
 
 
+def _completed_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
+    """Recover a completed marker from a worker's companion run artifact when
+    the log exited clean but has no standalone marker in its tail. Codex stdout
+    marker placement is not reliable across runs, so the durable run artifact is
+    read as a companion surface. Scoped to clean-exit implement, solver, and
+    judge logs only; the marker must still be a standalone allowlisted line."""
+    name = log_path.name
+    if not name.endswith(".log"):
+        return None
+    if not is_clean_exit(log_path):
+        return None
+    allowed_prefixes: tuple[str, ...]
+    if name.startswith("implement-issue-"):
+        allowed_prefixes = ("IMPLEMENT_DONE",)
+    elif re.fullmatch(r"(?:phase9|solver)-issue\d+-r\d+-(?:minimal|structural|delete)\.log", name):
+        allowed_prefixes = ("SOLVER_DONE:",)
+    elif re.fullmatch(r"phase9-issue\d+-r\d+-judge\.log", name):
+        allowed_prefixes = ("META_JUDGE_DONE:",)
+    else:
+        return None
+    artifact = repo_root / ".refactor-loop" / "runs" / f"{name[: -len('.log')]}.md"
+    for line in reversed(tail_lines(artifact, MARKER_TAIL_LINES)):
+        marker = _extract_completed_marker_line(line.strip())
+        if marker and marker.startswith(allowed_prefixes):
+            return marker
+    return None
+
+
+def _implement_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
+    marker = _completed_artifact_marker_fallback(repo_root, log_path)
+    return marker if marker and marker.startswith("IMPLEMENT_DONE") else None
+
+
+def _synthetic_markerless_implement_marker(
+    repo_root: Path,
+    log_path: Path,
+    open_targets: set[tuple[str, int]] | None,
+    gh_items: list[GhItem] | None,
+) -> str | None:
+    if not is_implement_log(log_path) or not is_clean_exit(log_path):
+        return None
+    issue = _issue_number_from_implement_log(log_path)
+    if issue is None:
+        return None
+    if open_targets is not None and ("issue", issue) not in open_targets:
+        return None
+    if not _open_managed_implementable_issue(issue, gh_items):
+        return None
+    canonical_worktree = repo_root / ".worktrees" / f"iter{issue}-issue-{issue}"
+    if not canonical_worktree.is_dir():
+        return None
+    worktree = canonical_worktree.resolve()
+    head_ref = safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")
+    if not head_ref:
+        return None
+    if not _canonical_markerless_implement_has_output(worktree, _integration_branch_from_env()):
+        return None
+    return f"IMPLEMENT_DONE:issue-{issue}:ok"
+
+
+def _issue_number_from_implement_log(log_path: Path) -> int | None:
+    match = re.fullmatch(r"implement-issue-?([1-9][0-9]*)\.log", log_path.name)
+    return int(match.group(1)) if match else None
+
+
+def _open_managed_implementable_issue(issue: int, gh_items: list[GhItem] | None) -> bool:
+    if gh_items is None:
+        return False
+    for item in gh_items:
+        if item.kind != "issue" or item.number != issue:
+            continue
+        labels = label_catalog.normalize_label_set(item.labels)
+        if label_catalog.MANAGED not in labels.canonical:
+            return False
+        return labels.phase in {label_catalog.PHASE_IMPLEMENTING, label_catalog.PHASE_CONSENSUS_REACHED}
+    return False
+
+
+def _canonical_markerless_implement_has_output(worktree: Path, integration_branch: str) -> bool:
+    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
+    if diff.returncode == 1:
+        return True
+    if diff.returncode != 0:
+        return False
+    integration = safe_head_ref(integration_branch)
+    if not integration:
+        return False
+    ahead = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"origin/{integration}..HEAD"], cwd=worktree)
+    if ahead.returncode != 0:
+        return False
+    try:
+        return int(ahead.stdout.strip()) > 0
+    except ValueError:
+        return False
+
+
 def completed_marker_actions(
     repo_root: Path,
     open_targets: set[tuple[str, int]] | None = None,
@@ -693,6 +900,10 @@ def completed_marker_actions(
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = marker_from_completed_log(log_path)
+        if not marker:
+            marker = _completed_artifact_marker_fallback(repo_root, log_path)
+        if not marker:
+            marker = _synthetic_markerless_implement_marker(repo_root, log_path, open_targets, gh_items)
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -2045,29 +2256,30 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
-def suppress_terminal_design_consensus_actions(
-    actions: list[dict[str, Any]],
-    gh_items: list[GhItem],
-    gh_items_loaded: bool,
-) -> list[dict[str, Any]]:
-    if not gh_items_loaded:
-        return actions
-    terminal_targets = _terminal_design_consensus_targets(gh_items)
-    if not terminal_targets:
-        return actions
-    kept: list[dict[str, Any]] = []
-    for action in actions:
-        target_kind = action.get("target_kind")
-        target_number = action.get("target_number")
-        if (
-            action.get("controller_action") == "dispatch_design_consensus"
-            and isinstance(target_kind, str)
-            and isinstance(target_number, int)
-            and (target_kind, target_number) in terminal_targets
-        ):
-            continue
-        kept.append(action)
-    return kept
+def action_priority_sort_key(action: dict[str, Any]) -> tuple[int, int]:
+    return (action_priority_class(action), int(action.get("priority", 99)))
+
+
+def action_priority_class(action: dict[str, Any]) -> int:
+    controller_action = action.get("controller_action")
+    kind = action.get("kind")
+    if kind == "maintainer-comment":
+        return 1
+    if kind == "unpushed-worker-output":
+        return 2
+    if kind == "completed-marker":
+        return 3
+    if kind == "ci-red":
+        return 4
+    if kind in {"no-gap-violation", "milestone"}:
+        return 5
+    if kind == "existing-issue":
+        return 6
+    if action.get("kind") == "harness-spawn-intent" and controller_action == "spawn_codex_harness_background":
+        return 7
+    if controller_action == "dispatch_consensus_implementation":
+        return 7
+    return 8
 
 
 def controller_action_from_marker(marker: str) -> str:
@@ -2083,8 +2295,6 @@ def controller_action_from_marker(marker: str) -> str:
         return "close_managed_item_from_drop_marker"
     if marker.startswith("META_JUDGE_DONE:consensus"):
         return "dispatch_consensus_implementation"
-    if marker.startswith(("SOLVER_DONE", "META_JUDGE_DONE", "META_RESOLVED")):
-        return "dispatch_design_consensus"
     if marker.startswith("AUDIT_DONE"):
         return "dispatch_work_intake"
     if marker.startswith("VERIFY_DONE"):
@@ -2130,7 +2340,8 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         closed.pop("runner_authority", None)
         closed.pop("no_generic_command", None)
         return closed
-    if closed.get("controller_action") == "dispatch_design_consensus" and str(closed.get("source_marker") or "").startswith("META_RESOLVED:"):
+    source_marker = str(closed.get("source_marker") or "")
+    if _design_consensus_marker_is_router_owned(source_marker):
         closed["status_only"] = True
         closed["no_lifecycle_authority"] = True
         closed.pop("runner_authority", None)
@@ -2159,6 +2370,16 @@ def _close_projection_action(action: dict[str, Any]) -> dict[str, Any]:
         closed.setdefault("status_only", True)
         closed.setdefault("no_lifecycle_authority", True)
     return closed
+
+
+def _design_consensus_marker_is_router_owned(marker: str) -> bool:
+    if marker.startswith("SOLVER_DONE"):
+        return True
+    if marker.startswith("META_JUDGE_DONE") and not marker.startswith("META_JUDGE_DONE:consensus"):
+        return True
+    if marker.startswith("META_RESOLVED") and not marker.startswith("META_RESOLVED:drop:"):
+        return True
+    return False
 
 
 def suppress_stale_unexecutable_actions(
@@ -2225,6 +2446,8 @@ def _stale_publish_implementation_reason(
         integration_branch=_integration_branch_from_env(),
         command_runner=lambda command: git_text(list(command), cwd=repo_root),
     )
+    if _publish_recoverable_stale_base_implement(state):
+        state = replace(state, status="publish_ready")
     if state.redispatch:
         clear_redispatchable_implement_log(
             repo_root=repo_root,
@@ -2256,7 +2479,7 @@ def _stale_publish_implementation_reason(
 
 
 def _worktree_has_non_empty_diff(worktree: Path) -> bool:
-    diff = git_text(["git", "-C", str(worktree), "diff", "--quiet"], cwd=worktree)
+    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
     return diff.returncode == 1
 
 
@@ -2424,9 +2647,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
-    actions = suppress_terminal_design_consensus_actions(actions, gh_items, gh_items_loaded)
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
-    actions.sort(key=lambda action: action["priority"])
+    actions.sort(key=action_priority_sort_key)
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 

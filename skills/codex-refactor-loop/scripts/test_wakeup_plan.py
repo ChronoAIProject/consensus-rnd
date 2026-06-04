@@ -12,6 +12,7 @@ import textwrap
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve()
@@ -24,7 +25,9 @@ from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E4
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
+    _revive_stale_redispatchable_implement_log,
     close_projection_actions,
+    force_revive_stuck_implements,
     completed_marker_actions,
     consensus_implementation_fields,
     consensus_implementation_suppressed_reason,
@@ -35,6 +38,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
+    stale_revival_seconds,
 )
 
 
@@ -695,6 +699,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_markerless_clean_log(self, name: str) -> Path:
+        path = self.logs / name
+        path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
+        return path
+
+    def write_run_artifact(self, stem: str, *lines: str) -> Path:
+        path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+        return path
+
     def set_log_mtime(self, name: str, mtime: float) -> None:
         os.utime(self.logs / name, (mtime, mtime))
 
@@ -816,12 +831,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def harness_spawn_actions(self, plan: dict) -> list[dict]:
         return [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
 
+    def action_index(self, plan: dict, predicate: object) -> int:
+        for index, action in enumerate(plan["actions"]):
+            if predicate(action):
+                return index
+        self.fail(f"missing action in plan: {json.dumps(plan['actions'], sort_keys=True)}")
+
+    def assert_before_all_new_work_spawns(self, plan: dict, action_index: int) -> None:
+        spawn_indexes = [
+            index
+            for index, action in enumerate(plan["actions"])
+            if action.get("controller_action") == "spawn_codex_harness_background"
+            and action.get("kind") == "harness-spawn-intent"
+        ]
+        self.assertGreaterEqual(len(spawn_indexes), 1)
+        self.assertLess(action_index, min(spawn_indexes))
+
     def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
         self.append_harness_spawn_intent()
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["command"], "spawn-codex")
         self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
@@ -833,12 +864,110 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
 
+    def test_review_gate_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:reject")
+
+        plan = self.run_plan(fixture="open_pr_123", ps_count=0)
+
+        review_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "review_gate"
+            and action.get("target_kind") == "PR"
+            and action.get("target_number") == 123
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, review_index)
+
+    def test_publish_implementation_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("target_kind") == "issue"
+            and action.get("target_number") == 20
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
+    def test_wakeup_plan_priority_order_keeps_existing_front_of_queue_routes(self) -> None:
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("2026-05-31T00:00:00Z maintainer comment on PR #31\n", encoding="utf-8")
+        self.append_harness_spawn_intent(
+            intent_id="new-work-ci",
+            task_id="new-work-ci",
+            prompt=".refactor-loop/prompts/new-work-ci.md",
+            log=".refactor-loop/logs/new-work-ci.log",
+        )
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="ci_red", ps_count=0)
+
+        kinds = [action["kind"] for action in plan["actions"]]
+        self.assertLess(kinds.index("maintainer-comment"), kinds.index("ci-red"))
+        self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+        self.assertLess(kinds.index("no-gap-violation"), kinds.index("harness-spawn-intent"))
+        ci_action = next(action for action in plan["actions"] if action["kind"] == "ci-red")
+        self.assertTrue(ci_action["status_only"])
+
+    def test_status_only_completed_marker_keeps_completed_marker_priority_class(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.write_completed_log("implement-issue330.log", "IMPLEMENT_DONE:issue-330:ok")
+
+        plan = self.run_plan(fixture="open_issue_330", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("status_only")
+            and action.get("target_number") == 330,
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
     def test_harness_spawn_intent_accepts_absolute_repo_contained_cd(self) -> None:
         self.append_harness_spawn_intent(cd=str(self.repo.resolve()))
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["cd"], str(self.repo.resolve()))
 
@@ -1188,6 +1317,260 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertFalse(action.get("status_only"))
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
 
+    def test_implement_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        # An implement worker can exit clean (EXIT=0) but emit IMPLEMENT_DONE only
+        # into its run artifact, not the log tail (codex stdout marker placement is
+        # not reliable). The publish predicate must still detect completion via the
+        # run artifact, mirroring the review verdict artifact-first pattern.
+        log = self.logs / "implement-issue-421.log"
+        log.write_text(
+            "worker chatter, no standalone marker here\nEXIT=0\nDONE_AT=2026-06-03T19:06:35Z\n",
+            encoding="utf-8",
+        )
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "implement-issue-421.md").write_text(
+            "## summary\nimplemented\n\n## SCOPE_EXTEND 记录\n- none.\n\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-421:ok\n",
+            encoding="utf-8",
+        )
+        # log-only scan misses it (markerless log)
+        self.assertIsNone(marker_from_completed_log(log))
+        # completed_marker_actions recovers it via artifact fallback -> publish action
+        actions = completed_marker_actions(self.repo)
+        pub = [a for a in actions if a.get("marker") == "IMPLEMENT_DONE:issue-421:ok"]
+        self.assertTrue(pub, "expected publish action recovered from implement run artifact")
+        self.assertEqual(pub[0]["phase"], "publish")
+
+    def test_implement_artifact_fallback_scoped_to_clean_exit_implement_logs(self) -> None:
+        # Fallback is scoped: a non-implement log, or an implement log without
+        # EXIT=0, must not pull an IMPLEMENT_DONE marker from any artifact.
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (self.logs / "audit-iter-9.log").write_text("chatter\nEXIT=0\n", encoding="utf-8")
+        (runs / "audit-iter-9.md").write_text("\nIMPLEMENT_DONE:issue-9:ok\n", encoding="utf-8")
+        (self.logs / "implement-issue-777.log").write_text("crashed\nEXIT=1\n", encoding="utf-8")
+        (runs / "implement-issue-777.md").write_text("\nIMPLEMENT_DONE:issue-777:ok\n", encoding="utf-8")
+        actions = completed_marker_actions(self.repo)
+        recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
+        self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
+
+    def test_markerless_clean_implement_with_diff_projects_synthetic_publish_marker(self) -> None:
+        log = self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "0\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        gh_items = [
+            GhItem(
+                "issue",
+                421,
+                "markerless implement",
+                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+            )
+        ]
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+
+        pub = [a for a in actions if a.get("controller_action") == "publish_implementation_output"]
+        self.assertEqual(1, len(pub))
+        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["marker"])
+        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["source_marker"])
+        self.assertEqual("issue", pub[0]["target_kind"])
+        self.assertEqual(421, pub[0]["target_number"])
+        self.assertEqual(str(log.relative_to(self.repo)), pub[0]["source_artifact"])
+
+    def test_markerless_clean_implement_without_diff_does_not_project_publish(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "0\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        gh_items = [
+            GhItem(
+                "issue",
+                421,
+                "empty markerless implement",
+                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+            )
+        ]
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+
+        self.assertFalse([a for a in actions if a.get("controller_action") == "publish_implementation_output"])
+
+    def test_markerless_clean_implement_keeps_existing_marker_paths(self) -> None:
+        self.write_completed_log("implement-issue-422.log", "IMPLEMENT_DONE:issue-422:ok")
+        self.write_markerless_clean_log("implement-issue-423.log")
+        self.write_run_artifact("implement-issue-423", "IMPLEMENT_DONE:issue-423:ok")
+
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("issue", 422), ("issue", 423)},
+            gh_items=[
+                GhItem(
+                    "issue",
+                    422,
+                    "clean marker",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                ),
+                GhItem(
+                    "issue",
+                    423,
+                    "artifact marker",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                ),
+            ],
+        )
+        markers = {a.get("marker") for a in actions}
+
+        self.assertIn("IMPLEMENT_DONE:issue-422:ok:real", markers)
+        self.assertIn("IMPLEMENT_DONE:issue-423:ok", markers)
+
+    def test_markerless_clean_implement_requires_open_managed_implementable_issue(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            if command == [
+                "git",
+                "-C",
+                str(worktree),
+                "rev-list",
+                "--count",
+                "origin/auto-refact-dev..HEAD",
+            ]:
+                return subprocess.CompletedProcess(command, 0, "1\n", "")
+            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
+
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                not_open_actions = completed_marker_actions(
+                    self.repo,
+                    open_targets=set(),
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            421,
+                            "closed markerless implement",
+                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                )
+                not_managed_actions = completed_marker_actions(
+                    self.repo,
+                    open_targets={("issue", 421)},
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            421,
+                            "unmanaged markerless implement",
+                            (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                )
+
+        self.assertFalse([a for a in not_open_actions if a.get("controller_action") == "publish_implementation_output"])
+        self.assertFalse([a for a in not_managed_actions if a.get("controller_action") == "publish_implementation_output"])
+
+    def test_wakeup_plan_source_regression_has_markerless_implement_publish_fallback(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        self.assertIn("_synthetic_markerless_implement_marker", source)
+        self.assertIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
+        self.assertIn('f"iter{issue}-issue-{issue}"', source)
+        self.assertIn('safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")', source)
+        self.assertIn('"diff", "HEAD", "--quiet"', source)
+        self.assertIn('"rev-list", "--count"', source)
+        self.assertIn("label_catalog.PHASE_IMPLEMENTING", source)
+        self.assertIn("label_catalog.PHASE_CONSENSUS_REACHED", source)
+
+    def test_solver_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("phase9-issue505-r1-minimal.log")
+        self.write_run_artifact("phase9-issue505-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 505)})
+        recovered = [a for a in actions if a.get("marker") == "SOLVER_DONE:minimal:artifact:summary"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from solver run artifact")
+        self.assertEqual(recovered[0]["phase"], "design-consensus")
+        self.assertEqual(recovered[0]["target_kind"], "issue")
+        self.assertEqual(recovered[0]["target_number"], 505)
+
+    def test_judge_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("phase9-issue505-r2-judge.log")
+        self.write_run_artifact("phase9-issue505-r2-judge", "META_JUDGE_DONE:converge:round-3:artifact")
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 505)})
+        recovered = [a for a in actions if a.get("marker") == "META_JUDGE_DONE:converge:round-3:artifact"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from judge run artifact")
+        self.assertEqual(recovered[0]["phase"], "design-consensus")
+
+    def test_solver_judge_artifact_fallback_requires_clean_exit_and_artifact_marker(self) -> None:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (self.logs / "phase9-issue506-r1-minimal.log").write_text("crashed\nEXIT=1\n", encoding="utf-8")
+        (runs / "phase9-issue506-r1-minimal.md").write_text("SOLVER_DONE:minimal:artifact:summary\n", encoding="utf-8")
+        self.write_markerless_clean_log("phase9-issue507-r1-judge.log")
+        self.write_run_artifact(
+            "phase9-issue507-r1-judge",
+            "body embeds META_JUDGE_DONE:converge:round-2:artifact but not standalone",
+        )
+
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 506), ("issue", 507)})
+        markers = {a.get("marker") for a in actions}
+
+        self.assertNotIn("SOLVER_DONE:minimal:artifact:summary", markers)
+        self.assertNotIn("META_JUDGE_DONE:converge:round-2:artifact", markers)
+
+    def test_wakeup_plan_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        for required in (
+            "def _completed_artifact_marker_fallback",
+            'name.startswith("implement-issue-")',
+            "SOLVER_DONE:",
+            "META_JUDGE_DONE:",
+            'repo_root / ".refactor-loop" / "runs" / f"{name[: -len(\'.log\')]}.md"',
+            "is_clean_exit(log_path)",
+            "_extract_completed_marker_line(line.strip())",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+
     def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
 
@@ -1219,7 +1602,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("fresh_integration_base", action["preconditions"])
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
-    def test_clean_implementation_marker_with_stale_base_redispatches_consensus_issue(self) -> None:
+    def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
         self.write_consensus_artifact()
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         log = self.logs / "implement-issue20.log"
@@ -1228,24 +1611,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="local_iter_branch_issue20_stale_base")
 
         publish = next(item for item in plan["actions"] if str(item.get("action_id") or "").startswith("completed-marker:implement-issue20"))
-        self.assertTrue(publish["status_only"])
-        self.assertEqual(publish["suppressed_reason"], "implementation_redispatch:stale_base")
-        self.assertFalse(log.exists())
-        dispatch_actions = existing_issue_actions(
-            [
-                GhItem(
-                    kind="issue",
-                    number=20,
-                    title="implementation issue",
-                    labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO, label_catalog.MILESTONE_CURRENT),
-                )
-            ],
-            repo_root=self.repo,
+        self.assertFalse(publish.get("status_only"))
+        self.assertEqual(publish["controller_action"], "publish_implementation_output")
+        self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
+        self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertTrue(log.exists())
+        self.assertFalse(
+            any(
+                item.get("controller_action") == "dispatch_consensus_implementation"
+                and item.get("target_number") == 20
+                and not item.get("status_only")
+                for item in plan["actions"]
+            )
         )
-        dispatch = next(item for item in dispatch_actions if item.get("controller_action") == "dispatch_consensus_implementation")
-        self.assertEqual(dispatch["target_number"], 20)
-        self.assertFalse(dispatch.get("status_only"))
-        self.assertTrue(dispatch["consensus_implementation_ready"])
 
     def test_completed_marker_without_target_is_status_only_when_open_managed_read_model_is_loaded(self) -> None:
         self.write_completed_log("implement-worker.log", "IMPLEMENT_DONE")
@@ -1405,17 +1783,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target"], {"kind": "issue", "number": 53})
         self.assertNotIn("status_only", action)
 
-    def test_non_drop_meta_resolved_still_routes_design_consensus(self) -> None:
+    def test_non_drop_meta_resolved_is_status_only_for_phase9_router(self) -> None:
         self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")
 
         plan = self.run_plan(fixture="open_issue_54")
 
         action = plan["actions"][0]
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
         self.assertTrue(action["status_only"])
         self.assertTrue(action["no_lifecycle_authority"])
 
-    def test_solver_triplet_completed_marker_projects_executable_design_consensus(self) -> None:
+    def test_solver_triplet_completed_marker_is_status_only_for_phase9_router(self) -> None:
         for role in ("minimal", "structural", "delete"):
             self.write_completed_log(f"phase9-issue453-r1-{role}.log", f"SOLVER_DONE:{role}:ready")
             self.set_log_mtime(f"phase9-issue453-r1-{role}.log", {"delete": 100.0, "structural": 200.0, "minimal": 300.0}[role])
@@ -1427,10 +1805,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             if item["action_id"].startswith("completed-marker:phase9-issue453-r1-minimal")
         )
         self.assertEqual(action["kind"], "completed-marker")
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
-        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
-        self.assertTrue(action["no_generic_command"])
-        self.assertNotIn("status_only", action)
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
         self.assertIn("clean_exit_source_marker", action["preconditions"])
         self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue453-r1-minimal.log")
         self.assertEqual(action["source_marker"], "SOLVER_DONE:minimal:ready:real")
@@ -1463,7 +1842,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             item for item in plan["actions"]
             if item["action_id"].startswith("completed-marker:phase9-issue453-r3-structural")
         )
-        self.assertEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertNotEqual(action["controller_action"], "dispatch_design_consensus")
+        self.assertTrue(action["status_only"])
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 453)
 
@@ -1488,13 +1868,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         rendered = json.dumps(plan, sort_keys=True)
         self.assertNotIn("dispatch_design_consensus", rendered)
-        self.assertFalse(
-            [
-                action
-                for action in plan["actions"]
-                if action.get("source_artifact", "").startswith(".refactor-loop/logs/phase9-issue330-r1-")
-            ]
-        )
+        actions = [
+            action
+            for action in plan["actions"]
+            if action.get("source_artifact", "").startswith(".refactor-loop/logs/phase9-issue330-r1-")
+        ]
+        self.assertTrue(actions)
+        self.assertTrue(all(action.get("status_only") is True for action in actions))
+        self.assertTrue(all("runner_authority" not in action for action in actions))
 
     def test_review_gate_source_does_not_add_readiness_or_action_vocabulary(self) -> None:
         wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
@@ -2212,6 +2593,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             with self.subTest(token=token):
                 self.assertIn(token, source)
 
+    def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertIn("clean :ok stale-base belongs to publish recovery, not redispatch", source)
+        self.assertIn("def _publish_recoverable_stale_base_implement", source)
+        self.assertIn('getattr(state, "reason", "") == "stale_base"', source)
+        self.assertIn('replace(state, status="publish_ready")', source)
+
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
@@ -2221,10 +2609,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "PHASE_IMPLEMENTING",
             "PHASE_MERGED",
             "PHASE_CLOSED",
-            "suppress_terminal_design_consensus_actions",
             "_terminal_design_consensus_targets",
             "_is_design_consensus_solver_dispatch_intent",
-            "dispatch_design_consensus",
+            "source_marker = str(closed.get(\"source_marker\") or \"\")",
+            "_design_consensus_marker_is_router_owned(source_marker)",
+            "\"status_only\"",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
@@ -2960,7 +3349,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan, stdout = self.run_plan_with_stdout(fixture="open_issue_330", ps_count=0, active_audit=True)
 
-        self.assertEqual(plan["actions"][0]["kind"], "harness-spawn-intent")
+        self.assertTrue(any(action["kind"] == "harness-spawn-intent" for action in plan["actions"]))
         self.assertTrue(has_dispatchable_action(plan["actions"]))
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
@@ -3090,7 +3479,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "closed-action-projection")
         self.assertTrue(plan["no_lifecycle_authority"])
         self.assertEqual(plan["apply_authority"], "wakeup-runner-396-only")
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         for field in (
             "action_id",
@@ -3116,6 +3505,159 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(release["no_lifecycle_authority"])
         self.assertNotIn("runner_authority", release)
         self.assertNotIn("no_generic_command", release)
+
+
+class StaleRevivalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.logs = self.repo / ".refactor-loop" / "logs"
+        self.logs.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _write_partial(self, issue: int) -> Path:
+        log = self.logs / f"implement-issue-{issue}.log"
+        log.write_text(
+            f"working...\nIMPLEMENT_DONE:issue-{issue}:partial\nEXIT=0\n", encoding="utf-8"
+        )
+        return log
+
+    def test_default_threshold_is_three_hours(self) -> None:
+        prev = os.environ.pop("STALE_REVIVAL_HOURS", None)
+        try:
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+        finally:
+            if prev is not None:
+                os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_env_override_changes_threshold(self) -> None:
+        prev = os.environ.get("STALE_REVIVAL_HOURS")
+        try:
+            os.environ["STALE_REVIVAL_HOURS"] = "1"
+            self.assertEqual(3600.0, stale_revival_seconds())
+            os.environ["STALE_REVIVAL_HOURS"] = "bad"
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+            os.environ["STALE_REVIVAL_HOURS"] = "0"
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+        finally:
+            if prev is None:
+                os.environ.pop("STALE_REVIVAL_HOURS", None)
+            else:
+                os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_stale_partial_implement_log_is_revived(self) -> None:
+        log = self._write_partial(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
+        self.assertTrue(revived)
+        self.assertFalse(log.exists())
+
+    def test_fresh_partial_implement_log_is_not_revived(self) -> None:
+        log = self._write_partial(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time())
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_clean_ok_stale_base_implement_log_is_not_revived_for_churn(self) -> None:
+        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
+        worktree.mkdir(parents=True)
+        log = self.logs / "implement-issue-421.log"
+        log.write_text("IMPLEMENT_DONE:issue-421:ok\nEXIT=0\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter421-issue-421\n", "")
+            if command == ["git", "-C", str(worktree), "merge-base", "HEAD", "origin/auto-refact-dev"]:
+                return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/auto-refact-dev"]:
+                return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return subprocess.CompletedProcess(command, 1, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+                revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
+
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def _write_inflight(self, issue: int) -> Path:
+        # no terminal EXIT line => classify() == in_flight (e.g. a codex/supervisor
+        # killed mid-run, the cut-off-daemon wedge)
+        log = self.logs / f"implement-issue-{issue}.log"
+        log.write_text(
+            "codex\nFocused suite 仍未结束，当前还是正常通过输出。\n", encoding="utf-8"
+        )
+        return log
+
+    def test_dead_inflight_log_revived_when_old_and_no_live_process(self) -> None:
+        log = self._write_inflight(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 100 * 3600)
+        self.assertTrue(revived)
+        self.assertFalse(log.exists())
+
+    def test_inflight_log_not_revived_when_fresh(self) -> None:
+        log = self._write_inflight(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time())
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_inflight_log_not_revived_when_live_process_present(self) -> None:
+        log = self._write_inflight(421)
+
+        class _LiveMonitor:
+            def list_in_flight_codex_lines(self_inner) -> list[str]:
+                return [f"spawn-codex --log {log} --stall 5400"]
+
+        revived = _revive_stale_redispatchable_implement_log(
+            log, now=time.time() + 100 * 3600, monitor=_LiveMonitor()
+        )
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_force_revives_fresh_partial_without_age_wait(self) -> None:
+        # manual trigger: a just-finished partial (age 0) is NOT revived automatically
+        # but force=True clears it immediately.
+        log = self._write_partial(421)
+        self.assertFalse(_revive_stale_redispatchable_implement_log(log, now=time.time()))
+        self.assertTrue(log.exists())
+        self.assertTrue(_revive_stale_redispatchable_implement_log(log, now=time.time(), force=True))
+        self.assertFalse(log.exists())
+
+    def test_force_does_not_clear_inflight_without_monitor_proof(self) -> None:
+        # force has no age gate, so an in_flight log must be proven dead by a
+        # live-process check; with no monitor it is left alone (never orphan a codex).
+        log = self._write_inflight(421)
+        self.assertFalse(_revive_stale_redispatchable_implement_log(log, force=True, monitor=None))
+        self.assertTrue(log.exists())
+
+    def test_force_clears_inflight_when_monitor_proves_not_live(self) -> None:
+        log = self._write_inflight(421)
+
+        class _IdleMonitor:
+            def list_in_flight_codex_lines(self_inner) -> list[str]:
+                return []
+
+        self.assertTrue(
+            _revive_stale_redispatchable_implement_log(log, force=True, monitor=_IdleMonitor())
+        )
+        self.assertFalse(log.exists())
+
+    def test_force_revive_stuck_implements_scans_and_reports(self) -> None:
+        p493 = self._write_partial(493)
+        p494 = self._write_partial(494)
+        # an in_flight log (no terminal EXIT) with no monitor proof is left alone
+        inflight = self._write_inflight(490)
+        revived = force_revive_stuck_implements(self.repo, monitor=None)
+        names = {r["log"] for r in revived}
+        self.assertIn("implement-issue-493.log", names)
+        self.assertIn("implement-issue-494.log", names)
+        self.assertNotIn("implement-issue-490.log", names)
+        self.assertFalse(p493.exists())
+        self.assertFalse(p494.exists())
+        self.assertTrue(inflight.exists())
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -63,10 +64,29 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             command_runner = self.commands.append
         return Phase9Router(ctx=self.loop_context(), command_runner=command_runner)
 
+    def test_production_repo_root_ctx_resolves_host_gh_repo_slug(self) -> None:
+        # Regression: Phase9Router(repo_root=...) (the daemon production path) must
+        # read the process environment so GH_REPO_SLUG resolves. Restricting env to
+        # {REPO_ROOT} left gh_repo_slug=None, so _open_design_consensus_issues
+        # returned [] and DesignConsensusIssueIntake silently never dispatched.
+        with mock.patch.dict(
+            os.environ,
+            {"REPO_ROOT": str(self.repo), "GH_REPO_SLUG": self.TEST_GH_REPO_SLUG},
+            clear=False,
+        ):
+            router = Phase9Router(repo_root=self.repo)
+        self.assertEqual(self.TEST_GH_REPO_SLUG, router.ctx.gh_repo_slug)
+
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name
         tail = ["EXIT=0"] if exit_zero else ["EXIT=1"]
         path.write_text("\n".join([*lines, *tail, ""]), encoding="utf-8")
+        return path
+
+    def write_run_artifact(self, stem: str, *lines: str) -> Path:
+        path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join([*lines, ""]), encoding="utf-8")
         return path
 
     def write_solver_prompt(self, issue: int, round_no: int, role: str, body: str = "solver input\n") -> Path:
@@ -162,6 +182,52 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_prefers_log_tail_marker_over_companion_artifact(self) -> None:
+        log = self.write_log("phase9-issue505-r1-minimal.log", "SOLVER_DONE:minimal:log-tail:summary")
+        self.write_run_artifact("phase9-issue505-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        marker = self.router._final_marker_from_path(log)
+
+        self.assertEqual(marker, "SOLVER_DONE:minimal:log-tail:summary")
+
+    def test_phase9_router_recovers_solver_triplet_from_companion_artifacts(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue505-r1-{role}.log",
+                f"worker prose embeds SOLVER_DONE:{role}:embedded:ignored",
+            )
+            self.write_run_artifact(
+                f"phase9-issue505-r1-{role}",
+                "## result",
+                f"SOLVER_DONE:{role}:artifact:summary",
+            )
+
+        self.router.tick()
+
+        intents = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue505-r1-judge.log", intents)
+        self.assertIn("505-1-judge", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_companion_artifact_fallback_requires_clean_exit(self) -> None:
+        log = self.write_log("phase9-issue506-r1-minimal.log", "markerless crash", exit_zero=False)
+        self.write_run_artifact("phase9-issue506-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        self.assertIsNone(self.router._final_marker_from_path(log))
+
+    def test_phase9_router_companion_artifact_fallback_missing_artifact_returns_none(self) -> None:
+        log = self.write_log("phase9-issue507-r1-structural.log", "markerless clean exit")
+
+        self.assertIsNone(self.router._final_marker_from_path(log))
+
+    def test_phase9_router_recovers_judge_marker_from_companion_artifact(self) -> None:
+        log = self.write_log("meta-judge-issue508-r2.log", "markerless clean judge log")
+        self.write_run_artifact("meta-judge-issue508-r2", "META_JUDGE_DONE:converge:round-3:artifact")
+
+        self.assertEqual(
+            self.router._final_marker_from_path(log),
+            "META_JUDGE_DONE:converge:round-3:artifact",
+        )
 
     def test_phase9_router_skips_harness_bookkeeping_after_exit_zero(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -1832,23 +1898,33 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         for marker in markers:
             self.assertIn(marker, events)
 
-    def test_phase9_router_persists_fallback_dedup_across_restart(self) -> None:
-        """Restart must not re-emit fallback events already in pending-events log."""
-        self.write_log("phase9-issue42-r1-judge.log", "META_RESOLVED:re-design:scope-too-broad")
+    def test_phase9_router_redesign_routes_source_adjacent_next_round_solvers(self) -> None:
+        self.write_log("phase9-issue42-r4-reflector.log", "META_RESOLVED:re-design:scope-too-broad")
 
         self.router.tick()
-        first_events = self.pending_events()
-        self.assertEqual(first_events.count("META_RESOLVED:re-design:scope-too-broad"), 1)
+
+        rendered = " ".join(self.intent_text(command) for command in self.commands)
+        for role in ("minimal", "structural", "delete"):
+            self.assertIn(f"phase9-issue42-r5-{role}.log", rendered)
+        self.assertNotIn("phase9-issue42-r6", rendered)
+        entries = self.ledger_entries()
+        self.assertEqual(
+            {"42-5-minimal", "42-5-structural", "42-5-delete"},
+            {entry["key"] for entry in entries},
+        )
+        self.assertTrue(all(entry["marker"] == "META_RESOLVED:re-design:scope-too-broad" for entry in entries))
+
+    def test_phase9_router_persists_redesign_ledger_across_restart(self) -> None:
+        self.write_log("phase9-issue42-r1-reflector.log", "META_RESOLVED:re-design:scope-too-broad")
+
+        self.router.tick()
+        first_intents = list(self.commands)
+        self.assertEqual(len(first_intents), 3)
 
         fresh_router = self.new_router()
         fresh_router.tick()
 
-        second_events = self.pending_events()
-        self.assertEqual(
-            second_events.count("META_RESOLVED:re-design:scope-too-broad"),
-            1,
-            "fallback event must not re-emit after daemon restart",
-        )
+        self.assertEqual(self.commands, first_intents)
 
     def test_phase9_router_rejects_junk_markers_with_regex_special_chars(self) -> None:
         """Markers containing pipe/quote/backslash/template chars are prompt/regex echoes, not real markers."""
@@ -1941,6 +2017,20 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("class Phase9RoundProjection", src)
         self.assertNotIn("Phase9RoundProjection(", src)
         self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
+
+    def test_phase9_router_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+
+        for required in (
+            "def _companion_artifact_marker_fallback",
+            'artifact = self.runs_dir / f"{log_path.stem}.md"',
+            'allowed_prefix = "SOLVER_DONE:"',
+            'allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"',
+            "self._extract_marker(line.strip())",
+            "if not self._is_clean_exit(log_path):",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, src)
 
     def test_phase9_router_source_regression_uses_loop_context_artifact_path_boundary(self) -> None:
         src = PHASE9_ROUTER.read_text(encoding="utf-8")

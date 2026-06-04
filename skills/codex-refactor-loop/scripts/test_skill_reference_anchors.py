@@ -279,6 +279,39 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
 
+    def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
+
+        for needle in (
+            "HolisticStatusProjection",
+            "single shared read-only algorithm",
+            "`consensus-rnd-cli holistic-status` renders the full local card",
+            "`peek` may only reuse `render_peek_summary(...)`",
+            "progress-reporter",
+            "$HOST_HOLISTIC_STATUS_ENABLE=true",
+            "$HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "$HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "PATCH exactly one host-configured issue comment id",
+            "no new daemon",
+            "no public writer CLI",
+            "no create comment",
+            "no issue body edit",
+            "no PR body/title edit",
+            "no Discussions",
+            "no labels",
+            "no create/close/reopen/merge",
+            "no tag/release",
+            "no git",
+            "no generic GitHub writer",
+            "no prompt-body/prose decision reads",
+            "no multi-carrier grammar",
+            "no standalone dashboard truth source",
+            "no standalone dependency truth source",
+            "test_holistic_status.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
@@ -765,7 +798,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq .state`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N> --jq '[.labels[].name]'`", self.skill)
         self.assertIn("issue intake, triplet/converge/router-derived stalled continuation", self.skill)
-        self.assertIn("wakeup-plan design-consensus issue evidence is status-only", self.skill)
+        self.assertIn("wakeup-plan design-consensus completed-marker evidence is status-only", self.skill)
         self.assertIn("design-consensus solver `HARNESS_SPAWN_INTENT` actions for terminal phase labels only", self.skill)
         self.assertIn("state-only", self.skill)
         self.assertIn("labels-only terminal gate", self.skill)
@@ -1058,7 +1091,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
             "rollup/": {"controller_actions.py", "sync/dev.py"},
+<<<<<<< HEAD
             "COMMANDS": {"cli.py", "gh_accounting.py", "gh_invoke.py", "restart.py"},
+=======
+            "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
+>>>>>>> origin/auto-refact-dev
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
         for token, allowed_paths in allowed.items():
@@ -1162,6 +1199,8 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "before queueing r(S+1) minimal/structural/delete solver intents",
             "router-owned stalled predicate",
             "suppress next solvers",
+            "`META_RESOLVED:re-design` from reflector to source-adjacent `marker.round + 1` solver triplet",
+            "source-adjacent `marker.round + 1`",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, contract_section)
@@ -1453,6 +1492,26 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, batching)
+
+    def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
+        source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")
+        for needle in (
+            "class HeadlessDogfoodFixture",
+            "Phase9Router",
+            "build_plan",
+            "WakeupRunner",
+            "FakeControllerActions",
+            "dispatch_consensus_implementation",
+            "merge_pr",
+            "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, source)
+        self.assertNotIn("time.sleep", source)
+        self.assertNotIn("gh issue close", source)
+        self.assertNotIn("gh pr merge", source)
 
     def test_wakeup_plan_release_rollup_freshness_prunes_superseded_local_evidence(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")

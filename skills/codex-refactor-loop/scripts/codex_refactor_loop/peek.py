@@ -15,6 +15,8 @@ from typing import Iterable, Mapping, Sequence
 from . import labels as label_catalog
 from .closed_phase_labels import plan_from_gh_item
 from .context import LoopContext, LoopContextError
+from .holistic_status import collect as collect_holistic_status
+from .holistic_status import render_peek_summary
 from .pr_checks import PrChecksProjection
 from .work_items import ManagedWorkProjection
 from .workflow_stages import format_stage
@@ -28,6 +30,7 @@ class PeekStatusLens:
     def render(self) -> str:
         lines: list[str] = []
         lines.append(f"═══════════════ peek {datetime.now(timezone.utc).strftime('%H:%M:%SZ')} ═══════════════")
+        lines.extend(["", *self._holistic_summary()])
         lines.extend(["", "▍🚨 maintainer comments (read first — missed read = controller bug):"])
         lines.extend(self._maintainer_comments())
         lines.extend(["", f"▍Active codex: {self._count_loop_codex()}"])
@@ -62,6 +65,12 @@ class PeekStatusLens:
         lines.extend(self._open_issues())
         lines.extend(["", "═══════════════════════════════════════════════════"])
         return "\n".join(lines) + "\n"
+
+    def _holistic_summary(self) -> list[str]:
+        try:
+            return render_peek_summary(collect_holistic_status(self.ctx))
+        except Exception as exc:
+            return ["▍Holistic status:", f"  unavailable: {exc}"]
 
     def _maintainer_comments(self) -> list[str]:
         output: list[str] = []

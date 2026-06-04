@@ -51,6 +51,8 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         (self.repo / ".config/consensus-rnd/host.env").write_text(f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n', encoding="utf-8")
         self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         (self.repo / ".refactor-loop/prompts/fix.md").write_text("fix\n", encoding="utf-8")
+        self.pr_worktree = self.repo / ".worktrees" / "pr12"
+        self.pr_worktree.mkdir(parents=True, exist_ok=True)
         self.actions = FakeActions()
         self.supervisor = FakeSupervisor()
 
@@ -98,10 +100,13 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         is_draft: bool = False,
     ) -> object:
         def command_runner(command):
+            repo_root = self.ctx.repo_root
             if command[:3] == ["gh", "pr", "view"] and ".state" in command:
                 return subprocess.CompletedProcess(command, 0, "OPEN\n", "")
             if command[:3] == ["gh", "pr", "view"] and ".headRefOid" in command:
                 return subprocess.CompletedProcess(command, 0, live_head + "\n", "")
+            if command[:3] == ["gh", "pr", "view"] and "headRefName" in command and "--jq" not in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": "refactor/pr12"}), "")
             if command[:3] == ["gh", "pr", "view"] and "mergeable,isDraft" in command:
                 return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": mergeable, "isDraft": is_draft}), "")
             if command[:2] == ["gh", "api"] and command[2] == "repos/owner/repo/pulls/12":
@@ -109,6 +114,14 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
             if command[:2] == ["gh", "api"] and command[2] == f"repos/owner/repo/commits/{live_head}/check-runs":
                 payload = {"check_runs": [{"name": "ci", "status": check_status, "conclusion": check_conclusion}]}
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {repo_root}\nbranch refs/heads/main\n\n"
+                    f"worktree {self.pr_worktree.resolve()}\nbranch refs/heads/refactor/pr12\n\n",
+                    "",
+                )
             return subprocess.CompletedProcess(command, 0, "", "")
 
         if action is None:
@@ -164,6 +177,7 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         launch.assert_called_once()
         self.assertEqual(Path(launch.call_args.kwargs["prompt"]).resolve(), (self.repo / ".refactor-loop/prompts/fix.md").resolve())
         self.assertEqual(Path(launch.call_args.kwargs["log"]).resolve(), (self.repo / ".refactor-loop/logs/fix.log").resolve())
+        self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), self.pr_worktree.resolve())
         self.assertEqual(self.supervisor.calls, 0)
 
     def test_missing_reviewer_fails_closed(self) -> None:
