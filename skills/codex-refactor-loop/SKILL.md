@@ -805,10 +805,12 @@ Policy:the loop continues until an explicit stop condition or a visible `crnd:hu
 3. Code refactor rationale follows `$HOST_REFACTOR_COMMENT_POLICY`: missing, empty, or default policy is `none`, which forbids refactor-history source comments and keeps rationale in external artifacts; explicit `self-doc-comment` is a downstream compatibility opt-in and must still obey source English-only.
 4. No `commit`, `push`, `checkout`, PR create/merge, or issue close inside worker prompts; controller owns git topology.
 5. No sleep/delay-based test pacing; use deterministic awaiters.
-6. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
-7. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
-8. Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and GitHub issue/PR/commit/design artifacts remain 中文 by default. No mandatory parallel English section.
-10. Do not hardcode host facts into this cross-platform skill.
+6. Touched-module test ratchet: every implementation that changes a module's behavior, contract, prompt, helper, or guard must move relevant tests toward fast / hermetic / behavior-first coverage using owner-local fact sources and observable behavior or contracts.
+7. No suite-level host-wide process-table daemon guard: daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests; suite-level tests must not scan the current machine with `ps -eo pid=,command=`.
+8. No `[Skip]`, disabled tests, ignored tests, or manual category escapes to make CI green.
+9. No scope creep; workers must print `SCOPE_EXTEND: <file> <reason>` before touching outside authorized scope.
+10. Source files are English-only; external user-facing artifacts are 中文 by default. The root README pair is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and GitHub issue/PR/commit/design artifacts remain 中文 by default. No mandatory parallel English section.
+11. Do not hardcode host facts into this cross-platform skill.
 
 Details are in [hard rules details](#hard-rules-details).
 
@@ -3134,9 +3136,11 @@ Bash(
 3. **Code refactor rationale follows policy** — `$HOST_REFACTOR_COMMENT_POLICY` missing/empty/default is `none`: source refactor-history comments are forbidden and rationale belongs in external artifacts. Explicit `self-doc-comment` is a downstream compatibility opt-in for a 3-5 line host-style source comment with `Refactor (iterN/cluster-XXX)`, `Old pattern`, and `New principle`; it must still obey source English-only.
 4. **No `commit`/`push`/`checkout` inside codex prompts** — the controller owns git topology.
 5. **No `sleep/delay`-based test pacing** — tests must use deterministic awaiters.
-6. **No `[Skip]` / disabled tests** as a way to make CI green.
-7. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
-8. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
+6. **Touched-module test ratchet** — every implementation that changes a module's behavior, contract, prompt, helper, or guard must move the touched module's relevant tests toward fast / hermetic / behavior-first coverage. Prefer owner-local fact sources, mocks/fakes/stubs for external processes and networks, and assertions on observable behavior or contracts. Do not add tests that only restate implementation literals or depend on ambient host state.
+7. **No suite-level host-wide process-table daemon guard** — daemon leak / duplicate coverage belongs in the responsible helper's local fact source or helper behavior tests. A suite-level test must not scan the current machine with `ps -eo pid=,command=` as the truth source for daemon leak / duplicate state.
+8. **No `[Skip]` / disabled tests** as a way to make CI green.
+9. **No scope creep** — codex must print `SCOPE_EXTEND: <file> <reason>` before touching anything outside `scope_paths`.
+10. **Source files are English-only; external user-facing artifacts are 中文 by default**. Inside `.rs` / `.lua` / `.sh` / `.py` / `.ts`, comments, docstrings, `log.{info,warn,error}` strings, error/panic text, identifiers, and code-built commit-body templates are English. Outside source files, GitHub issue bodies, PR descriptions, design notifications, git commit messages written by the controller/codex, docs, TODO markers, and natural-language artifacts use 中文. `README.md` + `README.zh-CN.md` is the only English-canonical public-doc carve-out: `README.md` is English canonical, `README.zh-CN.md` is the 中文 companion, and large-section order alignment is enough. English may appear inline when quoting (a) a CLAUDE.md / AGENTS.md clause, (b) source error messages, (c) test names — quote verbatim, do not translate. No mandatory parallel English section.
 
 ## 工作语言规则(源码内英文,源码外中文)
 
