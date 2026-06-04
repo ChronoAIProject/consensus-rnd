@@ -1001,18 +1001,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in ("main", "load_optional_context", "post_status_banner"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, banners_projection.function_names | banners_projection.imported_names)
-        for required in (
-<<<<<<< HEAD
-            "def post_status_banner(self, request: BannerRequest) -> str:",
-            'self._require_owner_or_raise("post-banner")',
-            'self._require_github_actor_or_raise("post-banner")',
-=======
-            "post_status_banner",
->>>>>>> origin/auto-refact-dev
-            "_normalize_lifecycle_target_or_raise",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, actions_projection.function_names)
+        self.assertIn("post_status_banner", actions_projection.function_names)
+        self.assertIn("_normalize_lifecycle_target_or_raise", actions_projection.function_names)
         self.assertIn("post-banner", actions_projection.string_literals)
         self.assertIn("gh_comment_command", actions_projection.imported_names)
         for required in (
