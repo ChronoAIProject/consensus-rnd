@@ -159,14 +159,6 @@ class Phase9ActorHealth:
     markerless_clean_log: Path | None = None
     dispatched_at: datetime | None = None
 
-    @property
-    def complete(self) -> bool:
-        return self.valid_marker is not None or self.target_log_exists or self.equivalent_log_exists
-
-    @property
-    def active(self) -> bool:
-        return self.pending_intent or self.in_flight
-
     def stale_for_recovery(self, now: datetime, threshold: timedelta) -> bool:
         return self.dispatched_at is not None and now - self.dispatched_at >= threshold
 
@@ -1061,7 +1053,7 @@ class Phase9Router:
             if parsed is None:
                 continue
             issue, round_no, actor = parsed
-            if actor not in (*self._solver_roles(), self._judge_role(), "reflector"):
+            if actor not in (*self._solver_roles(), self._judge_role()):
                 continue
             health = self._actor_health(issue, round_no, actor, ledger)
             if not self._actor_recovery_allowed(health, now, threshold):

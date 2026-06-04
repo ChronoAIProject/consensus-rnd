@@ -1192,26 +1192,53 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     def test_phase9_router_stale_ledger_bypass_requires_all_actor_health_gates(self) -> None:
         cases = (
             ("target-log", lambda: self.router._log_path("262", 1, "minimal").write_text("reserved\n", encoding="utf-8")),
+            ("equivalent-legacy-log", lambda: (
+                self.repo / ".refactor-loop" / "logs" / "solver-issue262-r1-minimal.log"
+            ).write_text("reserved by legacy solver log\n", encoding="utf-8")),
             ("pending-intent", lambda: (self.repo / ".refactor-loop/.controller-pending-events.log").write_text(
                 '2026-01-01T00:00:00Z HARNESS_SPAWN_INTENT {"log": ".refactor-loop/logs/phase9-issue262-r1-minimal.log"}\n',
                 encoding="utf-8",
             )),
+            ("in-flight", lambda: setattr(
+                self.router,
+                "_spawn_codex_in_flight",
+                lambda log_path: log_path == self.router._log_path("262", 1, "minimal"),
+            )),
+            ("source-closed", lambda: self.source_issue_states.update({"262": "CLOSED"})),
+            ("source-unavailable", lambda: self.source_issue_states.update({"262": "UNAVAILABLE"})),
             ("terminal-closed", lambda: setattr(
                 self.router,
                 "_solver_dispatch_terminal_decision",
                 lambda issue, issue_labels=None: Phase9TerminalDecision(False, "phase9-already-consensus", "test"),
+            )),
+            ("valid-marker", lambda: self.write_log("phase9-issue262-r1-minimal.log", "SOLVER_DONE:minimal:artifact:summary")),
+            ("not-yet-stale", lambda: self.write_ledger_entry(
+                key="262-1-minimal",
+                marker="DesignConsensusIssueIntake",
+                log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+                dispatched_at="2099-01-01T00:00:00Z",
+            )),
+            ("missing-dispatched-at", lambda: None),
+            ("malformed-dispatched-at", lambda: self.write_ledger_entry(
+                key="262-1-minimal",
+                marker="DesignConsensusIssueIntake",
+                log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+                dispatched_at="not-a-timestamp",
             )),
         )
         for name, setup in cases:
             with self.subTest(name=name):
                 self.tmp.cleanup()
                 self.setUp()
-                self.write_ledger_entry(
-                    key="262-1-minimal",
-                    marker="DesignConsensusIssueIntake",
-                    log_path=".refactor-loop/logs/phase9-issue262-r1-minimal.log",
-                    dispatched_at="2026-01-01T00:00:00Z",
-                )
+                if name not in {"not-yet-stale", "malformed-dispatched-at"}:
+                    entry: dict[str, object] = {
+                        "key": "262-1-minimal",
+                        "marker": "DesignConsensusIssueIntake",
+                        "log_path": ".refactor-loop/logs/phase9-issue262-r1-minimal.log",
+                    }
+                    if name != "missing-dispatched-at":
+                        entry["dispatched_at"] = "2026-01-01T00:00:00Z"
+                    self.write_ledger_entry(**entry)
                 self.router.ctx.host_env["STALE_REVIVAL_HOURS"] = "0.001"
                 setup()
 
