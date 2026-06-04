@@ -848,6 +848,17 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "`GitHubAuthenticatedActor` may read the current authenticated `gh` token login",
+            "repo permission",
+            "branch protection/ruleset/CODEOWNERS/required-review results",
+            "only after the #191 owner gate and before the first GitHub API mutation",
+            "fail-closed admission checks",
+            "not per-work owner",
+            "daemon owner",
+            "takeover permit",
+            "action-specific lifecycle authorization",
+            "generic lifecycle actor",
+            "bypass for #191/#238/#322/#396/#403",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
@@ -911,6 +922,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for required in (
             "def post_status_banner(self, request: BannerRequest) -> str:",
             'self._require_owner_or_raise("post-banner")',
+            'self._require_github_actor_or_raise("post-banner")',
             "_normalize_lifecycle_target_or_raise",
             "gh_comment_command",
         ):
@@ -938,17 +950,18 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "min(dispatch_required, deficit)",
             "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
             "budget = WakeupApplyBudget.from_plan(plan)",
+            "consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)",
             "result = self.apply_action(action)",
-            "if result.status in {\"blocked\", \"skipped\"} and not is_spawn_action:",
-            "if is_spawn_action and applied_spawns >= budget.spawn_budget:",
-            "if result.status == \"blocked\" and is_spawn_action and not _spawn_launch_failure(result):",
+            "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
+            "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
+            "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
             "is_spawn_action = budget.is_spawn_action(action)",
-            "if applied_spawns > 0 and not is_spawn_action:",
+            "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
-        self.assertIn("if applied_spawns < budget.spawn_budget:", run_once)
+        self.assertIn("continue", run_once)
         self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",

@@ -123,6 +123,12 @@ class CommentMonitorTests(unittest.TestCase):
             del cwd, check
             calls.append(list(command))
             text = " ".join(command)
+            if command == ["gh", "auth", "status"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            if command == ["gh", "api", "user"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"login": "controller-bot"}), stderr="")
+            if command == ["gh", "api", "repos/owner/repo"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"viewer_permission": "WRITE"}), stderr="")
             if "reactions" in text:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if "issue comment" in text:
@@ -138,9 +144,6 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertIn("new-team-comment 42 maintainer 99", pending)
         self.assertTrue(any("reactions" in " ".join(call) for call in calls))
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern: comment
-    # monitor instances on multiple devices could all mutate GitHub for one
-    # maintainer comment. New principle: non-owner remains read-only/noop.
     def test_non_owner_team_comment_does_not_react_post_or_mark_seen(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="comment-monitor-write", lease_id="", expires_at="")
@@ -160,18 +163,20 @@ class CommentMonitorTests(unittest.TestCase):
         api_calls: list[list[str]] = []
 
         with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=decision):
-            with mock.patch.object(
-                monitor,
-                "gh",
-                side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", ""),
-            ):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission") as admission:
                 with mock.patch.object(
                     monitor,
-                    "gh_api",
-                    side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", ""),
+                    "gh",
+                    side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", ""),
                 ):
-                    monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
+                    with mock.patch.object(
+                        monitor,
+                        "gh_api",
+                        side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", ""),
+                    ):
+                        monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
 
+        admission.assert_called_once_with("comment-monitor-write")
         self.assertTrue(any("reactions" in call[0] for call in api_calls), api_calls)
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertTrue(monitor.seen("99"))
@@ -222,6 +227,7 @@ class CommentMonitorTests(unittest.TestCase):
 
         with (
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission"),
             mock.patch.object(monitor, "post_banner") as post_banner,
         ):
             monitor.tick()

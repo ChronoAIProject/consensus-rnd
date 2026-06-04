@@ -41,7 +41,10 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         fake_gh = self.root / "gh"
         fake_gh.write_text(
             '#!/bin/bash\n'
-            'echo "$@" >> "$FAKE_GH_LOG"\n',
+            'echo "$@" >> "$FAKE_GH_LOG"\n'
+            'if [[ "$1 $2" == "auth status" ]]; then exit 0; fi\n'
+            'if [[ "$1 $2" == "api user" ]]; then printf \'%s\\n\' \'{"login":"controller-bot"}\'; exit 0; fi\n'
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo" ]]; then printf \'%s\\n\' \'{"viewer_permission":"WRITE"}\'; exit 0; fi\n',
             encoding="utf-8",
         )
         fake_gh.chmod(0o755)
@@ -94,11 +97,18 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
             return []
         return self.gh_log.read_text(encoding="utf-8").splitlines()
 
+    def gh_mutation_calls(self) -> list[str]:
+        return [
+            call
+            for call in self.gh_calls()
+            if call not in {"auth status", "api user", "api repos/test-owner/test-repo"}
+        ]
+
     def assert_gh_not_called(self) -> None:
         self.assertEqual(self.gh_calls(), [])
 
     def assert_human_label_applied_once(self) -> None:
-        self.assertEqual(self.gh_calls(), [f"pr edit 55 --repo test-owner/test-repo --add-label {HUMAN_LABEL}"])
+        self.assertEqual(self.gh_mutation_calls(), [f"pr edit 55 --repo test-owner/test-repo --add-label {HUMAN_LABEL}"])
 
     def test_apply_human_label_accepts_meta_resolved_marker_for_pr(self) -> None:
         result = self.run_helper("55", VALID_MARKER, "human-label-semantics-guard")
@@ -221,6 +231,21 @@ class ControllerLibRecentMergeProjectionTests(unittest.TestCase):
         fake_gh.write_text(
             f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
+if [[ "$1 $2" == "auth status" ]]; then
+  exit 0
+fi
+if [[ "$1 $2" == "api user" ]]; then
+  printf '%s\\n' '{{"login":"controller-bot"}}'
+  exit 0
+fi
+if [[ "$1 $2" == "api repos/test-owner/test-repo" ]]; then
+  printf '%s\\n' '{{"viewer_permission":"WRITE"}}'
+  exit 0
+fi
+if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json labels,body"* ]]; then
+  printf '%s\\n' '{{"labels":[{{"name":"crnd:lifecycle:managed"}}],"body":""}}'
+  exit 0
+fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json body"* ]]; then
   printf '%s\\n' {json.dumps(body)}
   exit 0

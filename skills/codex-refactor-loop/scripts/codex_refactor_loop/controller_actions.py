@@ -18,6 +18,7 @@ from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .gh_invoke import build_gh_argv
+from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .implement_lifecycle import clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
@@ -52,8 +53,9 @@ REVIEW_ROLES = ("architect", "tests", "quality")
 
 
 class ControllerActions:
-    def __init__(self, ctx: LoopContext) -> None:
+    def __init__(self, ctx: LoopContext, *, github_actor: GitHubAuthenticatedActor | None = None) -> None:
         self.ctx = ctx
+        self.github_actor = github_actor
         merged_env = {**os.environ, **ctx.host_env}
         self.integration_branch = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
         self.review_base_branch = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
@@ -71,10 +73,11 @@ class ControllerActions:
         return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *args])
+        coerced = [str(a) for a in args]
+        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *coerced])
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(args)} failed")
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(coerced)} failed")
         return result
 
     def git(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -107,6 +110,8 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
+        if not self._require_github_actor_or_return("controller-label", code=3):
+            return 3
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
@@ -164,6 +169,7 @@ class ControllerActions:
         target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
         if not target:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
+        self._require_github_actor_or_raise("publish-release")
         publisher = ReleasePublisher(self.ctx.repo_root)
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
@@ -183,6 +189,7 @@ class ControllerActions:
             log=request.log,
             stall=request.stall,
         )
+        self._require_github_actor_or_raise("post-banner")
         body = build_status_banner(normalized)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
@@ -287,6 +294,8 @@ class ControllerActions:
                 if normalized is None:
                     return 1
                 issue_target = normalized
+        if not self._require_github_actor_or_return("merge-pr", code=3):
+            return 3
         ready = self._ensure_pr_ready_for_merge(pr_target)
         if ready != 0:
             return ready
@@ -336,6 +345,7 @@ class ControllerActions:
                 action="open-pr",
                 source="body-link",
             )
+        self._require_github_actor_or_raise("open-pr")
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -375,6 +385,7 @@ class ControllerActions:
         if not title.strip():
             raise RuntimeError("open_design_issue_with_labels: title required")
         self._validate_design_issue_body_file(body_file)
+        self._require_github_actor_or_raise("open-design-issue")
         created = self.gh(
             [
                 "issue",
@@ -397,6 +408,7 @@ class ControllerActions:
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
         self._require_owner_or_raise("apply-issue-decomposition-plan")
         plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        self._require_github_actor_or_raise("apply-issue-decomposition-plan")
         created: list[tuple[int, str]] = []
         for child in plan.children:
             created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
@@ -567,6 +579,8 @@ class ControllerActions:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
         issue, verdict, rel_path = match.groups()
+        if not self._require_github_actor_or_return("apply-triage", code=3):
+            return 3
         config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
@@ -647,7 +661,7 @@ class ControllerActions:
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"Implement issue #{issue_target}"], check=False)
+        commit = self._git_in(worktree, ["commit", "-m", f"实施 issue #{issue_target}"], check=False)
         if commit.returncode != 0:
             if commit.stderr:
                 sys.stderr.write(commit.stderr)
@@ -656,7 +670,7 @@ class ControllerActions:
         if pushed != 0:
             return pushed
         body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        title = str(action.get("title") or f"实施 issue #{issue_target}")
         pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
@@ -925,6 +939,8 @@ class ControllerActions:
             )
             sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
             return 2
+        if not self._require_github_actor_or_return("close-managed-drop", code=3):
+            return 3
         comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
@@ -984,7 +1000,7 @@ class ControllerActions:
         path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
-            f"## Implementation for issue #{issue_target}\n\n"
+            f"## 实施 issue #{issue_target}\n\n"
             f"Closes #{issue_target}\n\n"
             "⟦AI:AUTO-LOOP⟧\n",
             encoding="utf-8",
@@ -1056,16 +1072,29 @@ class ControllerActions:
     def _require_owner_or_return(self, action: str, *, code: int) -> bool:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
-        if decision.allowed:
-            return True
-        sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
-        return False
+        if not decision.allowed:
+            sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
+            return False
+        return True
 
     def _require_owner_or_raise(self, action: str) -> None:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
+
+    def _require_github_actor_or_return(self, action: str, *, code: int) -> bool:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        try:
+            actor.require_admission(action)
+        except RuntimeError as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return False
+        return True
+
+    def _require_github_actor_or_raise(self, action: str) -> None:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        actor.require_admission(action)
 
     def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
         try:
@@ -1120,7 +1149,7 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source: str) -> str:
-    """refactor helper, no behavior change except rejecting unsafe GitHub target ids."""
+    """Return a canonical positive GitHub issue or PR number."""
     target = "" if value is None else str(value)
     if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(target):
         raise ValueError(f"{action}: invalid {kind} target from {source}: {target!r}")
@@ -1137,7 +1166,7 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
-    """refactor helper, no behavior change except rejecting unsafe path fields."""
+    """Validate worktree identity fields before constructing local paths."""
     if not SAFE_WORKTREE_ITERATION_RE.fullmatch(iteration):
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):

@@ -62,7 +62,14 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
 
 
 def release_env():
-    return mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, clear=False)
+    return mock.patch.dict(
+        os.environ,
+        {
+            "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            "ACTIVE_CONTROLLER_DEVICE_ID": "device-a",
+        },
+        clear=False,
+    )
 
 
 class FakePreflight:

@@ -47,6 +47,11 @@ class FakeActions:
         )()
 
 
+class AllowingGitHubActor:
+    def require_admission(self, action: str) -> None:
+        pass
+
+
 class ReviewGateEndToEndTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -165,7 +170,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
         action = self.project_review_gate_action()
         gh_calls: list[list[str]] = []
 
-        real_actions = ControllerActions(self.ctx)
+        real_actions = ControllerActions(self.ctx, github_actor=AllowingGitHubActor())
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
