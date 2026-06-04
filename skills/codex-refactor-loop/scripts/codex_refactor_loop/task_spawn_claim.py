@@ -58,10 +58,15 @@ class TaskSpawnClaimStore:
                     )
                     handle.write("\n")
             except OSError as exc:
+                cleanup_error = None
                 try:
                     lock_path.unlink()
-                except OSError:
-                    pass
+                except OSError as unlink_exc:
+                    cleanup_error = unlink_exc
+                if cleanup_error is not None:
+                    raise TaskSpawnClaimError(
+                        f"spawn claim metadata write failed and cleanup failed: {lock_path}: write={exc}; cleanup={cleanup_error}"
+                    ) from exc
                 raise TaskSpawnClaimError(f"spawn claim metadata write failed: {lock_path}: {exc}") from exc
             return TaskSpawnClaim(safe_task_id, lock_path, acquired=True)
 
@@ -123,8 +128,10 @@ def safe_task_id_from_task(task_id: str) -> str:
 def _log_has_exit_marker(path: Path) -> bool:
     try:
         tail = path.read_text(encoding="utf-8", errors="replace").splitlines()[-10:]
-    except OSError:
+    except FileNotFoundError:
         return False
+    except OSError:
+        raise TaskSpawnClaimError(f"spawn claim recycle log unreadable: {path}")
     return any(line.startswith("EXIT=") for line in tail)
 
 

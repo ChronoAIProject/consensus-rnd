@@ -279,7 +279,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
 
-<<<<<<< HEAD
     def test_task_spawn_claim_documents_spawn_boundary_not_distributed_authority(self) -> None:
         section = section_after_anchor(self.skill, "task-spawn-claim-490")
         spawn_pattern = self.skill
@@ -306,7 +305,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
         self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
         self.assertIn("not the enforcement point", spawn_pattern)
-=======
+
     def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
         section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
 
@@ -339,7 +338,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
->>>>>>> origin/auto-refact-dev
 
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.

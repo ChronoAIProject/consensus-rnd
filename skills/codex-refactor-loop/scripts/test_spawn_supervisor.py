@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -131,12 +130,7 @@ class SpawnSupervisorTests(unittest.TestCase):
         self.assertLess(source.index("TaskSpawnClaimStore(repo_root).acquire"), source.index("ProcessSupervisor().supervise"))
 
     def assert_process_dead(self, pid: int) -> None:
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            if not self.pid_alive(pid):
-                return
-            time.sleep(0.05)
-        self.fail(f"process still alive after process-group kill: {pid}")
+        self.assertFalse(self.pid_alive(pid), f"process still alive after process-group kill: {pid}")
 
     @staticmethod
     def pid_alive(pid: int) -> bool:

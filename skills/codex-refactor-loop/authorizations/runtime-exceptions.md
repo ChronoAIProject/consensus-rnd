@@ -207,7 +207,6 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
-<<<<<<< HEAD
 <a id="task-spawn-claim-490"></a>
 ## task-spawn-claim-490
 
@@ -221,7 +220,7 @@ in `SKILL.md` and the tests.
 - fact_source: `skills/codex-refactor-loop/scripts/codex_refactor_loop/task_spawn_claim.py` owns safe task-id validation, lock path, atomic create, metadata validation, and recycle policy; `spawn.py` is the only long-term enforcement caller before `ProcessSupervisor.supervise(...)`.
 - verification: `test_task_spawn_claim.py`, `test_spawn_claim.py`, `test_spawn_supervisor.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This is local spawn mutual exclusion only and does not grant lifecycle authority or distributed ownership.
-=======
+
 <a id="global-dashboard-status-card-504"></a>
 ## global-dashboard-status-card-504
 
@@ -235,7 +234,6 @@ in `SKILL.md` and the tests.
 - fact_source: `HolisticStatusProjection` in `holistic_status.py` is the single status-card algorithm; it reads existing statusline snapshot, daemon-status projection, concurrency count/list surfaces, dispatch queue depth, managed issue/PR label/body closing-ref projection through `ManagedWorkProjection`, recent merge state, GitHub headroom, and progress-reporter state. Host opt-in and fixed target fields come only from the host env surface matrix.
 - verification: `test_holistic_status.py`, `test_work_item_projection.py`, `test_progress_reporter.py`, `test_cli_command_router.py`, `test_peek_status_lens.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This is a private progress-reporter issue-comment PATCH subpath plus a read-only local command; it grants no new daemon, public writer command, lifecycle authority, or dashboard/dependency ledger authority.
->>>>>>> origin/auto-refact-dev
 
 <a id="issue-decomposition-403"></a>
 ## issue-decomposition-403
