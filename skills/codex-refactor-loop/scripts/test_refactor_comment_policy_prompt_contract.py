@@ -32,6 +32,14 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
         self.assertIn("original thread is replied to and resolved", skill)
         self.assertIn("or explicitly escalated", skill)
 
+    def test_fix_done_route_mentions_review_thread_completion_gate(self) -> None:
+        skill = read_skill()
+
+        self.assertIn("| `FIX_DONE` |", skill)
+        self.assertIn("review-thread completion evidence gate passes", skill)
+        self.assertIn("review-thread-driven fixes", skill)
+        self.assertIn("status-only block", skill)
+
     def test_review_fix_prompt_requires_seeded_review_thread_completion(self) -> None:
         review_fix = read_prompt("review-fix.md")
 

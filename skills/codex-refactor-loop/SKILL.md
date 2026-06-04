@@ -519,7 +519,7 @@ Routing is marker-driven, but markers are trusted only after `EXIT=0` at the tai
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `WAIT_EXPLICIT_APPROVAL` | Surface comments and wait; do not merge or dispatch fix. |
 | Latest complete Consensus-rnd Phase review-gate reviewer round resolves to `FIX` | Dispatch fix codex for next round using reject evidence as blocking input. |
 | Consensus-rnd Phase review-gate gate incomplete or invalid (`WAIT_OR_REDISPATCH`) | Wait or re-dispatch the missing/invalid reviewer; never merge. |
-| `FIX_DONE` | Dispatch reviewers again. |
+| `FIX_DONE` | Dispatch reviewers again only after review-thread completion evidence gate passes for review-thread-driven fixes; otherwise status-only block. |
 | `TEST_ADD_DONE` | Commit/push and resume CI watch. |
 
 No-gap policy:
