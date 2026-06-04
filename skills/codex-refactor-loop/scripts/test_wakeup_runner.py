@@ -481,6 +481,19 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         marker = "IMPLEMENT_DONE:issue-77:ok"
         log = self.repo / ".refactor-loop/logs/implement-issue77.log"
         log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        title = runs / "implementation-pr-issue-77-title.txt"
+        body = runs / "implementation-pr-issue-77-body.md"
+        title.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        body.write_text(
+            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
+            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            "Closes #77\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
         action = {
             "kind": "completed-marker",
             "action_id": "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
@@ -493,6 +506,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
+                "worker_authored_pr_artifacts",
                 "no_duplicate_open_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
@@ -504,6 +518,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
             "head_ref": "refactor/iter77-issue-77",
             "worktree": str(worktree),
+            "title_file": title.relative_to(self.repo).as_posix(),
+            "body_file": body.relative_to(self.repo).as_posix(),
         }
         action.update(overrides)
         return action
@@ -1135,16 +1151,16 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "helper_exit:7")
 
-    def test_publish_implementation_output_delegated_fallback_is_retryable(self) -> None:
+    def test_publish_implementation_output_helper_failure_is_blocked(self) -> None:
         actions = FakeActions(publish_code=75)
-        action = self.implementation_output_action(action_id="publish-implementation:delegated-fallback")
+        action = self.implementation_output_action(action_id="publish-implementation:helper-failure")
 
         first = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
         second = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
 
-        self.assertEqual(first[0].status, "delegated")
-        self.assertEqual(first[0].reason, "publish_implementation_fallback_delegated")
-        self.assertEqual(second[0].status, "delegated")
+        self.assertEqual(first[0].status, "blocked")
+        self.assertEqual(first[0].reason, "helper_exit:75")
+        self.assertEqual(second[0].status, "blocked")
         self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output", "publish_implementation_output"])
         ledger_rows = [
             json.loads(line)
@@ -1152,10 +1168,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             .read_text(encoding="utf-8")
             .splitlines()
         ]
-        self.assertEqual([row["status"] for row in ledger_rows], ["delegated", "delegated"])
+        self.assertEqual([row["status"] for row in ledger_rows], ["blocked", "blocked"])
         pending_path = self.repo / ".refactor-loop/.controller-pending-events.log"
         pending = pending_path.read_text(encoding="utf-8") if pending_path.exists() else ""
-        self.assertNotIn("WAKEUP_RUNNER_HELPER_EXIT", pending)
+        self.assertEqual(
+            pending.count("WAKEUP_RUNNER_HELPER_EXIT:publish-implementation:helper-failure:publish_implementation_output:75"),
+            2,
+        )
 
     def test_safe_push_stale_head_blocks_before_helper(self) -> None:
         actions = FakeActions()
@@ -1385,6 +1404,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "fresh_integration_base",
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
+                        "worker_authored_pr_artifacts",
                         "no_duplicate_open_pr",
                     ],
                 ),
@@ -1419,6 +1439,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     actions=actions,
                 )
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_publish_implementation_output_blocks_before_helper_without_worker_pr_artifacts(self) -> None:
+        actions = FakeActions()
+        action = self.implementation_output_action(
+            action_id="publish-implementation:missing-pr-artifacts",
+            title_file=".refactor-loop/runs/missing-title.txt",
+            body_file=".refactor-loop/runs/missing-body.md",
+        )
+
+        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "publish-implementation:missing-pr-artifacts",
+            "publish_implementation_title_artifact_missing",
+            actions,
+        )
 
     def test_publish_implementation_output_allows_existing_open_pr_for_helper_reuse(self) -> None:
         actions = FakeActions()

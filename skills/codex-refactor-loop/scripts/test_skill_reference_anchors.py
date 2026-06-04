@@ -1452,6 +1452,11 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`in_flight_implement`",
             "`scope_conflict_waiting`",
             "overlapping normalized `scope_paths`",
+            "PR title/body are worker-authored GitHub-facing artifacts",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
+            "exactly one matching `Closes #N`",
+            "non-placeholder title/body",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):

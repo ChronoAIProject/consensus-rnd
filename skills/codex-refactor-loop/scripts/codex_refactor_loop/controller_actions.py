@@ -51,7 +51,13 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
-PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
+IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
+    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
+    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
+    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
+)
+PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
+PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
 
 
 class ControllerActions:
@@ -637,9 +643,18 @@ class ControllerActions:
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
+        title_error = self._implementation_pr_title_error(action, issue_target)
+        if title_error:
+            sys.stderr.write(f"publish_implementation_output: {title_error}\n")
+            return 2
+        body_error = self._implementation_pr_body_error(action, issue_target)
+        if body_error:
+            sys.stderr.write(f"publish_implementation_output: {body_error}\n")
+            return 2
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
-            return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
+            sys.stderr.write(f"publish_implementation_output: {base_error}\n")
+            return 2
         existing_pr = self._open_pr_for_head(head_ref)
         if existing_pr == 0:
             sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
@@ -653,7 +668,7 @@ class ControllerActions:
             return pushed
         if existing_pr is None:
             body_file = self._implementation_pr_body_file(action, issue_target)
-            title = str(action.get("title") or f"实现 issue #{issue_target}")
+            title = self._implementation_pr_title(action, issue_target)
             pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
         else:
             pr_target = existing_pr
@@ -689,34 +704,19 @@ class ControllerActions:
         if diff.returncode == 0:
             return 0
         if diff.returncode != 1:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_diff_unavailable",
-            )
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_add_failed",
-            )
+            sys.stderr.write("publish_implementation_output: publish_add_failed\n")
+            return 2
         commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
         if commit.returncode == 0:
             return 0
         if commit.stderr:
             sys.stderr.write(commit.stderr)
-        return self._delegate_publish_implementation_fallback(
-            action,
-            issue_target,
-            head_ref,
-            worktree,
-            "publish_commit_failed",
-        )
+        sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+        return 2
 
     def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
         integration, _review_base = self._require_branch_config()
@@ -732,46 +732,6 @@ class ControllerActions:
             if merge.returncode != 0:
                 return "publish_stale_base_merge_conflict"
         return None
-
-    def _delegate_publish_implementation_fallback(
-        self,
-        action: Mapping[str, object],
-        issue_target: str,
-        head_ref: str,
-        worktree: Path,
-        reason: str,
-    ) -> int:
-        prompt = self.ctx.paths.prompts / f"publish-implementation-fallback-{issue_target}.md"
-        log = self.ctx.paths.logs / f"publish-implementation-fallback-{issue_target}.log"
-        output = self.ctx.paths.runs / f"publish-implementation-fallback-{issue_target}.md"
-        prompt.parent.mkdir(parents=True, exist_ok=True)
-        log.parent.mkdir(parents=True, exist_ok=True)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        self.render_template(
-            str(self.ctx.skill_root / "prompts" / "publish-implementation-fallback.md"),
-            str(prompt),
-            env={
-                "ISSUE_NUMBER": issue_target,
-                "WORKTREE_PATH": str(worktree),
-                "BRANCH": head_ref,
-                "BASE_BRANCH": self.integration_branch,
-                "FALLBACK_REASON": reason,
-                "PUBLISH_FALLBACK_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
-                "SOURCE_MARKER": str(action.get("source_marker") or ""),
-            },
-        )
-        self._append_harness_spawn_intent(
-            intent_id=f"publish-implementation-fallback:{issue_target}",
-            task_id=f"publish-implementation-fallback-{issue_target}",
-            route="publish-implementation-fallback",
-            cd=worktree,
-            prompt=prompt,
-            log=log,
-            stall=5400,
-            reason=f"publish implementation fallback for issue #{issue_target}: {reason}",
-        )
-        sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
-        return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -1082,18 +1042,75 @@ class ControllerActions:
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
         raw = str(action.get("body_file") or "").strip()
-        if raw:
-            path = Path(raw)
-            return path if path.is_absolute() else self.ctx.repo_root / path
-        path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"## issue #{issue_target} 实现\n\n"
-            f"Closes #{issue_target}\n\n"
-            "⟦AI:AUTO-LOOP⟧\n",
-            encoding="utf-8",
-        )
-        return path
+        cluster_id = _implementation_cluster_id(action, issue_target)
+        path = Path(raw) if raw else self.ctx.paths.runs / f"implementation-pr-{cluster_id}-body.md"
+        return path if path.is_absolute() else self.ctx.repo_root / path
+
+    def _implementation_pr_title_file(self, action: Mapping[str, object], issue_target: str) -> Path:
+        raw = str(action.get("title_file") or "").strip()
+        cluster_id = _implementation_cluster_id(action, issue_target)
+        path = Path(raw) if raw else self.ctx.paths.runs / f"implementation-pr-{cluster_id}-title.txt"
+        return path if path.is_absolute() else self.ctx.repo_root / path
+
+    def _implementation_pr_title(self, action: Mapping[str, object], issue_target: str) -> str:
+        return self._implementation_pr_title_file(action, issue_target).read_text(encoding="utf-8", errors="replace").strip()
+
+    def _implementation_pr_title_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        path = self._implementation_pr_title_file(action, issue_target)
+        if not self._repo_runs_file(path):
+            return "implementation PR title artifact outside runs"
+        if not path.is_file():
+            return "implementation PR title artifact missing"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "implementation PR title artifact missing"
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if len(lines) != 1:
+            return "implementation PR title must be exactly one non-empty line"
+        title = lines[0]
+        title_bytes = title.encode("utf-8")
+        if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + issue_target.encode("ascii") or title.lower().startswith(f"implement issue #{issue_target}"):
+            return "implementation PR title is placeholder"
+        if "⟦AI:AUTO-LOOP⟧" in title or re.search(r"\bCloses\s+#", title, flags=re.IGNORECASE):
+            return "implementation PR title contains body-only content"
+        return None
+
+    def _implementation_pr_body_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        path = self._implementation_pr_body_file(action, issue_target)
+        if not self._repo_runs_file(path):
+            return "implementation PR body artifact outside runs"
+        if not path.is_file():
+            return "implementation PR body artifact missing"
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "implementation PR body artifact missing"
+        try:
+            validate_self_contained_github_body(text)
+        except GitHubBodyError as exc:
+            return f"implementation PR body invalid: {exc}"
+        if text.rstrip("\n").splitlines()[-1] != "⟦AI:AUTO-LOOP⟧":
+            return "implementation PR body sentinel must be final standalone line"
+        closing = list(extract_closing_issue_numbers(text))
+        if closing != [int(issue_target)]:
+            return "implementation PR body must contain exactly one matching Closes link"
+        body_bytes = text.encode("utf-8")
+        for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
+            if section not in body_bytes:
+                return "implementation PR body missing required section"
+        placeholder_heading = re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % re.escape(issue_target).encode("ascii"), body_bytes)
+        if placeholder_heading:
+            return "implementation PR body is placeholder"
+        return None
+
+    def _repo_runs_file(self, path: Path) -> bool:
+        try:
+            resolved = path.resolve()
+            resolved.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
+        except ValueError:
+            return False
+        return True
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -1224,7 +1241,7 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source: str) -> str:
-    """refactor helper, no behavior change except rejecting unsafe GitHub target ids."""
+    """Return a normalized positive GitHub target id."""
     target = "" if value is None else str(value)
     if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(target):
         raise ValueError(f"{action}: invalid {kind} target from {source}: {target!r}")
@@ -1241,7 +1258,7 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
-    """refactor helper, no behavior change except rejecting unsafe path fields."""
+    """Validate controller-owned worktree path components."""
     if not SAFE_WORKTREE_ITERATION_RE.fullmatch(iteration):
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):
@@ -1250,3 +1267,10 @@ def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
+    marker = str(action.get("source_marker") or "")
+    marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+    candidate = marker_id.replace("_", "-").strip("-") or f"issue-{issue_target}"
+    return candidate if SAFE_WORKTREE_CLUSTER_RE.fullmatch(candidate) else f"issue-{issue_target}"

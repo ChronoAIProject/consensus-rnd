@@ -710,6 +710,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         path.write_text("\n".join([*lines, ""]), encoding="utf-8")
         return path
 
+    def write_implementation_pr_artifacts(self, issue: int = 20, cluster: str = "issue-20") -> tuple[Path, Path]:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        title = runs / f"implementation-pr-{cluster}-title.txt"
+        body = runs / f"implementation-pr-{cluster}-body.md"
+        title.write_text(f"完成 issue #{issue} 的发布契约\n", encoding="utf-8")
+        body.write_text(
+            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n\n"
+            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_plan.py\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            f"Closes #{issue}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return title, body
+
     def set_log_mtime(self, name: str, mtime: float) -> None:
         os.utime(self.logs / name, (mtime, mtime))
 
@@ -1244,6 +1260,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         log = self.write_markerless_clean_log("implement-issue-421.log")
         worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=421, cluster="issue-421")
 
         def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
             if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
@@ -1316,6 +1333,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.write_completed_log("implement-issue-422.log", "IMPLEMENT_DONE:issue-422:ok")
         self.write_markerless_clean_log("implement-issue-423.log")
         self.write_run_artifact("implement-issue-423", "IMPLEMENT_DONE:issue-423:ok")
+        self.write_implementation_pr_artifacts(issue=422, cluster="issue-422")
+        self.write_implementation_pr_artifacts(issue=423, cluster="issue-423")
 
         actions = completed_marker_actions(
             self.repo,
@@ -1471,6 +1490,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def test_publish_implementation_marker_with_verified_local_head_remains_executable(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         (self.logs / "implement-issue20.log").write_text(
             "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
             encoding="utf-8",
@@ -1484,13 +1504,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(action["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertEqual(action["title_file"], ".refactor-loop/runs/implementation-pr-issue-20-title.txt")
+        self.assertEqual(action["body_file"], ".refactor-loop/runs/implementation-pr-issue-20-body.md")
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
+        self.assertIn("worker_authored_pr_artifacts", action["preconditions"])
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_publish_implementation_marker_without_pr_artifacts_is_status_only(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_pr_title_artifact_missing")
+        self.assertNotIn("runner_authority", action)
 
     def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
         self.write_consensus_artifact()
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         log = self.logs / "implement-issue20.log"
         log.write_text("IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n", encoding="utf-8")
 

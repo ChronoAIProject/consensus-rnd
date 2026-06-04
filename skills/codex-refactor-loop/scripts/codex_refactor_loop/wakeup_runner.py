@@ -17,7 +17,7 @@ from typing import Any, Callable, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
-from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok, log_graphql_backoff
 from .heartbeat import DaemonHeartbeatLease
@@ -77,6 +77,13 @@ SUPPORTED_CONTROLLER_ACTIONS = {
 SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
     {"spawn_codex_harness_background"}
 )
+IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
+    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
+    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
+    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
+)
+PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
+PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
 
 
 @dataclass(frozen=True)
@@ -263,11 +270,6 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
-        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
-            return self._record(
-                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
-                action,
-            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code != 0:
@@ -513,6 +515,7 @@ class WakeupRunner:
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
+            "worker_authored_pr_artifacts",
             "no_duplicate_open_pr",
         ):
             if required not in preconditions:
@@ -524,7 +527,61 @@ class WakeupRunner:
         duplicate_error = self._validate_no_duplicate_open_pr(action)
         if duplicate_error:
             return duplicate_error
+        artifact_error = self._validate_implementation_pr_artifacts(action)
+        if artifact_error:
+            return artifact_error
         return self._validate_implementation_worktree(action)
+
+    def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        title_path = self._repo_runs_artifact_path(str(action.get("title_file") or ""))
+        body_path = self._repo_runs_artifact_path(str(action.get("body_file") or ""))
+        if title_path is None:
+            return "publish_implementation_title_artifact_invalid_path"
+        if body_path is None:
+            return "publish_implementation_body_artifact_invalid_path"
+        try:
+            title_text = title_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "publish_implementation_title_artifact_missing"
+        title_lines = [line.strip() for line in title_text.splitlines() if line.strip()]
+        if len(title_lines) != 1:
+            return "publish_implementation_title_artifact_invalid"
+        title = title_lines[0]
+        title_bytes = title.encode("utf-8")
+        if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + str(target).encode("ascii") or title.lower().startswith(f"implement issue #{target}"):
+            return "publish_implementation_title_placeholder"
+        if "⟦AI:AUTO-LOOP⟧" in title or re.search(r"\bCloses\s+#", title, flags=re.IGNORECASE):
+            return "publish_implementation_title_contains_body_content"
+        try:
+            body_text = body_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return "publish_implementation_body_artifact_missing"
+        if body_text.rstrip("\n").splitlines()[-1:] != ["⟦AI:AUTO-LOOP⟧"]:
+            return "publish_implementation_body_sentinel_missing"
+        closing = [int(match) for match in re.findall(r"(?im)\bCloses\s+#([1-9][0-9]*)\b", body_text)]
+        if closing != [target]:
+            return "publish_implementation_body_closes_mismatch"
+        body_bytes = body_text.encode("utf-8")
+        for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
+            if section not in body_bytes:
+                return "publish_implementation_body_required_section_missing"
+        if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % str(target).encode("ascii"), body_bytes):
+            return "publish_implementation_body_placeholder"
+        return None
+
+    def _repo_runs_artifact_path(self, value: str) -> Path | None:
+        if not value:
+            return None
+        path = Path(value)
+        resolved = (path if path.is_absolute() else self.ctx.repo_root / path).resolve()
+        try:
+            resolved.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
+        except ValueError:
+            return None
+        return resolved
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
