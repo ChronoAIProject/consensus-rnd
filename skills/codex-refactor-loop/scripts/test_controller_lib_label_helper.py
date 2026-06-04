@@ -27,6 +27,19 @@ HUMAN_LABEL = labels.HUMAN_MAINTAINER_DECISION
 VALID_MARKER = "META_RESOLVED:escalate-human:human-label-semantics-guard"
 
 
+def write_host_env(root: Path) -> str:
+    path = root / ".config" / "consensus-rnd" / "host.env"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'export REPO_ROOT="{root}"\n'
+        'export GH_REPO_SLUG="test-owner/test-repo"\n'
+        'export INTEGRATION_BRANCH="integration-branch"\n'
+        'export REVIEW_BASE_BRANCH="review-base"\n',
+        encoding="utf-8",
+    )
+    return ".config/consensus-rnd/host.env"
+
+
 def flattened_gh_command(args: list[str]) -> str:
     return " ".join(args)
 
@@ -42,9 +55,8 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         fake_gh.write_text(
             '#!/bin/bash\n'
             'echo "$@" >> "$FAKE_GH_LOG"\n'
-            'if [[ "$1 $2" == "auth status" ]]; then exit 0; fi\n'
             'if [[ "$1 $2" == "api user" ]]; then printf \'%s\\n\' \'{"login":"controller-bot"}\'; exit 0; fi\n'
-            'if [[ "$1 $2" == "api repos/test-owner/test-repo" ]]; then printf \'%s\\n\' \'{"viewer_permission":"WRITE"}\'; exit 0; fi\n',
+            'if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/permission" ]]; then printf \'%s\\n\' \'{"permission":"write"}\'; exit 0; fi\n',
             encoding="utf-8",
         )
         fake_gh.chmod(0o755)
@@ -63,6 +75,7 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
                 "GH_OWNER": "",
                 "GH_REPO_NAME": "",
                 "GH_REPO": "",
+                "CONSENSUS_RND_HOST_ENV": write_host_env(self.root),
                 "HUMAN_LABEL_SOURCE_MARKER": marker_env,
             }
         )
@@ -101,7 +114,7 @@ class ControllerLibHumanLabelPrHelperTests(unittest.TestCase):
         return [
             call
             for call in self.gh_calls()
-            if call not in {"auth status", "api user", "api repos/test-owner/test-repo"}
+            if call not in {"api user", "api repos/test-owner/test-repo/collaborators/controller-bot/permission"}
         ]
 
     def assert_gh_not_called(self) -> None:
@@ -231,15 +244,12 @@ class ControllerLibRecentMergeProjectionTests(unittest.TestCase):
         fake_gh.write_text(
             f"""#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "$FAKE_GH_LOG"
-if [[ "$1 $2" == "auth status" ]]; then
-  exit 0
-fi
 if [[ "$1 $2" == "api user" ]]; then
   printf '%s\\n' '{{"login":"controller-bot"}}'
   exit 0
 fi
-if [[ "$1 $2" == "api repos/test-owner/test-repo" ]]; then
-  printf '%s\\n' '{{"viewer_permission":"WRITE"}}'
+if [[ "$1 $2" == "api repos/test-owner/test-repo/collaborators/controller-bot/permission" ]]; then
+  printf '%s\\n' '{{"permission":"write"}}'
   exit 0
 fi
 if [[ "$1 $2 $3" == "pr view 55" && "$*" == *"--json labels,body"* ]]; then
@@ -291,6 +301,7 @@ exit 0
                 "GH_OWNER": "",
                 "GH_REPO_NAME": "",
                 "GH_REPO": "",
+                "CONSENSUS_RND_HOST_ENV": write_host_env(self.root),
                 "RECENT_PR_MERGE_RETRY_SLEEP_SECONDS": "0",
             }
         )

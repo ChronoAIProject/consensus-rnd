@@ -6,12 +6,31 @@ import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Literal, Sequence
 
 from .context import LoopContext
 
 
 Runner = Callable[[Sequence[str], Path], subprocess.CompletedProcess[str]]
+Permission = Literal["read", "triage", "write", "maintain", "admin"]
+Source = Literal["gh-api"]
+
+
+PERMISSION_RANK: dict[str, int] = {
+    "read": 0,
+    "triage": 1,
+    "write": 2,
+    "maintain": 3,
+    "admin": 4,
+}
+
+
+@dataclass(frozen=True)
+class GitHubActorAdmission:
+    login: str
+    repo_slug: str
+    permission: Permission
+    source: Source = "gh-api"
 
 
 @dataclass(frozen=True)
@@ -19,22 +38,17 @@ class GitHubAuthenticatedActor:
     ctx: LoopContext
     runner: Runner | None = None
 
-    def require_admission(self, action: str) -> None:
+    def require_admission(self, action: str) -> GitHubActorAdmission:
         if not self.ctx.gh_repo_slug:
             raise RuntimeError(f"github-authenticated-actor:{action}: GH_REPO_SLUG is required")
-        self._require_auth_status(action)
         login = self._authenticated_login(action)
-        permission = self._repo_permission(action)
-        if permission.lower() not in {"admin", "maintain", "write"}:
+        permission = self._repo_permission(action, login)
+        if PERMISSION_RANK[permission] < PERMISSION_RANK["write"]:
             raise RuntimeError(
                 f"github-authenticated-actor:{action}: authenticated actor {login} lacks write permission "
                 f"for {self.ctx.gh_repo_slug}"
             )
-
-    def _require_auth_status(self, action: str) -> None:
-        result = self._run(["gh", "auth", "status"])
-        if result.returncode != 0:
-            raise RuntimeError(_failure(action, "gh auth status", result))
+        return GitHubActorAdmission(login=login, repo_slug=self.ctx.gh_repo_slug, permission=permission)
 
     def _authenticated_login(self, action: str) -> str:
         result = self._run(["gh", "api", "user"])
@@ -49,31 +63,22 @@ class GitHubAuthenticatedActor:
             raise RuntimeError(f"github-authenticated-actor:{action}: authenticated login missing")
         return login
 
-    def _repo_permission(self, action: str) -> str:
-        result = self._run(["gh", "api", f"repos/{self.ctx.gh_repo_slug}"])
+    def _repo_permission(self, action: str, login: str) -> Permission:
+        endpoint = f"repos/{self.ctx.gh_repo_slug}/collaborators/{login}/permission"
+        result = self._run(["gh", "api", endpoint])
         if result.returncode != 0:
-            raise RuntimeError(_failure(action, f"gh api repos/{self.ctx.gh_repo_slug}", result))
+            raise RuntimeError(_failure(action, f"gh api {endpoint}", result))
         try:
             data = json.loads(result.stdout or "{}")
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"github-authenticated-actor:{action}: invalid repo permission JSON") from exc
-        permission = data.get("viewer_permission")
-        if not isinstance(permission, str) or not permission.strip():
-            permissions = data.get("permissions")
-            if isinstance(permissions, dict):
-                if permissions.get("admin"):
-                    permission = "admin"
-                elif permissions.get("maintain"):
-                    permission = "maintain"
-                elif permissions.get("push"):
-                    permission = "write"
-                elif permissions.get("triage"):
-                    permission = "triage"
-                elif permissions.get("pull"):
-                    permission = "read"
-        if not isinstance(permission, str) or not permission.strip():
+        permission = data.get("permission")
+        if not isinstance(permission, str):
             raise RuntimeError(f"github-authenticated-actor:{action}: repo permission missing")
-        return permission.strip()
+        normalized = permission.strip().lower()
+        if normalized not in PERMISSION_RANK:
+            raise RuntimeError(f"github-authenticated-actor:{action}: unsupported repo permission {permission!r}")
+        return normalized  # type: ignore[return-value]
 
     def _run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         if self.runner is not None:

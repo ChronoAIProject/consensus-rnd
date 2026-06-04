@@ -129,12 +129,10 @@ class CommentMonitorTests(unittest.TestCase):
             del cwd, check
             calls.append(list(command))
             text = " ".join(command)
-            if command == ["gh", "auth", "status"]:
-                return mock.Mock(returncode=0, stdout="", stderr="")
             if command == ["gh", "api", "user"]:
                 return mock.Mock(returncode=0, stdout=json.dumps({"login": "controller-bot"}), stderr="")
-            if command == ["gh", "api", "repos/owner/repo"]:
-                return mock.Mock(returncode=0, stdout=json.dumps({"viewer_permission": "WRITE"}), stderr="")
+            if command == ["gh", "api", "repos/owner/repo/collaborators/controller-bot/permission"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"permission": "write"}), stderr="")
             if "reactions" in text:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if "issue comment" in text:
