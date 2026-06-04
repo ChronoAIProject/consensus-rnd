@@ -61,7 +61,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
+        self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={})
         self.config = RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1)
         self.helpers: list[RestartDaemons] = []
 
@@ -101,7 +101,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         command = (sys.executable, "-c", FAKE_DAEMON)
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
             with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory or DaemonProcessInventory(())):
-                return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+                with mock.patch.dict(os.environ, {}, clear=True):
+                    return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -503,6 +504,19 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual(("comment-monitor",), tuple(target.name for target in one))
         with self.assertRaises(ValueError):
             daemon_targets(self.ctx, "not-allowlisted")
+
+    def test_suite_level_global_ps_leak_guard_is_deleted(self) -> None:
+        guard = SCRIPT_DIR / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
+        for path in (
+            SCRIPT_DIR / "test_restart_daemons.py",
+            SCRIPT_DIR / "test_cli_daemon_help_smoke.py",
+            SCRIPT_DIR / "test_cli_command_router.py",
+        ):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("ps " + "-eo", source)
+                self.assertNotIn(" phase9-router " + "--daemon", source)
 
     def test_restart_helper_source_mentions_launch_fingerprint_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
