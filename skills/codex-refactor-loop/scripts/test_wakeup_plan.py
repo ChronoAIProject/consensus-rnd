@@ -831,12 +831,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def harness_spawn_actions(self, plan: dict) -> list[dict]:
         return [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
 
+    def action_index(self, plan: dict, predicate: object) -> int:
+        for index, action in enumerate(plan["actions"]):
+            if predicate(action):
+                return index
+        self.fail(f"missing action in plan: {json.dumps(plan['actions'], sort_keys=True)}")
+
+    def assert_before_all_new_work_spawns(self, plan: dict, action_index: int) -> None:
+        spawn_indexes = [
+            index
+            for index, action in enumerate(plan["actions"])
+            if action.get("controller_action") == "spawn_codex_harness_background"
+            and action.get("kind") == "harness-spawn-intent"
+        ]
+        self.assertGreaterEqual(len(spawn_indexes), 1)
+        self.assertLess(action_index, min(spawn_indexes))
+
     def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
         self.append_harness_spawn_intent()
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["command"], "spawn-codex")
         self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
@@ -848,12 +864,110 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
 
+    def test_review_gate_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:reject")
+
+        plan = self.run_plan(fixture="open_pr_123", ps_count=0)
+
+        review_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "review_gate"
+            and action.get("target_kind") == "PR"
+            and action.get("target_number") == 123
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, review_index)
+
+    def test_publish_implementation_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("target_kind") == "issue"
+            and action.get("target_number") == 20
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
+    def test_wakeup_plan_priority_order_keeps_existing_front_of_queue_routes(self) -> None:
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("2026-05-31T00:00:00Z maintainer comment on PR #31\n", encoding="utf-8")
+        self.append_harness_spawn_intent(
+            intent_id="new-work-ci",
+            task_id="new-work-ci",
+            prompt=".refactor-loop/prompts/new-work-ci.md",
+            log=".refactor-loop/logs/new-work-ci.log",
+        )
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="ci_red", ps_count=0)
+
+        kinds = [action["kind"] for action in plan["actions"]]
+        self.assertLess(kinds.index("maintainer-comment"), kinds.index("ci-red"))
+        self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+        self.assertLess(kinds.index("no-gap-violation"), kinds.index("harness-spawn-intent"))
+        ci_action = next(action for action in plan["actions"] if action["kind"] == "ci-red")
+        self.assertTrue(ci_action["status_only"])
+
+    def test_status_only_completed_marker_keeps_completed_marker_priority_class(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.write_completed_log("implement-issue330.log", "IMPLEMENT_DONE:issue-330:ok")
+
+        plan = self.run_plan(fixture="open_issue_330", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("status_only")
+            and action.get("target_number") == 330,
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
     def test_harness_spawn_intent_accepts_absolute_repo_contained_cd(self) -> None:
         self.append_harness_spawn_intent(cd=str(self.repo.resolve()))
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["cd"], str(self.repo.resolve()))
 
@@ -3235,7 +3349,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan, stdout = self.run_plan_with_stdout(fixture="open_issue_330", ps_count=0, active_audit=True)
 
-        self.assertEqual(plan["actions"][0]["kind"], "harness-spawn-intent")
+        self.assertTrue(any(action["kind"] == "harness-spawn-intent" for action in plan["actions"]))
         self.assertTrue(has_dispatchable_action(plan["actions"]))
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
@@ -3365,7 +3479,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "closed-action-projection")
         self.assertTrue(plan["no_lifecycle_authority"])
         self.assertEqual(plan["apply_authority"], "wakeup-runner-396-only")
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         for field in (
             "action_id",
