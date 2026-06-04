@@ -766,15 +766,63 @@ class ControllerActions:
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
+        add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
+        remove_labels = ISSUE_LABELS_REMOVE
         args = ["issue", "edit", issue_target]
-        for label in ISSUE_LABELS_REMOVE:
+        for label in remove_labels:
             args.extend(["--remove-label", label])
-        args.extend(["--add-label", ",".join((labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO))])
+        args.extend(["--add-label", ",".join(add_labels)])
         result = self.gh(args, check=False)
         if result.returncode != 0:
-            self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}")
-            sys.stderr.write("dispatch_consensus_implementation: failed to move issue to implementing phase\n")
+            self._write_phase_transition_blocked_event(
+                issue_target=issue_target,
+                result=result,
+                add_labels=add_labels,
+                remove_labels=remove_labels,
+            )
         return result.returncode
+
+    def _write_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        result: subprocess.CompletedProcess[str],
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> None:
+        line = self._format_phase_transition_blocked_event(
+            issue_target=issue_target,
+            gh_rc=result.returncode,
+            gh_stderr=result.stderr,
+            add_labels=add_labels,
+            remove_labels=remove_labels,
+        )
+        self._append_pending_event(line)
+        sys.stderr.write(f"{line}\n")
+
+    def _format_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        gh_rc: int,
+        gh_stderr: str,
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> str:
+        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}"
+        fields: Mapping[str, object] = {
+            "controller_action": "dispatch-consensus-implementation",
+            "action": "move-to-implementing",
+            "target_kind": "issue",
+            "target_number": issue_target,
+            "issue": issue_target,
+            "helper": "gh",
+            "gh_rc": gh_rc,
+            "gh_stderr": _single_line(gh_stderr),
+            "add_labels": ",".join(add_labels),
+            "remove_labels": ",".join(remove_labels),
+        }
+        return f"{prefix} {_format_key_value_suffix(fields)}"
 
     def _clear_stale_implement_log_for_fresh_dispatch(self, log: Path, action: Mapping[str, object] | None = None) -> None:
         clear_redispatchable_implement_log(
@@ -1151,6 +1199,14 @@ def _single_linked_issue(body: str) -> str:
 
 def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
     return tuple(match.group(1) for match in BODY_CLOSING_ISSUE_TARGET_RE.finditer(body or ""))
+
+
+def _single_line(value: str) -> str:
+    return " ".join(str(value or "").splitlines())
+
+
+def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
+    return " ".join(f"{key}={json.dumps(str(value), ensure_ascii=False)}" for key, value in fields.items())
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
