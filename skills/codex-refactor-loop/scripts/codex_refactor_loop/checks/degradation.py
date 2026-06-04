@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Iterable
 
 from ..context import LoopContext
+from .host_fixture_smoke import run_no_manifest_open_milestone_smoke
 
 
 # Static checks preserve the existing CLI markers, check names, authorization
@@ -90,6 +91,17 @@ REQUIRED_SKILL_MARKERS = (
     "## Skill degradation source-repo validation",
     "consensus-rnd-cli check-degradation --static",
     "source-repo CI/release validation",
+    "bounded temporary host-fixture smoke for the #419 profile",
+    "no `.version-bump.json`",
+    "fake/read-only open milestone",
+    "RELEASE_AUTO_ENABLE=false",
+    "host-fixture-smoke",
+    "no public clean-room command",
+    "no clean-room artifact",
+    "no ninth internal release signal",
+    "no workflow job",
+    "no real GitHub repo lifecycle",
+    "no `.refactor-loop/host.env` production SSOT",
     "not-source-repo",
     "downstream host has no runtime watch",
     "no alert log",
@@ -116,6 +128,15 @@ REQUIRED_DETAILED_REFERENCE_MARKERS = (
     "CI job `.github/workflows/consensus-rnd-ci.yml` `skill-degradation`",
     "release gate `consensus-rnd-cli release-gate:required_checks_recent_green` does not name source-repo CI jobs directly",
     "consumes `required_release_checks()` from `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`",
+    "bounded temporary host-fixture smoke for the #419 profile",
+    "writes only a temporary host fixture with host-owned `.config/consensus-rnd/host.env`",
+    "reports failures as `host-fixture-smoke` findings",
+    "no public clean-room command",
+    "no clean-room artifact",
+    "no ninth internal release signal",
+    "no workflow job",
+    "no real GitHub repo lifecycle",
+    "no `.refactor-loop/host.env` production SSOT",
     "Downstream plugin-installed hosts have no skill-degradation runtime watch",
     "no degradation alert log",
     "no degradation pending event",
@@ -210,6 +231,8 @@ class SkillDriftChecker:
         findings.extend(self.downstream_runtime_surface_absent())
         findings.extend(self.forbidden_surfaces_absent())
         findings.extend(self.checker_is_read_only())
+        findings.extend(self.host_fixture_smoke_is_bounded())
+        findings.extend(self.host_fixture_smoke())
         return findings
 
     def required_files_exist(self) -> list[Finding]:
@@ -236,7 +259,11 @@ class SkillDriftChecker:
             for path in sorted(scripts.rglob("*degradation*")):
                 if "__pycache__" in path.parts:
                     continue
-                if path.name == "test_check_skill_degradation.py" or path == scripts / "codex_refactor_loop" / "checks" / "degradation.py":
+                if (
+                    path.name == "test_check_skill_degradation.py"
+                    or path == scripts / "codex_refactor_loop" / "checks" / "degradation.py"
+                    or path == scripts / "codex_refactor_loop" / "checks" / "host_fixture_smoke.py"
+                ):
                     continue
                 findings.append(
                     Finding(
@@ -415,6 +442,63 @@ class SkillDriftChecker:
                     )
                 )
         return findings
+
+    def host_fixture_smoke_is_bounded(self) -> list[Finding]:
+        relative = SCRIPT_RELATIVE / "codex_refactor_loop" / "checks" / "host_fixture_smoke.py"
+        text = self.read(relative)
+        if not text:
+            return [Finding("host-fixture-smoke", str(relative), "private host fixture smoke helper is missing")]
+        findings = self.require_markers(
+            relative,
+            (
+                "run_no_manifest_open_milestone_smoke",
+                "TemporaryDirectory",
+                ".config/consensus-rnd/host.env",
+                "CONSENSUS_RND_HOST_ENV",
+                "wakeup-plan",
+                "--repo-root",
+                "timeout=timeout_seconds",
+                "host-fixture-smoke",
+                "RELEASE_AUTO_ENABLE=false",
+                ".version-bump.json",
+                "milestones?state=open",
+            ),
+            "host-fixture-smoke",
+        )
+        forbidden_markers = (
+            "CleanRoomProfile",
+            "HostFixtureSmokeProfile",
+            "check-clean-room",
+            "clean-room-smoke",
+            "clean-room-",
+            "gh issue",
+            "gh pr",
+            "gh release",
+            "gh label",
+            "git push",
+            "git merge",
+            "git reset",
+            "codex dispatch",
+            "DEGRADATION_WATCH",
+            "pending event",
+            "workflow job",
+        )
+        for marker in forbidden_markers:
+            if marker in text:
+                findings.append(
+                    Finding(
+                        "host-fixture-smoke",
+                        str(relative),
+                        f"private smoke helper contains forbidden marker: {marker}",
+                    )
+                )
+        return findings
+
+    def host_fixture_smoke(self) -> list[Finding]:
+        return [
+            Finding(finding.check, finding.path, finding.message, finding.severity)
+            for finding in run_no_manifest_open_milestone_smoke(self.repo_root)
+        ]
 
     def require_markers(self, relative: Path, markers: Iterable[str], check: str) -> list[Finding]:
         text = self.read(relative)
