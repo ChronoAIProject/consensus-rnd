@@ -280,6 +280,7 @@ class Phase9Router:
         self.dry_run = dry_run
         self.loop_dir = ctx.paths.refactor_loop
         self.logs_dir = ctx.paths.logs
+        self.runs_dir = ctx.paths.runs
         self.prompts_dir = ctx.paths.prompts / "phase9"
         self.ledger_path = self.loop_dir / "phase9-router-ledger.jsonl"
         # Artifact parity: ctx.paths.pending_events resolves to
@@ -376,6 +377,9 @@ class Phase9Router:
         return markers
 
     def _final_marker_from_path(self, path: Path) -> str | None:
+        return self._final_marker_from_completed_log(path) or self._companion_artifact_marker_fallback(path)
+
+    def _final_marker_from_completed_log(self, path: Path) -> str | None:
         tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
         try:
             exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
@@ -397,6 +401,22 @@ class Phase9Router:
                 marker = self._extract_marker(candidate.strip())
                 if marker is not None:
                     return marker
+        return None
+
+    def _companion_artifact_marker_fallback(self, log_path: Path) -> str | None:
+        identity = self._identity_from_path(log_path)
+        if identity is None:
+            return None
+        if identity.actor not in (*self._solver_roles(), self._judge_role()):
+            return None
+        if not self._is_clean_exit(log_path):
+            return None
+        artifact = self.runs_dir / f"{log_path.stem}.md"
+        allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"
+        for line in reversed(self._read_tail_lines(artifact, self.MARKER_TAIL_LINES)):
+            marker = self._extract_marker(line.strip())
+            if marker and marker.startswith(allowed_prefix):
+                return marker
         return None
 
     def _extract_marker(self, line: str) -> str | None:

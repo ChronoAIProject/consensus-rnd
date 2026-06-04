@@ -698,6 +698,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_markerless_clean_log(self, name: str) -> Path:
+        path = self.logs / name
+        path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
+        return path
+
+    def write_run_artifact(self, stem: str, *lines: str) -> Path:
+        path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+        return path
+
     def set_log_mtime(self, name: str, mtime: float) -> None:
         os.utime(self.logs / name, (mtime, mtime))
 
@@ -1227,6 +1238,62 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         actions = completed_marker_actions(self.repo)
         recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
         self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
+
+    def test_solver_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("phase9-issue505-r1-minimal.log")
+        self.write_run_artifact("phase9-issue505-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 505)})
+        recovered = [a for a in actions if a.get("marker") == "SOLVER_DONE:minimal:artifact:summary"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from solver run artifact")
+        self.assertEqual(recovered[0]["phase"], "design-consensus")
+        self.assertEqual(recovered[0]["target_kind"], "issue")
+        self.assertEqual(recovered[0]["target_number"], 505)
+
+    def test_judge_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("phase9-issue505-r2-judge.log")
+        self.write_run_artifact("phase9-issue505-r2-judge", "META_JUDGE_DONE:converge:round-3:artifact")
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 505)})
+        recovered = [a for a in actions if a.get("marker") == "META_JUDGE_DONE:converge:round-3:artifact"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from judge run artifact")
+        self.assertEqual(recovered[0]["phase"], "design-consensus")
+
+    def test_solver_judge_artifact_fallback_requires_clean_exit_and_artifact_marker(self) -> None:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (self.logs / "phase9-issue506-r1-minimal.log").write_text("crashed\nEXIT=1\n", encoding="utf-8")
+        (runs / "phase9-issue506-r1-minimal.md").write_text("SOLVER_DONE:minimal:artifact:summary\n", encoding="utf-8")
+        self.write_markerless_clean_log("phase9-issue507-r1-judge.log")
+        self.write_run_artifact(
+            "phase9-issue507-r1-judge",
+            "body embeds META_JUDGE_DONE:converge:round-2:artifact but not standalone",
+        )
+
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 506), ("issue", 507)})
+        markers = {a.get("marker") for a in actions}
+
+        self.assertNotIn("SOLVER_DONE:minimal:artifact:summary", markers)
+        self.assertNotIn("META_JUDGE_DONE:converge:round-2:artifact", markers)
+
+    def test_wakeup_plan_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+
+        for required in (
+            "def _completed_artifact_marker_fallback",
+            'name.startswith("implement-issue-")',
+            "SOLVER_DONE:",
+            "META_JUDGE_DONE:",
+            'repo_root / ".refactor-loop" / "runs" / f"{name[: -len(\'.log\')]}.md"',
+            "is_clean_exit(log_path)",
+            "_extract_completed_marker_line(line.strip())",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
 
     def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
         self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")

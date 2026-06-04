@@ -83,6 +83,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         path.write_text("\n".join([*lines, *tail, ""]), encoding="utf-8")
         return path
 
+    def write_run_artifact(self, stem: str, *lines: str) -> Path:
+        path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join([*lines, ""]), encoding="utf-8")
+        return path
+
     def write_solver_prompt(self, issue: int, round_no: int, role: str, body: str = "solver input\n") -> Path:
         path = self.repo / ".refactor-loop" / "prompts" / "phase9" / f"phase9-issue{issue}-r{round_no}-{role}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,6 +182,52 @@ class Phase9RouterDaemonTests(unittest.TestCase):
 
         self.assertEqual(self.commands, [])
         self.assertEqual(self.ledger_entries(), [])
+
+    def test_phase9_router_prefers_log_tail_marker_over_companion_artifact(self) -> None:
+        log = self.write_log("phase9-issue505-r1-minimal.log", "SOLVER_DONE:minimal:log-tail:summary")
+        self.write_run_artifact("phase9-issue505-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        marker = self.router._final_marker_from_path(log)
+
+        self.assertEqual(marker, "SOLVER_DONE:minimal:log-tail:summary")
+
+    def test_phase9_router_recovers_solver_triplet_from_companion_artifacts(self) -> None:
+        for role in ("minimal", "structural", "delete"):
+            self.write_log(
+                f"phase9-issue505-r1-{role}.log",
+                f"worker prose embeds SOLVER_DONE:{role}:embedded:ignored",
+            )
+            self.write_run_artifact(
+                f"phase9-issue505-r1-{role}",
+                "## result",
+                f"SOLVER_DONE:{role}:artifact:summary",
+            )
+
+        self.router.tick()
+
+        intents = " ".join(self.intent_text(command) for command in self.commands)
+        self.assertIn("phase9-issue505-r1-judge.log", intents)
+        self.assertIn("505-1-judge", [entry["key"] for entry in self.ledger_entries()])
+
+    def test_phase9_router_companion_artifact_fallback_requires_clean_exit(self) -> None:
+        log = self.write_log("phase9-issue506-r1-minimal.log", "markerless crash", exit_zero=False)
+        self.write_run_artifact("phase9-issue506-r1-minimal", "SOLVER_DONE:minimal:artifact:summary")
+
+        self.assertIsNone(self.router._final_marker_from_path(log))
+
+    def test_phase9_router_companion_artifact_fallback_missing_artifact_returns_none(self) -> None:
+        log = self.write_log("phase9-issue507-r1-structural.log", "markerless clean exit")
+
+        self.assertIsNone(self.router._final_marker_from_path(log))
+
+    def test_phase9_router_recovers_judge_marker_from_companion_artifact(self) -> None:
+        log = self.write_log("meta-judge-issue508-r2.log", "markerless clean judge log")
+        self.write_run_artifact("meta-judge-issue508-r2", "META_JUDGE_DONE:converge:round-3:artifact")
+
+        self.assertEqual(
+            self.router._final_marker_from_path(log),
+            "META_JUDGE_DONE:converge:round-3:artifact",
+        )
 
     def test_phase9_router_skips_harness_bookkeeping_after_exit_zero(self) -> None:
         for role in ("minimal", "structural", "delete"):
@@ -1965,6 +2017,20 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertNotIn("class Phase9RoundProjection", src)
         self.assertNotIn("Phase9RoundProjection(", src)
         self.assertNotIn("VALID_MARKER_PAYLOAD.match(candidate)", src)
+
+    def test_phase9_router_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+        src = PHASE9_ROUTER.read_text(encoding="utf-8")
+
+        for required in (
+            "def _companion_artifact_marker_fallback",
+            'artifact = self.runs_dir / f"{log_path.stem}.md"',
+            'allowed_prefix = "SOLVER_DONE:"',
+            'allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"',
+            "self._extract_marker(line.strip())",
+            "if not self._is_clean_exit(log_path):",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, src)
 
     def test_phase9_router_source_regression_uses_loop_context_artifact_path_boundary(self) -> None:
         src = PHASE9_ROUTER.read_text(encoding="utf-8")
