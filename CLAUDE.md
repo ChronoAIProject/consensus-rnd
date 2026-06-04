@@ -92,6 +92,16 @@ Refactor (iter343/issue-343):
 -->
 - **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
 
+## Python 代码规范
+
+本节只约束本仓库内 Python skill scripts 和测试代码;不是 host 项目规范,不得外推为下游 host 的 Python 规则。
+
+- **类型边界清楚**:公共函数和方法必须有类型注解。跨内部层传递结构化事实时优先使用 `dataclass`、`TypedDict` 或明确投影类型;`Mapping[str, Any]`、`dict[str, Any]` 一类宽边界只用于外部 JSON adapter 层,不得蔓延到核心决策逻辑。
+- **职责分层**:I/O、GitHub/git 副作用、环境读取、文件系统写入与决策逻辑分层;纯函数优先,可机械验证的判断应从副作用执行体中拆出。
+- **复杂度不继续膨胀**:过长函数/文件和高复杂度分支不得在新增或触碰时继续膨胀;必须拆分到职责清晰的 helper / projection,或在同次变更说明中写明具体后续重构计划。
+- **fail-closed 可诊断**:fail-closed 路径必须抛出具体、可诊断的异常或返回明确错误原因;禁止裸 `except`、吞错、静默 fallback,也不得用宽泛 fallback 掩盖缺失 host 事实或无授权副作用。
+- **命名跟随职责**:稳定 API、类型、helper、artifact parser 的命名表达职责边界,不把 runtime、issue 编号或临时实现泄露进稳定接口;哲学文档仍不写 schema/identifier 版本后缀。
+
 ## 版本同步(强制)
 
 改版本号时,`.version-bump.json` 列出的所有文件必须同步为同一版本:`package.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、`.codex-plugin/plugin.json`、`.cursor-plugin/plugin.json`、`gemini-extension.json`、`skills/codex-refactor-loop/VERSION.json`。漏改任一份会让某个平台装到旧版。
@@ -120,6 +130,32 @@ Refactor (iter343/issue-343):
 - **异常必抛出 + 必记日志,严禁吞掉/忽略**:任何错误、失败、fail-closed、skip、WAIT、budget 耗尽、分支不可达都必须抛出异常或写一条**可诊断、可 grep 的单行日志**(含目标 id、原因、关键计数),让问题在外部状态面立即可见。**禁止**空 `except`/`except: pass`、裸吞错、静默 `continue`/`return`、不记原因的跳过。诊断信息缺失即视为 bug —— 静默失败会让一个本可 5 分钟定位的问题拖成几小时。
 - **测试必须断言真实行为,禁无意义测试**:测试只为验证行为而存在,**禁止**无意义/同义反复测试 —— 断言常量、复述源码字面、纯为覆盖率而写、不实际触发被测行为的测试一律删除或重写为 behavior test。慢的真实-进程/真实-时序测试要 mock 成确定性快测试,不得让无价值测试拖慢验证回路。
 
+## 通用工程基本规则(面向对象,跨语言)
+
+落到代码实现层(方法 / 类 / 接口 / 分层)的通用面向对象设计要求,**跨语言适用** —— C# / Java / Python / TS 等具体语言机制只作举例,规则约束的是**设计意图**而非某语言语法。与已有「异常必抛出 + 必记日志」「事实源唯一」「命名跟随职责」等不动点同向,此处不重复声明,只补实现层细则。
+
+- **一方法一职**:一个方法只做一件事,只做方法名所表达的事,不包揽整条流程。
+- **参数不搬运**:实现类只关心自己的参数和字段,不做参数转换搬运;需要某类型就直接传该类型(如需要字节串就传字节串),不传通用容器再在方法内转换,转换交给扩展 / 工具函数。
+- **依赖过多即拆分**:一个类依赖太多 service 时,把部分能力改为参数传入或拆成更小职责,不让单个类成为万能入口。
+- **取值依赖一大堆就建 manager/service**:若取某个东西要先备齐一堆前置依赖,把它收敛成有明确状态边界的 manager / service(例如「需要 chain id 才能算」的能力不要做成无上下文静态 helper)。
+- **service 无状态**:service 必须无状态,命名以 `Service` 结尾。
+- **改接口先走评审**:改动任何对外 interface / 契约前,必须先开 issue / PR、至少 2 人 review 并组织讨论,想改的人负责发起;本仓库即落到共识闸 —— concrete plan 必过多角度共识(见「共识引擎哲学」)。
+- **接口保持简单**:加方法前先尝试扩展方法 / 组合实现,能不进接口就不进接口。
+- **delegate 先想 interface**:想用 delegate / 函数指针前,先考虑能否用 interface 表达职责。
+- **元编程需顶层评审**:attribute / 反射 / delegate / 语言级 event 等元编程机制需顶层开发评审讨论后才用,不默认使用。
+- **禁全局可变静态**:不用静态全局属性 / 全局可变状态。
+- **运行期不改静态值**:运行期绝不设置或改写静态值。
+- **只读不可降级**:字段在编码时已是 readonly / final / 只读时,永远不为图方便移除只读修饰。
+- **event 只在同命名空间内 raise**:只在同一命名空间 / 模块内发出 event,不跨模块乱发。
+- **符号引用不用裸字符串**:引用符号名用语言的符号引用机制(如 `nameof`),不写裸字符串字面量 `"MethodName"`。
+- **跟随既有风格**:加代码遵循文件既有风格;不得不破坏风格时,就地标 `TODO: review required`。
+- **基础设施层引用方向**:基础设施层只能被同一命名空间中 Domain 以上的层引用,不被反向依赖。
+- **子命名空间不反向引用父**:子命名空间不反向引用父命名空间(如 `X.Kernel.Node` 不应引用 `X.Kernel`)。
+- **不乱注入跨命名空间基础设施**:不理解含义时,不注入 / 引入其它命名空间(模块 / 层)的基础设施。
+- **复制即抽象**:需要复制代码时,抽成方法 / 扩展方法 / delegate,不就地复制。
+- **通用化优先**:重复出现的逻辑、被多处依赖的能力,提炼为不绑定单一调用点的通用方法 / manager / service,不写死一次性专用实现。
+- **非用户输入不防御性校验**:参数若非用户输入,不必写防御性校验,让异常自然抛出(承「异常必抛出」不动点,失败须可诊断)。
+- **不吞基类异常**:不 catch 基类异常(等于一次吞掉一切),除非确知在做什么(承「严禁吞掉 / 静默」不动点)。
 
 <!-- consensus-rnd:foundational-invariants:start version=1 sha256=f5c24b0c3515993a7b86c4ed78ce7386add665f8c8b84cc7275aedebd6c3e6af -->
 ## 共识研发不动点（由 consensus-rnd 管理）
