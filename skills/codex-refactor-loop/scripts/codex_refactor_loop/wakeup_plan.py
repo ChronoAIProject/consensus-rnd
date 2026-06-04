@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -35,6 +36,7 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
+META_ESCALATION_DEFAULT_HOURS = 24.0
 MARKER_TAIL_LINES = 30
 DONE_PREFIXES = (
     "AUDIT_DONE",
@@ -109,6 +111,7 @@ def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
     return resolved
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
+    "repository-stalled-meta-reflector",
     "unpushed-worker-output",
     "completed-marker",
     "release-rollup-needed",
@@ -149,6 +152,7 @@ class GhItem:
     head_ref: str | None = None
     head_sha: str = ""
     body: str = ""
+    updated_at: str = ""
 
     @property
     def item(self) -> str:
@@ -347,6 +351,17 @@ def stale_revival_seconds() -> float:
     if hours <= 0:
         hours = 3.0
     return hours * 3600.0
+
+
+def meta_escalation_stuck_seconds() -> float:
+    raw = os.environ.get("META_ESCALATION_STUCK_HOURS")
+    try:
+        hours = float(raw) if raw not in {None, ""} else META_ESCALATION_DEFAULT_HOURS
+    except (TypeError, ValueError):
+        hours = META_ESCALATION_DEFAULT_HOURS
+    if hours <= 0:
+        hours = META_ESCALATION_DEFAULT_HOURS
+    return max(hours * 3600.0, stale_revival_seconds())
 
 
 def _revive_stale_redispatchable_implement_log(
@@ -1505,7 +1520,7 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     loaded_ok = True
     for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
         rows: list[dict[str, Any]] = []
-        json_fields = "number,title,labels,headRefName,headRefOid,body" if kind == "PR" else "number,title,labels"
+        json_fields = "number,title,labels,headRefName,headRefOid,body,updatedAt" if kind == "PR" else "number,title,labels,updatedAt"
         for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
             command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
             data = run_json(command, cwd=repo_root)
@@ -1536,6 +1551,7 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
                     head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
                     head_sha=str(raw.get("headRefOid") or "") if kind == "PR" else "",
                     body=str(raw.get("body") or "") if kind == "PR" else "",
+                    updated_at=str(raw.get("updatedAt") or ""),
                 )
             )
     return items, loaded_ok
@@ -1810,6 +1826,132 @@ def existing_issue_actions(items: list[GhItem], repo_root: Path | None = None) -
                     action.pop("status_only", None)
         actions.append(action)
     return actions
+
+
+def repository_stalled_meta_reflector_actions(
+    repo_root: Path,
+    ctx: LoopContext,
+    items: list[GhItem],
+    monitor: Any | None = None,
+    now: float | None = None,
+) -> list[dict[str, Any]]:
+    threshold_seconds = meta_escalation_stuck_seconds()
+    stalled_items = _repository_stalled_items(items, threshold_seconds=threshold_seconds, now=now)
+    if not stalled_items:
+        return []
+    prompt = (ctx.skill_root / "prompts" / "meta-reflector-repository-stalled.md").resolve()
+    log = (repo_root / ".refactor-loop" / "logs" / "meta-reflector-repository-stalled.log").resolve()
+    if not prompt.is_file():
+        return []
+    if _repository_stalled_meta_reflector_suppressed(repo_root, log, monitor):
+        return []
+    threshold_hours = _format_hours(threshold_seconds / 3600.0)
+    return [
+        {
+            "priority": 8,
+            "kind": "repository-stalled-meta-reflector",
+            "action_id": "repository-stalled-meta-reflector",
+            "intent_id": "repository-stalled-meta-reflector",
+            "item": "repository stalled managed work",
+            "phase": "design-consensus",
+            "actor": "meta-reflector-codex",
+            "route": "repository-stalled-meta-reflector",
+            "source": "wakeup-plan",
+            "command": "spawn-codex",
+            "controller_action": "spawn_codex_harness_background",
+            "cd": str(repo_root.resolve()),
+            "prompt": str(prompt),
+            "log": str(log),
+            "stall": 5400,
+            "run_in_background_required": True,
+            "no_lifecycle_authority": True,
+            "reason": "open managed issue/PR updatedAt exceeded META_ESCALATION_STUCK_HOURS effective threshold",
+            "source_artifact": "github-open-managed-items",
+            "source_marker": f"meta-escalation-long-stuck:{threshold_hours}",
+            "target_kind": "codex",
+            "target_number": None,
+            "target": {"kind": "codex", "task_id": "meta-reflector-repository-stalled"},
+            "preconditions": [
+                "active_controller_owner",
+                "live_open_targets",
+                "long_stuck_threshold_exceeded",
+                "recommendation_only",
+            ],
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
+            "threshold_hours": threshold_hours,
+            "stale_revival_hours": _format_hours(stale_revival_seconds() / 3600.0),
+            "stalled_items": stalled_items,
+        }
+    ]
+
+
+def _repository_stalled_items(items: list[GhItem], *, threshold_seconds: float, now: float | None = None) -> list[dict[str, Any]]:
+    raw_by_key = {(item.kind.lower(), item.number): item for item in items}
+    actionable = open_actionable_managed_items(_projection_items(items))
+    result: list[dict[str, Any]] = []
+    current = time.time() if now is None else now
+    for item in sorted(actionable, key=lambda item: (0 if item.kind == "issue" else 1, item.number)):
+        labels = label_catalog.normalize_label_set(item.labels).canonical
+        if label_catalog.HUMAN_MAINTAINER_DECISION in labels:
+            continue
+        raw = raw_by_key.get((item.kind, item.number))
+        if raw is None:
+            continue
+        updated_at = _parse_github_timestamp(raw.updated_at)
+        if updated_at is None:
+            continue
+        age_seconds = max(0.0, current - updated_at)
+        if age_seconds < threshold_seconds:
+            continue
+        result.append(
+            {
+                "kind": "PR" if item.kind == "pr" else "issue",
+                "number": item.number,
+                "title": raw.title,
+                "phase": phase_from_labels(item.labels),
+                "human": actor_from_labels(item.labels, item.kind),
+                "updated_at": raw.updated_at,
+                "stuck_hours": round(age_seconds / 3600.0, 2),
+            }
+        )
+    return result
+
+
+def _parse_github_timestamp(value: str) -> float | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def _repository_stalled_meta_reflector_suppressed(repo_root: Path, log: Path, monitor: Any | None) -> bool:
+    if _harness_spawn_intent_log_suppresses_retry(log):
+        return True
+    if _canonical_in_flight_for_log(log, monitor):
+        return True
+    pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    if not pending.exists():
+        return False
+    try:
+        lines = pending.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+    except OSError:
+        return False
+    return any("repository-stalled-meta-reflector" in line or "meta-reflector-repository-stalled" in line for line in lines)
+
+
+def _format_hours(value: float) -> str:
+    if value.is_integer():
+        return str(int(value))
+    return f"{value:g}"
 
 
 def _apply_consensus_implementation_readiness(
@@ -2547,6 +2689,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
+    if gh_items_loaded and not has_dispatchable_action(actions):
+        actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     actions.sort(key=lambda action: action["priority"])
     serialize_conflicting_consensus_implementation_actions(actions)

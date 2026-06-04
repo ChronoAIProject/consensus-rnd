@@ -33,6 +33,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     existing_issue_actions,
     has_dispatchable_action,
     marker_from_completed_log,
+    meta_escalation_stuck_seconds,
+    repository_stalled_meta_reflector_actions,
     release_countdown_actions,
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
@@ -260,6 +262,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     non_action_statuses)
                       if [[ "$label" == "auto-loop" ]]; then
                         printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"old design issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]},{"number":507,"title":"old implementation issue","updatedAt":"2026-05-02T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_fresh)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"fresh design issue","updatedAt":"2099-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_human_decision)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"human decision issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:maintainer-decision"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -2832,6 +2855,70 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
         self.assertIn("RECOMMEND:audit", stdout)
 
+    def test_repository_stalled_meta_reflector_projects_single_spawn_only_action(self) -> None:
+        plan = self.run_plan(fixture="repository_stalled")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(action["source_artifact"], "github-open-managed-items")
+        self.assertEqual(action["source_marker"], "meta-escalation-long-stuck:24")
+        self.assertEqual(action["threshold_hours"], "24")
+        self.assertEqual(action["stale_revival_hours"], "3")
+        self.assertTrue(action["run_in_background_required"])
+        self.assertEqual(Path(action["prompt"]).name, "meta-reflector-repository-stalled.md")
+        self.assertEqual(Path(action["log"]).name, "meta-reflector-repository-stalled.log")
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "meta-reflector-repository-stalled"})
+        self.assertEqual(action["preconditions"], ["active_controller_owner", "live_open_targets", "long_stuck_threshold_exceeded", "recommendation_only"])
+        self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507])
+        rendered = json.dumps(action, sort_keys=True)
+        for forbidden in (
+            "IssueDecompositionPlan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rendered)
+        for forbidden_key in (
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "argv",
+            "shell",
+            "commands",
+            "executor",
+            "gh",
+            "git",
+        ):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        for forbidden_key in ("cmd", "env"):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        self.assertTrue(has_dispatchable_action([action]))
+
+    def test_repository_stalled_meta_reflector_suppresses_fresh_human_and_duplicate_pending(self) -> None:
+        fresh = self.run_plan(fixture="repository_fresh")
+        self.assertEqual([action for action in fresh["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        human = self.run_plan(fixture="repository_human_decision")
+        self.assertEqual([action for action in human["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("repository-stalled-meta-reflector already queued\n", encoding="utf-8")
+        duplicate = self.run_plan(fixture="repository_stalled")
+        self.assertEqual([action for action in duplicate["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+    def test_repository_stalled_meta_reflector_waits_for_specific_executable_action(self) -> None:
+        self.append_harness_spawn_intent(intent_id="specific-work", task_id="issue #506")
+
+        plan = self.run_plan(fixture="repository_stalled")
+
+        self.assertEqual([action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["specific-work"])
+
     def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
         path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3268,6 +3355,33 @@ class StaleRevivalTests(unittest.TestCase):
                 os.environ.pop("STALE_REVIVAL_HOURS", None)
             else:
                 os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_meta_escalation_threshold_defaults_and_normalizes_above_stale_revival(self) -> None:
+        prev_meta = os.environ.get("META_ESCALATION_STUCK_HOURS")
+        prev_stale = os.environ.get("STALE_REVIVAL_HOURS")
+        try:
+            os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            os.environ.pop("STALE_REVIVAL_HOURS", None)
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "bad"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "0"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "2"
+            os.environ["STALE_REVIVAL_HOURS"] = "5"
+            self.assertEqual(5 * 3600.0, meta_escalation_stuck_seconds())
+        finally:
+            if prev_meta is None:
+                os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            else:
+                os.environ["META_ESCALATION_STUCK_HOURS"] = prev_meta
+            if prev_stale is None:
+                os.environ.pop("STALE_REVIVAL_HOURS", None)
+            else:
+                os.environ["STALE_REVIVAL_HOURS"] = prev_stale
 
     def test_stale_partial_implement_log_is_revived(self) -> None:
         log = self._write_partial(421)

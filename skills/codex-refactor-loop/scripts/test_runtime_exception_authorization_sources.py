@@ -38,6 +38,7 @@ TARGET_ANCHORS = {
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
+    "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -584,6 +585,81 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source", self.repo_rules)
         self.assertNotIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
         self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
+
+    def test_repository_stalled_meta_reflector_506_is_spawn_only_recommendation_only(self) -> None:
+        entry = mirror_entry(self.mirror, "repository-stalled-meta-reflector-506")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        prompt = read(SKILL_ROOT / "prompts" / "meta-reflector-repository-stalled.md")
+
+        for required in (
+            "#506",
+            "wakeup-plan spawn-only repository stalled reflector",
+            "r4",
+            "META_ESCALATION_STUCK_HOURS=max(meta, STALE_REVIVAL_HOURS)",
+            "spawn_codex_harness_background",
+            "meta-reflector-repository-stalled.md",
+            "no_lifecycle_authority: true",
+            "no_generic_command: true",
+            ".refactor-loop/runs/meta-escalation/",
+            "recommendation artifacts are advisory only",
+            "existing design-consensus",
+            "#403 validated `IssueDecompositionPlan`",
+            "normal narrow-fix/review gate",
+            "#396 clean `META_RESOLVED:drop` close path",
+            "test_marker_emission_contract.py",
+            "test_host_env_surface_matrix.py",
+            "test_runtime_exception_authorization_sources.py",
+            "no root CLAUDE lifecycle carveout",
+            "no public CLI",
+            "no validator module",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no standalone lifecycle or escalation system",
+            "no direct decompose",
+            "no `IssueDecompositionPlan` or `apply_issue_decomposition_plan` projection from `wakeup-plan`",
+            "no close",
+            "merge",
+            "label",
+            "commit",
+            "push",
+            "git",
+            "gh",
+            "cmd",
+            "argv",
+            "shell",
+            "env",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "prompt-body apply decision",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        for prompt_required in (
+            "META_ESCALATION_DONE:recommendations:<artifact>",
+            "META_ESCALATION_BLOCKED:<reason>",
+            "The recommendation artifact is not side-effect authorization",
+            "Forbidden actions: no `git`, no `gh`",
+            "no lifecycle authority",
+        ):
+            with self.subTest(prompt_required=prompt_required):
+                self.assertIn(prompt_required, prompt)
+
+        self.assertIn("repository_stalled_meta_reflector_actions", wakeup_source)
+        self.assertIn('"controller_action": "spawn_codex_harness_background"', wakeup_source)
+        self.assertIn('"no_lifecycle_authority": True', wakeup_source)
+        self.assertIn('"no_generic_command": True', wakeup_source)
+        self.assertIn("meta_escalation_stuck_seconds", wakeup_source)
+        self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "meta_escalation.py").exists())
+        self.assertNotIn("#506 是唯一", self.repo_rules)
+        self.assertNotIn("long-stuck repository meta-reflector carveout", self.repo_rules)
 
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "update-check-231")

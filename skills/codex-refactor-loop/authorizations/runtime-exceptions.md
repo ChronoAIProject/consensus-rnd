@@ -207,6 +207,20 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
+<a id="repository-stalled-meta-reflector-506"></a>
+## repository-stalled-meta-reflector-506
+
+- surface: `wakeup-plan spawn-only repository stalled reflector`
+- source_issue: `#506`
+- source_round: `r4`
+- source_marker: `META_JUDGE_DONE:consensus:minimal-structural-converged:v1仓库级只读reflector+wakeup-plan spawn-only;无meta_escalation.py无根CLAUDE carveout`
+- skill_anchor: `#wakeup-skeleton`
+- allowed: active-controller owner only; after `wakeup-plan` reads live open managed issue/PR metadata and `updatedAt` ages exceed effective `META_ESCALATION_STUCK_HOURS=max(meta, STALE_REVIVAL_HOURS)`, project at most one `spawn_codex_harness_background` action for the checked-in `meta-reflector-repository-stalled.md` prompt, with `no_lifecycle_authority: true`, `no_generic_command: true`, prompt/log paths, open-target summary, and recommendation-only preconditions; the evaluator may write `.refactor-loop/runs/meta-escalation/` recommendation artifacts.
+- forbidden: no standalone lifecycle or escalation system, no direct decompose, no `IssueDecompositionPlan` or `apply_issue_decomposition_plan` projection from `wakeup-plan`, no close, merge, label, issue/PR create/edit/reopen, commit, push, tag, release, git, gh, cmd, argv, shell, commands, env, executor, lifecycle_authority, lifecycle_owner, prompt-body apply decision, command bus, public issue factory, or generic lifecycle actor.
+- fact_source: `wakeup-plan` consumes GitHub open managed issue/PR metadata plus `META_ESCALATION_STUCK_HOURS` / `STALE_REVIVAL_HOURS`; recommendation artifacts are advisory only and are not side-effect authorization. Handoffs must go through existing design-consensus, #403 validated `IssueDecompositionPlan`, normal narrow-fix/review gate, or #396 clean `META_RESOLVED:drop` close path.
+- verification: `test_wakeup_plan.py`, `test_marker_emission_contract.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`
+- no_new_runtime_authority: This mirror anchors #506 v1 as read-only, spawn-only, and recommendation-only; it adds no root CLAUDE lifecycle carveout, no public CLI, no validator module, and no lifecycle authority beyond existing #396 spawn projection plus existing downstream gates.
+
 <a id="issue-decomposition-403"></a>
 ## issue-decomposition-403
 
