@@ -24,6 +24,7 @@ from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E4
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
+    _revive_stale_redispatchable_implement_log,
     close_projection_actions,
     completed_marker_actions,
     consensus_implementation_fields,
@@ -35,6 +36,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
+    stale_revival_seconds,
 )
 
 
@@ -3157,6 +3159,66 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(release["no_lifecycle_authority"])
         self.assertNotIn("runner_authority", release)
         self.assertNotIn("no_generic_command", release)
+
+
+class StaleRevivalTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        self.logs = self.repo / ".refactor-loop" / "logs"
+        self.logs.mkdir(parents=True)
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def _write_partial(self, issue: int) -> Path:
+        log = self.logs / f"implement-issue-{issue}.log"
+        log.write_text(
+            f"working...\nIMPLEMENT_DONE:issue-{issue}:partial\nEXIT=0\n", encoding="utf-8"
+        )
+        return log
+
+    def test_default_threshold_is_three_hours(self) -> None:
+        prev = os.environ.pop("STALE_REVIVAL_HOURS", None)
+        try:
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+        finally:
+            if prev is not None:
+                os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_env_override_changes_threshold(self) -> None:
+        prev = os.environ.get("STALE_REVIVAL_HOURS")
+        try:
+            os.environ["STALE_REVIVAL_HOURS"] = "1"
+            self.assertEqual(3600.0, stale_revival_seconds())
+            os.environ["STALE_REVIVAL_HOURS"] = "bad"
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+            os.environ["STALE_REVIVAL_HOURS"] = "0"
+            self.assertEqual(3 * 3600.0, stale_revival_seconds())
+        finally:
+            if prev is None:
+                os.environ.pop("STALE_REVIVAL_HOURS", None)
+            else:
+                os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_stale_partial_implement_log_is_revived(self) -> None:
+        log = self._write_partial(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
+        self.assertTrue(revived)
+        self.assertFalse(log.exists())
+
+    def test_fresh_partial_implement_log_is_not_revived(self) -> None:
+        log = self._write_partial(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time())
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
+
+    def test_inflight_log_never_revived_even_when_old(self) -> None:
+        log = self.logs / "implement-issue-421.log"
+        log.write_text("still working, no terminal exit yet\n", encoding="utf-8")
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 100 * 3600)
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
 
 
 if __name__ == "__main__":

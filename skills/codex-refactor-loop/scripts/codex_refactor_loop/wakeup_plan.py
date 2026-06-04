@@ -265,6 +265,7 @@ def harness_spawn_intent_actions(
         except Exception as exc:
             actions.append(_invalid_harness_spawn_intent(f"invalid-path:{exc}", line, intent_id=intent_id))
             continue
+        _revive_stale_redispatchable_implement_log(log_path)
         if _harness_spawn_intent_log_suppresses_retry(log_path) or _canonical_in_flight_for_log(log_path, monitor):
             continue
         if _suppress_harness_spawn_intent(
@@ -332,6 +333,45 @@ def _repo_root_from_log(log_path: Path) -> Path:
     except ValueError:
         return log_path.resolve().parent
     return Path(*parts[:index])
+
+
+def stale_revival_seconds() -> float:
+    """Host-tunable idle threshold (default 3 hours) after which a stuck managed
+    work item's blocking local evidence is treated as stale and re-triggered.
+    `STALE_REVIVAL_HOURS` in host.env overrides it; missing/invalid/<=0 -> 3h."""
+    raw = os.environ.get("STALE_REVIVAL_HOURS")
+    try:
+        hours = float(raw) if raw is not None and raw.strip() != "" else 3.0
+    except (TypeError, ValueError):
+        hours = 3.0
+    if hours <= 0:
+        hours = 3.0
+    return hours * 3600.0
+
+
+def _revive_stale_redispatchable_implement_log(log_path: Path, *, now: float | None = None) -> bool:
+    """Re-trigger a stuck implement by clearing its blocking local log once the
+    attempt is redispatchable (partial/failed/markerless/stale-base) AND has not
+    progressed for longer than stale_revival_seconds(). Otherwise a partial
+    implement log permanently fails the queued spawn intent's target_log_absent
+    precondition and the implement re-dispatch never fires (headless wedge).
+    Age-gated and redispatch-gated, so an in-flight (no terminal EXIT) or freshly
+    finished attempt is never cleared; only genuinely idle stuck work revives."""
+    if not is_implement_log(log_path) or not log_path.exists():
+        return False
+    try:
+        age = (now if now is not None else time.time()) - log_path.stat().st_mtime
+    except OSError:
+        return False
+    if age < stale_revival_seconds():
+        return False
+    repo_root = _repo_root_from_log(log_path)
+    return clear_redispatchable_implement_log(
+        repo_root=repo_root,
+        log_path=log_path,
+        integration_branch=_integration_branch_from_env(),
+        command_runner=lambda command: git_text(list(command), cwd=repo_root),
+    )
 
 
 def _terminal_blocked_harness_spawn_intent_ids(lines: list[str]) -> set[str]:
