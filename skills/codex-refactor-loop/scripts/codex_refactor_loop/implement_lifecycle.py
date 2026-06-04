@@ -36,6 +36,10 @@ class ImplementAttemptState:
     def redispatch(self) -> bool:
         return self.status == "redispatch"
 
+    @property
+    def refresh_needed(self) -> bool:
+        return self.status == "refresh_needed"
+
 
 def classify_implement_attempt(
     *,
@@ -83,7 +87,7 @@ def classify_implement_attempt(
         if merge_base.returncode != 0 or current.returncode != 0:
             return ImplementAttemptState("redispatch", "base_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
         if merge_base.stdout.strip() != current.stdout.strip():
-            return ImplementAttemptState("redispatch", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
+            return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
     diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
     if diff.returncode == 0:
         return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)

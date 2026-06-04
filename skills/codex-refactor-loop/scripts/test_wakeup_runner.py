@@ -303,7 +303,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
                 return subprocess.CompletedProcess(command, 0, "{}", "")
             if command[:4] == ["gh", "pr", "list", "--state"]:
-                return subprocess.CompletedProcess(command, 0, json.dumps(duplicate_prs or []), "")
+                payload = duplicate_prs
+                if payload is None:
+                    payload = [
+                        {
+                            "number": 99,
+                            "baseRefName": "auto-refact-dev",
+                            "headRefName": "refactor/iter77-issue-77",
+                            "labels": [{"name": labels.MANAGED}],
+                            "body": "Closes #77\n",
+                        }
+                    ]
+                return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "labels,body" in command:
                     live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]
@@ -493,7 +504,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_duplicate_open_pr",
+                "exactly_one_matching_open_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -764,7 +775,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_duplicate_open_pr",
+                "exactly_one_matching_open_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -833,7 +844,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_duplicate_open_pr",
+                "exactly_one_matching_open_pr",
             ],
         )
         spawns = [
@@ -917,7 +928,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "no_duplicate_open_pr",
+                "exactly_one_matching_open_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -1363,7 +1374,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "fresh_integration_base",
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
-                        "no_duplicate_open_pr",
+                        "exactly_one_matching_open_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -1405,21 +1416,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(
             self.base_plan(action),
             git_diff_code=1,
-            duplicate_prs=[{"number": 99}],
+            duplicate_prs=[
+                {
+                    "number": 99,
+                    "baseRefName": "auto-refact-dev",
+                    "headRefName": "refactor/iter77-issue-77",
+                    "labels": [{"name": labels.MANAGED}],
+                    "body": "Closes #77\n",
+                }
+            ],
             actions=actions,
         )
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_wakeup_runner_source_locks_publish_stale_base_recovery_delegation(self) -> None:
+    def test_wakeup_runner_source_locks_publish_refresh_needed_and_matching_pr_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
         publish_validator = source[source.index("    def _validate_publish_implementation") : source.index("    def _validate_dispatch_reviewers")]
-        worktree_validator = source[source.index("    def _validate_implementation_worktree") : source.index("    def _validate_canonical_implementation_identity")]
-        duplicate_validator = source[source.index("    def _validate_no_duplicate_open_pr") : source.index("    def _validate_implementation_worktree")]
-        self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
-        self.assertNotIn("merge-base", publish_validator + worktree_validator)
-        self.assertNotIn("publish_implementation_duplicate_open_pr", duplicate_validator)
+        worktree_validator = source[source.index("    def _validate_implementation_worktree") : source.index("    def _dispatch")]
+        matching_validator = source[source.index("    def _validate_exactly_one_matching_open_pr") : source.index("    def _validate_implementation_worktree")]
+        self.assertIn("publish_implementation_refresh_needed:stale_base", worktree_validator)
+        self.assertIn("merge-base", worktree_validator)
+        self.assertIn("publish_implementation_early_pr_missing", matching_validator)
+        self.assertIn("publish_implementation_multiple_matching_open_pr", matching_validator)
+        self.assertIn("publish_implementation_matching_pr_issue_mismatch", matching_validator)
+        self.assertIn("_validate_implementation_worktree(action)", publish_validator)
+        self.assertNotIn("publish_implementation_duplicate_open_pr", matching_validator)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -1668,7 +1691,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_clean_implementation_on_stale_base_routes_to_publish_helper_for_recovery(self) -> None:
+    def test_clean_implementation_on_stale_base_blocks_before_publish_for_refresh_status(self) -> None:
         actions = FakeActions()
 
         results = self.run_result(
@@ -1678,10 +1701,14 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             implementation_base=("old-base", "new-base"),
         )
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
+            "publish_implementation_refresh_needed:stale_base",
+            actions,
+        )
 
-    def test_publish_implementation_output_does_not_block_stale_base_before_helper(self) -> None:
+    def test_publish_implementation_output_blocks_missing_early_pr_before_helper(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -1698,9 +1725,9 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
                 if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
-                    return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+                    return subprocess.CompletedProcess(command, 0, "base\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
-                    return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+                    return subprocess.CompletedProcess(command, 0, "base\n", "")
                 if command[3:] == ["diff", "--quiet"]:
                     return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
@@ -1715,8 +1742,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
+            "publish_implementation_early_pr_missing",
+            actions,
+        )
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
