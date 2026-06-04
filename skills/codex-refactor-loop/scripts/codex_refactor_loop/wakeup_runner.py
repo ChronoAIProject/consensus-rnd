@@ -19,7 +19,7 @@ from . import labels
 from .context import LoopContext
 from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 from .gh_invoke import build_gh_argv
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .pr_checks import PrChecksProjection
@@ -196,7 +196,6 @@ class WakeupRunner:
 
     def run_once(self) -> list[RunnerResult]:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("wakeup-runner")
             return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
         write_active_controller_status(self.ctx, owner)
@@ -636,7 +635,7 @@ class WakeupRunner:
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action.get('action_id', '')}:graphql-headroom-low")
-            log_graphql_backoff("wakeup-runner")
+            _log_tick_status("wakeup-runner", "skip:graphql-backoff remaining=unknown")
             return 3
         cd = Path(str(action.get("cd") or self.ctx.repo_root))
         prompt = Path(str(action.get("prompt") or ""))
@@ -1216,7 +1215,7 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if first.status == "applied":
         return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
-        return f"skip:graphql-backoff [{counts}]"
+        return f"skip:graphql-backoff remaining=unknown [{counts}]"
     if first.status == "noop":
         return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":

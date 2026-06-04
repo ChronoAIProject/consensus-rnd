@@ -225,6 +225,12 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
+    def test_activity_is_not_a_public_command_and_peek_remains_status_lens(self) -> None:
+        self.assertNotIn("activity", COMMANDS)
+        self.assertIn("peek", COMMANDS)
+        self.assertEqual(("read-state", "read-gh"), COMMANDS["peek"].authority)
+        self.assertIn("read-only state sweep", COMMANDS["peek"].description)
+
     def test_holistic_status_is_read_only_shared_projection_command(self) -> None:
         self.assertEqual(("read-state", "read-process", "read-gh"), COMMANDS["holistic-status"].authority)
         self.assertFalse(set(COMMANDS["holistic-status"].authority) & MUTATION_TOKENS)

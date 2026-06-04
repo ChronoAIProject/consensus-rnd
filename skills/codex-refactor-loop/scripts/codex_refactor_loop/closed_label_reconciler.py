@@ -14,7 +14,7 @@ from . import labels as label_catalog
 from .active_controller import require_active_controller, write_active_controller_status
 from .closed_phase_labels import ClosedPhaseLabelPlan, plan_from_gh_item
 from .context import LoopContext, LoopContextError
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 
 
@@ -37,7 +37,6 @@ class ClosedLabelReconciler:
     # New principle: renew during the tick and isolate each item so closed-only phase reconciliation continues.
     def run_once(self, beat: Callable[[], None] | None = None) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("closed-label-reconciler")
             _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")
             return 0
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
