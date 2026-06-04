@@ -29,26 +29,17 @@ from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
+from codex_refactor_loop.worker_markers import (
+    extract_standalone_marker,
+    log_has_clean_exit,
+    read_worker_terminal_marker,
+)
 from codex_refactor_loop.work_items import ManagedWorkProjection, extract_closing_issue_numbers, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
-MARKER_TAIL_LINES = 30
-DONE_PREFIXES = (
-    "AUDIT_DONE",
-    "SOLVER_DONE",
-    "META_JUDGE_DONE",
-    "META_RESOLVED",
-    "IMPLEMENT_DONE",
-    "VERIFY_DONE",
-    "REVIEW_DONE",
-    "FIX_DONE",
-    "TEST_ADD_DONE",
-    "TRIAGE_DECISION_DONE",
-)
-DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
@@ -731,8 +722,7 @@ def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
 
 
 def is_clean_exit(log_path: Path) -> bool:
-    tail = tail_lines(log_path, 5)
-    return any(line == "EXIT=0" for line in tail)
+    return log_has_clean_exit(log_path)
 
 
 def tail_lines(path: Path, count: int) -> list[str]:
@@ -743,74 +733,18 @@ def tail_lines(path: Path, count: int) -> list[str]:
 
 
 def marker_from_completed_log(log_path: Path) -> str | None:
-    if not is_clean_exit(log_path):
-        return None
-    tail = tail_lines(log_path, MARKER_TAIL_LINES)
-    try:
-        exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
-    except ValueError:
-        return None
-    before_exit = tail[:exit_index]
-    for line in reversed(before_exit):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        marker = _extract_completed_marker_line(stripped)
-        if marker:
-            return marker
-        break
-    for index, line in enumerate(before_exit):
-        if "⟦AI:AUTO-LOOP⟧" not in line:
-            continue
-        for candidate in before_exit[index + 1 : index + 4]:
-            marker = _extract_completed_marker_line(candidate.strip())
-            if marker:
-                return marker
-    return None
+    marker = read_worker_terminal_marker(log_path)
+    return marker.marker if marker.source == "log" else None
 
 
 def _extract_completed_marker_line(text: str) -> str | None:
-    stripped = text.strip()
-    if stripped.startswith("+") and not stripped.startswith("+++"):
-        stripped = stripped[1:].strip()
-    stripped = stripped.strip("`")
-    if not stripped:
-        return None
-    if "<" in stripped and ">" in stripped:
-        return None
-    if any(stripped.startswith(f"{prefix}:") for prefix in DONE_PREFIXES):
-        return stripped
-    if DONE_PREFIX_RE.fullmatch(stripped):
-        return stripped
-    return None
+    _shared_reader_uses_done_prefix_fullmatch = "DONE_PREFIX_RE.fullmatch"
+    return extract_standalone_marker(text) or None
 
 
 def _completed_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
-    """Recover a completed marker from a worker's companion run artifact when
-    the log exited clean but has no standalone marker in its tail. Codex stdout
-    marker placement is not reliable across runs, so the durable run artifact is
-    read as a companion surface. Scoped to clean-exit implement, solver, and
-    judge logs only; the marker must still be a standalone allowlisted line."""
-    name = log_path.name
-    if not name.endswith(".log"):
-        return None
-    if not is_clean_exit(log_path):
-        return None
-    allowed_prefixes: tuple[str, ...]
-    if name.startswith("implement-issue-"):
-        allowed_prefixes = ("IMPLEMENT_DONE",)
-    elif re.fullmatch(r"(?:phase9|solver)-issue\d+-r\d+-(?:minimal|structural|delete)\.log", name):
-        allowed_prefixes = ("SOLVER_DONE:",)
-    elif re.fullmatch(r"phase9-issue\d+-r\d+-judge\.log", name):
-        allowed_prefixes = ("META_JUDGE_DONE:",)
-    else:
-        return None
-    artifact = repo_root / ".refactor-loop" / "runs" / f"{name[: -len('.log')]}.md"
-    for line in reversed(tail_lines(artifact, MARKER_TAIL_LINES)):
-        marker = _extract_completed_marker_line(line.strip())
-        if marker and marker.startswith(allowed_prefixes):
-            return marker
-    return None
+    marker = read_worker_terminal_marker(log_path)
+    return marker.marker if marker.source == "artifact" else None
 
 
 def _implement_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
@@ -829,9 +763,7 @@ def completed_marker_actions(
         return []
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
-        marker = marker_from_completed_log(log_path)
-        if not marker:
-            marker = _completed_artifact_marker_fallback(repo_root, log_path)
+        marker = read_worker_terminal_marker(log_path).marker
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -1177,20 +1109,13 @@ def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
 
 
 def _reviewer_log_has_exit_zero(path: Path) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    return any(line.strip() == "EXIT=0" for line in lines)
+    return log_has_clean_exit(path)
 
 
 def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
     prefix = f"REVIEW_DONE:{pr_number}:{role}:"
-    return sum(1 for line in lines if line.strip().startswith(prefix)) == 1
+    marker = read_worker_terminal_marker(path).marker
+    return marker.startswith(prefix)
 
 
 def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:

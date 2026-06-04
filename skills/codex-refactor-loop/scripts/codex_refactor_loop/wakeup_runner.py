@@ -27,6 +27,7 @@ from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
+from .worker_markers import log_has_clean_exit, read_worker_terminal_marker
 
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
@@ -795,7 +796,10 @@ class WakeupRunner:
     def _review_evidence_from_artifact(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
         companion_log = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _log_has_exit_zero(companion_log):
+        marker_read = read_worker_terminal_marker(companion_log)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
         verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
         if len(verdict_lines) != 1:
@@ -803,38 +807,29 @@ class WakeupRunner:
         verdict = verdict_lines[0]
         if verdict not in {"approve", "comment", "reject"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict:{role}")
-        marker_count = sum(
-            1
-            for line in text.splitlines()
-            if REVIEW_DONE_RE.match(line.strip()) and line.strip().split(":")[1:3] == [str(pr_number), role]
-        )
-        if marker_count > 1:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"duplicate_review_marker:{role}")
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
+        if not REVIEW_DONE_RE.match(marker_read.marker) or marker_read.marker.split(":")[1:3] != [str(pr_number), role]:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
         prompt_path = self.ctx.paths.prompts / path.name
         return ReviewEvidence(role, round_number, verdict, self._review_head_sha_for(prompt_path, companion_log, text), str(path))
 
     def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
-        if not _log_has_exit_zero(path):
+        marker_read = read_worker_terminal_marker(path)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
-        verdicts: list[str] = []
-        invalid_marker = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("REVIEW_DONE:"):
-                continue
-            match = REVIEW_DONE_RE.match(stripped)
-            if not match:
-                invalid_marker = True
-                continue
-            if match.group(1) == str(pr_number) and match.group(2) == role:
-                verdicts.append(match.group(3))
-        if invalid_marker:
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
-        if len(verdicts) != 1:
+        match = REVIEW_DONE_RE.match(marker_read.marker)
+        if match is None:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
+        if match.group(1) != str(pr_number) or match.group(2) != role:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
         prompt_path = self.ctx.paths.prompts / path.with_suffix(".md").name
-        return ReviewEvidence(role, round_number, verdicts[0], self._review_head_sha_for(prompt_path, path, text), str(path))
+        return ReviewEvidence(role, round_number, match.group(3), self._review_head_sha_for(prompt_path, path, text), str(path))
 
     def _review_head_sha_for(self, prompt_path: Path, log_path: Path, evidence_text: str) -> str:
         head_sha = _extract_review_head_sha(evidence_text)
@@ -983,46 +978,27 @@ class WakeupRunner:
 
 
 def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
+    marker_read = read_worker_terminal_marker(path)
+    if marker_read.marker or marker_read.reason not in {"marker_missing", ""}:
+        return marker_read.marker == marker
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
-        lines = None
-    if lines is not None:
-        try:
-            marker_index = max(index for index, line in enumerate(lines) if marker in line)
-            exit_index = max(index for index, line in enumerate(lines) if line == "EXIT=0")
-            if marker_index < exit_index:
-                return True
-        except ValueError:
-            pass
-    return _implement_run_artifact_has_marker(path, marker)
+        return False
+    try:
+        marker_index = max(index for index, line in enumerate(lines) if marker in line)
+        exit_index = max(index for index, line in enumerate(lines) if line.strip() == "EXIT=0")
+    except ValueError:
+        return False
+    return marker_index < exit_index
 
 
 def _implement_run_artifact_has_marker(log_path: Path, marker: str) -> bool:
-    """Revalidation fallback mirroring wakeup_plan's implement artifact-marker
-    recovery: a clean-exit implement worker may emit its IMPLEMENT_DONE marker
-    only into the run artifact (runs/implement-issue-<id>.md) instead of the log
-    tail, because codex stdout marker placement is not reliable. Accept the
-    marker from the artifact for clean-exit implement-issue logs only, so the
-    detection (wakeup_plan) and revalidation (wakeup_runner) sides stay
-    consistent and a markerless-log implement does not block publish."""
-    name = log_path.name
-    if not (name.startswith("implement-issue-") and name.endswith(".log")):
-        return False
-    if not _log_has_exit_zero(log_path):
-        return False
-    artifact = log_path.parent.parent / "runs" / f"{name[: -len('.log')]}.md"
-    try:
-        return any(marker in line for line in artifact.read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError:
-        return False
+    return read_worker_terminal_marker(log_path).marker == marker
 
 
 def _log_has_exit_zero(path: Path) -> bool:
-    try:
-        return any(line == "EXIT=0" for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
-    except OSError:
-        return False
+    return log_has_clean_exit(path)
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:

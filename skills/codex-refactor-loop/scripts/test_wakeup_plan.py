@@ -1263,6 +1263,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(recovered, "expected completed-marker action recovered from judge run artifact")
         self.assertEqual(recovered[0]["phase"], "design-consensus")
 
+    def test_review_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("review-pr480-quality-r3.log")
+        self.write_run_artifact(
+            "review-pr480-quality-r3",
+            "---",
+            "verdict: approve",
+            "---",
+            "head_sha: " + "a" * 40,
+            "REVIEW_DONE:480:quality:approve",
+        )
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("PR", 480)},
+            gh_items=[
+                GhItem(
+                    kind="PR",
+                    number=480,
+                    title="open PR",
+                    labels=("crnd:lifecycle:managed", "crnd:phase:reviewing", "crnd:human:auto"),
+                    head_ref="impl/pr480",
+                    head_sha="a" * 40,
+                )
+            ],
+        )
+        recovered = [a for a in actions if a.get("marker") == "REVIEW_DONE:480:quality:approve"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from review run artifact")
+        self.assertEqual(recovered[0]["controller_action"], "review_gate")
+        self.assertEqual(recovered[0]["head_sha"], "a" * 40)
+
     def test_solver_judge_artifact_fallback_requires_clean_exit_and_artifact_marker(self) -> None:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -1280,17 +1312,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("SOLVER_DONE:minimal:artifact:summary", markers)
         self.assertNotIn("META_JUDGE_DONE:converge:round-2:artifact", markers)
 
-    def test_wakeup_plan_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+    def test_wakeup_plan_source_regression_uses_shared_worker_marker_reader(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
         for required in (
-            "def _completed_artifact_marker_fallback",
-            'name.startswith("implement-issue-")',
-            "SOLVER_DONE:",
-            "META_JUDGE_DONE:",
-            'repo_root / ".refactor-loop" / "runs" / f"{name[: -len(\'.log\')]}.md"',
-            "is_clean_exit(log_path)",
-            "_extract_completed_marker_line(line.strip())",
+            "from codex_refactor_loop.worker_markers import",
+            "read_worker_terminal_marker(log_path)",
+            "marker.source == \"log\"",
+            "marker.source == \"artifact\"",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
