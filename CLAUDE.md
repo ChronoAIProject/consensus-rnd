@@ -92,6 +92,16 @@ Refactor (iter343/issue-343):
 -->
 - **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
 
+## Python 代码规范
+
+本节只约束本仓库内 Python skill scripts 和测试代码;不是 host 项目规范,不得外推为下游 host 的 Python 规则。
+
+- **类型边界清楚**:公共函数和方法必须有类型注解。跨内部层传递结构化事实时优先使用 `dataclass`、`TypedDict` 或明确投影类型;`Mapping[str, Any]`、`dict[str, Any]` 一类宽边界只用于外部 JSON adapter 层,不得蔓延到核心决策逻辑。
+- **职责分层**:I/O、GitHub/git 副作用、环境读取、文件系统写入与决策逻辑分层;纯函数优先,可机械验证的判断应从副作用执行体中拆出。
+- **复杂度不继续膨胀**:过长函数/文件和高复杂度分支不得在新增或触碰时继续膨胀;必须拆分到职责清晰的 helper / projection,或在同次变更说明中写明具体后续重构计划。
+- **fail-closed 可诊断**:fail-closed 路径必须抛出具体、可诊断的异常或返回明确错误原因;禁止裸 `except`、吞错、静默 fallback,也不得用宽泛 fallback 掩盖缺失 host 事实或无授权副作用。
+- **命名跟随职责**:稳定 API、类型、helper、artifact parser 的命名表达职责边界,不把 runtime、issue 编号或临时实现泄露进稳定接口;哲学文档仍不写 schema/identifier 版本后缀。
+
 ## 版本同步(强制)
 
 改版本号时,`.version-bump.json` 列出的所有文件必须同步为同一版本:`package.json`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、`.codex-plugin/plugin.json`、`.cursor-plugin/plugin.json`、`gemini-extension.json`、`skills/codex-refactor-loop/VERSION.json`。漏改任一份会让某个平台装到旧版。
