@@ -38,9 +38,10 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             clear=False,
         )
         self.env.start()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         from codex_refactor_loop.context import LoopContext
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.ctx = LoopContext.load(repo_root=self.repo, env=os.environ)
         self.monitor = ConcurrencyMonitor(self.ctx)
 
     def tearDown(self) -> None:

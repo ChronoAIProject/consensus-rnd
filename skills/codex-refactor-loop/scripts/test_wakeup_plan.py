@@ -2696,25 +2696,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("headless_actions", projection.assigned_names | projection.function_names)
 
     def test_wakeup_plan_source_locks_reviewer_head_redispatch_contract(self) -> None:
-<<<<<<< HEAD
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        for token in (
-            "head_sha=str(raw.get(\"head_sha\") or \"\")",
-            "def review_evidence_redispatch_actions(",
-            "latest_reviewer_heads(repo_root, item.number)",
-            "by_role: dict[str, tuple[int, str]]",
-            "pending_review_spawn_exists(repo_root, item.number)",
-            '"controller_action": "dispatch_reviewers"',
-            '"missing_or_stale_reviewer_head_evidence"',
-            '"review-evidence-redispatch"',
-        ):
-=======
         projection = wakeup_plan_projection()
         for token in ("dispatch_reviewers", "missing_or_stale_reviewer_head_evidence", "review-evidence-redispatch"):
->>>>>>> origin/auto-refact-dev
             with self.subTest(token=token):
                 self.assertIn(token, projection.string_literals)
-        self.assertTrue(any(value.endswith("headRefName,headRefOid,body") for value in projection.string_literals))
+        snapshot_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "managed_work_snapshot.py").read_text(encoding="utf-8")
+        self.assertIn('"body,headRefName,headRefOid"', snapshot_source)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
 

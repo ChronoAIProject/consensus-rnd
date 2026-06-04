@@ -27,7 +27,6 @@ from typing import Any, Callable, Iterable, Literal, cast
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
 from ..heartbeat import DaemonHeartbeatLease
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..prompt_contracts import inline_prompt_contracts
@@ -296,10 +295,6 @@ class Phase9Router:
         self._tick_dispatch_count = 0
 
     def tick(self) -> None:
-        if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("phase9-router")
-            self._log_tick_status("skip:graphql-backoff remaining=unknown")
-            return
         decision = require_active_controller(self.ctx, "phase9-router")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:

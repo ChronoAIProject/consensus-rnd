@@ -58,6 +58,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.commands: list[dict[str, object]] = []
         self.source_issue_states: dict[str, str] = {}
         self.original_source_issue_reader = Phase9Router._read_source_issue_decision
@@ -75,6 +77,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router._read_source_issue_decision = fake_source_issue_decision  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.old_env)
         self.tmp.cleanup()
 
     def loop_context(self) -> LoopContext:

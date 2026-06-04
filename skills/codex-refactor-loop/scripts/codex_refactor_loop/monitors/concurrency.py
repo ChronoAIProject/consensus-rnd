@@ -48,8 +48,6 @@ _DEFAULT_MONITOR: ConcurrencyMonitor | None = None
 
 @dataclass(frozen=True)
 class Boundary:
-    """refactor helper, no behavior change"""
-
     task_id: str
     evidence: str
 
