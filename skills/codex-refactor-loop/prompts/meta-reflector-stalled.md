@@ -33,6 +33,8 @@ If any of answers 1-3 is yes, do not emit `META_RESOLVED:escalate-human`. Emit `
 
 `META_RESOLVED:drop:<reason>` is valid for false-positive/wontfix cases and for phase9-no-framing cases where Consensus-rnd Phase design-consensus stayed unchanged across multi-round solver evidence and continued polling would be waste. Do not use `drop` to bypass architect/quality rejects that have an actionable Consensus-rnd Phase design-consensus or maintainer-directive route.
 
+Repeated rejects over deterministic in-scope text normalization are not human escalation. If `HOST_REFACTOR_COMMENT_POLICY=self-doc-comment` and the blocker is only non-canonical refactor marker identity, such as `Refactor (issue1525)` versus `Refactor (iterN/cluster-XXX)`, emit `META_RESOLVED:retry-fix:<exact normalization instruction>` when the canonical value can be derived from iteration/cluster metadata or the reviewer provided the concrete replacement pattern.
+
 Valid outputs:
 
 - `META_RESOLVED:retry-fix:<reason>`

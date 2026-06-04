@@ -11,7 +11,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
@@ -20,7 +20,11 @@ from .context import LoopContext
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .issue_decomposition import load_issue_decomposition_plan
 from .release.publisher import ReleasePublishResult, ReleasePublisher
-from .review_fix_dispatch import ReviewFixDispatchSpec
+from .review_fix_dispatch import (
+    ReviewFixDispatchSpec,
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -926,7 +930,107 @@ class ControllerActions:
             str(prompt_path),
             env=render_env,
         )
+        self._write_review_thread_completion_seed(pr_number)
         return spec
+
+    def _write_review_thread_completion_seed(self, pr_number: int) -> None:
+        state_dir = self.ctx.repo_root / ".refactor-loop" / "state" / "review-thread-completion"
+        state_path = state_dir / f"pr{pr_number}.json"
+        thread = self._first_unresolved_review_thread(pr_number)
+        if thread is None:
+            state_path.unlink(missing_ok=True)
+            return
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": thread["id"],
+                    "replied": False,
+                    "resolved": False,
+                    "source": thread["source"],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+    def _first_unresolved_review_thread(self, pr_number: int) -> dict[str, Any] | None:
+        slug = self.ctx.gh_repo_slug
+        if not slug:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        owner, _, repo = slug.partition("/")
+        if not owner or not repo:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        query = (
+            "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
+            "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
+            "reviewThreads(first:100, after:$after){ "
+            "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
+            "} } } }"
+        )
+        after = ""
+        while True:
+            args = [
+                "api",
+                "graphql",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"repo={repo}",
+                "-F",
+                f"number={pr_number}",
+                "-f",
+                f"query={query}",
+            ]
+            if after:
+                args.extend(["-f", f"after={after}"])
+            result = subprocess.run(
+                ["gh", *args],
+                cwd=str(self.ctx.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            try:
+                payload = json.loads(result.stdout or "{}")
+            except json.JSONDecodeError:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            review_threads = (
+                (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                .get("reviewThreads")
+            )
+            if not isinstance(review_threads, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            nodes = review_threads.get("nodes")
+            if not isinstance(nodes, list):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            for node in nodes:
+                if not isinstance(node, dict):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+                thread_id = node.get("id")
+                is_resolved = node.get("isResolved")
+                if isinstance(thread_id, str) and thread_id and is_resolved is False:
+                    return {"id": thread_id, "source": "live-pr-review-thread"}
+                if not isinstance(is_resolved, bool):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+            page_info = review_threads.get("pageInfo")
+            if not isinstance(page_info, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            has_next_page = page_info.get("hasNextPage")
+            if has_next_page is False:
+                return None
+            if has_next_page is not True:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            end_cursor = page_info.get("endCursor")
+            if not isinstance(end_cursor, str) or not end_cursor:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            after = end_cursor
+
+    def validate_review_fix_completion(self, evidence: ReviewThreadCompletionEvidence) -> None:
+        validate_review_thread_completion(evidence)
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):

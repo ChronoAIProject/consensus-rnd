@@ -25,6 +25,10 @@ from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.work_items import ManagedWorkProjection, open_actionable_managed_items
+from codex_refactor_loop.review_fix_dispatch import (
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -627,10 +631,12 @@ def _extract_completed_marker_line(text: str) -> str | None:
     return None
 
 
-def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
+def completed_marker_actions(repo_root: Path, ctx: LoopContext | None = None) -> list[dict[str, Any]]:
     logs_dir = repo_root / ".refactor-loop" / "logs"
     if not logs_dir.exists():
         return []
+    if ctx is None:
+        ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
     actions: list[dict[str, Any]] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = marker_from_completed_log(log_path)
@@ -679,8 +685,144 @@ def completed_marker_actions(repo_root: Path) -> list[dict[str, Any]]:
                 action["no_lifecycle_authority"] = True
                 action.pop("runner_authority", None)
                 action.pop("no_generic_command", None)
+        if marker.startswith("FIX_DONE"):
+            _apply_fix_done_review_thread_gate(repo_root, ctx, action)
         actions.append(action)
     return actions
+
+
+def _apply_fix_done_review_thread_gate(repo_root: Path, ctx: LoopContext, action: dict[str, Any]) -> None:
+    pr_number = action.get("target_number")
+    if action.get("target_kind") != "PR" or not isinstance(pr_number, int):
+        return
+    evidence = _review_thread_completion_evidence(repo_root, ctx, pr_number)
+    try:
+        validate_review_thread_completion(evidence)
+    except ValueError as exc:
+        action["status_only"] = True
+        action["no_lifecycle_authority"] = True
+        action["route"] = "review-thread-completion-gate"
+        action["blocked_reason"] = f"review_thread_completion_incomplete:{exc}"
+        action["preconditions"] = [
+            *action.get("preconditions", []),
+            "review_thread_completion_evidence",
+        ]
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+        action.pop("controller_action", None)
+    else:
+        action["preconditions"] = [
+            *action.get("preconditions", []),
+            "review_thread_completion_evidence",
+        ]
+
+
+def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_number: int) -> ReviewThreadCompletionEvidence:
+    artifact = repo_root / ".refactor-loop" / "state" / "review-thread-completion" / f"pr{pr_number}.json"
+    data: dict[str, Any] = {}
+    if artifact.is_file():
+        try:
+            loaded = json.loads(artifact.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            data = loaded
+    review_thread_driven = bool(data.get("review_thread_driven"))
+    thread_id = str(data.get("thread_id") or "")
+    raw_escalation_evidence = str(data.get("escalation_evidence") or "")
+    escalation_evidence = (
+        raw_escalation_evidence
+        if _has_clean_escalation_marker_source(repo_root, raw_escalation_evidence)
+        else ""
+    )
+    live_original_thread_resolved = True
+    if review_thread_driven and not escalation_evidence.strip():
+        live_original_thread_resolved = _original_review_thread_is_resolved(ctx, pr_number, thread_id)
+    return ReviewThreadCompletionEvidence(
+        review_thread_driven=review_thread_driven,
+        thread_id=thread_id,
+        replied=bool(data.get("replied")),
+        resolved=bool(data.get("resolved")) and live_original_thread_resolved,
+        escalation_evidence=escalation_evidence,
+    )
+
+
+def _has_clean_escalation_marker_source(repo_root: Path, escalation_evidence: str) -> bool:
+    marker = escalation_evidence.strip()
+    if not marker.startswith("META_RESOLVED:escalate-human:"):
+        return False
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    if not logs_dir.exists():
+        return False
+    for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if marker_from_completed_log(log_path) == marker:
+            return True
+    return False
+
+
+def _original_review_thread_is_resolved(ctx: LoopContext, pr_number: int, thread_id: str) -> bool:
+    if not thread_id.strip():
+        return False
+    slug = str(ctx.host_env.get("GH_REPO_SLUG") or "").strip()
+    owner, _, repo = slug.partition("/")
+    if not owner or not repo:
+        return False
+    query = (
+        "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
+        "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
+        "reviewThreads(first:100, after:$after){ "
+        "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
+        "} } } }"
+    )
+    after = ""
+    while True:
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={repo}",
+            "-F",
+            f"number={pr_number}",
+            "-f",
+            f"query={query}",
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        payload = run_json(cmd, cwd=ctx.repo_root)
+        repository = ((payload or {}).get("data") or {}).get("repository")
+        if not isinstance(repository, dict):
+            return False
+        pull_request = repository.get("pullRequest")
+        if not isinstance(pull_request, dict):
+            return False
+        review_threads = pull_request.get("reviewThreads")
+        if not isinstance(review_threads, dict):
+            return False
+        nodes = review_threads.get("nodes")
+        if not isinstance(nodes, list):
+            return False
+        for node in nodes:
+            if not isinstance(node, dict):
+                return False
+            if node.get("id") != thread_id:
+                continue
+            is_resolved = node.get("isResolved")
+            return is_resolved if isinstance(is_resolved, bool) else False
+        page_info = review_threads.get("pageInfo")
+        if not isinstance(page_info, dict):
+            return False
+        has_next_page = page_info.get("hasNextPage")
+        if not isinstance(has_next_page, bool):
+            return False
+        if not has_next_page:
+            return False
+        end_cursor = page_info.get("endCursor")
+        if not isinstance(end_cursor, str) or not end_cursor:
+            return False
+        after = end_cursor
 
 
 def consensus_implementation_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
@@ -1686,7 +1828,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(harness_spawn_intent_actions(repo_root, ctx, monitor, gh_items, gh_items_loaded))
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
-    actions.extend(completed_marker_actions(repo_root))
+    actions.extend(completed_marker_actions(repo_root, ctx))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))
