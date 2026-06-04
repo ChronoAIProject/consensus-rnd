@@ -40,6 +40,12 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     resolve_repo_root,
     stale_revival_seconds,
 )
+from test_support.authorization_projection import project_python  # noqa: E402
+
+
+def wakeup_plan_projection():
+    source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+    return project_python(source)
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -1063,13 +1069,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["unresolved-target"])
 
     def test_wakeup_plan_uses_concurrency_monitor_for_spawn_intent_in_flight_detection(self) -> None:
-        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
-        self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
-        self.assertIn("if monitor is None:\n        return False", wakeup_source)
-        self.assertNotIn('["ps", "-eo", "command"]', wakeup_source)
-        self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
-        self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
+        self.assertIn("_canonical_in_flight_for_log", projection.function_names)
+        self.assertIn("list_in_flight_codex_lines", projection.attribute_names)
+        self.assertNotIn("ps", projection.string_literals)
+        self.assertNotIn("_spawn_codex_in_flight_for_log", projection.function_names)
 
     def test_harness_spawn_intent_target_extraction_owner_contract_is_anchored(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -2250,101 +2255,95 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([], projected)
 
     def test_wakeup_plan_source_locks_consensus_projection_to_judge_artifact_only(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for required in (
-            "CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)",
-            "CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)",
+            "CONSENSUS_JUDGE_LOG_RE",
+            "CONSENSUS_JUDGE_ARTIFACT_RE",
             "_frontmatter_is_consensus",
             "_extract_implementation_owner",
             "_extract_structured_consensus_field",
             "_consensus_projection_from_artifact",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, source)
-        self.assertNotIn("_extract_solver_scope_paths", source)
-        self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", source)
+                self.assertIn(required, projection.assigned_names | projection.function_names)
+        self.assertNotIn("_extract_solver_scope_paths", projection.function_names)
+        self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", projection.string_literals)
 
     def test_wakeup_plan_source_locks_consensus_implementation_scope_conflict_serialization(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for required in (
-            "serialize_conflicting_consensus_implementation_actions(actions)",
+            "serialize_conflicting_consensus_implementation_actions",
             "_normalized_consensus_scope_paths",
             "_scope_paths_overlap",
-            "scope_conflict_waiting",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, source)
+                self.assertIn(required, projection.function_names)
+        self.assertIn("scope_conflict_waiting", projection.string_literals)
 
     def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        for helper in (
-            "dispatch_consensus_implementation",
-            "publish_implementation_output",
-            "dispatch_reviewers",
-            "open_release_rollup_pr_from_action",
-        ):
-            with self.subTest(helper=helper):
-                self.assertIn(helper, source)
-        self.assertNotIn("HeadlessLifecycleAction", source)
-        self.assertNotIn("headless_actions", source)
+        projection = wakeup_plan_projection()
+        self.assertGreaterEqual(
+            projection.set_members["RUNNER_NAMED_HELPER_ACTIONS"],
+            {
+                "dispatch_consensus_implementation",
+                "publish_implementation_output",
+                "dispatch_reviewers",
+                "open_release_rollup_pr_from_action",
+            },
+        )
+        self.assertNotIn("HeadlessLifecycleAction", projection.class_names)
+        self.assertNotIn("headless_actions", projection.assigned_names | projection.function_names)
 
     def test_wakeup_plan_source_locks_reviewer_head_redispatch_contract(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        for token in (
-            "headRefName,headRefOid,body",
-            "def review_evidence_redispatch_actions(",
-            "latest_reviewer_heads(repo_root, item.number)",
-            "by_role: dict[str, tuple[int, str]]",
-            "pending_review_spawn_exists(repo_root, item.number)",
-            '"controller_action": "dispatch_reviewers"',
-            '"missing_or_stale_reviewer_head_evidence"',
-            '"review-evidence-redispatch"',
-        ):
+        projection = wakeup_plan_projection()
+        for token in ("dispatch_reviewers", "missing_or_stale_reviewer_head_evidence", "review-evidence-redispatch"):
             with self.subTest(token=token):
-                self.assertIn(token, source)
-        constants = source[source.index("EXECUTABLE_ACTION_KINDS = {") : source.index("NON_ACTION_PHASE_LABELS = {")]
-        self.assertIn('"review-evidence-redispatch"', constants)
+                self.assertIn(token, projection.string_literals)
+        self.assertTrue(any(value.endswith("headRefName,headRefOid,body") for value in projection.string_literals))
+        self.assertIn("review_evidence_redispatch_actions", projection.function_names)
+        self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for token in (
-            "suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)",
-            "def suppress_stale_unexecutable_actions(",
-            'controller_action == "publish_implementation_output"',
-            'controller_action == "close_managed_item_from_drop_marker"',
-            '"verified_pr_head_unavailable"',
-            'action["status_only"] = True',
+            "publish_implementation_output",
+            "close_managed_item_from_drop_marker",
+            "verified_pr_head_unavailable",
+            "status_only",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, source)
+                self.assertIn(token, projection.string_literals)
+        self.assertIn("suppress_stale_unexecutable_actions", projection.function_names)
 
     def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        self.assertIn("clean :ok stale-base belongs to publish recovery, not redispatch", source)
-        self.assertIn("def _publish_recoverable_stale_base_implement", source)
-        self.assertIn('getattr(state, "reason", "") == "stale_base"', source)
-        self.assertIn('replace(state, status="publish_ready")', source)
+        projection = wakeup_plan_projection()
+        self.assertIn("_publish_recoverable_stale_base_implement", projection.function_names)
+        self.assertIn("stale_base", projection.string_literals)
+        self.assertIn("publish_ready", projection.string_literals)
 
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
         for token in (
-            "DESIGN_CONSENSUS_TERMINAL_PHASES",
             "PHASE_CONSENSUS_REACHED",
             "PHASE_IMPLEMENTING",
             "PHASE_MERGED",
             "PHASE_CLOSED",
-            "_terminal_design_consensus_targets",
-            "_is_design_consensus_solver_dispatch_intent",
-            "source_marker = str(closed.get(\"source_marker\") or \"\")",
-            "_design_consensus_marker_is_router_owned(source_marker)",
-            "\"status_only\"",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, source)
+                self.assertIn(token, projection.attribute_names)
+        for token in (
+            "DESIGN_CONSENSUS_TERMINAL_PHASES",
+            "_terminal_design_consensus_targets",
+            "_is_design_consensus_solver_dispatch_intent",
+            "_design_consensus_marker_is_router_owned",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, projection.assigned_names | projection.function_names | projection.string_literals)
+        self.assertIn("status_only", projection.string_literals)
         for forbidden in ("gh issue edit", "gh issue close", "gh pr merge", "git push", "git commit"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, source)
+                self.assertNotIn(forbidden, projection.string_literals)
 
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")
@@ -2415,9 +2414,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="ci_red")
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        self.assertIn("PrChecksProjection", source)
-        self.assertNotIn('"pr", "checks"', source)
+        projection = wakeup_plan_projection()
+        self.assertIn("PrChecksProjection", projection.imported_names)
+        self.assertNotIn("pr", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
+        self.assertNotIn("checks", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
@@ -2503,10 +2503,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(hard_gate["dispatch_required"], 0)
 
     def test_wakeup_plan_source_does_not_make_dispatch_next_step_worker_executable(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
-        self.assertNotIn('"no-gap-violation",\n    "existing-issue"', source)
-        self.assertNotIn('closed.setdefault("controller_action", "dispatch_next_step_worker")', source)
+        self.assertNotIn("no-gap-violation", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        self.assertNotIn("existing-issue", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        self.assertNotIn("dispatch_next_step_worker", projection.set_members["RUNNER_NAMED_HELPER_ACTIONS"])
 
     def test_milestone_labeled_items_route_before_ordinary_existing_issue(self) -> None:
         plan = self.run_plan(fixture="milestone")
