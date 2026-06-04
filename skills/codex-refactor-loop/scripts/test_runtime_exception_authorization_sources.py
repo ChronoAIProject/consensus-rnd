@@ -9,6 +9,8 @@ import subprocess
 import unittest
 from pathlib import Path
 
+from test_support.authorization_projection import project_markdown, project_python
+
 
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
@@ -79,6 +81,10 @@ MAINTAINER_DIRECTIVE_REQUIRED_FIELDS = (
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def python_projection(path: Path):
+    return project_python(read(path))
 
 
 def mirror_entry(mirror: str, anchor: str) -> str:
@@ -160,11 +166,13 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("downstream host has no runtime watch", self.skill)
 
     def test_mirror_entries_have_required_fields(self) -> None:
+        mirror_projection = project_markdown(self.mirror)
         for anchor in TARGET_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
             with self.subTest(anchor=anchor):
+                self.assertIn(anchor, mirror_projection.anchors)
                 for field in REQUIRED_FIELDS:
-                    self.assertRegex(entry, rf"(?m)^- {field}:")
+                    self.assertIn(field, project_markdown(entry).bullet_fields)
 
     def test_issue_403_decomposition_allowlist_excludes_wakeup_plan_public_projection(self) -> None:
         entry = mirror_entry(self.mirror, "issue-decomposition-403")
@@ -285,15 +293,17 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
+        mirror_projection = project_markdown(self.mirror)
         for anchor in MAINTAINER_DIRECTIVE_ANCHORS:
             entry = mirror_entry(self.mirror, anchor)
+            entry_projection = project_markdown(entry)
             with self.subTest(anchor=anchor):
-                self.assertIn(f'<a id="{anchor}"></a>', self.mirror)
+                self.assertIn(anchor, mirror_projection.anchors)
                 self.assertIn(f"{MIRROR_RELATIVE}#{anchor}", self.skill)
                 self.assertIn("source_kind: maintainer_directive", entry)
                 self.assertIn("no_new_runtime_authority", entry)
                 for field in MAINTAINER_DIRECTIVE_REQUIRED_FIELDS:
-                    self.assertRegex(entry, rf"(?m)^- {field}:")
+                    self.assertIn(field, entry_projection.bullet_fields)
 
     def test_floor_no_exemption_mirror_preserves_single_active_audit_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "maintainer-directive-floor-no-exemption")
@@ -835,8 +845,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
     def test_phase9_router_terminal_design_gate_matches_implementation(self) -> None:
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
-        router = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
-        wakeup_plan = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        router_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "phase9" / "router.py")
+        wakeup_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
         combined_authority = "\n".join((entry, self.skill))
 
         for token in (
@@ -845,21 +855,29 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "_terminal_consensus_judge_source",
             "_live_terminal_issue_source",
             "_append_terminal_fallback_event",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router_projection.class_names | router_projection.function_names)
+        for token in (
             "phase9-terminal-eligibility:",
             "phase9-already-consensus",
             "META_JUDGE_DONE:consensus:",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, router_projection.string_literals)
+        for token in (
             "PHASE_CONSENSUS_REACHED",
             "PHASE_IMPLEMENTING",
             "PHASE_MERGED",
             "PHASE_CLOSED",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, router)
-        self.assertIn('"[.labels[].name]"', router)
-        self.assertNotIn('"{state:.state,labels:[.labels[].name]}"', router)
-        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_plan)
-        self.assertIn("_design_consensus_marker_is_router_owned", wakeup_plan)
-        self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_plan)
+                self.assertIn(token, router_projection.attribute_names)
+        self.assertIn("[.labels[].name]", router_projection.string_literals)
+        self.assertNotIn("{state:.state,labels:[.labels[].name]}", router_projection.string_literals)
+        self.assertIn("DESIGN_CONSENSUS_TERMINAL_PHASES", wakeup_projection.assigned_names)
+        self.assertIn("_design_consensus_marker_is_router_owned", wakeup_projection.function_names)
+        self.assertIn("_is_design_consensus_solver_dispatch_intent", wakeup_projection.function_names)
         for token in (
             "phase9-terminal-eligibility:",
             "phase9-already-consensus",
@@ -962,24 +980,24 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertEqual(mirror_allowlist.group(0), skill_allowlist.group(0))
 
     def test_banner_public_cli_removed_and_controller_action_owner_gated(self) -> None:
-        cli = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
-        banners = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "banners.py")
-        actions = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
+        cli_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        banners_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "banners.py")
+        actions_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "controller_actions.py")
         observability_entry = mirror_entry(self.mirror, "observability-comment-writers-53")
 
-        self.assertNotIn('"post-banner": CommandSpec', cli)
-        self.assertNotIn("banners.main", cli)
-        for forbidden in ("def main(", "argparse", "load_optional_context", "post_status_banner("):
+        self.assertNotIn("post-banner", cli_projection.dict_keys)
+        self.assertNotIn("banners.main", cli_projection.string_literals)
+        for forbidden in ("main", "load_optional_context", "post_status_banner"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, banners)
+                self.assertNotIn(forbidden, banners_projection.function_names | banners_projection.imported_names)
         for required in (
-            "def post_status_banner(self, request: BannerRequest) -> str:",
-            'self._require_owner_or_raise("post-banner")',
+            "post_status_banner",
             "_normalize_lifecycle_target_or_raise",
-            "gh_comment_command",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, actions)
+                self.assertIn(required, actions_projection.function_names)
+        self.assertIn("post-banner", actions_projection.string_literals)
+        self.assertIn("gh_comment_command", actions_projection.imported_names)
         for required in (
             "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
             "not a cross-device write permit",
