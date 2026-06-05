@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import json
 import os
 import json
 import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -285,6 +287,14 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             env["PEEK_TEST_MISSING_LINK_PR"] = "1"
         if closed_label_fixtures:
             env["PEEK_TEST_CLOSED_LABEL_FIXTURES"] = "1"
+        self.write_managed_work_snapshot(
+            pr=pr,
+            milestone_fixtures=milestone_fixtures,
+            unpushed=unpushed,
+            pr_open_issue=pr_open_issue,
+            represented_parent=represented_parent,
+            missing_link_pr=missing_link_pr,
+        )
         return subprocess.run(
             [sys.executable, str(PEEK), "peek", *(args or [])],
             cwd=self.root,
@@ -293,6 +303,56 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             text=True,
             check=False,
         )
+
+    def write_managed_work_snapshot(
+        self,
+        *,
+        pr: int | None = None,
+        milestone_fixtures: bool = False,
+        unpushed: bool = False,
+        pr_open_issue: bool = False,
+        represented_parent: bool = False,
+        missing_link_pr: bool = False,
+    ) -> None:
+        items: list[dict[str, object]] = []
+
+        def issue(number: int, title: str, labels: list[str]) -> None:
+            items.append({"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": "2026-06-05T00:00:00Z"})
+
+        def pr_item(number: int, title: str, labels: list[str], *, head_ref: str = "", body: str = "") -> None:
+            items.append(
+                {
+                    "kind": "PR",
+                    "number": number,
+                    "title": title,
+                    "labels": labels,
+                    "head_ref": head_ref or None,
+                    "head_sha": "peek-sha",
+                    "body": body,
+                    "state": "open",
+                    "updated_at": "2026-06-05T00:00:00Z",
+                }
+            )
+
+        if pr_open_issue:
+            issue(239, "parent issue", ["crnd:lifecycle:managed", "crnd:phase:pr-open", "crnd:human:auto"])
+        if represented_parent:
+            issue(239, "represented parent", ["crnd:lifecycle:managed", "crnd:phase:implementing", "crnd:human:auto"])
+            pr_item(255, "child PR", ["crnd:lifecycle:managed", "crnd:phase:reviewing", "crnd:human:auto"], head_ref="impl/issue239", body="Closes #239")
+        if missing_link_pr:
+            pr_item(256, "missing link PR", ["crnd:lifecycle:managed", "crnd:phase:reviewing", "crnd:human:auto"], head_ref="impl/missing")
+        if milestone_fixtures:
+            issue(20, "milestone issue", ["auto-loop", "🎯 milestone", "🔍 phase:design-solving"])
+            issue(10, "ordinary issue", ["auto-loop", "🔍 phase:design-solving"])
+            pr_item(30, "milestone PR", ["auto-loop", "🎯 milestone", "👀 phase:reviewing"])
+        if pr is not None:
+            labels = ["auto-loop", "👀 phase:reviewing"] if unpushed else []
+            head_ref = f"refactor/iter{pr}-worker" if unpushed else ""
+            pr_item(pr, "stub PR", labels, head_ref=head_ref)
+
+        path = self.root / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"fetched_at_epoch": time.time(), "items": items}) + "\n", encoding="utf-8")
 
     def test_peek_help_is_bounded_and_does_not_load_live_status(self) -> None:
         self.write_fake_git(fail=True)

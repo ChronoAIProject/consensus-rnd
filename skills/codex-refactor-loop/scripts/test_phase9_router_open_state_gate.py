@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels as label_catalog
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.phase9.router import Phase9Router
 
 
@@ -93,30 +94,23 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
                 ],
             }
         ]
-        result = mock.Mock(returncode=0, stdout=json.dumps(rows), stderr="")
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", return_value=result) as run:
+        snapshot = ManagedWorkSnapshotResult(
+            (
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=416,
+                    title="design issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                ),
+            ),
+            True,
+            "cache:fresh",
+        )
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=snapshot) as load_snapshot:
             issues = self.router(gh_repo_slug="owner/repo")._open_design_consensus_issues()
 
         self.assertEqual([issue.number for issue in issues], ["416"])
-        command = run.call_args.args[0]
-        self.assertEqual(
-            command,
-            [
-                "gh",
-                "issue",
-                "list",
-                "--repo",
-                "owner/repo",
-                "--state",
-                "open",
-                "--label",
-                "crnd:lifecycle:managed",
-                "--json",
-                "number,title,labels",
-            ],
-        )
-        forbidden = {"close", "comment", "create", "delete", "edit", "merge", "pr", "release", "reopen"}
-        self.assertFalse(set(command) & forbidden)
+        load_snapshot.assert_called_once()
 
 
 if __name__ == "__main__":

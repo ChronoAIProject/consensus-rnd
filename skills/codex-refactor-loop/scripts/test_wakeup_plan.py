@@ -11,6 +11,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +23,7 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
@@ -33,6 +36,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
+    load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
     repository_stalled_meta_reflector_actions,
@@ -536,6 +540,171 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         gh.chmod(0o755)
 
+    def write_managed_work_snapshot_fixture(self, fixture: str) -> None:
+        path = self.repo / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if fixture == "gh_failure":
+            path.unlink(missing_ok=True)
+            return
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "managed-work-snapshot",
+                    "fetched_at_epoch": time.time(),
+                    "items": self.managed_work_snapshot_items(fixture),
+                    "not_live_state_fact_source": True,
+                    "not_host_production_ssot": True,
+                    "no_lifecycle_authority": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def managed_work_snapshot_items(self, fixture: str) -> list[dict[str, object]]:
+        def issue(number: int, title: str, labels: list[str], *, updated_at: str = "2026-06-05T00:00:00Z") -> dict[str, object]:
+            return {"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": updated_at}
+
+        def pr(
+            number: int,
+            title: str,
+            labels: list[str],
+            *,
+            head_ref: str = "",
+            head_sha: str = "",
+            body: str = "",
+            updated_at: str = "2026-06-05T00:00:00Z",
+        ) -> dict[str, object]:
+            return {
+                "kind": "PR",
+                "number": number,
+                "title": title,
+                "labels": labels,
+                "head_ref": head_ref or None,
+                "head_sha": head_sha,
+                "body": body,
+                "state": "open",
+                "updated_at": updated_at,
+            }
+
+        managed = label_catalog.MANAGED
+        auto = label_catalog.HUMAN_AUTO
+        issue_rows: dict[str, list[dict[str, object]]] = {
+            "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue20_stale_base": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto, label_catalog.MILESTONE_CURRENT])],
+            "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "remote_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_331": [issue(331, "different open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issues_330_331_332": [
+                issue(330, "first target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(331, "overlap target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(332, "disjoint target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+            ],
+            "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "consensus_issue_330": [issue(330, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "managed_dual_read": [
+                issue(81, "canonical issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(82, "legacy issue", ["auto-loop", "🔧 phase:fixing", "🤖 human:codex"]),
+            ],
+            "milestone": [
+                issue(20, "milestone issue", ["auto-loop", "🎯 milestone", "🔍 phase:design-solving"]),
+                issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"]),
+            ],
+            "existing": [issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"])],
+            "transition_sort": [
+                issue(60, "unknown issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(61, "positive issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(62, "classifier issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(63, "confident classifier issue", ["auto-loop", "🔧 phase:fixing"]),
+            ],
+            "many_active": [issue(number, f"active issue {number}", ["auto-loop", "🔧 phase:fixing"]) for number in range(1, 7)],
+            "represented_parent": [issue(239, "represented parent", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "pr_open_parent": [issue(239, "parent issue with open PR", [managed, label_catalog.PHASE_PR_OPEN, auto])],
+            "non_action_statuses": [
+                issue(40, "blocked issue", ["auto-loop", "⏸️ phase:blocked"]),
+                issue(41, "merged issue", ["auto-loop", "🎉 phase:merged"]),
+                issue(44, "parent issue with child PR", ["auto-loop", "crnd:phase:pr-open"]),
+            ],
+            "repository_stalled": [
+                issue(506, "old design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2026-05-01T00:00:00Z"),
+                issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
+            ],
+            "repository_fresh": [
+                issue(506, "fresh design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2099-05-01T00:00:00Z"),
+            ],
+            "repository_human_decision": [
+                issue(
+                    506,
+                    "human decision issue",
+                    [managed, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_MAINTAINER_DECISION],
+                    updated_at="2026-05-01T00:00:00Z",
+                ),
+            ],
+        }
+        pr_rows: dict[str, list[dict[str, object]]] = {
+            "local_iter_branch_issue20_stale_base": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "local_iter_branch_issue20": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "managed_dual_read": [
+                pr(91, "canonical PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/canonical"),
+                pr(92, "legacy PR", ["refactor-design-needed", "🔍 phase:design-solving", "🤖 human:auto-推进"], head_ref="impl/legacy"),
+            ],
+            "unpushed": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_fetch_fail": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_ahead": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_remote": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_no_worktree": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
+            "unpushed_head_dash": [pr(78, "unsafe dash head", ["auto-loop", "👀 phase:reviewing"], head_ref="-bad")],
+            "unpushed_head_space": [pr(79, "unsafe space head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad ref")],
+            "unpushed_head_control": [pr(80, "unsafe control head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad\u0001ref")],
+            "ci_red": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
+            "ci_red_issue20": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
+            "open_pr_123": [pr(123, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr123")],
+            "open_pr_480": [
+                pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            ],
+            "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_unrelated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_outdated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_resolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_paginated_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_graphql_failure": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_pull_request_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_page_info_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_node_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "closing_pr_issue20": [
+                issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
+            "milestone": [pr(30, "milestone PR", ["auto-loop", "🎯 milestone", "👀 phase:reviewing"])],
+            "non_action_statuses": [
+                pr(42, "non-red CI PR", ["auto-loop", "⚙️ phase:ci-running"]),
+                pr(43, "merged PR", ["auto-loop", "🎉 phase:merged"]),
+            ],
+            "repository_stalled": [
+                pr(
+                    536,
+                    "old review PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="refactor/iter506-issue-506",
+                    updated_at="2026-05-03T00:00:00Z",
+                ),
+            ],
+        }
+        return [*issue_rows.get(fixture, []), *pr_rows.get(fixture, [])]
+
     def write_fake_git(self) -> None:
         git = self.fakebin / "git"
         git.write_text(
@@ -697,6 +866,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -736,6 +906,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -1736,6 +1907,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = next(item for item in actions if item["action_id"].startswith("completed-marker:review-pr467"))
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 467)
+        self.assertFalse(action.get("status_only"))
+
+    def test_completed_marker_uses_repo_local_host_env_when_outer_locator_points_elsewhere(self) -> None:
+        self.write_completed_log("review-pr468-architect-r1.log", "REVIEW_DONE:468:architect:approve")
+        with tempfile.TemporaryDirectory(prefix="outer-host-env-") as other_raw:
+            other = Path(other_raw)
+            (other / ".config" / "consensus-rnd").mkdir(parents=True)
+            outer_host_env = other / ".config" / "consensus-rnd" / "host.env"
+            outer_host_env.write_text(
+                f"REPO_ROOT={other}\nGH_REPO_SLUG=outer/repo\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outer_host_env)}):
+                actions = completed_marker_actions(self.repo)
+
+        action = next(item for item in actions if item["action_id"].startswith("completed-marker:review-pr468"))
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 468)
         self.assertFalse(action.get("status_only"))
 
     def test_completed_marker_keeps_latest_non_design_target_marker_only(self) -> None:
@@ -2911,8 +3101,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for token in ("dispatch_reviewers", "missing_or_stale_reviewer_head_evidence", "review-evidence-redispatch"):
             with self.subTest(token=token):
                 self.assertIn(token, projection.string_literals)
-        self.assertIn("number,title,labels,headRefName,headRefOid,body,updatedAt", projection.string_literals)
-        self.assertIn("number,title,labels,updatedAt", projection.string_literals)
+        snapshot_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "managed_work_snapshot.py").read_text(encoding="utf-8")
+        for token in ("gh\",", "api\",", "graphql", "body", "headRefName", "headRefOid"):
+            with self.subTest(snapshot_token=token):
+                self.assertIn(token, snapshot_source)
+        caller_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertNotIn("issue list", caller_source)
+        self.assertNotIn("pr list", caller_source)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
 
@@ -3577,13 +3772,24 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
         self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
         query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8").splitlines()
-        expected = [
-            f"{kind} {label}"
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-        ]
-        expected.append("api milestones")
-        self.assertEqual(query_log, expected)
+        self.assertEqual(query_log, ["api milestones"])
+        snapshot = json.loads((self.repo / ".refactor-loop/state/managed-work-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(snapshot["items"]), 4)
+
+    def test_load_github_items_logs_unavailable_managed_work_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)
+        output = StringIO()
+        with mock.patch("codex_refactor_loop.wakeup_plan.load_open_managed_work_snapshot", return_value=snapshot):
+            with redirect_stderr(output):
+                items, loaded_ok = load_github_items_with_status(self.repo)
+
+        self.assertEqual(items, [])
+        self.assertFalse(loaded_ok)
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=wakeup-plan.load-github-items reason=graphql-headroom-low "
+            "source=unavailable age_seconds=901 items=0 target=projection-open-managed",
+            output.getvalue(),
+        )
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
         plan = self.run_plan(fixture="non_action_statuses")
@@ -3619,7 +3825,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn('"--state", "open"', source)
+        self.assertIn("load_open_managed_work_snapshot(ctx)", source)
         self.assertNotIn('"--state", "closed"', source)
         self.assertNotIn('"--state", "merged"', source)
 
