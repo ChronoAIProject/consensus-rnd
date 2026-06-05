@@ -63,6 +63,28 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             check=False,
         )
 
+    def write_stale_worktree_plan(self, name: str = "iter1-issue-1") -> Path:
+        stale = self.repo / ".worktrees" / name
+        stale.mkdir(parents=True, exist_ok=True)
+        plan = {
+            "kind": "RuntimeRetentionPlan",
+            "stale_worktrees": [
+                {
+                    "path": f".worktrees/{name}",
+                    "eligible": True,
+                    "proof": {
+                        "no_in_flight": True,
+                        "no_open_issue_or_pr": True,
+                        "no_dirty": True,
+                        "no_local_ahead": True,
+                        "merged_or_missing_safe": True,
+                    },
+                },
+            ],
+        }
+        (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+        return stale
+
     def test_default_disabled_noops_even_when_old_files_exist(self) -> None:
         self.host_env.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport RUNTIME_RETENTION_ENABLE="false"\n',
@@ -160,9 +182,9 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
 
         def runner(command):
             commands.append(tuple(command))
-            if command[3:5] == ("status", "--porcelain"):
+            if tuple(command[3:5]) == ("status", "--porcelain"):
                 return subprocess.CompletedProcess(command, 0, "", "")
-            if command[3:6] == ("rev-list", "--count", "@{upstream}..HEAD"):
+            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
                 return subprocess.CompletedProcess(command, 0, "0\n", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
@@ -173,6 +195,65 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertIn(("git", "-C", str(self.repo.resolve()), "worktree", "remove", str(stale.resolve())), commands)
         self.assertIn(("git", "-C", str(self.repo.resolve()), "worktree", "prune"), commands)
         self.assertFalse(any(".worktrees/iter2-issue-2" in " ".join(command) for command in commands))
+
+    def test_stale_worktree_dirty_git_recheck_refuses_remove_and_prune(self) -> None:
+        self.write_stale_worktree_plan()
+        commands: list[tuple[str, ...]] = []
+
+        def runner(command):
+            commands.append(tuple(command))
+            if tuple(command[3:5]) == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(command, 0, " M changed.txt\n", "")
+            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
+                return subprocess.CompletedProcess(command, 0, "0\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+
+        self.assertEqual(0, result.removed_worktrees)
+        self.assertFalse(result.pruned_worktrees)
+        self.assertFalse(any(command[3:5] == ("worktree", "remove") for command in commands))
+        self.assertFalse(any(command[3:5] == ("worktree", "prune") for command in commands))
+
+    def test_stale_worktree_local_ahead_git_recheck_refuses_remove_and_prune(self) -> None:
+        self.write_stale_worktree_plan()
+        commands: list[tuple[str, ...]] = []
+
+        def runner(command):
+            commands.append(tuple(command))
+            if tuple(command[3:5]) == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
+                return subprocess.CompletedProcess(command, 0, "2\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+
+        self.assertEqual(0, result.removed_worktrees)
+        self.assertFalse(result.pruned_worktrees)
+        self.assertFalse(any(command[3:5] == ("worktree", "remove") for command in commands))
+        self.assertFalse(any(command[3:5] == ("worktree", "prune") for command in commands))
+
+    def test_stale_worktree_failed_git_recheck_refuses_remove_and_prune(self) -> None:
+        for failing_command in ("status", "rev-list"):
+            with self.subTest(failing_command=failing_command):
+                self.write_stale_worktree_plan()
+                commands: list[tuple[str, ...]] = []
+
+                def runner(command):
+                    commands.append(tuple(command))
+                    if tuple(command[3:5]) == ("status", "--porcelain"):
+                        return subprocess.CompletedProcess(command, 1 if failing_command == "status" else 0, "", "fatal\n")
+                    if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
+                        return subprocess.CompletedProcess(command, 1 if failing_command == "rev-list" else 0, "0\n", "fatal\n")
+                    return subprocess.CompletedProcess(command, 0, "", "")
+
+                result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+
+                self.assertEqual(0, result.removed_worktrees)
+                self.assertFalse(result.pruned_worktrees)
+                self.assertFalse(any(command[3:5] == ("worktree", "remove") for command in commands))
+                self.assertFalse(any(command[3:5] == ("worktree", "prune") for command in commands))
 
     def test_cli_uses_host_env_and_reports_summary(self) -> None:
         self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)

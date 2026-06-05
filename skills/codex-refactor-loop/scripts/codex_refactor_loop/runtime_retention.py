@@ -123,7 +123,7 @@ def _remove_planner_stale_worktrees(
         path = _eligible_worktree_path(repo_root, item)
         if path is None:
             continue
-        if not _git_verification_passes(repo_root, path, command_runner=command_runner):
+        if not _git_verification_passes(path, command_runner=command_runner):
             continue
         result = command_runner(["git", "-C", str(repo_root), "worktree", "remove", str(path)])
         if result.returncode == 0:
@@ -176,7 +176,6 @@ def _eligible_worktree_path(repo_root: Path, item: dict[str, Any]) -> Path | Non
 
 
 def _git_verification_passes(
-    repo_root: Path,
     path: Path,
     *,
     command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]],
@@ -187,7 +186,7 @@ def _git_verification_passes(
     if dirty.returncode != 0 or dirty.stdout.strip():
         return False
     ahead = command_runner(["git", "-C", str(path), "rev-list", "--count", "@{upstream}..HEAD"])
-    if ahead.returncode == 0 and ahead.stdout.strip() not in ("", "0"):
+    if ahead.returncode != 0 or ahead.stdout.strip() not in ("", "0"):
         return False
     return True
 
