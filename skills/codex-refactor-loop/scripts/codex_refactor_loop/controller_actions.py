@@ -11,7 +11,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
@@ -20,12 +20,15 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
-from .implement_lifecycle import clear_redispatchable_implement_log
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
-from .release.publisher import ReleasePublishResult, ReleasePublisher
-from .review_fix_dispatch import ReviewFixDispatchSpec
 from .git import Git
+from .review_fix_dispatch import (
+    ReviewFixDispatchSpec,
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
@@ -651,16 +654,16 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        pr_error, pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
+        if pr_error:
+            sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
+            return 2
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        existing_pr = self._open_pr_for_head(head_ref)
-        if existing_pr == 0:
-            sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
-            return 2
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
@@ -668,12 +671,6 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        if existing_pr is None:
-            body_file = self._implementation_pr_body_file(action, issue_target)
-            title = str(action.get("title") or f"实现 issue #{issue_target}")
-            pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-        else:
-            pr_target = existing_pr
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -821,7 +818,11 @@ class ControllerActions:
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
             return 2
         readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
-        if readiness_reason:
+        early_pr_missing_redispatch = (
+            readiness_reason == "implementation_ready_to_publish"
+            and self._implementation_early_pr_missing(action, issue_target=number)
+        )
+        if readiness_reason and not early_pr_missing_redispatch:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
         phase_result = self._move_issue_to_implementing_phase(number)
@@ -830,8 +831,14 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        pr_result = self._reserve_implementation_pr(issue_target=number, head_ref=branch, action=action)
+        if pr_result != 0:
+            return pr_result
         log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
-        self._clear_stale_implement_log_for_fresh_dispatch(log, action)
+        if early_pr_missing_redispatch:
+            log.unlink(missing_ok=True)
+        else:
+            self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -861,6 +868,42 @@ class ControllerActions:
             stall=5400,
             reason=f"issue #{number} consensus implementation",
         )
+        return 0
+
+    def _implementation_early_pr_missing(self, action: Mapping[str, object], *, issue_target: str) -> bool:
+        state = classify_implement_attempt(
+            repo_root=self.ctx.repo_root,
+            action=action,
+            integration_branch=self.integration_branch,
+            command_runner=lambda command: self._git_lifecycle_command(command),
+        )
+        if not (state.publish_ready or state.refresh_needed):
+            return False
+        error, _number = self._exactly_one_matching_implementation_pr(state.head_ref, issue_target)
+        return error == "early_pr_missing"
+
+    def _reserve_implementation_pr(self, *, issue_target: str, head_ref: str, action: Mapping[str, object]) -> int:
+        body_file = self._implementation_pr_body_file(action, issue_target)
+        worktree = self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{str(action.get('cluster_id') or '').strip()}"
+        empty = self._git_in(
+            worktree,
+            ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}", "-m", "⟦AI:AUTO-LOOP⟧"],
+            check=False,
+        )
+        if empty.returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to create reserved head commit\n")
+            if empty.stderr:
+                sys.stderr.write(empty.stderr)
+            return empty.returncode
+        if self._git_in(worktree, ["push", "origin", f"{head_ref}:{head_ref}"], check=False).returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to push reserved head\n")
+            return 2
+        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        try:
+            self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        except RuntimeError as exc:
+            sys.stderr.write(f"dispatch_consensus_implementation: early PR reservation failed: {exc}\n")
+            return 2
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
@@ -1112,21 +1155,42 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _open_pr_for_head(self, head_ref: str) -> int | None:
-        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+    def _exactly_one_matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+        result = self.gh(
+            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
+            check=False,
+        )
         if result.returncode != 0:
-            return 0
+            return "matching_pr_unavailable", None
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return 0
-        if not isinstance(payload, list) or not payload:
-            return None
-        first = payload[0]
-        if not isinstance(first, dict):
-            return 0
-        number = first.get("number")
-        return number if isinstance(number, int) and number > 0 else 0
+            return "matching_pr_invalid_json", None
+        if not isinstance(payload, list):
+            return "matching_pr_invalid_json", None
+        if len(payload) == 0:
+            return "early_pr_missing", None
+        if len(payload) > 1:
+            return "multiple_matching_open_pr", None
+        pr = payload[0]
+        if not isinstance(pr, dict):
+            return "matching_pr_invalid_json", None
+        number = pr.get("number")
+        if not isinstance(number, int) or number <= 0:
+            return "matching_pr_invalid_json", None
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "matching_pr_head_mismatch", None
+        if str(pr.get("baseRefName") or "") != self.integration_branch:
+            return "matching_pr_base_mismatch", None
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "matching_pr_not_managed", None
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "matching_pr_not_managed", None
+        if _single_linked_issue(str(pr.get("body") or "")) != issue_target:
+            return "matching_pr_issue_mismatch", None
+        return None, number
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
@@ -1255,6 +1319,9 @@ class ControllerActions:
         render_env = {
             "AUDIT_PATH": "",
             "IMPLEMENT_SUMMARY_PATH": "",
+            "CLUSTER_ID": "",
+            "ISSUE_NUMBER": "",
+            "ITERATION": "",
             "PROJECT_RULES": "CLAUDE.md",
             "HOST_REFACTOR_COMMENT_POLICY": "none",
         }
@@ -1271,6 +1338,7 @@ class ControllerActions:
         )
         self._replace_review_fix_shell_defaults(prompt_path, render_env)
         self._ensure_review_fix_prompt_fully_rendered(prompt_path)
+        self._write_review_thread_completion_seed(pr_number)
         return spec
 
     def _replace_review_fix_shell_defaults(self, prompt_path: Path, render_env: Mapping[str, str]) -> None:
@@ -1283,6 +1351,105 @@ class ControllerActions:
         unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
         if unresolved:
             raise RuntimeError(f"review-fix prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _write_review_thread_completion_seed(self, pr_number: int) -> None:
+        state_dir = self.ctx.repo_root / ".refactor-loop" / "state" / "review-thread-completion"
+        state_path = state_dir / f"pr{pr_number}.json"
+        thread = self._first_unresolved_review_thread(pr_number)
+        if thread is None:
+            state_path.unlink(missing_ok=True)
+            return
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": thread["id"],
+                    "replied": False,
+                    "resolved": False,
+                    "source": thread["source"],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+    def _first_unresolved_review_thread(self, pr_number: int) -> dict[str, Any] | None:
+        slug = self.ctx.gh_repo_slug
+        if not slug:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        owner, _, repo = slug.partition("/")
+        if not owner or not repo:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        query = (
+            "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
+            "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
+            "reviewThreads(first:100, after:$after){ "
+            "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
+            "} } } }"
+        )
+        after = ""
+        while True:
+            args = [
+                "api",
+                "graphql",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"repo={repo}",
+                "-F",
+                f"number={pr_number}",
+                "-f",
+                f"query={query}",
+            ]
+            if after:
+                args.extend(["-f", f"after={after}"])
+            result = subprocess.run(
+                ["gh", *args],
+                cwd=str(self.ctx.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            try:
+                payload = json.loads(result.stdout or "{}")
+            except json.JSONDecodeError:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            review_threads = (
+                (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                .get("reviewThreads")
+            )
+            if not isinstance(review_threads, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            nodes = review_threads.get("nodes")
+            if not isinstance(nodes, list):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            for node in nodes:
+                if not isinstance(node, dict):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+                thread_id = node.get("id")
+                is_resolved = node.get("isResolved")
+                if isinstance(thread_id, str) and thread_id and is_resolved is False:
+                    return {"id": thread_id, "source": "live-pr-review-thread"}
+                if not isinstance(is_resolved, bool):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+            page_info = review_threads.get("pageInfo")
+            if not isinstance(page_info, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            has_next_page = page_info.get("hasNextPage")
+            if has_next_page is False:
+                return None
+            if has_next_page is not True:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            end_cursor = page_info.get("endCursor")
+            if not isinstance(end_cursor, str) or not end_cursor:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            after = end_cursor
+
+    def validate_review_fix_completion(self, evidence: ReviewThreadCompletionEvidence) -> None:
+        validate_review_thread_completion(evidence)
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):

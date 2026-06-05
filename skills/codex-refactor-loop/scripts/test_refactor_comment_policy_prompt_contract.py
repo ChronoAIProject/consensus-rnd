@@ -10,13 +10,47 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 PROMPTS_DIR = SKILL_ROOT / "prompts"
+SKILL_MD = SKILL_ROOT / "SKILL.md"
 
 
 def read_prompt(name: str) -> str:
     return (PROMPTS_DIR / name).read_text(encoding="utf-8")
 
 
+def read_skill() -> str:
+    return SKILL_MD.read_text(encoding="utf-8")
+
+
 class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
+    def test_github_state_contract_requires_pr_review_thread_closure(self) -> None:
+        skill = read_skill()
+
+        self.assertIn("## GitHub State Contract", skill)
+        self.assertIn("| PR review comment fix |", skill)
+        self.assertIn("Completion includes review-thread closure", skill)
+        self.assertIn("fixes driven by PR review comments are incomplete", skill)
+        self.assertIn("original thread is replied to and resolved", skill)
+        self.assertIn("or explicitly escalated", skill)
+
+    def test_fix_done_route_mentions_review_thread_completion_gate(self) -> None:
+        skill = read_skill()
+
+        self.assertIn("| `FIX_DONE` |", skill)
+        self.assertIn("review-thread completion evidence gate passes", skill)
+        self.assertIn("review-thread-driven fixes", skill)
+        self.assertIn("status-only block", skill)
+
+    def test_review_fix_prompt_requires_seeded_review_thread_completion(self) -> None:
+        review_fix = read_prompt("review-fix.md")
+
+        self.assertIn("Close review-thread completion evidence when seeded", review_fix)
+        self.assertIn(".refactor-loop/state/review-thread-completion/pr${PR_NUMBER}.json", review_fix)
+        self.assertIn("reply to and resolve the seeded original PR review thread", review_fix)
+        self.assertIn("set `replied=true` and `resolved=true`", review_fix)
+        self.assertIn("FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:review-thread-completion", review_fix)
+        self.assertIn("exact clean-exit `.refactor-loop/logs/*.log`", review_fix)
+        self.assertIn("META_RESOLVED:escalate-human:<short>", review_fix)
+
     def test_default_policy_is_none_and_external_rationale(self) -> None:
         implement = read_prompt("implement.md")
         verify = read_prompt("verify.md")
@@ -61,10 +95,14 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
         self.assertIn("Old pattern: ${OLD_PATTERN}", implement)
         self.assertIn("New principle: ${NEW_PRINCIPLE}", implement)
         self.assertIn("源码注释必须 English-only", implement)
+        self.assertIn("do not replace it with issue-only identities", implement)
         self.assertIn("缺失任何一处且无合理 not-applicable 说明 → 标记缺陷", verify)
         self.assertIn("HOST_REFACTOR_COMMENT_POLICY=self-doc-comment", quality)
         self.assertIn("must be present and clear", quality)
+        self.assertIn("Non-canonical marker identity is a fixable process defect", quality)
         self.assertIn("Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}=self-doc-comment`", review_fix)
+        self.assertIn("non-canonical marker identity is (A) fixable in-scope", review_fix)
+        self.assertIn("Do not emit `FIX_BLOCKED:human-decision` for deterministic marker normalization", review_fix)
 
     def test_none_policy_forbids_refactor_history_source_comments(self) -> None:
         expected = (
@@ -113,11 +151,20 @@ class RefactorCommentPolicyPromptContractTests(unittest.TestCase):
                 "reviewer-architect.md",
                 "reviewer-quality.md",
                 "review-fix.md",
+                "meta-reflector-stalled.md",
             )
         )
         for token in forbidden_unconditional:
             with self.subTest(token=token):
                 self.assertNotIn(token, combined)
+
+    def test_deterministic_marker_normalization_routes_to_fix(self) -> None:
+        reflector = read_prompt("meta-reflector-stalled.md")
+
+        self.assertIn("deterministic in-scope text normalization", reflector)
+        self.assertIn("non-canonical refactor marker identity", reflector)
+        self.assertIn("META_RESOLVED:retry-fix:<exact normalization instruction>", reflector)
+        self.assertIn("not human escalation", reflector)
 
     def test_invalid_refactor_comment_policy_fails_closed(self) -> None:
         for name in (
