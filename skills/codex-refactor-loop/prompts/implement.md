@@ -57,7 +57,8 @@ ${SCOPE_PATHS}
    - 测试结果
    - deviation 记录
    - `SCOPE_EXTEND` 记录
-10. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
+10. 若 status 为 `ok`，同时写入 worker-authored PR artifacts：`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` 与 `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`。title 必须是一行非占位中文标题，不得是 `实现 issue #N`；body 必须包含且只包含一个 `Closes #N`，包含 `## 修改文件`、`## 测试结果`、`## deviation 记录`，并以 sentinel 作为最终独立行。
+11. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
 
 ## Marker emission allowlist(强制)
 
@@ -71,7 +72,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## 红线
 
-- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
+- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）、`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`、`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md` 和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
 - 禁止 `git commit` / `git push` / `git checkout <branch>`。
 - 禁止安装新依赖。
 - 禁止跳过测试或加 `[Skip]`。

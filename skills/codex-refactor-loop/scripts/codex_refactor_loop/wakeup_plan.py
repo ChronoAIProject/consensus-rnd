@@ -26,6 +26,10 @@ from codex_refactor_loop.implement_lifecycle import (
     clear_redispatchable_implement_log,
     is_implement_log,
 )
+from codex_refactor_loop.implementation_pr_artifacts import (
+    implementation_cluster_id,
+    validate_implementation_pr_artifacts,
+)
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
@@ -886,6 +890,8 @@ def completed_marker_actions(
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
         }
+        if action["controller_action"] == "publish_implementation_output":
+            _attach_implementation_pr_artifacts(repo_root, action)
         target = _action_target_key(action)
         if (
             open_targets is not None
@@ -1036,6 +1042,17 @@ def _action_target_key(action: dict[str, Any]) -> tuple[str, int] | None:
     if kind in {"PR", "issue"} and isinstance(number, int):
         return kind, number
     return None
+
+
+def _attach_implementation_pr_artifacts(repo_root: Path, action: dict[str, Any]) -> None:
+    target = _action_target_key(action)
+    if target is None or target[0] != "issue":
+        return
+    cluster_id = _implementation_cluster_id(action, target[1])
+    title = repo_root / ".refactor-loop" / "runs" / f"implementation-pr-{cluster_id}-title.txt"
+    body = repo_root / ".refactor-loop" / "runs" / f"implementation-pr-{cluster_id}-body.md"
+    action["title_file"] = title.relative_to(repo_root).as_posix()
+    action["body_file"] = body.relative_to(repo_root).as_posix()
 
 
 def _apply_fix_done_review_thread_gate(repo_root: Path, ctx: LoopContext, action: dict[str, Any]) -> None:
@@ -2701,6 +2718,9 @@ def _stale_publish_implementation_reason(
         return f"implementation_redispatch:{state.reason}"
     if state.in_flight:
         return "in_flight_implement"
+    artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
+    if artifact_reason:
+        return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref, worktree=worktree)
     if match_error:
         return match_error
@@ -2711,6 +2731,7 @@ def _stale_publish_implementation_reason(
         "canonical_implementation_identity",
         "fresh_integration_base",
         "single_linked_managed_issue",
+        "worker_authored_pr_artifacts",
         "exactly_one_matching_open_pr",
         "host_checks_green",
         "clean_scoped_diff",
@@ -2779,6 +2800,18 @@ def _implementation_head_ref(action: dict[str, Any], target: tuple[str, int] | N
         if ref:
             return ref
     return None
+
+
+def _implementation_cluster_id(action: Mapping[str, Any], issue_target: int) -> str:
+    return implementation_cluster_id(action, issue_target)
+
+
+def _implementation_pr_artifact_invalid_reason(action: Mapping[str, Any], repo_root: Path) -> str | None:
+    target = action.get("target_number")
+    if not isinstance(target, int):
+        return "implementation_pr_artifact_target_missing"
+    validation = validate_implementation_pr_artifacts(repo_root, repo_root / ".refactor-loop" / "runs", action, target)
+    return validation.reason
 
 
 def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:

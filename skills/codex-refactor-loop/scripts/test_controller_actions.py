@@ -28,7 +28,6 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.controller_actions import (
     ControllerActions,
     ISSUE_LABELS_REMOVE,
-    PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT,
 )
 from codex_refactor_loop.git import Git
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
@@ -65,6 +64,7 @@ class RejectingGitHubActor:
 class ControllerActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
+        self._old_host_env_locator = os.environ.get("CONSENSUS_RND_HOST_ENV")
         (self.tmp / ".refactor-loop" / "state").mkdir(parents=True)
         (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
@@ -76,6 +76,7 @@ class ControllerActionsTests(unittest.TestCase):
             'export HOST_REFACTOR_COMMENT_POLICY="none"\n',
             encoding="utf-8",
         )
+        os.environ["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
         self.actor = AllowingGitHubActor()
         self.actions = ControllerActions(
             LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}),
@@ -85,6 +86,10 @@ class ControllerActionsTests(unittest.TestCase):
         self.pr_body.write_text("## 🤖 PR ready\n\nSelf-contained body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
     def tearDown(self) -> None:
+        if self._old_host_env_locator is None:
+            os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
+        else:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self._old_host_env_locator
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_record_recent_pr_merge_writes_rolling_artifact(self) -> None:
@@ -174,6 +179,10 @@ class ControllerActionsTests(unittest.TestCase):
             "def _recover_publish_implementation_base",
             '["fetch", "origin"]',
             '["merge", "--no-edit", f"origin/{integration}"]',
+            "from .implementation_pr_artifacts import",
+            "validate_implementation_pr_artifacts",
+            "implementation PR title artifact missing",
+            "implementation PR body artifact missing",
             '"publish_stale_base_merge_conflict"',
             "def _delegate_publish_implementation_fallback",
             "publish-implementation-fallback",
@@ -226,6 +235,22 @@ class ControllerActionsTests(unittest.TestCase):
     def pending_events(self) -> str:
         path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def write_implementation_pr_artifacts(self, issue: int = 77, cluster: str = "issue-77") -> tuple[Path, Path]:
+        runs = self.tmp / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        title = runs / f"implementation-pr-{cluster}-title.txt"
+        body = runs / f"implementation-pr-{cluster}-body.md"
+        title.write_text(f"完成 issue #{issue} 的发布契约\n", encoding="utf-8")
+        body.write_text(
+            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/controller_actions.py\n\n"
+            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_controller_actions.py\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            f"Closes #{issue}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return title, body
 
     def banner_request(self, **overrides: object) -> BannerRequest:
         values = {
@@ -873,6 +898,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_commits_pushes_existing_early_pr_then_dispatches_reviewers(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {
@@ -970,6 +996,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_pushes_existing_open_pr_without_reopening(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
 
@@ -1051,6 +1078,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_fails_closed_when_early_pr_missing(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {
@@ -1090,6 +1118,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_recovers_stale_base_then_updates_existing_draft_pr(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {
@@ -1166,6 +1195,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_delegates_stale_base_merge_conflict_without_wedge(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {
@@ -1229,21 +1259,119 @@ class ControllerActionsTests(unittest.TestCase):
                 with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
                     with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
                         with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
-                            self.assertEqual(PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT, self.actions.publish_implementation_output(action))
+                            self.assertEqual(75, self.actions.publish_implementation_output(action))
 
         self.assertEqual(
             ["git:diff-head", "git:add", "git:commit", "git:fetch-origin", "git:merge-base", "git:origin-base", "git:merge-conflict"],
             sequence,
         )
-        pending = self.pending_events()
-        self.assertIn("HARNESS_SPAWN_INTENT", pending)
-        self.assertIn('"route": "publish-implementation-fallback"', pending)
-        self.assertIn('"cd": "' + str(worktree.resolve()) + '"', pending)
-        self.assertIn("publish-implementation-fallback-77.md", pending)
+        self.assertIn("publish-implementation-fallback:77", self.pending_events())
+
+    def test_publish_implementation_output_fails_closed_without_worker_pr_artifacts(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"no publish side effect should run: {args!r}")
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                    with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                        with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                            self.assertEqual(2, self.actions.publish_implementation_output(action))
+
+        self.assertEqual("", self.pending_events())
+
+    def test_publish_implementation_output_fails_closed_for_malformed_worker_pr_artifacts(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+        title, body = self.write_implementation_pr_artifacts()
+        outside = self.tmp / "outside-title.txt"
+        outside.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        outside_body = self.tmp / "outside-body.md"
+        outside_body.write_text(body.read_text(encoding="utf-8"), encoding="utf-8")
+        valid_title = title.read_text(encoding="utf-8")
+        valid_body = body.read_text(encoding="utf-8")
+        cases = (
+            ("outside-title-path", {"title_file": str(outside)}, None, "implementation PR title artifact outside runs"),
+            ("outside-body-path", {"body_file": str(outside_body)}, None, "implementation PR body artifact outside runs"),
+            ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("english-placeholder-title", {}, lambda: title.write_text("implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "implementation PR title must be exactly one non-empty line"),
+            ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "implementation PR title contains body-only content"),
+            ("sentinel-title", {}, lambda: title.write_text("⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR title contains body-only content"),
+            ("missing-sentinel", {}, lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
+            ("sentinel-not-final", {}, lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
+            ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## 测试结果", "## test result"), encoding="utf-8"), "implementation PR body missing required section"),
+            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR body is placeholder"),
+            ("local-path-authority", {}, lambda: body.write_text(valid_body.replace("## 修改文件", "授权: `.refactor-loop/runs/source.md`\n\n## 修改文件"), encoding="utf-8"), "implementation PR body invalid: local .refactor-loop artifact path cannot be the only authority source"),
+        )
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"no publish side effect should run: {args!r}")
+
+        for name, overrides, mutate, expected in cases:
+            with self.subTest(name=name):
+                title.write_text(valid_title, encoding="utf-8")
+                body.write_text(valid_body, encoding="utf-8")
+                if mutate is not None:
+                    mutate()
+                current_action = dict(action)
+                current_action.update(overrides)
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                            with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                                with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                        self.assertEqual(2, self.actions.publish_implementation_output(current_action))
+                self.assertIn(expected, stderr.getvalue())
+                self.assertEqual("", self.pending_events())
 
     def test_publish_implementation_output_commits_fully_staged_diff_before_fresh_base_merge(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {
@@ -1322,6 +1450,7 @@ class ControllerActionsTests(unittest.TestCase):
     def test_publish_implementation_output_retry_finishes_after_fallback_staged_resolution(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"
         worktree.mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
         sequence: list[str] = []
         action = {

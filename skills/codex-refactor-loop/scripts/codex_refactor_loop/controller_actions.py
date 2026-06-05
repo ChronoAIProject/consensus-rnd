@@ -20,6 +20,12 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .implementation_pr_artifacts import (
+    implementation_cluster_id,
+    implementation_pr_body_path,
+    implementation_pr_title_path,
+    validate_implementation_pr_artifacts,
+)
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
@@ -655,6 +661,14 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        title_error = self._implementation_pr_title_error(action, issue_target)
+        if title_error:
+            sys.stderr.write(f"publish_implementation_output: {title_error}\n")
+            return 2
+        body_error = self._implementation_pr_body_error(action, issue_target)
+        if body_error:
+            sys.stderr.write(f"publish_implementation_output: {body_error}\n")
+            return 2
         pr_error, pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
         if pr_error:
             sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
@@ -704,34 +718,19 @@ class ControllerActions:
         if diff.returncode == 0:
             return 0
         if diff.returncode != 1:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_diff_unavailable",
-            )
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_add_failed",
-            )
+            sys.stderr.write("publish_implementation_output: publish_add_failed\n")
+            return 2
         commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
         if commit.returncode == 0:
             return 0
         if commit.stderr:
             sys.stderr.write(commit.stderr)
-        return self._delegate_publish_implementation_fallback(
-            action,
-            issue_target,
-            head_ref,
-            worktree,
-            "publish_commit_failed",
-        )
+        sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+        return 2
 
     def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
         integration, _review_base = self._require_branch_config()
@@ -1213,19 +1212,25 @@ class ControllerActions:
         return result.returncode
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
-        raw = str(action.get("body_file") or "").strip()
-        if raw:
-            path = Path(raw)
-            return path if path.is_absolute() else self.ctx.repo_root / path
-        path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"## issue #{issue_target} 实现\n\n"
-            f"Closes #{issue_target}\n\n"
-            "⟦AI:AUTO-LOOP⟧\n",
-            encoding="utf-8",
-        )
-        return path
+        return implementation_pr_body_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title_file(self, action: Mapping[str, object], issue_target: str) -> Path:
+        return implementation_pr_title_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title(self, action: Mapping[str, object], issue_target: str) -> str:
+        return self._implementation_pr_title_file(action, issue_target).read_text(encoding="utf-8", errors="replace").strip()
+
+    def _implementation_pr_title_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_title_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
+
+    def _implementation_pr_body_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_body_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -1596,3 +1601,26 @@ def _review_fix_log_has_exit_zero(path: Path) -> bool:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
+    return implementation_cluster_id(action, issue_target)
+
+
+def _controller_implementation_pr_error(reason: str, detail: str = "") -> str:
+    messages = {
+        "implementation_pr_title_artifact_invalid_path": "implementation PR title artifact outside runs",
+        "implementation_pr_title_artifact_missing": "implementation PR title artifact missing",
+        "implementation_pr_title_artifact_invalid": "implementation PR title must be exactly one non-empty line",
+        "implementation_pr_title_placeholder": "implementation PR title is placeholder",
+        "implementation_pr_title_contains_body_content": "implementation PR title contains body-only content",
+        "implementation_pr_body_artifact_invalid_path": "implementation PR body artifact outside runs",
+        "implementation_pr_body_artifact_missing": "implementation PR body artifact missing",
+        "implementation_pr_body_sentinel_missing": "implementation PR body sentinel must be final standalone line",
+        "implementation_pr_body_closes_mismatch": "implementation PR body must contain exactly one matching Closes link",
+        "implementation_pr_body_required_section_missing": "implementation PR body missing required section",
+        "implementation_pr_body_placeholder": "implementation PR body is placeholder",
+        "implementation_pr_body_github_body_invalid": "implementation PR body invalid",
+    }
+    message = messages.get(reason, reason)
+    return f"{message}: {detail}" if detail else message

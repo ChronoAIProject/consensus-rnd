@@ -17,11 +17,12 @@ from typing import Any, Callable, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
-from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
+from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
@@ -264,11 +265,6 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
-        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
-            return self._record(
-                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
-                action,
-            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code != 0:
@@ -518,6 +514,7 @@ class WakeupRunner:
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
+            "worker_authored_pr_artifacts",
             "exactly_one_matching_open_pr",
         ):
             if required not in preconditions:
@@ -526,10 +523,22 @@ class WakeupRunner:
             return "publish_implementation_target_missing"
         if not self._live_target_has_managed_label("issue", int(action["target_number"])):
             return "publish_implementation_target_not_managed"
+        artifact_error = self._validate_implementation_pr_artifacts(action)
+        if artifact_error:
+            return artifact_error
         worktree_error = self._validate_implementation_worktree(action)
         if worktree_error:
             return worktree_error
         return self._validate_exactly_one_matching_open_pr(action)
+
+    def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, target)
+        if not validation.reason:
+            return None
+        return _publish_implementation_artifact_reason(validation.reason)
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
@@ -1127,6 +1136,14 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _publish_implementation_artifact_reason(reason: str) -> str:
+    prefix = "implementation_pr_"
+    if not reason.startswith(prefix):
+        return reason
+    local = reason.removeprefix(prefix)
+    return "publish_implementation_" + local
 
 
 def _spawn_launch_failure(result: RunnerResult) -> bool:

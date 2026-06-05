@@ -1573,6 +1573,11 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`in_flight_implement`",
             "`scope_conflict_waiting`",
             "overlapping normalized `scope_paths`",
+            "PR title/body are worker-authored GitHub-facing artifacts",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
+            "exactly one matching `Closes #N`",
+            "non-placeholder title/body",
             "empty reservation commit",
             "`early_pr_missing`",
             "exactly one matching open managed PR",
@@ -1625,6 +1630,18 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
         self.assertFalse(guard.exists())
+
+    def test_implement_prompt_pr_artifact_writes_are_allowed_by_red_line(self) -> None:
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        flow = implement[implement.index("## 流程") : implement.index("## Marker emission allowlist")]
+        red_line = implement[implement.index("## 红线") : implement.index("## 附录")]
+        for artifact in (
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(artifact, flow)
+                self.assertIn(artifact, red_line)
 
     def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
         source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")
