@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .worker_markers import _marker_from_companion_artifact, read_worker_terminal_marker
+
 
 SAFE_TASK_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$")
 
@@ -82,9 +84,7 @@ class TaskSpawnClaimStore:
         if claimed_task != task_id or claimed_log != str(log_path):
             raise TaskSpawnClaimError(f"spawn claim metadata mismatch: {lock_path}")
         claimed_log_path = Path(claimed_log)
-        if not claimed_log_path.is_file():
-            return False
-        return _log_has_exit_marker(claimed_log_path)
+        return _worker_terminal_completion_marker_found(claimed_log_path)
 
     def _read_metadata(self, lock_path: Path) -> dict[str, object]:
         try:
@@ -122,6 +122,15 @@ def safe_task_id_from_task(task_id: str) -> str:
     if not SAFE_TASK_ID_RE.fullmatch(safe):
         raise TaskSpawnClaimError(f"invalid spawn claim task id: {task_id!r}")
     return safe
+
+
+def _worker_terminal_completion_marker_found(path: Path) -> bool:
+    marker_read = read_worker_terminal_marker(path)
+    if marker_read.found:
+        return True
+    if not path.is_file():
+        return _marker_from_companion_artifact(path).found
+    return _log_has_exit_marker(path)
 
 
 def _log_has_exit_marker(path: Path) -> bool:

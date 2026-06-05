@@ -57,6 +57,50 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
         metadata = json.loads(first.lock_path.read_text(encoding="utf-8"))
         self.assertEqual("fix-pr490-round-1", metadata["task_id"])
 
+    def test_deleted_completed_log_recycles_from_durable_artifact(self) -> None:
+        task_id = "implement-issue490"
+        first = self.store.acquire(task_id, log_path=self.log)
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        self.log.write_text("old worker output\nEXIT=0\n", encoding="utf-8")
+        self.log.unlink()
+        (runs / f"{self.log.stem}.md").write_text(
+            "summary\n"
+            "IMPLEMENT_DONE:issue490:ok\n",
+            encoding="utf-8",
+        )
+
+        second = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertTrue(first.acquired)
+        self.assertTrue(second.acquired)
+        self.assertTrue(first.lock_path.is_file())
+
+    def test_running_claim_without_terminal_log_or_artifact_marker_stays_held(self) -> None:
+        task_id = "implement-issue490"
+        first = self.store.acquire(task_id, log_path=self.log)
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        self.log.write_text("worker still running\n", encoding="utf-8")
+        (runs / f"{self.log.stem}.md").write_text("summary without terminal marker\n", encoding="utf-8")
+
+        second = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertTrue(first.acquired)
+        self.assertFalse(second.acquired)
+        self.assertEqual(first.lock_path, second.lock_path)
+
+    def test_log_with_exit_zero_still_recycles_existing_claim(self) -> None:
+        task_id = "implement-issue490"
+        first = self.store.acquire(task_id, log_path=self.log)
+        self.log.write_text("worker output\nEXIT=0\n", encoding="utf-8")
+
+        second = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertTrue(first.acquired)
+        self.assertTrue(second.acquired)
+        self.assertTrue(first.lock_path.is_file())
+
     def test_unreadable_metadata_fails_closed(self) -> None:
         claim = self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
         claim.lock_path.write_text("{not json", encoding="utf-8")
