@@ -36,8 +36,25 @@ class ClosedPhaseLabelPlan:
 class ClosedReconcileCandidateQuery:
     kind: str
     state: str
-    label: str
+    managed_label: str
+    dirty_label: str | None
     limit: str
+
+    def gh_args(self, fields: str) -> list[str]:
+        args = [
+            self.kind,
+            "list",
+            "--label",
+            self.managed_label,
+            "--state",
+            self.state,
+            "--limit",
+            self.limit,
+        ]
+        if self.dirty_label:
+            args.extend(["--search", f'label:"{self.dirty_label}"'])
+        args.extend(["--json", fields])
+        return args
 
 
 def plan_closed_phase_labels(
@@ -104,22 +121,28 @@ def closed_reconcile_candidate_query_labels() -> tuple[str, ...]:
 
 
 def closed_reconcile_candidate_queries(kind: str, state: str) -> tuple[ClosedReconcileCandidateQuery, ...]:
-    managed_labels = set(label_catalog.query_labels_for(label_catalog.MANAGED))
-    labels: list[ClosedReconcileCandidateQuery] = []
-    for label in closed_reconcile_candidate_query_labels():
-        if label in managed_labels:
-            continue
-        labels.append(ClosedReconcileCandidateQuery(kind=kind, state=state, label=label, limit="100"))
-    labels.extend(
-        ClosedReconcileCandidateQuery(
-            kind=kind,
-            state=state,
-            label=label,
-            limit=RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
+    queries: list[ClosedReconcileCandidateQuery] = []
+    for managed_label in label_catalog.query_labels_for(label_catalog.MANAGED):
+        for dirty_label in closed_reconcile_candidate_query_labels():
+            queries.append(
+                ClosedReconcileCandidateQuery(
+                    kind=kind,
+                    state=state,
+                    managed_label=managed_label,
+                    dirty_label=dirty_label,
+                    limit="100",
+                )
+            )
+        queries.append(
+            ClosedReconcileCandidateQuery(
+                kind=kind,
+                state=state,
+                managed_label=managed_label,
+                dirty_label=None,
+                limit=RECENT_CLOSED_MANAGED_WINDOW_LIMIT,
+            )
         )
-        for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-    )
-    return tuple(labels)
+    return tuple(queries)
 
 
 def plan_closed_reconcile_candidate(
@@ -132,6 +155,24 @@ def plan_closed_reconcile_candidate(
     if plan is None or not plan.needs_edit:
         return None
     return plan
+
+
+def item_matches_closed_reconcile_query(kind: str, item: Mapping[str, object], query: ClosedReconcileCandidateQuery) -> bool:
+    labels = [
+        str(label.get("name", ""))
+        for label in item.get("labels", [])
+        if isinstance(label, Mapping)
+    ]
+    projection = label_catalog.normalize_label_set(labels)
+    if label_catalog.MANAGED not in projection.canonical:
+        return False
+    if query.dirty_label is None:
+        phase_labels = set(projection.labels_for_group("phase"))
+        return phase_labels.isdisjoint(TERMINAL_PHASE_LABELS)
+    dirty_projection = label_catalog.normalize_label_set([query.dirty_label])
+    if dirty_projection.cleanup_only:
+        return bool(projection.cleanup_only)
+    return bool(projection.canonical.intersection(dirty_projection.canonical))
 
 
 def _terminal_phase(

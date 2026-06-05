@@ -548,11 +548,23 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
         self.assertIn("plan_closed_reconcile_candidate(kind, item) is None", reconciler)
         self.assertIn("closed_reconcile_candidate_queries", peek)
         self.assertIn("plan_closed_reconcile_candidate", peek)
+        self.assertIn("managed_label: str", projection)
+        self.assertIn("dirty_label: str | None", projection)
+        self.assertIn('args.extend(["--search", f\'label:"{self.dirty_label}"\'])', projection)
+        self.assertIn("item_matches_closed_reconcile_query", projection)
+        self.assertIn("label_catalog.MANAGED not in projection.canonical", projection)
+        self.assertIn("query.gh_args(fields)", reconciler)
+        self.assertIn("item_matches_closed_reconcile_query(kind, item, query)", reconciler)
+        self.assertIn("(query.managed_label,)", peek)
+        self.assertIn("item_matches_closed_reconcile_query(kind, item, query)", peek)
+        self.assertIn('search=f\'label:"{query.dirty_label}"\' if query.dirty_label else None', peek)
         self.assertIn("RECENT_CLOSED_MANAGED_WINDOW_LIMIT", projection)
         self.assertIn("NONTERMINAL_PHASE_LABELS", projection)
         self.assertIn("label_catalog.STUCK", projection)
         self.assertNotIn("def _has_human_label_drift", reconciler)
         self.assertNotIn("expected exactly one canonical human label", reconciler)
+        self.assertNotIn("query.label", reconciler)
+        self.assertNotIn("query.label", peek)
         for forbidden in (
             '"--label", label_catalog.MANAGED, "--state", "closed", "--limit", "100"',
             '"--label", query_label, "--state", state, "--limit", "100", "--json", fields',

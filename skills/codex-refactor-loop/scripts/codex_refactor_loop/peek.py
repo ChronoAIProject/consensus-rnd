@@ -15,6 +15,7 @@ from typing import Iterable, Mapping, Sequence
 from . import labels as label_catalog
 from .closed_phase_labels import (
     closed_reconcile_candidate_queries,
+    item_matches_closed_reconcile_query,
     plan_closed_reconcile_candidate,
 )
 from .context import LoopContext, LoopContextError
@@ -170,24 +171,33 @@ class PeekStatusLens:
 
     def _stale_labels(self) -> list[str]:
         out = []
+        seen: set[tuple[str, int]] = set()
         for kind in ("issue", "pr"):
             for query in closed_reconcile_candidate_queries(kind, "closed"):
                 rows = self._list_by_any_label(
                     query.kind,
-                    (query.label,),
+                    (query.managed_label,),
                     "number,state,labels",
                     state=query.state,
                     limit=query.limit,
+                    search=f'label:"{query.dirty_label}"' if query.dirty_label else None,
                 )
                 for item in rows:
                     if not isinstance(item, dict):
                         continue
+                    if not item_matches_closed_reconcile_query(kind, item, query):
+                        continue
                     plan = plan_closed_reconcile_candidate(kind, item)
-                    if plan:
-                        out.append(
-                            f"  ⚠️ closed {kind} #{plan.number} terminal={plan.terminal_phase} "
-                            f"add={','.join(plan.add_labels) or '-'} remove={','.join(plan.remove_labels) or '-'}"
-                        )
+                    if not plan:
+                        continue
+                    key = (plan.kind, plan.number)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(
+                        f"  ⚠️ closed {kind} #{plan.number} terminal={plan.terminal_phase} "
+                        f"add={','.join(plan.add_labels) or '-'} remove={','.join(plan.remove_labels) or '-'}"
+                    )
         return out
 
     def _linkage_mismatch(self) -> list[str]:

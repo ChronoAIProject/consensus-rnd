@@ -81,8 +81,16 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 pr="${PEEK_TEST_PR:-}"
                 if [[ "$1 $2" == "issue list" ]]; then
                   if [[ "${PEEK_TEST_CLOSED_LABEL_FIXTURES:-}" == "1" && "$args" == *"--state closed"* ]]; then
-                    if [[ "$args" == *"--label crnd:phase:reviewing"* ]]; then
-                      printf '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":302,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:closed"},{"name":"crnd:human:auto"}]}]\n'
+                    if [[ "$args" != *"--label crnd:lifecycle:managed"* && "$args" != *"--label auto-loop"* ]]; then
+                      printf 'dirty closed query must prove managed membership: %s\n' "$args" >&2
+                      exit 45
+                    fi
+                    if [[ "$args" == *'--search label:"crnd:phase:reviewing"'* ]]; then
+                      printf '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":302,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:closed"},{"name":"crnd:human:auto"}]},{"number":305,"state":"CLOSED","labels":[{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    if [[ "$args" == *'--search label:"crnd:lifecycle:stuck"'* ]]; then
+                      printf '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
                     if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
@@ -137,8 +145,16 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$1 $2" == "pr list" ]]; then
                   if [[ "${PEEK_TEST_CLOSED_LABEL_FIXTURES:-}" == "1" && "$args" == *"--state closed"* ]]; then
-                    if [[ "$args" == *"--label crnd:phase:fixing"* ]]; then
-                      printf '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
+                    if [[ "$args" != *"--label crnd:lifecycle:managed"* && "$args" != *"--label auto-loop"* ]]; then
+                      printf 'dirty closed query must prove managed membership: %s\n' "$args" >&2
+                      exit 45
+                    fi
+                    if [[ "$args" == *'--search label:"crnd:phase:fixing"'* ]]; then
+                      printf '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":306,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
+                      exit 0
+                    fi
+                    if [[ "$args" == *'--search label:"crnd:lifecycle:stuck"'* ]]; then
+                      printf '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
                     if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
@@ -446,7 +462,10 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.assertIn("closed pr #303", result.stdout)
         self.assertNotIn("closed issue #302", result.stdout)
         self.assertNotIn("closed pr #304", result.stdout)
+        self.assertNotIn("closed issue #305", result.stdout)
+        self.assertNotIn("closed pr #306", result.stdout)
         self.assertNotIn("closed managed query must use bounded recent window", result.stderr)
+        self.assertNotIn("dirty closed query must prove managed membership", result.stderr)
 
     def test_peek_counts_codex_via_canonical_monitor_cli(self) -> None:
         text = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")

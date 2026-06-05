@@ -15,6 +15,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from .closed_phase_labels import (
     ClosedPhaseLabelPlan,
     closed_reconcile_candidate_queries,
+    item_matches_closed_reconcile_query,
     plan_closed_reconcile_candidate,
     plan_from_gh_item,
 )
@@ -197,25 +198,13 @@ class ClosedLabelReconciler:
         if kind == "pr":
             fields += ",mergedAt"
         for query in closed_reconcile_candidate_queries(kind, state):
-            data = self._gh_json(
-                [
-                    query.kind,
-                    "list",
-                    "--label",
-                    query.label,
-                    "--state",
-                    query.state,
-                    "--limit",
-                    query.limit,
-                    "--json",
-                    fields,
-                ],
-                [],
-            )
+            data = self._gh_json(query.gh_args(fields), [])
             if not isinstance(data, list):
                 continue
             for item in data:
                 if not isinstance(item, dict):
+                    continue
+                if not item_matches_closed_reconcile_query(kind, item, query):
                     continue
                 if plan_closed_reconcile_candidate(kind, item) is None:
                     continue
