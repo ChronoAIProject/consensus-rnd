@@ -27,7 +27,7 @@ from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
-from .worker_markers import log_has_clean_exit, read_worker_terminal_marker
+from .worker_markers import read_worker_terminal_marker
 
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
@@ -313,6 +313,14 @@ class WakeupRunner:
     def _validate_evidence(self, action: Mapping[str, Any]) -> str | None:
         source_artifact = str(action.get("source_artifact") or "")
         source_marker = str(action.get("source_marker") or "")
+        if (
+            "clean_exit_source_marker" in action.get("preconditions", [])
+            and action.get("controller_action") != "publish_release_candidate"
+        ):
+            path = self.ctx.repo_root / source_artifact
+            if not _source_log_has_clean_marker(path, source_marker):
+                return "clean_exit_marker_missing"
+            return None
         if source_artifact.startswith(".refactor-loop/") and source_marker:
             path = self.ctx.repo_root / source_artifact
             try:
@@ -321,10 +329,6 @@ class WakeupRunner:
                 return "source_artifact_missing"
             if source_marker not in text:
                 return "source_marker_missing"
-        if "clean_exit_source_marker" in action.get("preconditions", []):
-            path = self.ctx.repo_root / source_artifact
-            if not _source_log_has_clean_marker(path, source_marker):
-                return "clean_exit_marker_missing"
         return None
 
     def _validate_target(self, action: Mapping[str, Any]) -> str | None:
@@ -967,26 +971,7 @@ class WakeupRunner:
 
 def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     marker_read = read_worker_terminal_marker(path)
-    if marker_read.marker or marker_read.reason not in {"marker_missing", ""}:
-        return marker_read.marker == marker
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    try:
-        marker_index = max(index for index, line in enumerate(lines) if marker in line)
-        exit_index = max(index for index, line in enumerate(lines) if line.strip() == "EXIT=0")
-    except ValueError:
-        return False
-    return marker_index < exit_index
-
-
-def _implement_run_artifact_has_marker(log_path: Path, marker: str) -> bool:
-    return read_worker_terminal_marker(log_path).marker == marker
-
-
-def _log_has_exit_zero(path: Path) -> bool:
-    return log_has_clean_exit(path)
+    return marker_read.marker == marker
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:

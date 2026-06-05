@@ -83,6 +83,33 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertFalse(read_worker_terminal_marker(logs / "implement-issue-777.log").found)
             self.assertFalse(read_worker_terminal_marker(logs / "implement-issue-778.log").found)
 
+    def test_strict_marker_families_reject_malformed_payloads(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            bad_log = logs / "implement-issue-5.log"
+            bad_log.write_text("IMPLEMENT_DONE:issue-5:ok:extra\nEXIT=0\n", encoding="utf-8")
+            bad_artifact = logs / "review-pr42-quality-r1.log"
+            bad_artifact.write_text("review body\nEXIT=0\n", encoding="utf-8")
+            (runs / "review-pr42-quality-r1.md").write_text("REVIEW_DONE:42:quality:approve:extra\n", encoding="utf-8")
+            invalid_implement_status = logs / "implement-issue-6.log"
+            invalid_implement_status.write_text("IMPLEMENT_DONE:issue-6:done\nEXIT=0\n", encoding="utf-8")
+
+            self.assertFalse(read_worker_terminal_marker(bad_log).found)
+            self.assertFalse(read_worker_terminal_marker(bad_artifact).found)
+            self.assertFalse(read_worker_terminal_marker(invalid_implement_status).found)
+
+    def test_malformed_log_marker_blocks_artifact_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "review-pr42-quality-r1.log"
+            log.write_text("REVIEW_DONE:42:quality:approve:extra\nEXIT=0\n", encoding="utf-8")
+            (runs / "review-pr42-quality-r1.md").write_text("REVIEW_DONE:42:quality:approve\n", encoding="utf-8")
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "malformed_log_marker")
+
     def test_duplicate_or_conflicting_artifact_evidence_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
@@ -139,6 +166,13 @@ class WorkerMarkerReaderTests(unittest.TestCase):
         for required in (
             "def read_worker_terminal_marker(",
             "log_path.parent.parent / \"runs\" / f\"{log_path.stem}.md\"",
+            "REVIEW_DONE_STRICT_RE",
+            "IMPLEMENT_DONE_STATUSES",
+            "def _reject_malformed_implement_marker(",
+            "def _malformed_standalone_marker(",
+            "REVIEW_DONE:[1-9][0-9]*:[A-Za-z][A-Za-z0-9_-]*:(?:approve|comment|reject)(?::real)?",
+            "malformed_log_marker",
+            "malformed_artifact_marker",
             "IMPLEMENT_DONE:",
             "SOLVER_DONE:",
             "META_JUDGE_DONE:",

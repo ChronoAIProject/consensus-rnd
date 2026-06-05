@@ -21,6 +21,8 @@ DONE_PREFIXES = (
     "TRIAGE_DECISION_DONE",
 )
 DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
+REVIEW_DONE_STRICT_RE = re.compile(r"^REVIEW_DONE:[1-9][0-9]*:[A-Za-z][A-Za-z0-9_-]*:(?:approve|comment|reject)(?::real)?$")
+IMPLEMENT_DONE_STATUSES = {"ok", "partial", "blocked"}
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?:issue-)?[A-Za-z0-9._-]+\.log$")
 SOLVER_LOG_RE = re.compile(r"^(?:" + "phase9-" + r"|solver-)issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log$")
 JUDGE_LOG_RE = re.compile(r"^" + "phase9-" + r"issue[1-9][0-9]*-r[1-9][0-9]*-judge\.log$")
@@ -59,19 +61,49 @@ def log_has_clean_exit(log_path: Path) -> bool:
 
 
 def extract_standalone_marker(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("+") and not stripped.startswith("+++"):
-        stripped = stripped[1:].strip()
-    stripped = stripped.strip("`")
+    stripped = _normalized_marker_candidate(text)
     if not stripped:
         return ""
     if "<" in stripped and ">" in stripped:
+        return ""
+    if stripped.startswith("REVIEW_DONE:"):
+        return stripped if REVIEW_DONE_STRICT_RE.fullmatch(stripped) else ""
+    if stripped.startswith("IMPLEMENT_DONE:") and _reject_malformed_implement_marker(stripped):
         return ""
     if any(stripped.startswith(f"{prefix}:") for prefix in DONE_PREFIXES):
         return stripped
     if DONE_PREFIX_RE.fullmatch(stripped):
         return stripped
     return ""
+
+
+def _malformed_standalone_marker(text: str) -> bool:
+    stripped = _normalized_marker_candidate(text)
+    if not stripped or ("<" in stripped and ">" in stripped):
+        return False
+    if stripped.startswith("REVIEW_DONE:"):
+        return REVIEW_DONE_STRICT_RE.fullmatch(stripped) is None
+    if stripped.startswith("IMPLEMENT_DONE:"):
+        return _reject_malformed_implement_marker(stripped)
+    return False
+
+
+def _normalized_marker_candidate(text: str) -> str:
+    stripped = text.strip()
+    if stripped.startswith("+") and not stripped.startswith("+++"):
+        stripped = stripped[1:].strip()
+    return stripped.strip("`")
+
+
+def _reject_malformed_implement_marker(marker: str) -> bool:
+    parts = marker.split(":")
+    if len(parts) <= 2:
+        return False
+    if len(parts) == 3:
+        return parts[2] not in IMPLEMENT_DONE_STATUSES
+    if len(parts) == 4:
+        return not (parts[2] in IMPLEMENT_DONE_STATUSES and parts[3] == "real")
+    return True
 
 
 def _marker_from_clean_log_lines(lines: list[str]) -> WorkerMarkerRead:
@@ -94,6 +126,8 @@ def _last_final_marker(lines: list[str]) -> WorkerMarkerRead:
         if not stripped:
             continue
         final_marker = extract_standalone_marker(stripped)
+        if _malformed_standalone_marker(stripped):
+            return WorkerMarkerRead(reason="malformed_log_marker")
         if not final_marker:
             return WorkerMarkerRead()
         earlier = [
@@ -108,6 +142,8 @@ def _last_final_marker(lines: list[str]) -> WorkerMarkerRead:
 
 
 def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:
+    if any(_malformed_standalone_marker(line) for line in lines):
+        return WorkerMarkerRead(reason="malformed_log_marker")
     all_markers = [marker for marker in (extract_standalone_marker(line) for line in lines) if marker]
     markers: list[str] = []
     for index, line in enumerate(lines):
@@ -133,6 +169,8 @@ def _marker_from_companion_artifact(log_path: Path) -> WorkerMarkerRead:
     lines = _read_lines(artifact)
     if lines is None:
         return WorkerMarkerRead()
+    if any(_malformed_standalone_marker(line) for line in lines[-MARKER_TAIL_LINES:]):
+        return WorkerMarkerRead(reason="malformed_artifact_marker")
     all_markers = [marker for marker in (extract_standalone_marker(line) for line in lines[-MARKER_TAIL_LINES:]) if marker]
     markers = [marker for marker in all_markers if marker.startswith(allowed_prefixes)]
     if all_markers and len(markers) != len(all_markers):
