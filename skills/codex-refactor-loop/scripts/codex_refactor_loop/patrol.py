@@ -186,7 +186,7 @@ def render_issue_body(finding: PatrolFinding) -> str:
 def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(log_dir.glob("*.log"))[-200:]:
-        lines = _read_tail(path, 80)
+        lines = _read_tail_or_fail(path, 80)
         matched = [line for line in lines if _line_has_exception_signal(line)]
         if not matched:
             continue
@@ -205,7 +205,7 @@ def _find_log_exceptions(log_dir: Path) -> tuple[PatrolFinding, ...]:
 def _find_runtime_artifact_gaps(runs_dir: Path) -> tuple[PatrolFinding, ...]:
     findings = []
     for path in sorted(runs_dir.glob("*.md"))[-200:]:
-        text = _safe_read_text(path)
+        text = _read_text_or_fail(path)
         if not text:
             continue
         if "IMPLEMENT_DONE:" in text and "⟦AI:AUTO-LOOP⟧" not in text:
@@ -227,7 +227,7 @@ def _find_projection_gaps(state_dir: Path) -> tuple[PatrolFinding, ...]:
         path = state_dir / name
         if not path.exists():
             continue
-        data = _safe_json(path)
+        data = _json_or_fail(path)
         if isinstance(data, dict) and data.get("status") in {"error", "failed", "blocked"}:
             findings.append(
                 PatrolFinding(
@@ -278,26 +278,28 @@ def _line_has_exception_signal(line: str) -> bool:
     return any(token in lowered for token in ("traceback", "exception", "runtimeerror", "fatal:", "failed"))
 
 
-def _read_tail(path: Path, max_lines: int) -> tuple[str, ...]:
+def _read_tail_or_fail(path: Path, max_lines: int) -> tuple[str, ...]:
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ()
+    except OSError as exc:
+        raise RuntimeError(f"patrol input read failed: source={_repo_local_source(path)} reason={exc}") from exc
     return tuple(lines[-max_lines:])
 
 
-def _safe_read_text(path: Path) -> str:
+def _read_text_or_fail(path: Path) -> str:
     try:
         return path.read_text(encoding="utf-8")
-    except OSError:
-        return ""
+    except OSError as exc:
+        raise RuntimeError(f"patrol input read failed: source={_repo_local_source(path)} reason={exc}") from exc
 
 
-def _safe_json(path: Path) -> Any:
+def _json_or_fail(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
+    except OSError as exc:
+        raise RuntimeError(f"patrol input read failed: source={_repo_local_source(path)} reason={exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"patrol input JSON malformed: source={_repo_local_source(path)} reason={exc}") from exc
 
 
 def _repo_local_source(path: Path) -> str:

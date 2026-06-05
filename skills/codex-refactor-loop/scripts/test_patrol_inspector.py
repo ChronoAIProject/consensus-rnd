@@ -114,6 +114,88 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual("failed", state["status"])
         self.assertIn("loaded_ok_false", state["reason"])
 
+    def test_unreadable_log_input_is_visible_and_blocks_publication(self) -> None:
+        log_path = self.tmp / ".refactor-loop" / "logs" / "router.log"
+        log_path.write_text("RuntimeError: broken\n", encoding="utf-8")
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            github_items=(),
+        )
+
+        with patch.object(Path, "read_text", side_effect=OSError("permission denied")):
+            with self.assertRaisesRegex(RuntimeError, "patrol input read failed: source=.refactor-loop/logs/router.log"):
+                inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn(".refactor-loop/logs/router.log", state["reason"])
+
+    def test_unreadable_run_artifact_is_visible_and_blocks_publication(self) -> None:
+        artifact_path = self.tmp / ".refactor-loop" / "runs" / "implement-issue-1.md"
+        artifact_path.write_text("IMPLEMENT_DONE:issue-1:ok\n", encoding="utf-8")
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            github_items=(),
+        )
+        original_read_text = Path.read_text
+
+        def fail_run_artifact(path: Path, *args, **kwargs) -> str:
+            if path.name == artifact_path.name and path.parent.name == "runs":
+                raise OSError("stale handle")
+            return original_read_text(path, *args, **kwargs)
+
+        with patch.object(Path, "read_text", fail_run_artifact):
+            with self.assertRaisesRegex(RuntimeError, "patrol input read failed: source=.refactor-loop/runs/implement-issue-1.md"):
+                inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn(".refactor-loop/runs/implement-issue-1.md", state["reason"])
+
+    def test_malformed_wakeup_plan_is_visible_and_blocks_publication(self) -> None:
+        (self.tmp / ".refactor-loop" / "state" / "wakeup-plan.json").write_text("{not json\n", encoding="utf-8")
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            github_items=(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "patrol input JSON malformed: source=.refactor-loop/state/wakeup-plan.json"):
+            inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn(".refactor-loop/state/wakeup-plan.json", state["reason"])
+
+    def test_malformed_peek_projection_is_visible_and_blocks_publication(self) -> None:
+        (self.tmp / ".refactor-loop" / "state" / "peek.json").write_text("{not json\n", encoding="utf-8")
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+            github_items=(),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "patrol input JSON malformed: source=.refactor-loop/state/peek.json"):
+            inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn(".refactor-loop/state/peek.json", state["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
