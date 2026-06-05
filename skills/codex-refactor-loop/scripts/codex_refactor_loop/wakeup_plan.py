@@ -46,20 +46,6 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 STALE_SECONDS = 90
 META_ESCALATION_DEFAULT_HOURS = 24.0
-MARKER_TAIL_LINES = 30
-DONE_PREFIXES = (
-    "AUDIT_DONE",
-    "SOLVER_DONE",
-    "META_JUDGE_DONE",
-    "META_RESOLVED",
-    "IMPLEMENT_DONE",
-    "VERIFY_DONE",
-    "REVIEW_DONE",
-    "FIX_DONE",
-    "TEST_ADD_DONE",
-    "TRIAGE_DECISION_DONE",
-)
-DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
@@ -854,61 +840,10 @@ def is_clean_exit(log_path: Path) -> bool:
     return log_has_clean_exit(log_path)
 
 
-def tail_lines(path: Path, count: int) -> list[str]:
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore").splitlines()[-count:]
-    except OSError:
-        return []
-
-
 def marker_from_completed_log(log_path: Path) -> str | None:
     _shared_reader_uses_done_prefix_fullmatch = "DONE_PREFIX_RE.fullmatch"
     marker = read_worker_terminal_marker(log_path)
     return marker.marker if marker.source == "log" else None
-
-
-def _extract_completed_marker_line(text: str) -> str | None:
-    stripped = text.strip()
-    if stripped.startswith("+") and not stripped.startswith("+++"):
-        stripped = stripped[1:].strip()
-    stripped = stripped.strip("`")
-    if not stripped:
-        return None
-    if "<" in stripped and ">" in stripped:
-        return None
-    if any(stripped.startswith(f"{prefix}:") for prefix in DONE_PREFIXES):
-        return stripped
-    if DONE_PREFIX_RE.fullmatch(stripped):
-        return stripped
-    return None
-
-
-def _completed_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
-    """Recover a completed marker from a worker's companion run artifact when
-    the log exited clean but has no standalone marker in its tail. Codex stdout
-    marker placement is not reliable across runs, so the durable run artifact is
-    read as a companion surface. Scoped to clean-exit implement, solver, and
-    judge logs only; the marker must still be a standalone allowlisted line."""
-    name = log_path.name
-    if not name.endswith(".log"):
-        return None
-    if not is_clean_exit(log_path):
-        return None
-    allowed_prefixes: tuple[str, ...]
-    if name.startswith("implement-issue-"):
-        allowed_prefixes = ("IMPLEMENT_DONE",)
-    elif re.fullmatch(r"(?:phase9|solver)-issue\d+-r\d+-(?:minimal|structural|delete)\.log", name):
-        allowed_prefixes = ("SOLVER_DONE:",)
-    elif re.fullmatch(r"phase9-issue\d+-r\d+-judge\.log", name):
-        allowed_prefixes = ("META_JUDGE_DONE:",)
-    else:
-        return None
-    artifact = repo_root / ".refactor-loop" / "runs" / f"{name[: -len('.log')]}.md"
-    for line in reversed(tail_lines(artifact, MARKER_TAIL_LINES)):
-        marker = _extract_completed_marker_line(line.strip())
-        if marker and marker.startswith(allowed_prefixes):
-            return marker
-    return None
 
 
 def completed_marker_actions(
@@ -926,8 +861,6 @@ def completed_marker_actions(
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = read_worker_terminal_marker(log_path).marker
-        if not marker:
-            marker = _completed_artifact_marker_fallback(repo_root, log_path)
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -1384,7 +1317,7 @@ def _reviewed_head_sha_from_file(path: Path) -> str:
 
 
 def _review_done_action_head_sha(repo_root: Path, log_path: Path, marker: str, gh_items: list[GhItem] | None) -> str:
-    match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$", marker)
+    match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)(?::real)?$", marker)
     if match is None:
         return _reviewed_head_sha_from_log(log_path)
     pr_number = int(match.group(1))

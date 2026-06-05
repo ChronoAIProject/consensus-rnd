@@ -644,6 +644,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ],
         }
         pr_rows: dict[str, list[dict[str, object]]] = {
+            "local_iter_branch_issue20_stale_base": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "local_iter_branch_issue20": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
             "managed_dual_read": [
                 pr(91, "canonical PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/canonical"),
                 pr(92, "legacy PR", ["refactor-design-needed", "🔍 phase:design-solving", "🤖 human:auto-推进"], head_ref="impl/legacy"),
@@ -663,6 +669,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             ],
             "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_unrelated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_outdated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_resolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_paginated_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_graphql_failure": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_pull_request_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_page_info_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_node_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "closing_pr_issue20": [
                 issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
                 pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),

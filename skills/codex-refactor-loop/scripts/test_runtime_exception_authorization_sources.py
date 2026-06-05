@@ -951,13 +951,40 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "test_wakeup_runner.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
+            "`ManagedWorkSnapshot` open managed projection",
+            "skill-private read-only owner for open managed work discovery",
+            "`.refactor-loop/state/managed-work-snapshot.json`",
+            "`.refactor-loop/locks/managed-work-snapshot.lock`",
+            "`MANAGED_WORK_SNAPSHOT_TTL_SECONDS=300`",
+            "`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`",
+            "reuses `github_budget.py`",
+            "returns `loaded_ok=false`",
+            "cache is too stale or absent under low GraphQL headroom",
+            "not GitHub live state fact source",
+            "not host production SSOT",
+            "not #191/#396/#238/#322 lifecycle permit",
+            "snapshot unavailable",
+            "fail closed",
+            "without writing spawn intent or dispatch ledger",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
-        self.assertIn("`ManagedWorkSnapshot` open managed projection", self.skill)
+        self.assertIn("discover open managed `crnd:phase:design-solving` issue", entry)
         self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
-        self.assertIn("snapshot unavailable 时 fail closed", self.skill)
+        for mirror_token in (
+            'search shape `repo:<slug> is:open label:"crnd:lifecycle:managed"`',
+            "Issue and PullRequest nodes",
+            "labels(first: 30)",
+            "PullRequest body",
+            "headRefName",
+            "headRefOid",
+            "`gh api repos/<slug>/issues?state=open&labels=<label>&per_page=100`",
+            "`gh pr view <N> --repo <slug> --json body,headRefName,headRefOid`",
+            "cache-only/read-only status",
+        ):
+            with self.subTest(mirror_token=mirror_token):
+                self.assertIn(mirror_token, entry)
         self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",

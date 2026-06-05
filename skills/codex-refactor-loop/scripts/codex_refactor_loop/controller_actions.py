@@ -23,6 +23,7 @@ from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
+from .release.publisher import ReleasePublisher
 from .git import Git
 from .review_fix_dispatch import (
     ReviewFixDispatchSpec,
