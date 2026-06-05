@@ -37,10 +37,10 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 - **边界清晰,职责分层**:本文件承载**跨 skill 边界**与**仓库级宪法约束**;单个 skill 的工作流细则、术语定义、当前状态归该 skill 自维护,不复制回本文件。
 - **事实源唯一**:同一约束禁止在多处平行声明。版本号 → `.version-bump.json`;host 运行时事实 → `host.env`;skill 行为 → 该 skill 的 SKILL.md 与 `scripts/test_*.py`。
 - **抽象优先,行为契约**:skill 间通过 `host.env` + 文件 artifact + GitHub API 等稳定边界协作,不耦合彼此内部脚本;命名跟随职责,不泄露 runtime / 内部实现细节。
-- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority by default;授权来源必须 durable artifact + 仓库级文档双重锚定。#53 是唯一 integration-branch git carveout:`integration sync daemon` 在专用 integration worktree 内的 integration-branch git allowlist(`git fetch` / `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` / `rev-list` / `rev-parse` / `merge-base` / `reset --hard` / `rebase --rebase-merges` / `merge --ff-only|--no-ff` / `push HEAD:$INTEGRATION_BRANCH` / force-with-lease adoption),不得 commit worker diff、create/merge/close PR、开关 issue/PR/label、tag/release,不得作为 generic lifecycle actor。#191 是唯一跨设备 active-controller lease carveout:GitHub/已 push git 面只承载一个全局 `ActiveControllerLease`,允许 read/acquire/renew 专用 lease artifact 并暴露 owner/expiry;禁止 worker diff commit、issue/PR create/merge/close/edit、label mutation、tag/release、per-work claim、host-defined lease scope、跨设备 floor 聚合、daemon ownership matrix、active-active scheduler、generic lifecycle actor。#193 中 issue/PR author.login 与 updatedAt 仅可作为 planning/routing/stale metadata,不得作为 side-effect authorization、per-work owner authority、claim/lease scope 或 takeover permit;issue/PR target 写副作用的跨设备 permit 只来自 #191 ActiveControllerLease。#238 是唯一 closed managed item phase-label reconciliation carveout:active-controller owner 的 checked-in `closed-label-reconciler` 只可对 CLOSED `crnd:lifecycle:managed` issue/PR 做 phase-label reconciliation,移除 phase/cleanup/stuck label 并加 exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`;禁止 open item mutation、issue/PR create/close/reopen/body/title edit、PR merge、human/triage/milestone/lifecycle label mutation、tag/release、generic lifecycle actor。#322 是唯一 controller-owned release publication carveout:active-controller owner 的 `ReleasePublisher` 只可在 `ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`、fresh release-candidate/release-decision、decision_digest、target_ref、mapped manifest from_version、required checks 全绿后,走同一 publish 主链路:首次发布运行 `python3 .github/scripts/bump_version.py --version <to_version>`、`git add .version-bump.json <mapped manifests>`、`git commit -m "Release v<to_version>"`;already-bumped reentry 仅当 only preflight mismatch 是 mapped manifests 已==`to_version` 且 `git show -s --format=%s HEAD` 证明 HEAD subject 精确为 `Release v<to_version>` 时跳过这三步。两条路径随后都必须运行 `git rev-parse HEAD`、`git fetch origin HEAD`、`git rev-list --count HEAD..origin/HEAD`、`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取 `gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp` 或 reentry 的 `gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp` 并确认该 exact fresh SHA required checks 全绿后才运行(或 reentry 时确认该 exact fresh/reentry SHA required checks 全绿后才运行) `gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]` 或 reentry 的 `gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]`,并写 `.refactor-loop/state/release-publish-result.json`;禁止 public release-publish CLI、workflow tag/release creation、tag target without exact-SHA green checks、`git tag`、force-push、release edit/delete/upload、approval-ticket/emoji gate、issue/PR/label lifecycle、merge/close、generic lifecycle actor。#396 是唯一 unattended wakeup-runner carveout:active-controller owner 的 checked-in `wakeup-runner` 只可消费 `wakeup-plan` 产出的 evidence-bound closed action projection,并对每个 action 重新验证 clean `EXIT=0` source marker、review truth table、OPEN/live GitHub state、#191 owner、release #322 preflight 或 helper-specific precondition 后,机械调用既有 controller helper 或 #396 narrow helper。`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source;daemon 不得读 prompt body 决策,不得新增 `ControllerTurnDecision`/controller-turn worker/schema,不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields,不得把 `.refactor-loop/host.env` 当 host production SSOT。允许动作仅限 spawn codex、named helper `dispatch_consensus_implementation`、named helper `publish_implementation_output`、named helper `open_release_rollup_pr_from_action`、publish worker output、dispatch reviewers/fix/remote-ci worker、apply triage decision、merge PR under review truth table、close managed item from drop marker、publish release through #322;禁止任意 git/gh 命令、workflow tag/release、label/merge/close outside existing helper or named #396 helper、active-active scheduler、generic lifecycle actor。#403 是唯一大 issue 分解 carveout:active-controller owner 的 checked-in apply helper 只可消费已验证的 `IssueDecompositionPlan`,创建 `crnd:lifecycle:managed` child design issues 并评论父 issue;父 epic 保持 open/tracking,禁止 close/reopen/body-title edit,禁止 daemon/worker 建 issue、public issue factory、wakeup-plan decompose 投影或 generic lifecycle actor。#504 是唯一 global dashboard status-card writer carveout:active-controller owner 的 `global-dashboard-status-card` 只可读取既有 status producers,由共享只读 `HolisticStatusProjection` 渲染,并 PATCH exactly one host-configured issue comment;禁止 create comments、edit issue/PR bodies/titles、Discussions、label mutation、create/close/reopen/merge、tag/release、git、new daemon、public writer CLI、generic GitHub writer、standalone dashboard/dependency truth source 或 lifecycle authority。通用授权、escape hatch、宽口径修宪一律视为设计未完成。
+- **强类型边界,窄扩展点**:任何 controller-runtime 例外必须 narrow allowlist + no lifecycle authority by default;授权来源必须 durable artifact + 仓库级文档双重锚定。#53 是唯一 integration-branch git carveout:`integration sync daemon` 在专用 integration worktree 内的 integration-branch git allowlist(`git fetch` / `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH` / `rev-list` / `rev-parse` / `merge-base` / `reset --hard` / `rebase --rebase-merges` / `merge --ff-only|--no-ff` / `push HEAD:$INTEGRATION_BRANCH` / force-with-lease adoption),不得 commit worker diff、create/merge/close PR、开关 issue/PR/label、tag/release,不得作为 generic lifecycle actor。#191 是唯一跨设备 active-controller lease carveout:GitHub/已 push git 面只承载一个全局 `ActiveControllerLease`,允许 read/acquire/renew 专用 lease artifact 并暴露 owner/expiry;禁止 worker diff commit、issue/PR create/merge/close/edit、label mutation、tag/release、per-work claim、host-defined lease scope、跨设备 floor 聚合、daemon ownership matrix、active-active scheduler、generic lifecycle actor。#193 中 issue/PR author.login 与 updatedAt 仅可作为 planning/routing/stale metadata,不得作为 side-effect authorization、per-work owner authority、claim/lease scope 或 takeover permit;issue/PR target 写副作用的跨设备 permit 只来自 #191 ActiveControllerLease。authenticated GitHub API caller/token、repo permission、branch protection/ruleset/CODEOWNERS/required-review results 只能作为 #191 owner-gated GitHub API mutation 的必过 preflight facts;不得成为 per-work owner、claim/lease scope、daemon owner、takeover permit、action-specific lifecycle authorization,也不得绕过 #191/#238/#322/#396/#403。#238 是唯一 closed managed item phase-label reconciliation carveout:active-controller owner 的 checked-in `closed-label-reconciler` 只可对 CLOSED `crnd:lifecycle:managed` issue/PR 做 phase-label reconciliation,移除 phase/cleanup/stuck label 并加 exactly one terminal phase `crnd:phase:merged` 或 `crnd:phase:closed`;禁止 open item mutation、issue/PR create/close/reopen/body/title edit、PR merge、human/triage/milestone/lifecycle label mutation、tag/release、generic lifecycle actor。#322 是唯一 controller-owned release publication carveout:active-controller owner 的 `ReleasePublisher` 只可在 `ReleasePublishPreflight` 验证 `RELEASE_AUTO_ENABLE=true`、fresh release-candidate/release-decision、decision_digest、target_ref、mapped manifest from_version、required checks 全绿后,走同一 publish 主链路:首次发布运行 `python3 .github/scripts/bump_version.py --version <to_version>`、`git add .version-bump.json <mapped manifests>`、`git commit -m "Release v<to_version>"`;already-bumped reentry 仅当 only preflight mismatch 是 mapped manifests 已==`to_version` 且 `git show -s --format=%s HEAD` 证明 HEAD subject 精确为 `Release v<to_version>` 时跳过这三步。两条路径随后都必须运行 `git rev-parse HEAD`、`git fetch origin HEAD`、`git rev-list --count HEAD..origin/HEAD`、`git push origin HEAD`、通过 `ReleaseRequiredChecksProjection` 读取 `gh api repos/<slug>/commits/<fresh release commit sha>/check-runs --paginate --slurp` 或 reentry 的 `gh api repos/<slug>/commits/<exact release/reentry commit sha>/check-runs --paginate --slurp` 并确认该 exact fresh SHA required checks 全绿后才运行(或 reentry 时确认该 exact fresh/reentry SHA required checks 全绿后才运行) `gh release create v<to_version> --target <fresh release commit sha> --generate-notes [--prerelease]` 或 reentry 的 `gh release create v<to_version> --target <exact release/reentry commit sha> --generate-notes [--prerelease]`,并写 `.refactor-loop/state/release-publish-result.json`;禁止 public release-publish CLI、workflow tag/release creation、tag target without exact-SHA green checks、`git tag`、force-push、release edit/delete/upload、approval-ticket/emoji gate、issue/PR/label lifecycle、merge/close、generic lifecycle actor。#396 是唯一 unattended wakeup-runner carveout:active-controller owner 的 checked-in `wakeup-runner` 只可消费 `wakeup-plan` 产出的 evidence-bound closed action projection,并对每个 action 重新验证 clean `EXIT=0` source marker、review truth table、OPEN/live GitHub state、#191 owner、release #322 preflight 或 helper-specific precondition 后,机械调用既有 controller helper 或 #396 narrow helper。`wakeup-plan` 是唯一 action projection fact source但不是 standalone authorization source;daemon 不得读 prompt body 决策,不得新增 `ControllerTurnDecision`/controller-turn worker/schema,不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields,不得把 `.refactor-loop/host.env` 当 host production SSOT。允许动作仅限 spawn codex、named helper `dispatch_consensus_implementation`、named helper `publish_implementation_output`、named helper `open_release_rollup_pr_from_action`、publish worker output、dispatch reviewers/fix/remote-ci worker、apply triage decision、merge PR under review truth table、close managed item from drop marker、publish release through #322;禁止任意 git/gh 命令、workflow tag/release、label/merge/close outside existing helper or named #396 helper、active-active scheduler、generic lifecycle actor。#403 是唯一大 issue 分解 carveout:active-controller owner 的 checked-in apply helper 只可消费已验证的 `IssueDecompositionPlan`,创建 `crnd:lifecycle:managed` child design issues 并评论父 issue;父 epic 保持 open/tracking,禁止 close/reopen/body-title edit,禁止 daemon/worker 建 issue、public issue factory、wakeup-plan decompose 投影或 generic lifecycle actor。#504 是唯一 global dashboard status-card writer carveout:active-controller owner 的 `global-dashboard-status-card` 只可读取既有 status producers,由共享只读 `HolisticStatusProjection` 渲染,并 PATCH exactly one host-configured issue comment;禁止 create comments、edit issue/PR bodies/titles、Discussions、label mutation、create/close/reopen/merge、tag/release、git、new daemon、public writer CLI、generic GitHub writer、standalone dashboard/dependency truth source 或 lifecycle authority。通用授权、escape hatch、宽口径修宪一律视为设计未完成。
 - **抽象一旦能被滥用即设计未完成**:允许绕过审查边界、merge gate、CLAUDE.md 修宪门槛的通用机制必须继续收窄。
 - **删除优先**:废弃 skill、deprecated wrapper、`*.bak/*.old/*.deprecated` 直接删除,不保留兼容空壳;历史由 git 与 CHANGELOG 保留。
-- **变更必须可验证**:行为约束必须落到机械验证手段(behavior test / source-regression test / 段落 lint);仅靠"agent 应该记得"承载的约束视为未落地。
+- **变更必须可验证**:行为约束默认由 behavior test 或端到端可观察输入 / 输出 / 副作用验证;source-regression / 段落 lint 仅用于跨 artifact 一致性、授权边界、事实源唯一性、owner-local public / parsed / authorization interface、必备 anchor / path 存在;禁止对纯实现细节做同义反复精确字面断言。若断言只因实现重构而必须同步修改且不验证行为或授权边界,应替换为 behavior test 或语义化的跨 artifact 一致性断言;仅靠"agent 应该记得"承载的约束视为未落地。
 - **治理前置**:架构性 / 流程性规则与对应机械验证手段同时进仓库,缺一不补口径。
 - **正确架构优先**:架构在 skill 增长(更多 work-unit / 更多并发 worker / 更多 reviewer 角色)时若自然变松,说明架构本身不正确,要重设计而非加 escape hatch。
 - **命名跟随职责**:文件、目录、脚本、prompt、marker、label、branch、artifact 的名字表达职责边界,不泄露偶然 runtime / 临时实现 / 当前 issue 编号。任何被脚本解析、路由、daemon 启动、进程探测、GitHub/git 状态面消费、或跨 agent 传递的名字都是 operational interface,必须由所属 owner-local 事实源声明字段顺序、允许字符集、canonical write policy、legacy read / migration policy,并用 behavior test + source-regression 锁住。已存在事实源(如 label catalog、command registry、workflow stage registry、route-local parser)不得被第二套通用命名 registry 或全仓审美 lint 复制。未被脚本消费的一次性历史 artifact 不因风格不统一强制重命名;已发布 public command、marker、label、branch 或 artifact basename 改名必须先有 named migration artifact。
@@ -72,7 +72,7 @@ New principle: 改哲学:单文件 SKILL.md + intra-file anchors 是被认可的
 - frontmatter 仅需 `name` + `description`(全文 ≤1024 字符)。`description` 以 "Use when..." 描述**触发条件**,不要复述工作流。
 - 重型参考默认拆 `REFERENCE.md`;若该 skill 记录了单文件更稳定的维护事实,可留在 SKILL.md 的详细参考区并用 intra-file anchor 暴露;脚本放 `scripts/`;prompt 模板放 `prompts/`。
 - 写 / 改 skill **必须**遵循 `superpowers:writing-skills` 的 TDD 纪律:先用子 agent 跑 baseline(看它在没有 skill 时怎么失败),再写 / 改 skill。
-- 行为变更必须配套 **behavior test**(断言行为本身)+ **source-regression test**(对 SKILL.md 段落标题、narrow allowlist 字面、授权来源 path 等做字面断言),防止"改文档没改实现"或反之。
+- 行为变更必须优先配套 **behavior test** 或端到端可观察输入 / 输出 / 副作用断言,直接验证行为本身。**source-regression test** / 段落 lint 仅用于跨 artifact 一致性、narrow allowlist、授权来源 path、事实源唯一性、owner-local public / parsed / authorization interface、必备 anchor / path 等语义边界;禁止精确锁私有常量名、私有函数 / 类位置、局部变量、局部控制流、单行源码原文等纯实现细节。若断言只因实现重构而必须同步修改且不验证行为或授权边界,应替换为 behavior test 或语义化的跨 artifact 一致性断言。
 - 新增后台脚本或 runtime surface 必须显式说明:**允许做什么 / 不允许做什么 / 事实源在哪里 / 如何验证**;缺任一项视为未完成。
 - skill 间通过 `host.env` + 文件 artifact + GitHub API 等稳定边界协作,**不**耦合彼此内部脚本。
 
@@ -91,6 +91,16 @@ Refactor (iter343/issue-343):
   New principle: README.md 英文 canonical 公开身份文档 + README.zh-CN.md 中文 companion(双向交叉链接,大段顺序对齐不要求逐句对等);CLAUDE.md 文档分层/根.md收口/语言 carve-out 与 SKILL.md 语言策略窄改:README pair 是唯一英文-canonical 公开文档 carve-out,GitHub issue/PR/commit/design artifact 等工作态仍中文默认。严格按 DESIGN_DECISION_PATH verbatim Concrete plan;不碰 .version-bump.json/额外根文档/runtime/host.env/marker/daemon/workflow
 -->
 - **公开身份文档语言例外**:README pair 是唯一英文 canonical 公开文档 carve-out(only English-canonical public-doc carve-out):`README.md` 用英文作为 canonical public identity document,`README.zh-CN.md` 是中文 companion,二者双向交叉链接且大段顺序对齐即可,不要求逐句对等。GitHub issue/PR/commit/design artifact 等工作态仍按 skill 语言策略中文默认。
+
+## Python 代码规范
+
+本节只约束本仓库内 Python skill scripts 和测试代码;不是 host 项目规范,不得外推为下游 host 的 Python 规则。
+
+- **类型边界清楚**:公共函数和方法必须有类型注解。跨内部层传递结构化事实时优先使用 `dataclass`、`TypedDict` 或明确投影类型;`Mapping[str, Any]`、`dict[str, Any]` 一类宽边界只用于外部 JSON adapter 层,不得蔓延到核心决策逻辑。
+- **职责分层**:I/O、GitHub/git 副作用、环境读取、文件系统写入与决策逻辑分层;纯函数优先,可机械验证的判断应从副作用执行体中拆出。
+- **复杂度不继续膨胀**:过长函数/文件和高复杂度分支不得在新增或触碰时继续膨胀;必须拆分到职责清晰的 helper / projection,或在同次变更说明中写明具体后续重构计划。
+- **fail-closed 可诊断**:fail-closed 路径必须抛出具体、可诊断的异常或返回明确错误原因;禁止裸 `except`、吞错、静默 fallback,也不得用宽泛 fallback 掩盖缺失 host 事实或无授权副作用。
+- **命名跟随职责**:稳定 API、类型、helper、artifact parser 的命名表达职责边界,不把 runtime、issue 编号或临时实现泄露进稳定接口;哲学文档仍不写 schema/identifier 版本后缀。
 
 ## 版本同步(强制)
 
@@ -114,12 +124,80 @@ Refactor (iter343/issue-343):
 - **Git**:分支名描述意图;提交信息祈使句聚焦单一目的;PR 写明动机、影响范围、验证命令与结果。
 - **CI / 守卫**:任何 controller-runtime 例外(narrow allowlist daemon、observability、decision-artifact 等)必须配套机械验证手段(behavior test + source-regression test)。
 - **跨 platform 清单 lint**:发版前比对 `.version-bump.json` 列出的所有文件版本一致;比对各 plugin manifest 列出的 skill 列表与 `skills/` 子目录一致。
-- **测试按风险扩展**:窄文档改动可用 source-regression 覆盖;共享脚本或跨 skill 流程改动必须补 behavior test。
+- **测试按风险扩展**:窄文档 / anchor / 授权边界改动可用 source-regression 覆盖;共享脚本、跨 skill 流程或可观察行为改动必须补 behavior test。source-regression 不得替代行为验证,仅用于跨 artifact 一致性、授权边界、事实源唯一性、owner-local public / parsed / authorization interface、必备 anchor / path 存在,也不得把纯实现细节变成事实源。
 - **生成物不当事实源**:临时日志、一次性报告、agent 草稿、运行输出不得成为长期规范来源;权威源永远在 SKILL.md / 脚本 / 测试里。
 - **历史由 git 保存**:需要追溯旧行为时查 git,不在工作树保留影子副本或归档目录。
 - **异常必抛出 + 必记日志,严禁吞掉/忽略**:任何错误、失败、fail-closed、skip、WAIT、budget 耗尽、分支不可达都必须抛出异常或写一条**可诊断、可 grep 的单行日志**(含目标 id、原因、关键计数),让问题在外部状态面立即可见。**禁止**空 `except`/`except: pass`、裸吞错、静默 `continue`/`return`、不记原因的跳过。诊断信息缺失即视为 bug —— 静默失败会让一个本可 5 分钟定位的问题拖成几小时。
 - **测试必须断言真实行为,禁无意义测试**:测试只为验证行为而存在,**禁止**无意义/同义反复测试 —— 断言常量、复述源码字面、纯为覆盖率而写、不实际触发被测行为的测试一律删除或重写为 behavior test。慢的真实-进程/真实-时序测试要 mock 成确定性快测试,不得让无价值测试拖慢验证回路。
 
+## 通用工程基本规则(面向对象,跨语言)
+
+落到代码层的通用面向对象设计准则,**跨语言适用** —— C# / Java / Python / TS 等具体语言机制只作举例,约束的是**设计意图**而非某语言语法。本节先列**面向对象核心原则**(为什么这么设计),再给**实现层细则**(具体怎么做);细则是原则的落地,与已有「异常必抛出 + 必记日志」「事实源唯一」「命名跟随职责」等不动点同向,按事实源唯一不在多处重复声明。
+
+**核心原则(OO principles)**
+
+- **单一职责(SRP)**:一个类 / 模块只有一个变化原因,只承担一组内聚职责;职责一多就拆。
+- **开闭(OCP)**:对扩展开放、对修改关闭;新增行为靠新增类型 / 扩展点,不改既有稳定代码。
+- **里氏替换(LSP)**:子类型必须能无差别替换父类型而不破坏其契约 —— 前置条件不加强、后置条件不减弱、不抛父类型未声明的异常。
+- **接口隔离(ISP)**:接口窄而专,调用方不被迫依赖用不到的方法;宁可多个小接口,不要一个胖接口。
+- **依赖倒置(DIP)/ 面向抽象**:高层与低层都依赖抽象,而非高层依赖低层;依赖、参数、返回值优先用接口 / 抽象类型,面向接口编程不面向具体实现,便于替换、mock 与测试。
+- **组合优于继承**:优先用组合 / 委托复用行为;继承只用于真正稳定的 is-a 契约,不为复用代码而继承。
+- **迪米特法则(最少知识)**:只与直接协作者交互,不链式穿透 `a.b().c().d()` 抓别人内部结构;需要什么就让对方直接给到手。
+- **高内聚低耦合**:相关的聚在一起、无关的分开;跨边界只经稳定契约,不依赖对方内部实现。
+- **封装**:状态私有,只经方法 / 契约暴露;不泄露内部表示,不让外部依赖可变内部字段。
+- **DRY(一处权威)**:同一知识只有一处权威表达,重复即抽象(承「事实源唯一」不动点)。
+- **KISS / YAGNI**:用能解决当前问题的最简设计;不为臆想的未来需求预埋抽象与扩展点。
+
+**实现层细则(上述原则的落地)**
+
+- **一方法一职**:一个方法只做一件事,只做方法名所表达的事,不包揽整条流程。
+- **参数不搬运**:实现类只关心自己的参数和字段,不做参数转换搬运;需要某类型就直接传该类型(如需要字节串就传字节串),不传通用容器再在方法内转换,转换交给扩展 / 工具函数。
+- **依赖过多即拆分**:一个类依赖太多 service 时,把部分能力改为参数传入或拆成更小职责,不让单个类成为万能入口。
+- **取值依赖一大堆就建 manager/service**:若取某个东西要先备齐一堆前置依赖,把它收敛成有明确状态边界的 manager / service(例如「需要 chain id 才能算」的能力不要做成无上下文静态 helper)。
+- **service 无状态**:service 必须无状态,命名以 `Service` 结尾。
+- **改接口先走评审**:改动任何对外 interface / 契约前,必须先开 issue / PR、至少 2 人 review 并组织讨论,想改的人负责发起;本仓库即落到共识闸 —— concrete plan 必过多角度共识(见「共识引擎哲学」)。
+- **接口保持简单**:加方法前先尝试扩展方法 / 组合实现,能不进接口就不进接口。
+- **delegate 先想 interface**:想用 delegate / 函数指针前,先考虑能否用 interface 表达职责。
+- **元编程需顶层评审**:attribute / 反射 / delegate / 语言级 event 等元编程机制需顶层开发评审讨论后才用,不默认使用。
+- **禁全局可变静态**:不用静态全局属性 / 全局可变状态。
+- **运行期不改静态值**:运行期绝不设置或改写静态值。
+- **只读不可降级**:字段在编码时已是 readonly / final / 只读时,永远不为图方便移除只读修饰。
+- **event 只在同命名空间内 raise**:只在同一命名空间 / 模块内发出 event,不跨模块乱发。
+- **符号引用不用裸字符串**:引用符号名用语言的符号引用机制(如 `nameof`),不写裸字符串字面量 `"MethodName"`。
+- **跟随既有风格**:加代码遵循文件既有风格;不得不破坏风格时,就地标 `TODO: review required`。
+- **基础设施层引用方向**:基础设施层只能被同一命名空间中 Domain 以上的层引用,不被反向依赖。
+- **子命名空间不反向引用父**:子命名空间不反向引用父命名空间(如 `X.Kernel.Node` 不应引用 `X.Kernel`)。
+- **不乱注入跨命名空间基础设施**:不理解含义时,不注入 / 引入其它命名空间(模块 / 层)的基础设施。
+- **复制即抽象**:需要复制代码时,抽成方法 / 扩展方法 / delegate,不就地复制。
+- **通用化优先**:重复出现的逻辑、被多处依赖的能力,提炼为不绑定单一调用点的通用方法 / manager / service,不写死一次性专用实现。
+- **非用户输入不防御性校验**:参数若非用户输入,不必写防御性校验,让异常自然抛出(承「异常必抛出」不动点,失败须可诊断)。
+- **不吞基类异常**:不 catch 基类异常(等于一次吞掉一切),除非确知在做什么(承「严禁吞掉 / 静默」不动点)。
+
+**常用设计模式(Design Patterns)**
+
+成熟解法目录,服务于上面的原则、按需取用;**忌为模式而模式**(承 KISS / YAGNI),简单问题别套重模式。
+
+创建型:
+
+- **工厂 / 抽象工厂(Factory)**:把"创建哪个具体类型"从调用方抽走,调用方只依赖抽象;按上下文(配置 / chain id 等)决定实例时用,是 DIP 的落地。
+- **建造者(Builder)**:分步构造复杂对象,消除长参数列表 / 可选参数爆炸。
+- **单例(Singleton)**:慎用 —— 它常是全局可变状态的伪装;优先用 DI 容器管理生命周期,不自建运行期静态单例(承「禁全局可变静态」「运行期不改静态值」)。
+
+结构型:
+
+- **适配器(Adapter)**:把不兼容接口包成目标接口,隔离第三方 / 旧实现。
+- **装饰器(Decorator)**:用组合叠加横切行为(日志 / 缓存 / 重试)而不改原类,体现开闭 + 组合优于继承。
+- **代理(Proxy)**:在真实对象前加同接口的间接层(延迟加载 / 访问控制 / 远程调用)。
+- **外观(Facade)**:给一组子系统一个简化入口,降低调用方耦合(呼应高内聚低耦合)。
+
+行为型:
+
+- **策略(Strategy)**:把可替换算法封到同一接口、运行期注入,是「delegate 先想 interface」的正解。
+- **观察者 / 事件(Observer)**:发布-订阅解耦;本仓库落到「event 只在同命名空间内 raise」。
+- **模板方法(Template Method)**:父类定骨架、子类填可变步骤,骨架稳定 + 步骤可变时用。
+- **命令(Command)**:把请求封成对象,便于排队 / 撤销 / 审计。
+- **责任链(Chain of Responsibility)**:请求沿处理器链传递直到被处理,适合管线 / 中间件。
+- **状态(State)**:把状态相关行为分到状态对象,消灭巨型 `switch`。
 
 <!-- consensus-rnd:foundational-invariants:start version=1 sha256=f5c24b0c3515993a7b86c4ed78ce7386add665f8c8b84cc7275aedebd6c3e6af -->
 ## 共识研发不动点（由 consensus-rnd 管理）

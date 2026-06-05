@@ -19,7 +19,7 @@ from . import labels
 from .context import LoopContext
 from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 from .gh_invoke import build_gh_argv
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .pr_checks import PrChecksProjection
@@ -28,6 +28,7 @@ from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
+from .worker_markers import read_worker_terminal_marker
 
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
@@ -197,7 +198,6 @@ class WakeupRunner:
 
     def run_once(self) -> list[RunnerResult]:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("wakeup-runner")
             return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
         write_active_controller_status(self.ctx, owner)
@@ -313,6 +313,14 @@ class WakeupRunner:
     def _validate_evidence(self, action: Mapping[str, Any]) -> str | None:
         source_artifact = str(action.get("source_artifact") or "")
         source_marker = str(action.get("source_marker") or "")
+        if (
+            "clean_exit_source_marker" in action.get("preconditions", [])
+            and action.get("controller_action") != "publish_release_candidate"
+        ):
+            path = self.ctx.repo_root / source_artifact
+            if not _source_log_has_clean_marker(path, source_marker):
+                return "clean_exit_marker_missing"
+            return None
         if source_artifact.startswith(".refactor-loop/") and source_marker:
             path = self.ctx.repo_root / source_artifact
             try:
@@ -321,10 +329,6 @@ class WakeupRunner:
                 return "source_artifact_missing"
             if source_marker not in text:
                 return "source_marker_missing"
-        if "clean_exit_source_marker" in action.get("preconditions", []):
-            path = self.ctx.repo_root / source_artifact
-            if not _source_log_has_clean_marker(path, source_marker):
-                return "clean_exit_marker_missing"
         return None
 
     def _validate_target(self, action: Mapping[str, Any]) -> str | None:
@@ -634,6 +638,10 @@ class WakeupRunner:
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
         if controller_action == "dispatch_reviewers":
+            if str(action.get("source_marker") or "").startswith("FIX_DONE"):
+                fix_publish_rc = self._commit_and_push_review_fix_output(action)
+                if fix_publish_rc != 0:
+                    return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
@@ -661,7 +669,7 @@ class WakeupRunner:
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action.get('action_id', '')}:graphql-headroom-low")
-            log_graphql_backoff("wakeup-runner")
+            _log_tick_status("wakeup-runner", "skip:graphql-backoff remaining=unknown")
             return 3
         cd = Path(str(action.get("cd") or self.ctx.repo_root))
         prompt = Path(str(action.get("prompt") or ""))
@@ -732,6 +740,40 @@ class WakeupRunner:
             return ""
         value = payload.get("headRefName") if isinstance(payload, dict) else None
         return value.strip() if isinstance(value, str) else ""
+
+    def _commit_and_push_review_fix_output(self, action: Mapping[str, Any]) -> int:
+        """Commit and push uncommitted review-fix output before re-review.
+
+        Headless gap: a fix codex emits FIX_DONE but workers never commit, so the
+        fix sits uncommitted in the PR worktree and dispatch_reviewers would re-review
+        the stale head forever. Mirror the interactive controller, which commits and
+        pushes the fix codex's changes to the PR head before re-dispatching reviewers.
+        A clean worktree (already committed or no changes) is a no-op.
+        """
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return 2
+        worktree = self._review_fix_worktree(target)
+        if worktree is None:
+            return 3
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_STATUS_FAILED:{target}")
+            return 2
+        if not status.stdout.strip():
+            return 0
+        if self.command_runner(["git", "-C", str(worktree), "add", "-A"]).returncode != 0:
+            return 2
+        commit = self.command_runner(
+            ["git", "-C", str(worktree), "commit", "-m", f"PR #{target} review-fix output"]
+        )
+        if commit.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_COMMIT_FAILED:{target}")
+            return 2
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        return self.actions.safe_push(branch=head_ref, worktree=worktree)
 
     def _worktree_for_branch(self, branch: str) -> Path | None:
         result = self.command_runner(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"])
@@ -853,7 +895,10 @@ class WakeupRunner:
     def _review_evidence_from_artifact(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
         companion_log = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _log_has_exit_zero(companion_log):
+        marker_read = read_worker_terminal_marker(companion_log)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
         verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
         if len(verdict_lines) != 1:
@@ -861,38 +906,29 @@ class WakeupRunner:
         verdict = verdict_lines[0]
         if verdict not in {"approve", "comment", "reject"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict:{role}")
-        marker_count = sum(
-            1
-            for line in text.splitlines()
-            if REVIEW_DONE_RE.match(line.strip()) and line.strip().split(":")[1:3] == [str(pr_number), role]
-        )
-        if marker_count > 1:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"duplicate_review_marker:{role}")
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
+        if not REVIEW_DONE_RE.match(marker_read.marker) or marker_read.marker.split(":")[1:3] != [str(pr_number), role]:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
         prompt_path = self.ctx.paths.prompts / path.name
         return ReviewEvidence(role, round_number, verdict, self._review_head_sha_for(prompt_path, companion_log, text), str(path))
 
     def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
-        if not _log_has_exit_zero(path):
+        marker_read = read_worker_terminal_marker(path)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
-        verdicts: list[str] = []
-        invalid_marker = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("REVIEW_DONE:"):
-                continue
-            match = REVIEW_DONE_RE.match(stripped)
-            if not match:
-                invalid_marker = True
-                continue
-            if match.group(1) == str(pr_number) and match.group(2) == role:
-                verdicts.append(match.group(3))
-        if invalid_marker:
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
-        if len(verdicts) != 1:
+        match = REVIEW_DONE_RE.match(marker_read.marker)
+        if match is None:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
+        if match.group(1) != str(pr_number) or match.group(2) != role:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
         prompt_path = self.ctx.paths.prompts / path.with_suffix(".md").name
-        return ReviewEvidence(role, round_number, verdicts[0], self._review_head_sha_for(prompt_path, path, text), str(path))
+        return ReviewEvidence(role, round_number, match.group(3), self._review_head_sha_for(prompt_path, path, text), str(path))
 
     def _review_head_sha_for(self, prompt_path: Path, log_path: Path, evidence_text: str) -> str:
         head_sha = _extract_review_head_sha(evidence_text)
@@ -1041,46 +1077,8 @@ class WakeupRunner:
 
 
 def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        lines = None
-    if lines is not None:
-        try:
-            marker_index = max(index for index, line in enumerate(lines) if marker in line)
-            exit_index = max(index for index, line in enumerate(lines) if line == "EXIT=0")
-            if marker_index < exit_index:
-                return True
-        except ValueError:
-            pass
-    return _implement_run_artifact_has_marker(path, marker)
-
-
-def _implement_run_artifact_has_marker(log_path: Path, marker: str) -> bool:
-    """Revalidation fallback mirroring wakeup_plan's implement artifact-marker
-    recovery: a clean-exit implement worker may emit its IMPLEMENT_DONE marker
-    only into the run artifact (runs/implement-issue-<id>.md) instead of the log
-    tail, because codex stdout marker placement is not reliable. Accept the
-    marker from the artifact for clean-exit implement-issue logs only, so the
-    detection (wakeup_plan) and revalidation (wakeup_runner) sides stay
-    consistent and a markerless-log implement does not block publish."""
-    name = log_path.name
-    if not (name.startswith("implement-issue-") and name.endswith(".log")):
-        return False
-    if not _log_has_exit_zero(log_path):
-        return False
-    artifact = log_path.parent.parent / "runs" / f"{name[: -len('.log')]}.md"
-    try:
-        return any(marker in line for line in artifact.read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError:
-        return False
-
-
-def _log_has_exit_zero(path: Path) -> bool:
-    try:
-        return any(line == "EXIT=0" for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
-    except OSError:
-        return False
+    marker_read = read_worker_terminal_marker(path)
+    return marker_read.marker == marker
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:
@@ -1246,7 +1244,7 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if first.status == "applied":
         return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
-        return f"skip:graphql-backoff [{counts}]"
+        return f"skip:graphql-backoff remaining=unknown [{counts}]"
     if first.status == "noop":
         return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":

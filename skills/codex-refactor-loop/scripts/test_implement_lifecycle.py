@@ -30,6 +30,7 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
             (runs / "implement-issue-421.md").write_text(
                 "body\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-421:ok\n", encoding="utf-8"
             )
+            (logs / "implement-issue-421.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(
                 _implement_run_artifact_done_marker(logs / "implement-issue-421.log"),
                 "IMPLEMENT_DONE:issue-421:ok",
@@ -40,10 +41,13 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
             logs, runs = self._repo(tmp)
             # partial is NOT recovered (only :ok), so partial attempts still re-dispatch
             (runs / "implement-issue-777.md").write_text("IMPLEMENT_DONE:issue-777:partial\n", encoding="utf-8")
+            (logs / "implement-issue-777.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "implement-issue-777.log"), "")
             # missing artifact -> empty (true-failure markerless still re-dispatches)
+            (logs / "implement-issue-888.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "implement-issue-888.log"), "")
             # non-implement log -> empty (scope guard)
+            (logs / "audit-iter-9.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "audit-iter-9.log"), "")
 
     def test_clean_ok_stale_base_is_refresh_needed_not_redispatch(self) -> None:
