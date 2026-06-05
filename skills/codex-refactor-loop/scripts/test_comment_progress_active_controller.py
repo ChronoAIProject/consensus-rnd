@@ -46,18 +46,19 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
             expires_at="",
         )
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern: comment
-    # monitor instances could all react/post banners. New principle: non-owner
-    # comment monitor performs no GitHub mutation and does not mark seen.
     def test_non_owner_comment_monitor_does_not_react_post_or_mark_seen(self) -> None:
         monitor = CommentMonitor(self.ctx)
         gh_calls: list[list[str]] = []
         api_calls: list[list[str]] = []
 
         with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(False)):
-            with mock.patch.object(monitor, "gh", side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
-                with mock.patch.object(monitor, "gh_api", side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
-                    monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
+            with mock.patch(
+                "codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission",
+                side_effect=AssertionError("admission should not run for non-owner"),
+            ):
+                with mock.patch.object(monitor, "gh", side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
+                    with mock.patch.object(monitor, "gh_api", side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", "")):
+                        monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
 
         self.assertEqual(gh_calls, [])
         self.assertEqual(api_calls, [])
@@ -67,26 +68,46 @@ class CommentProgressActiveControllerTests(unittest.TestCase):
         monitor = CommentMonitor(self.ctx)
         gh_calls: list[list[str]] = []
         api_calls: list[list[str]] = []
+        sequence: list[str] = []
 
         def fake_gh(args, check=True):
+            sequence.append(f"gh:{args[0]}:{args[1]}")
             gh_calls.append(list(args))
             return subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", "")
 
         def fake_api(args, check=True):
+            sequence.append(f"api:{args[0]}")
             api_calls.append(list(args))
             return subprocess.CompletedProcess(args, 0, "", "")
 
-        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(True)):
-            with mock.patch.object(monitor, "gh", side_effect=fake_gh), mock.patch.object(monitor, "gh_api", side_effect=fake_api):
-                monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
+        def fake_admission(_actor, action: str) -> None:
+            sequence.append(f"actor:{action}")
 
+        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(True)):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission", fake_admission) as admission:
+                with mock.patch.object(monitor, "gh", side_effect=fake_gh), mock.patch.object(monitor, "gh_api", side_effect=fake_api):
+                    monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
+
+        self.assertEqual(sequence[0], "actor:comment-monitor-write")
+        self.assertEqual(sequence[1], "api:repos/owner/repo/issues/comments/123/reactions")
         self.assertTrue(any("reactions" in call[0] for call in api_calls))
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls))
         self.assertTrue(monitor.seen("123"))
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern: progress
-    # reporters on multiple devices could create/edit/delete GitHub comments.
-    # New principle: non-owner progress reporter does not call gh/gh api.
+    def test_owner_comment_monitor_fails_closed_when_github_actor_admission_fails(self) -> None:
+        monitor = CommentMonitor(self.ctx)
+
+        with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=self.decision(True)):
+            with mock.patch(
+                "codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission",
+                side_effect=RuntimeError("github-authenticated-actor:comment-monitor-write: denied"),
+            ):
+                with mock.patch.object(monitor, "gh", side_effect=AssertionError("gh should not be called")):
+                    with mock.patch.object(monitor, "gh_api", side_effect=AssertionError("gh api should not be called")):
+                        monitor.handle_comment("191", {"id": 123, "author": "maintainer", "body": "please continue"})
+
+        self.assertFalse(monitor.seen("123"))
+
     def test_non_owner_progress_reporter_does_not_create_edit_or_delete_comments(self) -> None:
         log = self.tmp / ".refactor-loop" / "logs" / "phase9-issue191-r2-minimal.log"
         log.write_text("running\n", encoding="utf-8")

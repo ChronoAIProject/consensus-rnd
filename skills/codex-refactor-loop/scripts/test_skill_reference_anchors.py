@@ -313,6 +313,33 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
 
+    def test_task_spawn_claim_documents_spawn_boundary_not_distributed_authority(self) -> None:
+        section = section_after_anchor(self.skill, "task-spawn-claim-490")
+        spawn_pattern = self.skill
+
+        for needle in (
+            "consensus-rnd-cli spawn-codex",
+            "spawn.py",
+            "same-device per-codex-task atomic spawn-claim enforcement point",
+            "TaskSpawnClaimStore.acquire(...)",
+            ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "O_CREAT|O_EXCL",
+            "ProcessSupervisor.supervise(...)",
+            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "exits 0 as skip/noop",
+            "fail closed nonzero before supervisor launch",
+            "log has an `EXIT=` marker",
+            "not #191 `ActiveControllerLease`",
+            "not a cross-device per-work claim",
+            "not lifecycle authority",
+            "not host production SSOT",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
+        self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
+        self.assertIn("not the enforcement point", spawn_pattern)
+
     def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
         section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
 
@@ -647,6 +674,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, combined)
 
+    def test_skill_degradation_documents_private_419_host_fixture_smoke_boundary(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        combined = "\n".join((source_repo_validation, details))
+        for needle in (
+            "source-repo CI/release validation covering static contract checks plus one bounded temporary host-fixture smoke for the #419 profile",
+            "no `.version-bump.json`",
+            "fake/read-only open milestone",
+            "RELEASE_AUTO_ENABLE=false",
+            "runs only through existing `consensus-rnd-cli check-degradation --static`",
+            "writes only a temporary host fixture with host-owned `.config/consensus-rnd/host.env`",
+            "reports failures as `host-fixture-smoke` findings in the existing `skill-degradation` check-run",
+            "no public clean-room command",
+            "no clean-room artifact",
+            "no ninth internal release signal",
+            "no workflow job",
+            "no real GitHub repo lifecycle",
+            "no downstream runtime watch",
+            "no `.refactor-loop/host.env` production SSOT",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (
@@ -919,6 +969,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
+    def test_closed_label_reconciler_documents_bounded_candidate_projection(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — closed-label-reconciler(per #238)")
+        for token in (
+            "bounded GitHub label/state driven dirty candidate projection",
+            "whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate",
+            "missing terminal phase",
+            "residual nonterminal phase",
+            "cleanup-only alias",
+            "`crnd:lifecycle:stuck`",
+            "managed-intersecting at query construction",
+            "small recent closed read-only managed window",
+            "terminal-complete closed managed items are excluded from steady-state scans",
+            "must not receive steady-state per-item view or linked-merge probes",
+            "unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens",
+            "Human-label exactness neither authorizes human-label mutation nor blocks phase/cleanup/stuck reconciliation",
+            "human labels are preserved as-is",
+            "test_gh_accounting.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
         # multi-device controller writes were described as local daemon facts.
@@ -957,6 +1028,17 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "`require_active_controller(...)` gate on issue/PR target writes",
+            "`GitHubAuthenticatedActor` may read the current authenticated GitHub API caller/token login",
+            "repo permission",
+            "branch protection/ruleset/CODEOWNERS/required-review results",
+            "only after the #191 owner gate and before the first GitHub API mutation",
+            "fail-closed admission checks",
+            "not per-work owner",
+            "daemon owner",
+            "takeover permit",
+            "action-specific lifecycle authorization",
+            "generic lifecycle actor",
+            "bypass for #191/#238/#322/#396/#403",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -1521,8 +1603,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
         hard_rules = section_after_heading(self.skill, "Hard rules (controller-level, propagated into every codex prompt)")
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
         verify = read(SKILL_ROOT / "prompts" / "verify.md")
-        guard = read(SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py")
-        combined = "\n".join((hard_rules, implement, verify, guard))
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        combined = "\n".join((hard_rules, implement, verify))
 
         for needle in (
             "Touched-module test ratchet",
@@ -1538,14 +1620,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
-        forbidden_tokens = (
-            "subprocess" + ".run",
-            '["' + "ps" + '"',
-            "pid=," + "command=",
-        )
-        for forbidden in forbidden_tokens:
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, guard)
+        self.assertFalse(guard.exists())
 
     def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
         source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")

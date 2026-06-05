@@ -283,6 +283,47 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
 
+    def test_review_artifact_verdict_uses_shared_completion_marker_not_marker_verdict(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nhead_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr12-{role}-r1.log").write_text(
+                "clean log with marker in artifact only\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        (self.repo / ".refactor-loop/runs/review-pr12-architect-r1.md").write_text(
+            f"---\nverdict: approve\n---\nhead_sha: {'a' * 40}\nREVIEW_DONE:12:architect:reject\n",
+            encoding="utf-8",
+        )
+        for role, verdict in (("tests", "approve"), ("quality", "comment")):
+            with (self.repo / ".refactor-loop/runs" / f"review-pr12-{role}-r1.md").open("a", encoding="utf-8") as handle:
+                handle.write(f"REVIEW_DONE:12:{role}:{verdict}\n")
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "applied")
+        self.assertEqual(self.actions.merged, ["12"])
+
+    def test_duplicate_review_completion_marker_fails_closed(self) -> None:
+        self.write_review("architect", "approve")
+        self.write_review("tests", "approve")
+        self.write_review("quality", "comment")
+        (self.repo / ".refactor-loop/logs/review-pr12-quality-r1.log").write_text(
+            f"head_sha: {'a' * 40}\n"
+            "REVIEW_DONE:12:quality:comment\n"
+            "REVIEW_DONE:12:quality:comment\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        result = self.run_action()
+
+        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.reason, "WAIT_OR_REDISPATCH:invalid_reviewer_evidence:invalid_review_marker:quality")
+        self.assertEqual(self.actions.merged, [])
+
     def test_ci_pending_or_failed_fails_closed_without_merge(self) -> None:
         for status, conclusion, reason in (
             ("queued", "", "ci_pending"),

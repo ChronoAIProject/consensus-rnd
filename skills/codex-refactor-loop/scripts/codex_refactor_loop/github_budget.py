@@ -69,10 +69,6 @@ def graphql_headroom_ok(
     return remaining >= threshold
 
 
-def log_graphql_backoff(daemon: str) -> None:
-    print(f"graphql-backoff: skipping {daemon} tick (remaining<threshold)", flush=True)
-
-
 def _read_graphql_remaining(
     *,
     cwd: Path | None,

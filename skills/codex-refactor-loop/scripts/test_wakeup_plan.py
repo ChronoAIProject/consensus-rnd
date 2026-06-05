@@ -34,6 +34,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     existing_issue_actions,
     has_dispatchable_action,
     marker_from_completed_log,
+    meta_escalation_stuck_seconds,
+    repository_stalled_meta_reflector_actions,
     release_countdown_actions,
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
@@ -271,6 +273,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"old design issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]},{"number":507,"title":"old implementation issue","updatedAt":"2026-05-02T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_fresh)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"fresh design issue","updatedAt":"2099-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_human_decision)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"human decision issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:maintainer-decision"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
@@ -395,6 +418,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":536,"title":"old review PR","updatedAt":"2026-05-03T00:00:00Z","headRefName":"refactor/iter506-issue-506","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
@@ -468,8 +498,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
 
     def managed_work_snapshot_items(self, fixture: str) -> list[dict[str, object]]:
-        def issue(number: int, title: str, labels: list[str]) -> dict[str, object]:
-            return {"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": "2026-06-05T00:00:00Z"}
+        def issue(number: int, title: str, labels: list[str], *, updated_at: str = "2026-06-05T00:00:00Z") -> dict[str, object]:
+            return {"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": updated_at}
 
         def pr(
             number: int,
@@ -479,6 +509,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             head_ref: str = "",
             head_sha: str = "",
             body: str = "",
+            updated_at: str = "2026-06-05T00:00:00Z",
         ) -> dict[str, object]:
             return {
                 "kind": "PR",
@@ -489,7 +520,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "head_sha": head_sha,
                 "body": body,
                 "state": "open",
-                "updated_at": "2026-06-05T00:00:00Z",
+                "updated_at": updated_at,
             }
 
         managed = label_catalog.MANAGED
@@ -536,6 +567,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 issue(41, "merged issue", ["auto-loop", "🎉 phase:merged"]),
                 issue(44, "parent issue with child PR", ["auto-loop", "crnd:phase:pr-open"]),
             ],
+            "repository_stalled": [
+                issue(506, "old design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2026-05-01T00:00:00Z"),
+                issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
+            ],
+            "repository_fresh": [
+                issue(506, "fresh design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2099-05-01T00:00:00Z"),
+            ],
+            "repository_human_decision": [
+                issue(
+                    506,
+                    "human decision issue",
+                    [managed, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_MAINTAINER_DECISION],
+                    updated_at="2026-05-01T00:00:00Z",
+                ),
+            ],
         }
         pr_rows: dict[str, list[dict[str, object]]] = {
             "managed_dual_read": [
@@ -566,6 +612,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "non_action_statuses": [
                 pr(42, "non-red CI PR", ["auto-loop", "⚙️ phase:ci-running"]),
                 pr(43, "merged PR", ["auto-loop", "🎉 phase:merged"]),
+            ],
+            "repository_stalled": [
+                pr(
+                    536,
+                    "old review PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="refactor/iter506-issue-506",
+                    updated_at="2026-05-03T00:00:00Z",
+                ),
             ],
         }
         return [*issue_rows.get(fixture, []), *pr_rows.get(fixture, [])]
@@ -1130,7 +1185,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan = self.run_plan()
 
-                action = plan["actions"][0]
+                action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], f"forbidden-fields:{field}")
 
@@ -1485,25 +1540,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
         self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
 
-    def test_markerless_clean_implement_with_diff_projects_synthetic_publish_marker(self) -> None:
-        log = self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 1, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
+    def test_markerless_clean_implement_without_artifact_does_not_project_publish(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
         gh_items = [
             GhItem(
                 "issue",
@@ -1512,48 +1550,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
             )
         ]
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
-
-        pub = [a for a in actions if a.get("controller_action") == "publish_implementation_output"]
-        self.assertEqual(1, len(pub))
-        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["marker"])
-        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["source_marker"])
-        self.assertEqual("issue", pub[0]["target_kind"])
-        self.assertEqual(421, pub[0]["target_number"])
-        self.assertEqual(str(log.relative_to(self.repo)), pub[0]["source_artifact"])
-
-    def test_markerless_clean_implement_without_diff_does_not_project_publish(self) -> None:
-        self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 0, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
-        gh_items = [
-            GhItem(
-                "issue",
-                421,
-                "empty markerless implement",
-                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-            )
-        ]
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
 
         self.assertFalse([a for a in actions if a.get("controller_action") == "publish_implementation_output"])
 
@@ -1585,66 +1582,44 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("IMPLEMENT_DONE:issue-422:ok:real", markers)
         self.assertIn("IMPLEMENT_DONE:issue-423:ok", markers)
 
-    def test_markerless_clean_implement_requires_open_managed_implementable_issue(self) -> None:
+    def test_markerless_clean_implement_with_artifact_still_requires_open_target(self) -> None:
         self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 1, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "1\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                not_open_actions = completed_marker_actions(
-                    self.repo,
-                    open_targets=set(),
-                    gh_items=[
-                        GhItem(
-                            "issue",
-                            421,
-                            "closed markerless implement",
-                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-                        )
-                    ],
+        self.write_run_artifact("implement-issue-421", "IMPLEMENT_DONE:issue-421:ok")
+        not_open_actions = completed_marker_actions(
+            self.repo,
+            open_targets=set(),
+            gh_items=[
+                GhItem(
+                    "issue",
+                    421,
+                    "closed markerless implement",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
                 )
-                not_managed_actions = completed_marker_actions(
-                    self.repo,
-                    open_targets={("issue", 421)},
-                    gh_items=[
-                        GhItem(
-                            "issue",
-                            421,
-                            "unmanaged markerless implement",
-                            (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-                        )
-                    ],
+            ],
+        )
+        not_managed_actions = completed_marker_actions(
+            self.repo,
+            open_targets=set(),
+            gh_items=[
+                GhItem(
+                    "issue",
+                    421,
+                    "unmanaged markerless implement",
+                    (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
                 )
+            ],
+        )
 
         self.assertFalse([a for a in not_open_actions if a.get("controller_action") == "publish_implementation_output"])
         self.assertFalse([a for a in not_managed_actions if a.get("controller_action") == "publish_implementation_output"])
 
-    def test_wakeup_plan_source_regression_has_markerless_implement_publish_fallback(self) -> None:
+    def test_wakeup_plan_source_regression_has_shared_reader_only_implement_marker_detection(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn("_synthetic_markerless_implement_marker", source)
-        self.assertIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
-        self.assertIn('f"iter{issue}-issue-{issue}"', source)
-        self.assertIn('safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")', source)
-        self.assertIn('"diff", "HEAD", "--quiet"', source)
-        self.assertIn('"rev-list", "--count"', source)
-        self.assertIn("label_catalog.PHASE_IMPLEMENTING", source)
-        self.assertIn("label_catalog.PHASE_CONSENSUS_REACHED", source)
+        self.assertIn("read_worker_terminal_marker(log_path).marker", source)
+        self.assertNotIn("_synthetic_markerless_implement_marker", source)
+        self.assertNotIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
+        self.assertNotIn("_canonical_markerless_implement_has_output", source)
 
     def test_solver_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
         log = self.write_markerless_clean_log("phase9-issue505-r1-minimal.log")
@@ -1670,6 +1645,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(recovered, "expected completed-marker action recovered from judge run artifact")
         self.assertEqual(recovered[0]["phase"], "design-consensus")
 
+    def test_review_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("review-pr480-quality-r3.log")
+        self.write_run_artifact(
+            "review-pr480-quality-r3",
+            "---",
+            "verdict: approve",
+            "---",
+            "head_sha: " + "a" * 40,
+            "REVIEW_DONE:480:quality:approve",
+        )
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("PR", 480)},
+            gh_items=[
+                GhItem(
+                    kind="PR",
+                    number=480,
+                    title="open PR",
+                    labels=("crnd:lifecycle:managed", "crnd:phase:reviewing", "crnd:human:auto"),
+                    head_ref="impl/pr480",
+                    head_sha="a" * 40,
+                )
+            ],
+        )
+        recovered = [a for a in actions if a.get("marker") == "REVIEW_DONE:480:quality:approve"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from review run artifact")
+        self.assertEqual(recovered[0]["controller_action"], "review_gate")
+        self.assertEqual(recovered[0]["head_sha"], "a" * 40)
+
     def test_solver_judge_artifact_fallback_requires_clean_exit_and_artifact_marker(self) -> None:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -1687,23 +1694,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("SOLVER_DONE:minimal:artifact:summary", markers)
         self.assertNotIn("META_JUDGE_DONE:converge:round-2:artifact", markers)
 
-    def test_wakeup_plan_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+    def test_wakeup_plan_source_regression_uses_shared_worker_marker_reader(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
         for required in (
-            "def _completed_artifact_marker_fallback",
-            'name.startswith("implement-issue-")',
-            "SOLVER_DONE:",
-            "META_JUDGE_DONE:",
-            'repo_root / ".refactor-loop" / "runs" / f"{name[: -len(\'.log\')]}.md"',
-            "is_clean_exit(log_path)",
-            "_extract_completed_marker_line(line.strip())",
+            "from codex_refactor_loop.worker_markers import",
+            "read_worker_terminal_marker(log_path)",
+            "marker.source == \"log\"",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
 
     def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
-        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
 
         plan = self.run_plan(fixture="open_issue_20")
 
@@ -2260,7 +2266,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_named_g1_g3_helpers_remain_executable_without_generic_command_fields(self) -> None:
         artifact = self.write_consensus_artifact()
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
-        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:ok")
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
         (self.repo / ".refactor-loop/runs").mkdir(parents=True, exist_ok=True)
         (self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").write_text(
             "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
@@ -3098,6 +3107,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["blocked_reasons"], [])
         self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
 
+    def test_release_countdown_fail_soft_when_version_manifest_is_absent_with_open_milestone(self) -> None:
+        (self.repo / ".version-bump.json").unlink()
+
+        plan = self.run_plan(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["activation"], "default-goal")
+        self.assertEqual(action["goal"]["milestone"], {"number": 1, "title": "Soon", "due_on": "2026-06-15T00:00:00Z"})
+        self.assertIsNone(action["goal"]["release"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+
     def test_release_countdown_fail_soft_when_mapped_manifest_versions_are_not_synchronized(self) -> None:
         (self.repo / ".version-bump.json").write_text(
             json.dumps(
@@ -3242,6 +3267,75 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(plan["actions"][0]["goal"]["milestone"])
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
         self.assertIn("RECOMMEND:audit", stdout)
+
+    def test_repository_stalled_meta_reflector_projects_single_spawn_only_action(self) -> None:
+        plan = self.run_plan(fixture="repository_stalled")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(action["source_artifact"], "github-open-managed-items")
+        self.assertEqual(action["source_marker"], "meta-escalation-long-stuck:24")
+        self.assertEqual(action["threshold_hours"], "24")
+        self.assertEqual(action["stale_revival_hours"], "3")
+        self.assertTrue(action["run_in_background_required"])
+        self.assertEqual(Path(action["prompt"]).name, "meta-reflector-repository-stalled.md")
+        self.assertEqual(Path(action["log"]).name, "meta-reflector-repository-stalled.log")
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "meta-reflector-repository-stalled"})
+        self.assertEqual(action["preconditions"], ["active_controller_owner", "live_open_targets", "long_stuck_threshold_exceeded", "recommendation_only"])
+        self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507, 536])
+        pr_item = action["stalled_items"][2]
+        self.assertEqual(pr_item["kind"], "PR")
+        self.assertEqual(pr_item["number"], 536)
+        self.assertEqual(pr_item["title"], "old review PR")
+        self.assertEqual(pr_item["phase"], "review-gate")
+        rendered = json.dumps(action, sort_keys=True)
+        for forbidden in (
+            "IssueDecompositionPlan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rendered)
+        for forbidden_key in (
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "argv",
+            "shell",
+            "commands",
+            "executor",
+            "gh",
+            "git",
+        ):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        for forbidden_key in ("cmd", "env"):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        self.assertTrue(has_dispatchable_action([action]))
+
+    def test_repository_stalled_meta_reflector_suppresses_fresh_human_and_duplicate_pending(self) -> None:
+        fresh = self.run_plan(fixture="repository_fresh")
+        self.assertEqual([action for action in fresh["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        human = self.run_plan(fixture="repository_human_decision")
+        self.assertEqual([action for action in human["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("repository-stalled-meta-reflector already queued\n", encoding="utf-8")
+        duplicate = self.run_plan(fixture="repository_stalled")
+        self.assertEqual([action for action in duplicate["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+    def test_repository_stalled_meta_reflector_waits_for_specific_executable_action(self) -> None:
+        self.append_harness_spawn_intent(intent_id="specific-work", task_id="issue #506")
+
+        plan = self.run_plan(fixture="repository_stalled")
+
+        self.assertEqual([action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["specific-work"])
 
     def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
         path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"
@@ -3675,6 +3769,33 @@ class StaleRevivalTests(unittest.TestCase):
                 os.environ.pop("STALE_REVIVAL_HOURS", None)
             else:
                 os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_meta_escalation_threshold_defaults_and_normalizes_above_stale_revival(self) -> None:
+        prev_meta = os.environ.get("META_ESCALATION_STUCK_HOURS")
+        prev_stale = os.environ.get("STALE_REVIVAL_HOURS")
+        try:
+            os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            os.environ.pop("STALE_REVIVAL_HOURS", None)
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "bad"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "0"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "2"
+            os.environ["STALE_REVIVAL_HOURS"] = "5"
+            self.assertEqual(5 * 3600.0, meta_escalation_stuck_seconds())
+        finally:
+            if prev_meta is None:
+                os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            else:
+                os.environ["META_ESCALATION_STUCK_HOURS"] = prev_meta
+            if prev_stale is None:
+                os.environ.pop("STALE_REVIVAL_HOURS", None)
+            else:
+                os.environ["STALE_REVIVAL_HOURS"] = prev_stale
 
     def test_stale_partial_implement_log_is_revived(self) -> None:
         log = self._write_partial(421)

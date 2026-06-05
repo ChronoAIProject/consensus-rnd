@@ -101,6 +101,39 @@ class LoopContextTests(unittest.TestCase):
         self.assertEqual(self.repo.resolve(), ctx.repo_root)
         self.assertEqual("owner/repo", ctx.gh_repo_slug)
 
+    def test_env_for_subprocess_projects_current_repo_contained_locator(self) -> None:
+        explicit = self.write_host_owned_env(
+            "\n".join(
+                (
+                    f'export REPO_ROOT="{self.repo}"',
+                    'export GH_REPO_SLUG="owner/repo"',
+                    'export BUILD_CMD="make build"',
+                )
+            )
+        )
+        outside = self.tmp_root / "outside.env"
+        outside.write_text('export REPO_ROOT="/tmp/outside"\n', encoding="utf-8")
+        ctx = LoopContext.load(cwd=self.repo, env={"CONSENSUS_RND_HOST_ENV": str(explicit)})
+
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outside)}, clear=False):
+            child_env = ctx.env_for_subprocess()
+
+        self.assertEqual(str(explicit.resolve()), child_env["CONSENSUS_RND_HOST_ENV"])
+        self.assertEqual(str(self.repo.resolve()), child_env["REPO_ROOT"])
+        self.assertEqual("owner/repo", child_env["GH_REPO_SLUG"])
+        self.assertEqual("make build", child_env["BUILD_CMD"])
+
+    def test_env_for_subprocess_removes_ambient_locator_without_context_locator(self) -> None:
+        outside = self.tmp_root / "outside.env"
+        outside.write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")
+        ctx = LoopContext.load(repo_root=self.repo, cwd=self.repo, env={})
+
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outside)}, clear=False):
+            child_env = ctx.env_for_subprocess()
+
+        self.assertNotIn("CONSENSUS_RND_HOST_ENV", child_env)
+        self.assertEqual(str(self.repo.resolve()), child_env["REPO_ROOT"])
+
     def test_consensus_rnd_host_env_rejects_repo_outside_and_parent_segments(self) -> None:
         outside = self.tmp_root / "outside.env"
         outside.write_text(f'export REPO_ROOT="{self.repo}"\n', encoding="utf-8")

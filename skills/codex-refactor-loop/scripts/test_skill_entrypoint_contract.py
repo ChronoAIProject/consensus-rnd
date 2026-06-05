@@ -632,16 +632,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertIn(needle, combined)
 
     def test_daemon_leak_suite_guard_no_longer_scans_host_process_table(self) -> None:
-        guard = read(SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py")
-        forbidden = (
-            "subprocess" + ".run",
-            '["' + "ps" + '"',
-            "pid=," + "command=",
-        )
-        for token in forbidden:
-            with self.subTest(token=token):
-                self.assertNotIn(token, guard)
-        self.assertIn("Guard against suite-level daemon checks using host-wide process tables", guard)
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
 
     def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
         host_config = section_between(
@@ -713,7 +705,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "PROMPT_ALLOWLISTS",
             "PROMPT_ARTIFACT_PROFILES",
             "review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`",
-            "fall back to clean log-tail `REVIEW_DONE` markers",
+            "`REVIEW_DONE` is only clean worker completion/routing evidence read through `codex_refactor_loop.worker_markers`",
             "consensus-rnd-cli restart-daemons",
             "must not hand-kill daemon processes",
             "probe process lists as liveness authority",
@@ -724,6 +716,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for token in forbidden:
             with self.subTest(token=token):
                 self.assertNotIn(token, self.skill)
+
+    def test_worker_terminal_marker_reader_contract_is_local_fact_source(self) -> None:
+        section = section_between(
+            self.skill,
+            r"^### Consensus rules$",
+            r"^### Fix-retry loop",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "codex_refactor_loop.worker_markers",
+            "detection, runner revalidation, implement readiness, and review completion evidence",
+            "standalone allowlisted terminal markers only after clean `EXIT=0`",
+            "same-stem `.refactor-loop/runs/<stem>.md` companion artifact",
+            "Duplicate, malformed, or conflicting marker evidence fails closed",
+            "Implement readiness recognizes `IMPLEMENT_DONE:*:ok`",
+            "Review-gate verdict authority remains artifact-frontmatter-first",
+            "`REVIEW_DONE` does not override frontmatter verdicts",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
     def test_spawn_contract_isolates_background_spawns_from_fallible_calls(self) -> None:
         # Old pattern: a spawn-codex background task batched with a fallible probe
