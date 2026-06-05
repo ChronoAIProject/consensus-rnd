@@ -130,12 +130,13 @@ def _last_final_marker(lines: list[str]) -> WorkerMarkerRead:
             return WorkerMarkerRead(reason="malformed_log_marker")
         if not final_marker:
             return WorkerMarkerRead()
-        earlier = [
+        markers = [
             marker
-            for marker in (extract_standalone_marker(line) for line in lines[:index])
+            for marker in (extract_standalone_marker(line) for line in lines[: index + 1])
             if marker
         ]
-        if earlier:
+        unique = set(markers)
+        if len(unique) != 1:
             return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
         return WorkerMarkerRead(marker=final_marker, source="log")
     return WorkerMarkerRead()
@@ -154,9 +155,10 @@ def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:
             if marker:
                 markers.append(marker)
     unique = set(markers)
-    if len(markers) == 1 and len(unique) == 1 and len(all_markers) == 1:
-        return WorkerMarkerRead(marker=markers[0], source="log")
-    if markers or all_markers:
+    all_unique = set(all_markers)
+    if markers and len(unique) == 1 and len(all_unique) == 1:
+        return WorkerMarkerRead(marker=markers[-1], source="log")
+    if len(unique) > 1 or len(all_unique) > 1 or all_markers:
         return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
     return WorkerMarkerRead()
 
@@ -176,9 +178,9 @@ def _marker_from_companion_artifact(log_path: Path) -> WorkerMarkerRead:
     if all_markers and len(markers) != len(all_markers):
         return WorkerMarkerRead(reason="duplicate_or_conflicting_artifact_marker")
     unique = set(markers)
-    if len(markers) == 1 and len(unique) == 1:
+    if markers and len(unique) == 1:
         return WorkerMarkerRead(marker=markers[-1], source="artifact")
-    if markers:
+    if len(unique) > 1:
         return WorkerMarkerRead(reason="duplicate_or_conflicting_artifact_marker")
     return WorkerMarkerRead()
 
