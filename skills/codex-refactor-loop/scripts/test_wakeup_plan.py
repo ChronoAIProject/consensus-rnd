@@ -50,6 +50,14 @@ def wakeup_plan_projection():
     return project_python(source)
 
 
+def completed_marker_action(plan: dict, prefix: str) -> dict:
+    return next(
+        item
+        for item in plan["actions"]
+        if str(item.get("action_id") or "").startswith(prefix)
+    )
+
+
 class WakeupPlanBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -380,7 +388,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    open_pr_77)
+                    open_pr_77|review_thread_unresolved|review_thread_unresolved_unrelated|review_thread_unresolved_outdated|review_thread_resolved|review_thread_paginated_unresolved|review_thread_graphql_failure|review_thread_malformed|review_thread_pull_request_null|review_thread_page_info_null|review_thread_node_malformed)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":77,"title":"open PR target","headRefName":"impl/pr77","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -452,6 +460,51 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         ;;
                       *)
                         printf '[]\n'
+                        ;;
+                    esac
+                    exit 0
+                  fi
+                  if [[ "$api_path" == "graphql" ]]; then
+                    if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" ]]; then
+                      printf 'api graphql %s\n' "$args" >> "$WAKEUP_PLAN_GH_QUERY_LOG"
+                    fi
+                    case "$fixture" in
+                      review_thread_unresolved)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_unresolved_unrelated)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_unresolved_outdated)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_resolved)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_paginated_unresolved)
+                        if [[ "$args" == *"after=cursor1"* ]]; then
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        else
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"}}}}}}\n'
+                        fi
+                        ;;
+                      review_thread_graphql_failure)
+                        exit 42
+                        ;;
+                      review_thread_malformed)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":null,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_pull_request_null)
+                        printf '{"data":{"repository":{"pullRequest":null}}}\n'
+                        ;;
+                      review_thread_page_info_null)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":null}}}}}\n'
+                        ;;
+                      review_thread_node_malformed)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[null],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      *)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
                         ;;
                     esac
                     exit 0
@@ -1391,7 +1444,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_77")
 
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 77)
@@ -1695,7 +1748,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         rendered = json.dumps(plan, sort_keys=True)
         self.assertNotIn("completed-marker:fix-pr77-r2.log", rendered)
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 77)
@@ -2008,7 +2061,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_77")
 
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
@@ -2018,6 +2071,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 77)
         self.assertEqual(action["target"], {"kind": "PR", "number": 77})
         self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
@@ -2152,6 +2206,254 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 480)
         self.assertEqual(action["head_sha"], "a" * 40)
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
+
+    def test_fix_done_without_review_thread_artifact_ignores_unrelated_unresolved_threads(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_with_unresolved_original_review_thread_blocks_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertIn("review_thread_completion_incomplete", action["blocked_reason"])
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_fix_done_review_thread_completion_artifact_allows_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_resolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_review_thread_completion_artifact_does_not_bypass_live_unresolved_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_explicit_escalation_allows_unresolved_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (self.logs / "judge-pr77-r1.log").write_text(
+            "META_RESOLVED:escalate-human:conflicting-review-thread\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": False,
+                    "resolved": False,
+                    "escalation_evidence": "META_RESOLVED:escalate-human:conflicting-review-thread",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_local_escalation_without_clean_marker_source_blocks_unresolved_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": False,
+                    "resolved": False,
+                    "escalation_evidence": "META_RESOLVED:escalate-human:conflicting-review-thread",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_blocks_when_original_review_thread_live_state_is_unknown(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        for fixture in (
+            "review_thread_graphql_failure",
+            "review_thread_malformed",
+            "review_thread_pull_request_null",
+            "review_thread_page_info_null",
+            "review_thread_node_malformed",
+        ):
+            with self.subTest(fixture=fixture):
+                self.logs.joinpath("fix-pr77-r3.log").unlink(missing_ok=True)
+                (completion_dir / "pr77.json").write_text(
+                    json.dumps(
+                        {
+                            "review_thread_driven": True,
+                            "thread_id": "PRRT_kwDOExample",
+                            "replied": True,
+                            "resolved": True,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+                plan = self.run_plan(fixture=fixture)
+
+                action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+                self.assertEqual(action["route"], "review-thread-completion-gate")
+                self.assertTrue(action["status_only"])
+                self.assertNotIn("controller_action", action)
+
+    def test_fix_done_blocks_unresolved_outdated_original_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved_outdated")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_checks_paginated_original_review_thread_before_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_paginated_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+        query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8")
+        self.assertIn("api graphql", query_log)
+        self.assertIn("after=cursor1", query_log)
+
+    def test_fix_done_blocks_when_original_review_thread_repo_slug_is_missing(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f"REPO_ROOT={self.repo}\nCODEX_FLOOR=5\n",
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan_with_env({"GH_REPO_SLUG": ""}, fixture="review_thread_unresolved")[0]
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
 
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
