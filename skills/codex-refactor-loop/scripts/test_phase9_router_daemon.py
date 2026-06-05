@@ -61,6 +61,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
     TEST_GH_REPO_SLUG = "example/consensus-rnd"
 
     def setUp(self) -> None:
+        self.original_host_env_locator = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
@@ -86,6 +87,10 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self.old_env)
         self.tmp.cleanup()
+        if self.original_host_env_locator is None:
+            os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
+        else:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self.original_host_env_locator
 
     def loop_context(self) -> LoopContext:
         return LoopContext.load(repo_root=self.repo, env={"GH_REPO_SLUG": self.TEST_GH_REPO_SLUG})

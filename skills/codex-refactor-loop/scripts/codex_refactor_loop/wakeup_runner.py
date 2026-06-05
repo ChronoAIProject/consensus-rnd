@@ -261,6 +261,8 @@ class WakeupRunner:
             return self._blocked(action, error)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
+        if action.get("capability") == "release-rollup-body":
+            self._prepare_release_rollup_body_prompt(action)
 
         controller_action = str(action.get("controller_action") or "")
         try:
@@ -395,10 +397,40 @@ class WakeupRunner:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list) or "target_log_absent" not in preconditions:
             return "spawn_missing_precondition:target_log_absent"
+        if action.get("capability") == "release-rollup-body":
+            body_error = self._validate_release_rollup_body_spawn(action)
+            if body_error:
+                return body_error
         log = Path(str(action.get("log") or ""))
         if self._spawn_log_suppresses_retry(log):
             return "target_log_exists"
         return None
+
+    def _validate_release_rollup_body_spawn(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "release_rollup_body_missing_preconditions"
+        for required in ("release_rollup_event", "target_body_absent"):
+            if required not in preconditions:
+                return f"release_rollup_body_missing_precondition:{required}"
+        event = action.get("event")
+        if not isinstance(event, dict):
+            return "release_rollup_body_event_missing"
+        if not str(event.get("integration_sha") or "").strip():
+            return "release_rollup_body_integration_sha_missing"
+        body_file = self.ctx.repo_root / str(action.get("body_file") or "")
+        try:
+            body_file.resolve().relative_to(self.ctx.paths.runs.resolve())
+        except ValueError:
+            return "release_rollup_body_output_outside_runs"
+        if body_file.is_file():
+            return "release_rollup_body_exists"
+        if Path(str(action.get("prompt") or "")).resolve() != (self.ctx.paths.prompts / "release-rollup-body.md").resolve():
+            return "release_rollup_body_prompt_mismatch"
+        return None
+
+    def _prepare_release_rollup_body_prompt(self, action: Mapping[str, Any]) -> None:
+        self.actions.render_release_rollup_body_prompt(action)
 
     def _validate_safe_push(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")
@@ -880,14 +912,14 @@ class WakeupRunner:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
         if action_head != live_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "action_head_mismatch", "gate": gate}
+        mergeability_error = self._review_gate_mergeability_error(target)
+        if mergeability_error:
+            return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}
         if gate["reject"] > 0:
             return {"decision": "FIX", "reason": "", "gate": gate}
         ci_error = self._review_gate_ci_error(target, live_head)
         if ci_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": ci_error, "gate": gate}
-        mergeability_error = self._review_gate_mergeability_error(target)
-        if mergeability_error:
-            return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}
         if gate["approve"] < 1:
             return {"decision": "WAIT_EXPLICIT_APPROVAL", "reason": "no_approval", "gate": gate}
         decision = "MERGE" if gate["comment"] == 0 else "MERGE_WITH_COMMENTS"

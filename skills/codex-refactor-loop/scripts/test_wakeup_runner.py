@@ -123,6 +123,13 @@ class FakeActions:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
 
+    def render_release_rollup_body_prompt(self, action: dict) -> Path:
+        self.calls.append(("render_release_rollup_body_prompt", dict(action)))
+        prompt = Path(action["prompt"])
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("release rollup body prompt\n", encoding="utf-8")
+        return prompt
+
     def close_managed_item_from_drop_marker(self, action: dict) -> int:
         self.calls.append(("close_managed_item_from_drop_marker", dict(action)))
         return self.close_code
@@ -663,6 +670,39 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def release_rollup_body_action(self, **overrides) -> dict:
+        marker = 'DEV_SYNC_PENDING:release-rollup-needed:{"integration_sha":"abc123"}'
+        pending = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending.write_text(marker + "\n", encoding="utf-8")
+        action = {
+            "kind": "release-rollup-needed",
+            "action_id": "release-rollup-body:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "source_artifact_contains_evidence",
+                "release_rollup_event",
+                "target_log_absent",
+                "target_body_absent",
+            ],
+            "source_artifact": ".refactor-loop/.controller-pending-events.log",
+            "source_marker": marker,
+            "target_kind": "codex",
+            "target_number": None,
+            "target": {"kind": "codex", "task_id": "release-rollup-body"},
+            "controller_action": "spawn_codex_harness_background",
+            "capability": "release-rollup-body",
+            "no_generic_command": True,
+            "event": {"integration_sha": "abc123"},
+            "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+            "cd": str(self.repo),
+            "prompt": str(self.repo / ".refactor-loop/prompts/release-rollup-body.md"),
+            "log": str(self.repo / ".refactor-loop/logs/release-rollup-body.log"),
+            "stall": 1800,
+        }
+        action.update(overrides)
+        return action
+
     def reviewer_dispatch_action(self, **overrides) -> dict:
         marker = "FIX_DONE:414:round-2:applied-1:rejected-0:blocked-0"
         log = self.repo / ".refactor-loop/logs/fix-pr77-r3.log"
@@ -1128,7 +1168,24 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(decision["reason"], "")
         gate.assert_called_once_with(77)
         ci_error.assert_not_called()
-        mergeability_error.assert_not_called()
+        mergeability_error.assert_called_once_with(77)
+
+    def test_review_gate_reject_waits_when_pr_is_conflicting(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(reject=1, approve=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value=None) as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value="mergeability:CONFLICTING") as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "mergeability:CONFLICTING")
+        mergeability_error.assert_called_once_with(77)
+        ci_error.assert_not_called()
 
     def test_review_gate_approval_still_waits_when_ci_is_red(self) -> None:
         runner = WakeupRunner(self.ctx)
@@ -1145,7 +1202,24 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
         self.assertEqual(decision["reason"], "ci_failed")
         ci_error.assert_called_once_with(77, "a" * 40)
-        mergeability_error.assert_not_called()
+        mergeability_error.assert_called_once_with(77)
+
+    def test_review_gate_approval_waits_when_pr_is_conflicting(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(approve=1, reject=0, comment=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value=None) as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value="mergeability:CONFLICTING") as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "mergeability:CONFLICTING")
+        mergeability_error.assert_called_once_with(77)
+        ci_error.assert_not_called()
 
     def test_review_gate_approval_merges_when_ci_green_and_mergeable(self) -> None:
         runner = WakeupRunner(self.ctx)
@@ -2222,6 +2296,58 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "open_release_rollup_pr_from_action")
+
+    def test_release_rollup_body_spawn_renders_prompt_and_does_not_open_pr(self) -> None:
+        action = self.release_rollup_body_action()
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "render_release_rollup_body_prompt")
+        self.assertEqual(len(actions.calls), 1)
+        launch.assert_called_once()
+        self.assertFalse((self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").exists())
+
+    def test_release_rollup_body_spawn_blocks_when_body_already_exists(self) -> None:
+        body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"
+        body.write_text("existing\n", encoding="utf-8")
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.release_rollup_body_action()), actions=actions)
+
+        self.assert_blocked_before_dispatch(results, "release-rollup-body:abc123", "release_rollup_body_exists", actions)
+
+    def test_release_rollup_body_spawn_blocks_invalid_narrow_allowlist_inputs_before_dispatch(self) -> None:
+        cases = (
+            (
+                "missing-event-precondition",
+                {"preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent", "target_body_absent"]},
+                "release_rollup_body_missing_precondition:release_rollup_event",
+            ),
+            (
+                "missing-body-absent-precondition",
+                {"preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "release_rollup_event", "target_log_absent"]},
+                "release_rollup_body_missing_precondition:target_body_absent",
+            ),
+            ("missing-event", {"event": None}, "release_rollup_body_event_missing"),
+            ("blank-integration-sha", {"event": {"integration_sha": "   "}}, "release_rollup_body_integration_sha_missing"),
+            ("body-outside-runs", {"body_file": ".refactor-loop/state/release-rollup-pr-body.md"}, "release_rollup_body_output_outside_runs"),
+            (
+                "prompt-mismatch",
+                {"prompt": str(self.repo / ".refactor-loop/prompts/other.md")},
+                "release_rollup_body_prompt_mismatch",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.release_rollup_body_action(action_id=f"release-rollup-body:{name}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_release_rollup_blocks_missing_event_fields_before_helper(self) -> None:
         body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"

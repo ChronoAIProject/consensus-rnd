@@ -246,7 +246,8 @@ class MarkerEmissionContractTests(unittest.TestCase):
     def test_no_prompt_missing_from_contract(self) -> None:
         role_prompt_files = {
             path.name for path in PROMPTS_DIR.glob("*.md")
-            if path.name not in {"_github-post-rules.md", "design-issue-body.md", "design-issue-reply.md"}
+            if path.name
+            not in {"_github-post-rules.md", "design-issue-body.md", "design-issue-reply.md", "release-rollup-body.md"}
         }
 
         self.assertEqual(role_prompt_files, set(PROMPT_ALLOWLISTS))
@@ -309,6 +310,14 @@ class MarkerEmissionContractTests(unittest.TestCase):
     def test_github_post_rules_declares_post_body_artifact_profile(self) -> None:
         body = (PROMPTS_DIR / "_github-post-rules.md").read_text(encoding="utf-8")
         self.assertEqual(artifact_profile_anchors(body), ["github-ai-post-body"])
+
+    def test_release_rollup_body_prompt_is_github_body_not_role_marker_prompt(self) -> None:
+        body = (PROMPTS_DIR / "release-rollup-body.md").read_text(encoding="utf-8")
+
+        self.assertEqual(artifact_profile_anchors(body), ["github-ai-post-body"])
+        self.assertEqual(allowlist_section(body), "")
+        self.assertIn("Do not run `gh`.", body)
+        self.assertIn("Do not create, edit, label, close, merge, tag, or release anything.", body)
 
     def test_skill_documents_prompt_inventory_sync_for_new_role_prompts(self) -> None:
         skill = (PROMPTS_DIR.parents[0] / "SKILL.md").read_text(encoding="utf-8")
