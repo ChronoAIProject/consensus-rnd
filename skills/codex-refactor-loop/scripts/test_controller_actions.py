@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import ast
+import io
 import os
 import re
 import shutil
@@ -24,11 +25,41 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.banners import BannerRequest
 from codex_refactor_loop.cli import COMMANDS
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from codex_refactor_loop.controller_actions import (
+    ControllerActions,
+    ISSUE_LABELS_REMOVE,
+    PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT,
+)
 from codex_refactor_loop.git import Git
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
+
+
+class AllowingGitHubActor:
+    def __init__(self) -> None:
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> None:
+        self.actions.append(action)
+
+
+class SequencedGitHubActor:
+    def __init__(self, sequence: list[str]) -> None:
+        self.sequence = sequence
+
+    def require_admission(self, action: str) -> None:
+        self.sequence.append(f"actor:{action}")
+
+
+class RejectingGitHubActor:
+    def __init__(self, reason: str = "github actor denied") -> None:
+        self.reason = reason
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> None:
+        self.actions.append(action)
+        raise RuntimeError(f"{self.reason}: action={action}")
 
 
 class ControllerActionsTests(unittest.TestCase):
@@ -45,7 +76,11 @@ class ControllerActionsTests(unittest.TestCase):
             'export HOST_REFACTOR_COMMENT_POLICY="none"\n',
             encoding="utf-8",
         )
-        self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}))
+        self.actor = AllowingGitHubActor()
+        self.actions = ControllerActions(
+            LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}),
+            github_actor=self.actor,
+        )
         self.pr_body = self.tmp / "pr-body.md"
         self.pr_body.write_text("## 🤖 PR ready\n\nSelf-contained body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
@@ -68,7 +103,10 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_branch_configuration_ignores_legacy_alias_env(self) -> None:
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
@@ -92,10 +130,31 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
+
+    def test_run_host_command_uses_context_host_env_locator_not_ambient_locator(self) -> None:
+        outside = self.tmp / "outside-host.env"
+        outside.write_text('export REPO_ROOT="/outside"\n', encoding="utf-8")
+        captured_env: Mapping[str, str] = {}
+
+        def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal captured_env
+            captured_env = dict(kwargs.get("env") or {})
+            return subprocess.CompletedProcess(["bash"], 0, stdout="", stderr="")
+
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outside)}, clear=False):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                self.assertEqual(0, self.actions._run_host_command("BUILD_CMD", self.tmp))
+
+        self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), captured_env["CONSENSUS_RND_HOST_ENV"])
+        self.assertEqual(str(self.tmp.resolve()), captured_env["REPO_ROOT"])
+        self.assertEqual("owner/repo", captured_env["GH_REPO_SLUG"])
 
     def test_controller_actions_source_locks_named_wakeup_runner_helpers(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
@@ -127,7 +186,10 @@ class ControllerActionsTests(unittest.TestCase):
         body = self.tmp / "body.md"
         body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
         gh_calls: list[list[str]] = []
         git_calls: list[list[str]] = []
 
@@ -204,6 +266,58 @@ class ControllerActionsTests(unittest.TestCase):
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
         self.assertEqual("post-banner", status["action"])
+        self.assertEqual(self.actor.actions, ["post-banner"])
+
+    def test_post_status_banner_runs_github_actor_admission_after_owner_gate_before_mutation(self) -> None:
+        sequence: list[str] = []
+        actions = ControllerActions(self.actions.ctx, github_actor=SequencedGitHubActor(sequence))
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            sequence.append(f"gh:{args[0]}:{args[1]}")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77#issuecomment-1\n", stderr="")
+
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        def fake_owner(ctx: LoopContext, action: str) -> mock.Mock:
+            self.assertEqual(self.actions.ctx, ctx)
+            sequence.append(f"owner:{action}")
+            return decision
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", side_effect=fake_owner):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(sequence, ["owner:post-banner", "actor:post-banner", "gh:pr:comment"])
+
+    def test_post_status_banner_actor_denial_blocks_tempfile_and_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch(
+                "codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile",
+                side_effect=AssertionError("tempfile should not be created"),
+            ):
+                with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "github actor denied: action=post-banner"):
+                        actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(actor.actions, ["post-banner"])
 
     def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
         cases = (
@@ -255,6 +369,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner action=post-banner"):
                         self.actions.post_status_banner(self.banner_request())
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
         self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
@@ -297,6 +412,28 @@ class ControllerActionsTests(unittest.TestCase):
             "CONTROLLER_ACTION_BLOCKED:invalid-github-target:apply-human-label:pr:argument",
             self.pending_events(),
         )
+
+    def test_apply_human_label_actor_denial_returns_three_before_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="controller-label",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        stderr = io.StringIO()
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                with mock.patch("sys.stderr", stderr):
+                    result = actions.apply_human_label_or_skip("77", "META_RESOLVED:escalate-human:reason")
+
+        self.assertEqual(3, result)
+        self.assertEqual(actor.actions, ["controller-label"])
+        self.assertIn("github actor denied: action=controller-label", stderr.getvalue())
 
     def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
@@ -589,6 +726,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.publish_release_candidate(target_ref="abc")
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
 
@@ -1218,16 +1356,30 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_gh(args: Sequence[str], *, check: bool = True) -> mock.Mock:
             self.assertEqual(["issue", "edit", "413"], list(args)[:3])
-            return mock.Mock(returncode=7, stdout="", stderr="label update failed")
+            return mock.Mock(returncode=7, stdout="", stderr='label update failed\nmissing "phase" label')
 
+        stderr = io.StringIO()
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
             with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-                with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
-                    with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
-                        self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
+                with mock.patch("sys.stderr", stderr):
+                    with mock.patch.object(self.actions, "fresh_safe_worktree", side_effect=AssertionError("fresh_safe_worktree should not run")):
+                        with mock.patch.object(self.actions, "render_template", side_effect=AssertionError("render_template should not run")):
+                            self.assertEqual(7, self.actions.dispatch_consensus_implementation(action))
 
         pending = self.pending_events()
-        self.assertIn("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413", pending)
+        canonical_line = pending.strip()
+        self.assertEqual(canonical_line, stderr.getvalue().strip())
+        self.assertTrue(canonical_line.startswith("CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:413 "))
+        self.assertIn('controller_action="dispatch-consensus-implementation"', canonical_line)
+        self.assertIn('action="move-to-implementing"', canonical_line)
+        self.assertIn('target_kind="issue"', canonical_line)
+        self.assertIn('target_number="413"', canonical_line)
+        self.assertIn('issue="413"', canonical_line)
+        self.assertIn('helper="gh"', canonical_line)
+        self.assertIn('gh_rc="7"', canonical_line)
+        self.assertIn('gh_stderr="label update failed missing \\"phase\\" label"', canonical_line)
+        self.assertIn(f'add_labels="{labels.MANAGED},{labels.PHASE_IMPLEMENTING},{labels.HUMAN_AUTO}"', canonical_line)
+        self.assertIn(f'remove_labels="{",".join(ISSUE_LABELS_REMOVE)}"', canonical_line)
         self.assertNotIn("HARNESS_SPAWN_INTENT", pending)
 
     def test_dispatch_consensus_implementation_intent_round_trips_through_wakeup_plan(self) -> None:
@@ -2344,6 +2496,7 @@ class ControllerActionsTests(unittest.TestCase):
                 actual = self.actions.publish_release_candidate()
 
         self.assertIs(actual, result)
+        self.assertIn("publish-release", self.actor.actions)
         publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
         publisher.publish.assert_called_once_with(
             candidate_path=".refactor-loop/state/release-candidate.json",
@@ -2371,11 +2524,23 @@ class ControllerActionsTests(unittest.TestCase):
                 )
 
         self.assertIs(actual, result)
+        self.assertIn("publish-release", self.actor.actions)
         publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
         publisher.publish.assert_called_once_with(
             candidate_path=".refactor-loop/state/custom-candidate.json",
             target_ref="explicit-ref",
         )
+
+    def test_publish_release_candidate_actor_denial_blocks_before_publisher(self) -> None:
+        class DenyingGitHubActor:
+            def require_admission(self, action: str) -> None:
+                raise RuntimeError(f"github-authenticated-actor:{action}: denied")
+
+        actions = ControllerActions(self.actions.ctx, github_actor=DenyingGitHubActor())
+
+        with mock.patch("codex_refactor_loop.controller_actions.ReleasePublisher", side_effect=AssertionError("publisher should not be constructed")):
+            with self.assertRaisesRegex(RuntimeError, "github-authenticated-actor:publish-release: denied"):
+                actions.publish_release_candidate(target_ref="abc123")
 
     def write_host_workflow_spec(self, data: dict) -> ControllerActions:
         (self.tmp / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
@@ -2383,7 +2548,7 @@ class ControllerActionsTests(unittest.TestCase):
             repo_root=self.tmp,
             env={"REPO_ROOT": str(self.tmp), "GH_REPO_SLUG": "owner/repo", "HOST_WORKFLOW_SPEC": "workflow.json"},
         )
-        return ControllerActions(ctx)
+        return ControllerActions(ctx, github_actor=AllowingGitHubActor())
 
     def valid_host_prompt_spec(self) -> dict:
         (self.tmp / "prompts").mkdir(exist_ok=True)
@@ -2466,6 +2631,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             "def post_status_banner(self, request: BannerRequest) -> str:",
             'self._require_owner_or_raise("post-banner")',
             "_normalize_lifecycle_target_or_raise(",
+            'self._require_github_actor_or_raise("post-banner")',
             "build_status_banner(normalized)",
             "tempfile.NamedTemporaryFile",
             "gh_comment_command(normalized, Path(tmp))",
@@ -2474,8 +2640,76 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertLess(method.index('self._require_owner_or_raise("post-banner")'), method.index("_normalize_lifecycle_target_or_raise("))
-        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index("tempfile.NamedTemporaryFile"))
+        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index('self._require_github_actor_or_raise("post-banner")'))
+        self.assertLess(method.index('self._require_github_actor_or_raise("post-banner")'), method.index("tempfile.NamedTemporaryFile"))
+        self.assertNotIn("_github_actor_admission_required", text)
         self.assertLess(method.index("tempfile.NamedTemporaryFile"), method.index("self.gh("))
+
+    def test_github_actor_admission_stays_after_active_controller_gate(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        checks = {
+            "apply_human_label_or_skip": (
+                'self._require_owner_or_return("controller-label", code=3)',
+                'self._require_github_actor_or_return("controller-label", code=3)',
+                'self.gh(["pr", "edit", pr_target',
+            ),
+            "publish_release_candidate": (
+                'self._require_owner_or_raise("publish-release")',
+                'self._require_github_actor_or_raise("publish-release")',
+                "publisher.publish(",
+            ),
+            "post_status_banner": (
+                'self._require_owner_or_raise("post-banner")',
+                'self._require_github_actor_or_raise("post-banner")',
+                "tempfile.NamedTemporaryFile",
+            ),
+            "merge_pr": (
+                'self._require_owner_or_return("merge-pr", code=3)',
+                'self._require_github_actor_or_return("merge-pr", code=3)',
+                'ready = self._ensure_pr_ready_for_merge(pr_target)',
+            ),
+            "open_pr_with_label": (
+                'self._require_owner_or_raise("open-pr")',
+                'self._require_github_actor_or_raise("open-pr")',
+                'self.gh(["pr", "create"',
+            ),
+            "open_design_issue_with_labels": (
+                'self._require_owner_or_raise("open-design-issue")',
+                'self._require_github_actor_or_raise("open-design-issue")',
+                'self.gh(',
+            ),
+            "apply_issue_decomposition_plan": (
+                'self._require_owner_or_raise("apply-issue-decomposition-plan")',
+                'self._require_github_actor_or_raise("apply-issue-decomposition-plan")',
+                "for child in plan.children:",
+            ),
+            "apply_triage_decision_marker": (
+                'self._require_owner_or_return("apply-triage", code=3)',
+                'self._require_github_actor_or_return("apply-triage", code=3)',
+                "return apply_decision(",
+            ),
+            "close_managed_item_from_drop_marker": (
+                'self._require_owner_or_return("close-managed-drop", code=3)',
+                'self._require_github_actor_or_return("close-managed-drop", code=3)',
+                'self.gh(["',
+            ),
+        }
+        for method_name, (owner_gate, actor_gate, first_mutation) in checks.items():
+            with self.subTest(method=method_name):
+                method = text[text.index(f"    def {method_name}") :]
+                next_method = re.search(r"(?m)^    def [a-zA-Z0-9_]+", method[len(f"    def {method_name}") :])
+                if next_method:
+                    method = method[: len(f"    def {method_name}") + next_method.start()]
+                self.assertIn(owner_gate, method)
+                self.assertIn(actor_gate, method)
+                self.assertIn(first_mutation, method)
+                self.assertLess(method.index(owner_gate), method.index(actor_gate))
+                self.assertLess(method.index(actor_gate), method.index(first_mutation))
+
+    def test_source_comments_do_not_use_refactor_history_when_policy_none(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertNotIn("refactor helper", text)
+        self.assertNotIn("no behavior change", text)
 
     def test_no_legacy_branch_alias_reads(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
@@ -2511,6 +2745,27 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         self.assertIn("BODY_CLOSING_ISSUE_TARGET_RE", text)
         self.assertIn("source=\"body-link\"", text)
         self.assertIn("CONTROLLER_ACTION_BLOCKED:invalid-github-target:{action}:{kind}:{source}", text)
+
+    def test_phase_transition_blocked_event_source_contract(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        for needle in (
+            "def _format_phase_transition_blocked_event",
+            "CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}",
+            '"controller_action": "dispatch-consensus-implementation"',
+            '"action": "move-to-implementing"',
+            '"target_kind": "issue"',
+            '"target_number": issue_target',
+            '"issue": issue_target',
+            '"helper": "gh"',
+            '"gh_rc": gh_rc',
+            '"gh_stderr": _single_line(gh_stderr)',
+            '"add_labels": ",".join(add_labels)',
+            '"remove_labels": ",".join(remove_labels)',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, text)
+        self.assertIn("sys.stderr.write(f\"{line}\\n\")", text)
+        self.assertNotIn("failed to move issue to implementing phase", text)
 
     def test_issue_300_draft_pr_ready_before_merge_contract(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

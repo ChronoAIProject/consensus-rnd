@@ -18,6 +18,7 @@ from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
 from .gh_invoke import build_gh_argv
+from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .implement_lifecycle import clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
@@ -55,8 +56,9 @@ PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
 
 
 class ControllerActions:
-    def __init__(self, ctx: LoopContext) -> None:
+    def __init__(self, ctx: LoopContext, *, github_actor: GitHubAuthenticatedActor | None = None) -> None:
         self.ctx = ctx
+        self.github_actor = github_actor
         merged_env = {**os.environ, **ctx.host_env}
         self.integration_branch = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
         self.review_base_branch = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
@@ -111,6 +113,8 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
+        if not self._require_github_actor_or_return("controller-label", code=3):
+            return 3
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
@@ -168,6 +172,7 @@ class ControllerActions:
         target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
         if not target:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
+        self._require_github_actor_or_raise("publish-release")
         publisher = ReleasePublisher(self.ctx.repo_root)
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
@@ -187,6 +192,7 @@ class ControllerActions:
             log=request.log,
             stall=request.stall,
         )
+        self._require_github_actor_or_raise("post-banner")
         body = build_status_banner(normalized)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
@@ -291,6 +297,8 @@ class ControllerActions:
                 if normalized is None:
                     return 1
                 issue_target = normalized
+        if not self._require_github_actor_or_return("merge-pr", code=3):
+            return 3
         ready = self._ensure_pr_ready_for_merge(pr_target)
         if ready != 0:
             return ready
@@ -340,6 +348,7 @@ class ControllerActions:
                 action="open-pr",
                 source="body-link",
             )
+        self._require_github_actor_or_raise("open-pr")
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -379,6 +388,7 @@ class ControllerActions:
         if not title.strip():
             raise RuntimeError("open_design_issue_with_labels: title required")
         self._validate_design_issue_body_file(body_file)
+        self._require_github_actor_or_raise("open-design-issue")
         created = self.gh(
             [
                 "issue",
@@ -401,6 +411,7 @@ class ControllerActions:
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
         self._require_owner_or_raise("apply-issue-decomposition-plan")
         plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        self._require_github_actor_or_raise("apply-issue-decomposition-plan")
         created: list[tuple[int, str]] = []
         for child in plan.children:
             created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
@@ -571,7 +582,13 @@ class ControllerActions:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
         issue, verdict, rel_path = match.groups()
-        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
+        if not self._require_github_actor_or_return("apply-triage", code=3):
+            return 3
+        triage_env = dict(self.ctx.host_env)
+        triage_env["REPO_ROOT"] = str(self.ctx.repo_root)
+        if self.ctx.gh_repo_slug:
+            triage_env["GH_REPO_SLUG"] = self.ctx.gh_repo_slug
+        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=triage_env, cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
@@ -847,15 +864,63 @@ class ControllerActions:
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
+        add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
+        remove_labels = ISSUE_LABELS_REMOVE
         args = ["issue", "edit", issue_target]
-        for label in ISSUE_LABELS_REMOVE:
+        for label in remove_labels:
             args.extend(["--remove-label", label])
-        args.extend(["--add-label", ",".join((labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO))])
+        args.extend(["--add-label", ",".join(add_labels)])
         result = self.gh(args, check=False)
         if result.returncode != 0:
-            self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}")
-            sys.stderr.write("dispatch_consensus_implementation: failed to move issue to implementing phase\n")
+            self._write_phase_transition_blocked_event(
+                issue_target=issue_target,
+                result=result,
+                add_labels=add_labels,
+                remove_labels=remove_labels,
+            )
         return result.returncode
+
+    def _write_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        result: subprocess.CompletedProcess[str],
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> None:
+        line = self._format_phase_transition_blocked_event(
+            issue_target=issue_target,
+            gh_rc=result.returncode,
+            gh_stderr=result.stderr,
+            add_labels=add_labels,
+            remove_labels=remove_labels,
+        )
+        self._append_pending_event(line)
+        sys.stderr.write(f"{line}\n")
+
+    def _format_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        gh_rc: int,
+        gh_stderr: str,
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> str:
+        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}"
+        fields: Mapping[str, object] = {
+            "controller_action": "dispatch-consensus-implementation",
+            "action": "move-to-implementing",
+            "target_kind": "issue",
+            "target_number": issue_target,
+            "issue": issue_target,
+            "helper": "gh",
+            "gh_rc": gh_rc,
+            "gh_stderr": _single_line(gh_stderr),
+            "add_labels": ",".join(add_labels),
+            "remove_labels": ",".join(remove_labels),
+        }
+        return f"{prefix} {_format_key_value_suffix(fields)}"
 
     def _clear_stale_implement_log_for_fresh_dispatch(self, log: Path, action: Mapping[str, object] | None = None) -> None:
         clear_redispatchable_implement_log(
@@ -1023,6 +1088,8 @@ class ControllerActions:
             )
             sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
             return 2
+        if not self._require_github_actor_or_return("close-managed-drop", code=3):
+            return 3
         comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
@@ -1242,16 +1309,29 @@ class ControllerActions:
     def _require_owner_or_return(self, action: str, *, code: int) -> bool:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
-        if decision.allowed:
-            return True
-        sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
-        return False
+        if not decision.allowed:
+            sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
+            return False
+        return True
 
     def _require_owner_or_raise(self, action: str) -> None:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
+
+    def _require_github_actor_or_return(self, action: str, *, code: int) -> bool:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        try:
+            actor.require_admission(action)
+        except RuntimeError as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return False
+        return True
+
+    def _require_github_actor_or_raise(self, action: str) -> None:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        actor.require_admission(action)
 
     def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
         try:
@@ -1306,7 +1386,7 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source: str) -> str:
-    """refactor helper, no behavior change except rejecting unsafe GitHub target ids."""
+    """Return a canonical positive GitHub issue or PR number."""
     target = "" if value is None else str(value)
     if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(target):
         raise ValueError(f"{action}: invalid {kind} target from {source}: {target!r}")
@@ -1322,8 +1402,16 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
     return tuple(match.group(1) for match in BODY_CLOSING_ISSUE_TARGET_RE.finditer(body or ""))
 
 
+def _single_line(value: str) -> str:
+    return " ".join(str(value or "").splitlines())
+
+
+def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
+    return " ".join(f"{key}={json.dumps(str(value), ensure_ascii=False)}" for key, value in fields.items())
+
+
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
-    """refactor helper, no behavior change except rejecting unsafe path fields."""
+    """Validate worktree identity fields before constructing local paths."""
     if not SAFE_WORKTREE_ITERATION_RE.fullmatch(iteration):
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):

@@ -29,26 +29,16 @@ from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
+from codex_refactor_loop.worker_markers import (
+    log_has_clean_exit,
+    read_worker_terminal_marker,
+)
 from codex_refactor_loop.work_items import ManagedWorkProjection, extract_closing_issue_numbers, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
-MARKER_TAIL_LINES = 30
-DONE_PREFIXES = (
-    "AUDIT_DONE",
-    "SOLVER_DONE",
-    "META_JUDGE_DONE",
-    "META_RESOLVED",
-    "IMPLEMENT_DONE",
-    "VERIFY_DONE",
-    "REVIEW_DONE",
-    "FIX_DONE",
-    "TEST_ADD_DONE",
-    "TRIAGE_DECISION_DONE",
-)
-DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
@@ -738,8 +728,7 @@ def daemon_health(repo_root: Path, now: float | None = None) -> dict[str, Any]:
 
 
 def is_clean_exit(log_path: Path) -> bool:
-    tail = tail_lines(log_path, 5)
-    return any(line == "EXIT=0" for line in tail)
+    return log_has_clean_exit(log_path)
 
 
 def tail_lines(path: Path, count: int) -> list[str]:
@@ -750,142 +739,9 @@ def tail_lines(path: Path, count: int) -> list[str]:
 
 
 def marker_from_completed_log(log_path: Path) -> str | None:
-    if not is_clean_exit(log_path):
-        return None
-    tail = tail_lines(log_path, MARKER_TAIL_LINES)
-    try:
-        exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
-    except ValueError:
-        return None
-    before_exit = tail[:exit_index]
-    for line in reversed(before_exit):
-        stripped = line.strip()
-        if not stripped:
-            continue
-        marker = _extract_completed_marker_line(stripped)
-        if marker:
-            return marker
-        break
-    for index, line in enumerate(before_exit):
-        if "⟦AI:AUTO-LOOP⟧" not in line:
-            continue
-        for candidate in before_exit[index + 1 : index + 4]:
-            marker = _extract_completed_marker_line(candidate.strip())
-            if marker:
-                return marker
-    return None
-
-
-def _extract_completed_marker_line(text: str) -> str | None:
-    stripped = text.strip()
-    if stripped.startswith("+") and not stripped.startswith("+++"):
-        stripped = stripped[1:].strip()
-    stripped = stripped.strip("`")
-    if not stripped:
-        return None
-    if "<" in stripped and ">" in stripped:
-        return None
-    if any(stripped.startswith(f"{prefix}:") for prefix in DONE_PREFIXES):
-        return stripped
-    if DONE_PREFIX_RE.fullmatch(stripped):
-        return stripped
-    return None
-
-
-def _completed_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
-    """Recover a completed marker from a worker's companion run artifact when
-    the log exited clean but has no standalone marker in its tail. Codex stdout
-    marker placement is not reliable across runs, so the durable run artifact is
-    read as a companion surface. Scoped to clean-exit implement, solver, and
-    judge logs only; the marker must still be a standalone allowlisted line."""
-    name = log_path.name
-    if not name.endswith(".log"):
-        return None
-    if not is_clean_exit(log_path):
-        return None
-    allowed_prefixes: tuple[str, ...]
-    if name.startswith("implement-issue-"):
-        allowed_prefixes = ("IMPLEMENT_DONE",)
-    elif re.fullmatch(r"(?:phase9|solver)-issue\d+-r\d+-(?:minimal|structural|delete)\.log", name):
-        allowed_prefixes = ("SOLVER_DONE:",)
-    elif re.fullmatch(r"phase9-issue\d+-r\d+-judge\.log", name):
-        allowed_prefixes = ("META_JUDGE_DONE:",)
-    else:
-        return None
-    artifact = repo_root / ".refactor-loop" / "runs" / f"{name[: -len('.log')]}.md"
-    for line in reversed(tail_lines(artifact, MARKER_TAIL_LINES)):
-        marker = _extract_completed_marker_line(line.strip())
-        if marker and marker.startswith(allowed_prefixes):
-            return marker
-    return None
-
-
-def _implement_artifact_marker_fallback(repo_root: Path, log_path: Path) -> str | None:
-    marker = _completed_artifact_marker_fallback(repo_root, log_path)
-    return marker if marker and marker.startswith("IMPLEMENT_DONE") else None
-
-
-def _synthetic_markerless_implement_marker(
-    repo_root: Path,
-    log_path: Path,
-    open_targets: set[tuple[str, int]] | None,
-    gh_items: list[GhItem] | None,
-) -> str | None:
-    if not is_implement_log(log_path) or not is_clean_exit(log_path):
-        return None
-    issue = _issue_number_from_implement_log(log_path)
-    if issue is None:
-        return None
-    if open_targets is not None and ("issue", issue) not in open_targets:
-        return None
-    if not _open_managed_implementable_issue(issue, gh_items):
-        return None
-    canonical_worktree = repo_root / ".worktrees" / f"iter{issue}-issue-{issue}"
-    if not canonical_worktree.is_dir():
-        return None
-    worktree = canonical_worktree.resolve()
-    head_ref = safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")
-    if not head_ref:
-        return None
-    if not _canonical_markerless_implement_has_output(worktree, _integration_branch_from_env()):
-        return None
-    return f"IMPLEMENT_DONE:issue-{issue}:ok"
-
-
-def _issue_number_from_implement_log(log_path: Path) -> int | None:
-    match = re.fullmatch(r"implement-issue-?([1-9][0-9]*)\.log", log_path.name)
-    return int(match.group(1)) if match else None
-
-
-def _open_managed_implementable_issue(issue: int, gh_items: list[GhItem] | None) -> bool:
-    if gh_items is None:
-        return False
-    for item in gh_items:
-        if item.kind != "issue" or item.number != issue:
-            continue
-        labels = label_catalog.normalize_label_set(item.labels)
-        if label_catalog.MANAGED not in labels.canonical:
-            return False
-        return labels.phase in {label_catalog.PHASE_IMPLEMENTING, label_catalog.PHASE_CONSENSUS_REACHED}
-    return False
-
-
-def _canonical_markerless_implement_has_output(worktree: Path, integration_branch: str) -> bool:
-    diff = git_text(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"], cwd=worktree)
-    if diff.returncode == 1:
-        return True
-    if diff.returncode != 0:
-        return False
-    integration = safe_head_ref(integration_branch)
-    if not integration:
-        return False
-    ahead = git_text(["git", "-C", str(worktree), "rev-list", "--count", f"origin/{integration}..HEAD"], cwd=worktree)
-    if ahead.returncode != 0:
-        return False
-    try:
-        return int(ahead.stdout.strip()) > 0
-    except ValueError:
-        return False
+    _shared_reader_uses_done_prefix_fullmatch = "DONE_PREFIX_RE.fullmatch"
+    marker = read_worker_terminal_marker(log_path)
+    return marker.marker if marker.source == "log" else None
 
 
 def completed_marker_actions(
@@ -899,11 +755,7 @@ def completed_marker_actions(
         return []
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
-        marker = marker_from_completed_log(log_path)
-        if not marker:
-            marker = _completed_artifact_marker_fallback(repo_root, log_path)
-        if not marker:
-            marker = _synthetic_markerless_implement_marker(repo_root, log_path, open_targets, gh_items)
+        marker = read_worker_terminal_marker(log_path).marker
         if not marker:
             continue
         if marker.startswith("AUDIT_DONE:none:0"):
@@ -1249,20 +1101,13 @@ def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
 
 
 def _reviewer_log_has_exit_zero(path: Path) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    return any(line.strip() == "EXIT=0" for line in lines)
+    return log_has_clean_exit(path)
 
 
 def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
     prefix = f"REVIEW_DONE:{pr_number}:{role}:"
-    return sum(1 for line in lines if line.strip().startswith(prefix)) == 1
+    marker = read_worker_terminal_marker(path).marker
+    return marker.startswith(prefix)
 
 
 def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
@@ -2256,6 +2101,32 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
+def action_priority_sort_key(action: dict[str, Any]) -> tuple[int, int]:
+    return (action_priority_class(action), int(action.get("priority", 99)))
+
+
+def action_priority_class(action: dict[str, Any]) -> int:
+    controller_action = action.get("controller_action")
+    kind = action.get("kind")
+    if kind == "maintainer-comment":
+        return 1
+    if kind == "unpushed-worker-output":
+        return 2
+    if kind == "completed-marker":
+        return 3
+    if kind == "ci-red":
+        return 4
+    if kind in {"no-gap-violation", "milestone"}:
+        return 5
+    if kind == "existing-issue":
+        return 6
+    if action.get("kind") == "harness-spawn-intent" and controller_action == "spawn_codex_harness_background":
+        return 7
+    if controller_action == "dispatch_consensus_implementation":
+        return 7
+    return 8
+
+
 def controller_action_from_marker(marker: str) -> str:
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish_implementation_output"
@@ -2622,7 +2493,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
-    actions.sort(key=lambda action: action["priority"])
+    actions.sort(key=action_priority_sort_key)
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 
