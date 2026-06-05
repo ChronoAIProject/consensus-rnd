@@ -880,14 +880,14 @@ class WakeupRunner:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
         if action_head != live_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "action_head_mismatch", "gate": gate}
+        if gate["reject"] > 0:
+            return {"decision": "FIX", "reason": "", "gate": gate}
         ci_error = self._review_gate_ci_error(target, live_head)
         if ci_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": ci_error, "gate": gate}
         mergeability_error = self._review_gate_mergeability_error(target)
         if mergeability_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}
-        if gate["reject"] > 0:
-            return {"decision": "FIX", "reason": "", "gate": gate}
         if gate["approve"] < 1:
             return {"decision": "WAIT_EXPLICIT_APPROVAL", "reason": "no_approval", "gate": gate}
         decision = "MERGE" if gate["comment"] == 0 else "MERGE_WITH_COMMENTS"

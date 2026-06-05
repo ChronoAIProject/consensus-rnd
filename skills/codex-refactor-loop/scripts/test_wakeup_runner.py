@@ -464,6 +464,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def review_gate_snapshot(self, **overrides) -> dict:
+        snapshot = {
+            "invalid": [],
+            "all_present": True,
+            "approve": 1,
+            "reject": 0,
+            "comment": 0,
+            "live_head_sha": "a" * 40,
+        }
+        snapshot.update(overrides)
+        return snapshot
+
     def close_action(self, **overrides) -> dict:
         marker = "META_RESOLVED:drop:no-action"
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
@@ -1099,6 +1111,75 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
+
+    def test_review_gate_reject_routes_to_fix_even_when_ci_is_red(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(reject=1, approve=0)) as gate,
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "FIX")
+        self.assertEqual(decision["reason"], "")
+        gate.assert_called_once_with(77)
+        ci_error.assert_not_called()
+        mergeability_error.assert_not_called()
+
+    def test_review_gate_approval_still_waits_when_ci_is_red(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(approve=1, reject=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "ci_failed")
+        ci_error.assert_called_once_with(77, "a" * 40)
+        mergeability_error.assert_not_called()
+
+    def test_review_gate_approval_merges_when_ci_green_and_mergeable(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(approve=1, reject=0, comment=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value=None) as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "MERGE")
+        self.assertEqual(decision["reason"], "")
+        ci_error.assert_called_once_with(77, "a" * 40)
+        mergeability_error.assert_called_once_with(77)
+
+    def test_review_gate_reject_with_mismatched_head_still_waits(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action(head_sha="a" * 40)
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(reject=1, approve=0, live_head_sha="b" * 40)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="b" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "action_head_mismatch")
+        ci_error.assert_not_called()
+        mergeability_error.assert_not_called()
 
     def test_wakeup_runner_headless_review_fix_dispatch_uses_fully_rendered_prompt(self) -> None:
         worktree = self.repo / ".worktrees" / "iter77-worker"
