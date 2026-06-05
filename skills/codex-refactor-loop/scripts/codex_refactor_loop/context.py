@@ -55,6 +55,7 @@ class LoopContext:
     host_workflow_spec_path: str = ""
     read_only: bool = False
     repo_root_source: str = "env"
+    host_env_location: Path | None = None
 
     @classmethod
     def load(
@@ -76,7 +77,8 @@ class LoopContext:
             allow_git_root_fallback=allow_git_root_fallback,
             cwd=cwd,
         )
-        host_env = _load_host_env(repo, source_env, cwd)
+        host_env_location = HostEnvLocator.resolve(repo, source_env, Path(cwd) if cwd is not None else None)
+        host_env = parse_host_env(host_env_location.path) if host_env_location is not None else {}
         merged = {**source_env, **host_env}
         if repo_source == "host.env":
             merged["REPO_ROOT"] = str(repo)
@@ -94,12 +96,17 @@ class LoopContext:
             host_workflow_spec_path=str(merged.get("HOST_WORKFLOW_SPEC") or ""),
             read_only=read_only,
             repo_root_source=repo_source,
+            host_env_location=host_env_location.path if host_env_location is not None else None,
         )
 
     def env_for_subprocess(self) -> dict[str, str]:
         result = dict(os.environ)
         result.update(self.host_env)
         result["REPO_ROOT"] = str(self.repo_root)
+        if self.host_env_location is not None:
+            result[HostEnvLocator.EXPLICIT_ENV] = str(self.host_env_location)
+        else:
+            result.pop(HostEnvLocator.EXPLICIT_ENV, None)
         if self.gh_repo_slug:
             result["GH_REPO_SLUG"] = self.gh_repo_slug
         return result

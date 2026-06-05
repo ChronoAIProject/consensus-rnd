@@ -632,16 +632,8 @@ class SkillEntrypointContractTests(unittest.TestCase):
                 self.assertIn(needle, combined)
 
     def test_daemon_leak_suite_guard_no_longer_scans_host_process_table(self) -> None:
-        guard = read(SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py")
-        forbidden = (
-            "subprocess" + ".run",
-            '["' + "ps" + '"',
-            "pid=," + "command=",
-        )
-        for token in forbidden:
-            with self.subTest(token=token):
-                self.assertNotIn(token, guard)
-        self.assertIn("Guard against suite-level daemon checks using host-wide process tables", guard)
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
 
     def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
         host_config = section_between(

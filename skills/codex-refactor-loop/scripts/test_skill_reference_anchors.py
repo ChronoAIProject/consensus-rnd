@@ -1575,8 +1575,8 @@ class WakeupRunnerContractTests(unittest.TestCase):
         hard_rules = section_after_heading(self.skill, "Hard rules (controller-level, propagated into every codex prompt)")
         implement = read(SKILL_ROOT / "prompts" / "implement.md")
         verify = read(SKILL_ROOT / "prompts" / "verify.md")
-        guard = read(SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py")
-        combined = "\n".join((hard_rules, implement, verify, guard))
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        combined = "\n".join((hard_rules, implement, verify))
 
         for needle in (
             "Touched-module test ratchet",
@@ -1592,14 +1592,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
-        forbidden_tokens = (
-            "subprocess" + ".run",
-            '["' + "ps" + '"',
-            "pid=," + "command=",
-        )
-        for forbidden in forbidden_tokens:
-            with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, guard)
+        self.assertFalse(guard.exists())
 
     def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
         source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")

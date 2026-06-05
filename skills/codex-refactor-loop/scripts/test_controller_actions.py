@@ -138,6 +138,24 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
 
+    def test_run_host_command_uses_context_host_env_locator_not_ambient_locator(self) -> None:
+        outside = self.tmp / "outside-host.env"
+        outside.write_text('export REPO_ROOT="/outside"\n', encoding="utf-8")
+        captured_env: Mapping[str, str] = {}
+
+        def fake_run(*_args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal captured_env
+            captured_env = dict(kwargs.get("env") or {})
+            return subprocess.CompletedProcess(["bash"], 0, stdout="", stderr="")
+
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outside)}, clear=False):
+            with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                self.assertEqual(0, self.actions._run_host_command("BUILD_CMD", self.tmp))
+
+        self.assertEqual(str((self.tmp / ".config" / "consensus-rnd" / "host.env").resolve()), captured_env["CONSENSUS_RND_HOST_ENV"])
+        self.assertEqual(str(self.tmp.resolve()), captured_env["REPO_ROOT"])
+        self.assertEqual("owner/repo", captured_env["GH_REPO_SLUG"])
+
     def test_controller_actions_source_locks_named_wakeup_runner_helpers(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
         for helper in (
