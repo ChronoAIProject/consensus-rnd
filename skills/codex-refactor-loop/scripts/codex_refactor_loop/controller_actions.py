@@ -662,6 +662,9 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        diff_ready = self._require_publish_implementation_diff(worktree)
+        if diff_ready != 0:
+            return diff_ready
         title_error = self._implementation_pr_title_error(action, issue_target)
         if title_error:
             sys.stderr.write(f"publish_implementation_output: {title_error}\n")
@@ -670,7 +673,7 @@ class ControllerActions:
         if body_error:
             sys.stderr.write(f"publish_implementation_output: {body_error}\n")
             return 2
-        pr_error, pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
+        pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
         if pr_error:
             sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
             return 2
@@ -687,6 +690,13 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
+        if pr_target is None:
+            pr_target, _url = self.open_pr_with_label(
+                self._implementation_pr_title(action, issue_target),
+                str(self._implementation_pr_body_file(action, issue_target)),
+                base=self.integration_branch,
+                head=head_ref,
+            )
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -708,6 +718,16 @@ class ControllerActions:
             return "noncanonical branch"
         return None
 
+    def _require_publish_implementation_diff(self, worktree: Path) -> int:
+        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
+        if diff.returncode == 0:
+            sys.stderr.write("publish_implementation_output: implementation_produced_no_diff\n")
+            return 2
+        if diff.returncode != 1:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        return 0
+
     def _commit_publish_implementation_diff(
         self,
         action: Mapping[str, object],
@@ -715,12 +735,6 @@ class ControllerActions:
         head_ref: str,
         worktree: Path,
     ) -> int:
-        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
-        if diff.returncode == 0:
-            return 0
-        if diff.returncode != 1:
-            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
-            return 2
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             sys.stderr.write("publish_implementation_output: publish_add_failed\n")
@@ -819,11 +833,7 @@ class ControllerActions:
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
             return 2
         readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
-        early_pr_missing_redispatch = (
-            readiness_reason == "implementation_ready_to_publish"
-            and self._implementation_early_pr_missing(action, issue_target=number)
-        )
-        if readiness_reason and not early_pr_missing_redispatch:
+        if readiness_reason:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
         phase_result = self._move_issue_to_implementing_phase(number)
@@ -832,14 +842,8 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
-        pr_result = self._reserve_implementation_pr(issue_target=number, head_ref=branch, action=action)
-        if pr_result != 0:
-            return pr_result
         log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
-        if early_pr_missing_redispatch:
-            log.unlink(missing_ok=True)
-        else:
-            self._clear_stale_implement_log_for_fresh_dispatch(log, action)
+        self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -869,75 +873,6 @@ class ControllerActions:
             stall=5400,
             reason=f"issue #{number} consensus implementation",
         )
-        return 0
-
-    def _implementation_early_pr_missing(self, action: Mapping[str, object], *, issue_target: str) -> bool:
-        state = classify_implement_attempt(
-            repo_root=self.ctx.repo_root,
-            action=action,
-            integration_branch=self.integration_branch,
-            command_runner=lambda command: self._git_lifecycle_command(command),
-        )
-        if not (state.publish_ready or state.refresh_needed):
-            return False
-        error, _number = self._exactly_one_matching_implementation_pr(state.head_ref, issue_target)
-        return error == "early_pr_missing"
-
-    def _reserve_implementation_pr(self, *, issue_target: str, head_ref: str, action: Mapping[str, object]) -> int:
-        body_file = self._implementation_pr_body_file(action, issue_target)
-        worktree = self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{str(action.get('cluster_id') or '').strip()}"
-        pr_error, _pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
-        if pr_error is None:
-            return 0
-        remote_head_exists = self._git_in(worktree, ["ls-remote", "--exit-code", "--heads", "origin", head_ref], check=False).returncode == 0
-        if remote_head_exists:
-            reset = self._reset_reserved_implementation_head(worktree)
-            if reset != 0:
-                return reset
-        self._write_placeholder_implementation_pr_body_if_missing(body_file, issue_target)
-        empty = self._git_in(
-            worktree,
-            ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}", "-m", "⟦AI:AUTO-LOOP⟧"],
-            check=False,
-        )
-        if empty.returncode != 0:
-            sys.stderr.write("dispatch_consensus_implementation: failed to create reserved head commit\n")
-            if empty.stderr:
-                sys.stderr.write(empty.stderr)
-            return empty.returncode
-        push_args = ["push", "origin", f"{head_ref}:{head_ref}"]
-        if remote_head_exists:
-            push_args.insert(1, "--force-with-lease")
-        if self._git_in(worktree, push_args, check=False).returncode != 0:
-            sys.stderr.write("dispatch_consensus_implementation: failed to push reserved head\n")
-            return 2
-        title = str(action.get("title") or f"Implement issue #{issue_target}")
-        try:
-            self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-        except (RuntimeError, OSError) as exc:
-            sys.stderr.write(f"dispatch_consensus_implementation: early PR reservation failed: {exc}\n")
-            return 2
-        return 0
-
-    def _write_placeholder_implementation_pr_body_if_missing(self, body_file: Path, issue_target: str) -> None:
-        if body_file.exists():
-            return
-        body_file.parent.mkdir(parents=True, exist_ok=True)
-        body_file.write_text(_placeholder_implementation_pr_body(issue_target), encoding="utf-8")
-
-    def _reset_reserved_implementation_head(self, worktree: Path) -> int:
-        fetch = self._git_in(worktree, ["fetch", "origin", self.integration_branch], check=False)
-        if fetch.returncode != 0:
-            sys.stderr.write("dispatch_consensus_implementation: failed to fetch integration branch for reserved head\n")
-            if fetch.stderr:
-                sys.stderr.write(fetch.stderr)
-            return fetch.returncode
-        reset = self._git_in(worktree, ["reset", "--hard", f"origin/{self.integration_branch}"], check=False)
-        if reset.returncode != 0:
-            sys.stderr.write("dispatch_consensus_implementation: failed to reset reserved head\n")
-            if reset.stderr:
-                sys.stderr.write(reset.stderr)
-            return reset.returncode
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
@@ -1189,7 +1124,7 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _exactly_one_matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+    def _matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
         result = self.gh(
             ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
             check=False,
@@ -1203,7 +1138,7 @@ class ControllerActions:
         if not isinstance(payload, list):
             return "matching_pr_invalid_json", None
         if len(payload) == 0:
-            return "early_pr_missing", None
+            return None, None
         if len(payload) > 1:
             return "multiple_matching_open_pr", None
         pr = payload[0]
@@ -1615,21 +1550,6 @@ def _single_line(value: str) -> str:
 
 def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
     return " ".join(f"{key}={json.dumps(str(value), ensure_ascii=False)}" for key, value in fields.items())
-
-
-def _placeholder_implementation_pr_body(issue_target: str) -> str:
-    implement_label = b"\xe5\xae\x9e\xe7\x8e\xb0".decode("utf-8")
-    body = (
-        f"## issue #{issue_target} {implement_label}\n"
-        "\n"
-        "Implementation PR reservation placeholder.\n"
-        "\n"
-        f"Closes #{issue_target}\n"
-        "\n"
-        f"{FINAL_SENTINEL}\n"
-    )
-    validate_self_contained_github_body(body, authority_required=False)
-    return body
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:

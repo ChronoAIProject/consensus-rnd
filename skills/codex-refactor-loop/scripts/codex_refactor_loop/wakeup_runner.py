@@ -515,7 +515,7 @@ class WakeupRunner:
             "host_checks_green",
             "single_linked_managed_issue",
             "worker_authored_pr_artifacts",
-            "exactly_one_matching_open_pr",
+            "no_conflicting_open_implementation_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -529,7 +529,7 @@ class WakeupRunner:
         worktree_error = self._validate_implementation_worktree(action)
         if worktree_error:
             return worktree_error
-        return self._validate_exactly_one_matching_open_pr(action)
+        return self._validate_no_conflicting_open_implementation_pr(action)
 
     def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
         target = action.get("target_number")
@@ -559,7 +559,7 @@ class WakeupRunner:
             return "release_rollup_body_missing"
         return None
 
-    def _validate_exactly_one_matching_open_pr(self, action: Mapping[str, Any]) -> str | None:
+    def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
             return "publish_implementation_invalid_head_ref"
@@ -573,7 +573,7 @@ class WakeupRunner:
         if not isinstance(payload, list):
             return "publish_implementation_matching_pr_invalid_json"
         if len(payload) == 0:
-            return "publish_implementation_early_pr_missing"
+            return None
         if len(payload) > 1:
             return "publish_implementation_multiple_matching_open_pr"
         pr = payload[0]

@@ -2694,10 +2694,10 @@ def _stale_publish_implementation_reason(
         return "target_not_open"
     head_ref = _implementation_head_ref(action, target)
     if not head_ref:
-        return "early_pr_missing"
+        return "implementation_head_ref_missing"
     worktree = worktrees.get(head_ref)
     if worktree is None:
-        return "early_pr_missing"
+        return "implementation_worktree_missing"
     state = classify_implement_attempt(
         repo_root=repo_root,
         action=action,
@@ -2721,7 +2721,7 @@ def _stale_publish_implementation_reason(
     artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
     if artifact_reason:
         return artifact_reason
-    match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref, worktree=worktree)
+    match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
         return match_error
     action["head_ref"] = head_ref
@@ -2732,7 +2732,7 @@ def _stale_publish_implementation_reason(
         "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
-        "exactly_one_matching_open_pr",
+        "no_conflicting_open_implementation_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -2750,13 +2750,12 @@ def _matching_open_pr_error(
     *,
     gh_items: list[GhItem],
     head_ref: str,
-    worktree: Path,
 ) -> str | None:
     if target is None or target[0] != "issue":
         return "single_linked_managed_issue_missing"
     matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
     if not matches:
-        return "early_pr_missing"
+        return None
     if len(matches) > 1:
         return "multiple_matching_open_pr"
     pr = matches[0]

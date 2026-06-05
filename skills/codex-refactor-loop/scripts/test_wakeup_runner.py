@@ -554,7 +554,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "host_checks_green",
                 "single_linked_managed_issue",
                 "worker_authored_pr_artifacts",
-                "exactly_one_matching_open_pr",
+                "no_conflicting_open_implementation_pr",
             ],
             "source_artifact": ".refactor-loop/logs/implement-issue77.log",
             "source_marker": marker,
@@ -827,7 +827,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "exactly_one_matching_open_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         later = self.spawn_action(action_id="spawn:after-blocked-lifecycle")
@@ -896,7 +896,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "exactly_one_matching_open_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         spawns = [
@@ -980,7 +980,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "clean_scoped_diff",
                 "host_checks_green",
                 "single_linked_managed_issue",
-                "exactly_one_matching_open_pr",
+                "no_conflicting_open_implementation_pr",
             ],
         )
         close = self.close_action(action_id="close-managed-item:53:after-blocked-publish")
@@ -1537,7 +1537,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         "clean_scoped_diff",
                         "single_linked_managed_issue",
                         "worker_authored_pr_artifacts",
-                        "exactly_one_matching_open_pr",
+                        "no_conflicting_open_implementation_pr",
                     ],
                 ),
                 "publish_implementation_missing_precondition:host_checks_green",
@@ -1918,7 +1918,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
-    def test_publish_implementation_output_blocks_missing_early_pr_before_helper(self) -> None:
+    def test_publish_implementation_output_allows_missing_pr_so_publish_can_open_it(self) -> None:
         actions = FakeActions()
 
         def command_runner(command):
@@ -1948,12 +1948,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = runner.run_once()
 
-        self.assert_blocked_before_dispatch(
-            results,
-            "completed-marker:implement-issue77.log:IMPLEMENT_DONE:issue-77:ok",
-            "publish_implementation_early_pr_missing",
-            actions,
-        )
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
 
     def test_dispatch_reviewers_routes_to_named_helper_after_pr_target_validation(self) -> None:
         actions = FakeActions()
