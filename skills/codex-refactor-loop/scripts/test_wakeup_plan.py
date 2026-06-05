@@ -1639,7 +1639,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ("placeholder-title", lambda: title.write_text("实现 issue #20\n", encoding="utf-8"), "implementation_pr_title_placeholder"),
             ("multiline-title", lambda: title.write_text("完成 issue #20\n第二行\n", encoding="utf-8"), "implementation_pr_title_artifact_invalid"),
             ("body-content-title", lambda: title.write_text("Closes #20\n", encoding="utf-8"), "implementation_pr_title_contains_body_content"),
+            ("sentinel-title", lambda: title.write_text("⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_title_contains_body_content"),
             ("missing-sentinel", lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "implementation_pr_body_sentinel_missing"),
+            ("sentinel-not-final", lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "implementation_pr_body_sentinel_missing"),
             ("wrong-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("multiple-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #20\nCloses #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
             ("missing-closes", lambda: body.write_text(valid_body.replace("Closes #20\n\n", ""), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
@@ -1697,6 +1699,48 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertTrue(action["status_only"])
         self.assertEqual(action["suppressed_reason"], "implementation_pr_title_artifact_invalid_path")
+
+    def test_publish_implementation_projection_suppresses_outside_pr_body_artifact_path(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        title, body = self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        outside = self.repo / "outside-body.md"
+        outside.write_text(body.read_text(encoding="utf-8"), encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+            "title_file": title.relative_to(self.repo).as_posix(),
+            "body_file": str(outside),
+        }
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                suppress_stale_unexecutable_actions(
+                    [action],
+                    repo_root=self.repo,
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            20,
+                            "open target",
+                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                    gh_items_loaded=True,
+                )
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_pr_body_artifact_invalid_path")
 
     def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
         self.write_consensus_artifact()

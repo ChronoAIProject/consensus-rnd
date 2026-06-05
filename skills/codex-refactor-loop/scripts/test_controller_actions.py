@@ -1228,14 +1228,18 @@ class ControllerActionsTests(unittest.TestCase):
         title, body = self.write_implementation_pr_artifacts()
         outside = self.tmp / "outside-title.txt"
         outside.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        outside_body = self.tmp / "outside-body.md"
+        outside_body.write_text(body.read_text(encoding="utf-8"), encoding="utf-8")
         valid_title = title.read_text(encoding="utf-8")
         valid_body = body.read_text(encoding="utf-8")
         cases = (
             ("outside-title-path", {"title_file": str(outside)}, None, "implementation PR title artifact outside runs"),
+            ("outside-body-path", {"body_file": str(outside_body)}, None, "implementation PR body artifact outside runs"),
             ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("english-placeholder-title", {}, lambda: title.write_text("implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
             ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "implementation PR title must be exactly one non-empty line"),
             ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "implementation PR title contains body-only content"),
+            ("sentinel-title", {}, lambda: title.write_text("⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR title contains body-only content"),
             ("missing-sentinel", {}, lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
             ("sentinel-not-final", {}, lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
             ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),

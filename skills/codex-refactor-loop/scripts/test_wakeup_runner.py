@@ -1590,11 +1590,15 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         outside = self.repo / "outside-title.txt"
         outside.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        outside_body = self.repo / "outside-body.md"
+        outside_body.write_text(valid_body, encoding="utf-8")
         cases = (
             ("outside-title-path", {"title_file": str(outside)}, None, "publish_implementation_title_artifact_invalid_path"),
+            ("outside-body-path", {"body_file": str(outside_body)}, None, "publish_implementation_body_artifact_invalid_path"),
             ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "publish_implementation_title_placeholder"),
             ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "publish_implementation_title_artifact_invalid"),
             ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "publish_implementation_title_contains_body_content"),
+            ("sentinel-title", {}, lambda: title.write_text("⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "publish_implementation_title_contains_body_content"),
             ("missing-sentinel", {}, lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "publish_implementation_body_sentinel_missing"),
             ("sentinel-not-final", {}, lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "publish_implementation_body_sentinel_missing"),
             ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
