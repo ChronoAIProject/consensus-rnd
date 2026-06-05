@@ -18,7 +18,7 @@ from typing import Any, Protocol, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .gh_accounting import accounting_env
-from .retention import retain_logs
+from .runtime_retention import retain_runtime, runtime_retention_enabled
 from .update_check import maybe_run_update_check
 
 
@@ -352,7 +352,7 @@ class RestartDaemons:
             return 0
         self._acquire_restart_lock()
         try:
-            self._run_log_retention()
+            self._run_runtime_retention()
             for name, command in DAEMON_COMMANDS:
                 self.start_daemon(name, command)
         finally:
@@ -420,14 +420,19 @@ class RestartDaemons:
         for path in (self.ctx.paths.refactor_loop / "locks", self.ctx.paths.heartbeats, self.ctx.paths.logs):
             path.mkdir(parents=True, exist_ok=True)
 
-    def _run_log_retention(self) -> None:
+    def _run_runtime_retention(self) -> None:
         try:
-            deleted, kept, target, missing = retain_logs(self.ctx.repo_root)
+            result = retain_runtime(self.ctx.repo_root, enabled=runtime_retention_enabled(self.ctx))
         except Exception:
-            self._log("log_retention warning: helper failed; continuing daemon restart")
+            self._log("runtime_retention warning: helper failed; continuing daemon restart")
             return
-        suffix = " missing=true" if missing else ""
-        self._log(f"log_retention: ttl_hours=24 deleted={deleted} kept={kept} target={target}{suffix}")
+        suffix = " missing=true" if result.missing else ""
+        self._log(
+            "runtime_retention: "
+            f"enabled={str(result.enabled).lower()} ttl_hours=24 deleted={result.deleted} kept={result.kept} "
+            f"compacted_events={str(result.compacted_events).lower()} removed_worktrees={result.removed_worktrees} "
+            f"pruned_worktrees={str(result.pruned_worktrees).lower()} target={result.target}{suffix}"
+        )
 
     def _run_update_check(self) -> None:
         try:

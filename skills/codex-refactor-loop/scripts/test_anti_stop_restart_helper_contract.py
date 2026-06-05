@@ -40,6 +40,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "No lifecycle authority",
             "STALE_CONTROLLER",
             "$REPO_ROOT",
+            "consensus-rnd-cli runtime-retention",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -119,6 +120,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "same resolved static allowlist command",
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
+            "runs canonical RuntimeRetention before daemon freshness checks",
             "no host-defined daemon registry",
             "generic process supervisor",
             "GitHub/git lifecycle authority",

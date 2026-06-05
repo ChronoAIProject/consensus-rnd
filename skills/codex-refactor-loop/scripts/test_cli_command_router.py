@@ -23,6 +23,7 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 ALL_AUTHORITY_TOKENS = {
     "delete-log",
+    "delete-runtime",
     "gh-close",
     "gh-close-linked",
     "gh-comment",
@@ -68,11 +69,11 @@ DAEMON_COMMANDS = {
     "comment-monitor",
     "concurrency",
     "dev-sync",
-    "log-retention",
     "phase9-router",
     "progress-reporter",
     "release-gate",
     "restart-daemons",
+    "runtime-retention",
     "wakeup-runner",
 }
 
@@ -91,6 +92,7 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+    "runtime-retention": {"git-worktree"},
     "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
 }
 
@@ -125,7 +127,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "labels",
                 "concurrency",
                 "dev-sync",
-                "log-retention",
+                "runtime-retention",
                 "spawn-codex",
                 "peek",
                 "pr-checks",
@@ -420,6 +422,24 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
+
+    def test_runtime_retention_is_canonical_without_log_retention_alias(self) -> None:
+        self.assertEqual(("delete-runtime", "git-worktree"), COMMANDS["runtime-retention"].authority)
+        self.assertIn("canonical RuntimeRetention", COMMANDS["runtime-retention"].description)
+        removed_legacy_command = "log" + "-retention"
+        self.assertNotIn(removed_legacy_command, COMMANDS)
+        for forbidden in ("read-gh", "gh-close", "gh-edit", "gh-label", "gh-merge", "gh-open", "git-fetch", "git-push", "git-merge", "git-reset", "git-rebase"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS["runtime-retention"].authority)
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), removed_legacy_command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn(f"unknown command: {removed_legacy_command}", result.stderr)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():
