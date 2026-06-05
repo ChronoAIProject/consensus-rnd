@@ -270,38 +270,78 @@ def harness_spawn_intent_actions(
             terminal_design_targets,
         ):
             continue
+        suppressed = _suppressed_consensus_implementation_spawn_intent(
+            intent,
+            repo_root,
+            gh_items if gh_items_loaded else None,
+            monitor,
+        )
+        if suppressed is not None:
+            actions.append(
+                _harness_spawn_intent_action(
+                    intent,
+                    intent_id,
+                    cd,
+                    prompt,
+                    log_path,
+                    line,
+                    status_only=True,
+                    suppressed_reason=suppressed,
+                )
+            )
+            continue
         actions.append(
-            {
-                "priority": 2,
-                "kind": "harness-spawn-intent",
-                "action_id": f"harness-spawn-intent:{intent_id}",
-                "item": intent.get("task_id"),
-                "phase": "work-intake",
-                "actor": "controller",
-                "route": intent.get("route"),
-                "intent_id": intent_id,
-                "source": intent.get("source"),
-                "command": "spawn-codex",
-                "controller_action": "spawn_codex_harness_background",
-                "cd": str(cd),
-                "prompt": str(prompt),
-                "log": str(log_path),
-                "stall": int(intent.get("stall", 5400)),
-                "run_in_background_required": True,
-                "no_lifecycle_authority": True,
-                "reason": intent.get("reason"),
-                "evidence": line,
-                "source_artifact": ".refactor-loop/.controller-pending-events.log",
-                "source_marker": line,
-                "target_kind": "codex",
-                "target_number": None,
-                "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent_id)},
-                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
-            }
+            _harness_spawn_intent_action(intent, intent_id, cd, prompt, log_path, line)
         )
     return actions
+
+
+def _harness_spawn_intent_action(
+    intent: dict[str, Any],
+    intent_id: str,
+    cd: Path,
+    prompt: Path,
+    log_path: Path,
+    evidence: str,
+    *,
+    status_only: bool = False,
+    suppressed_reason: str | None = None,
+) -> dict[str, Any]:
+    action = {
+        "priority": 2,
+        "kind": "harness-spawn-intent",
+        "action_id": f"harness-spawn-intent:{intent_id}",
+        "item": intent.get("task_id"),
+        "phase": "work-intake",
+        "actor": "controller",
+        "route": intent.get("route"),
+        "intent_id": intent_id,
+        "source": intent.get("source"),
+        "command": "spawn-codex",
+        "controller_action": "spawn_codex_harness_background",
+        "cd": str(cd),
+        "prompt": str(prompt),
+        "log": str(log_path),
+        "stall": int(intent.get("stall", 5400)),
+        "run_in_background_required": True,
+        "no_lifecycle_authority": True,
+        "reason": intent.get("reason"),
+        "evidence": evidence,
+        "source_artifact": ".refactor-loop/.controller-pending-events.log",
+        "source_marker": evidence,
+        "target_kind": "codex",
+        "target_number": None,
+        "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent_id)},
+        "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+        "runner_authority": RUNNER_AUTHORITY,
+        "no_generic_command": True,
+    }
+    if status_only:
+        action["status_only"] = True
+        action["suppressed_reason"] = suppressed_reason
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+    return action
 
 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
@@ -509,6 +549,55 @@ def _suppress_harness_spawn_intent(
     ):
         return True
     return False
+
+
+def _suppressed_consensus_implementation_spawn_intent(
+    intent: dict[str, Any],
+    repo_root: Path,
+    gh_items: list[GhItem] | None,
+    monitor: Any | None,
+) -> str | None:
+    issue = _consensus_implementation_spawn_intent_issue(intent)
+    if issue is None:
+        return None
+    action = _consensus_implementation_action_for_intent(repo_root, issue)
+    if not action:
+        return "consensus_artifact_unavailable"
+    reason = consensus_implementation_suppressed_reason(
+        action,
+        repo_root,
+        gh_items,
+        monitor,
+        ignore_pending_implement_intent=True,
+    )
+    if reason in {"pending_implement_intent", None}:
+        return None
+    return reason
+
+
+def _consensus_implementation_spawn_intent_issue(intent: dict[str, Any]) -> int | None:
+    for field in ("intent_id", "action_id"):
+        value = intent.get(field)
+        if not isinstance(value, str):
+            continue
+        match = re.search(rf"(?:^|:){re.escape(IMPLEMENT_PENDING_INTENT_PREFIX)}([1-9][0-9]*)$", value)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _consensus_implementation_action_for_intent(repo_root: Path, issue: int) -> dict[str, Any]:
+    action = latest_consensus_implementation_for_issue(repo_root, issue)
+    if action:
+        action["target_kind"] = "issue"
+        action["target_number"] = issue
+        return action
+    return {
+        "target_kind": "issue",
+        "target_number": issue,
+        "iteration": str(issue),
+        "cluster_id": f"issue-{issue}",
+    }
 
 
 def _is_design_consensus_solver_dispatch_intent(intent: dict[str, Any]) -> bool:
@@ -1949,6 +2038,8 @@ def consensus_implementation_suppressed_reason(
     repo_root: Path,
     gh_items: list[GhItem] | None = None,
     monitor: Any | None = None,
+    *,
+    ignore_pending_implement_intent: bool = False,
 ) -> str | None:
     target_kind = action.get("target_kind")
     target_number = action.get("target_number")
@@ -1973,7 +2064,7 @@ def consensus_implementation_suppressed_reason(
         return "in_flight_implement"
     if lifecycle.publish_ready:
         return "implementation_ready_to_publish"
-    if _pending_implement_intent_exists(repo_root, target_number, action):
+    if not ignore_pending_implement_intent and _pending_implement_intent_exists(repo_root, target_number, action):
         return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"

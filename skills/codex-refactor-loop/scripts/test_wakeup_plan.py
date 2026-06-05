@@ -1171,6 +1171,45 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(self.harness_spawn_actions(plan), [])
 
+    def test_harness_spawn_intent_suppresses_consensus_implementation_with_open_closing_pr(self) -> None:
+        self.write_consensus_artifact()
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="closing_pr_issue20")
+
+        actions = self.harness_spawn_actions(plan)
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertTrue(action["status_only"])
+        self.assertEqual("open_closing_pr", action["suppressed_reason"])
+        self.assertEqual("spawn_codex_harness_background", action["controller_action"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_harness_spawn_intent_keeps_open_consensus_implementation_dispatchable(self) -> None:
+        self.write_consensus_artifact()
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="open_issue_20")
+
+        actions = self.harness_spawn_actions(plan)
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertNotIn("status_only", action)
+        self.assertNotIn("suppressed_reason", action)
+        self.assertEqual("spawn_codex_harness_background", action["controller_action"])
+        self.assertEqual("dispatch-consensus-implementation:20", action["intent_id"])
+
     def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
         self.append_harness_spawn_intent(
             intent_id="empty-read-model-target",
