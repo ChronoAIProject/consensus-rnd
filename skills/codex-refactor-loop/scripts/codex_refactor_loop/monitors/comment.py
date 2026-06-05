@@ -99,6 +99,7 @@ class CommentMonitor:
         lookback = _lookback_minimum_updated_at()
         snapshot = load_open_managed_work_snapshot(self.ctx)
         if not snapshot.loaded_ok:
+            print(snapshot.unavailable_diagnostic("comment-monitor.search-active", target_context="active-comments"), flush=True)
             return active
         for row in snapshot.items:
             number = str(row.number)
@@ -115,6 +116,7 @@ class CommentMonitor:
         numbers: set[str] = set()
         snapshot = load_open_managed_work_snapshot(self.ctx)
         if not snapshot.loaded_ok:
+            print(snapshot.unavailable_diagnostic("comment-monitor.targets", target_context="all-open-managed"), flush=True)
             return []
         for item in snapshot.items:
             numbers.add(str(item.number))

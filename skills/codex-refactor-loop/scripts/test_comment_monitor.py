@@ -9,6 +9,8 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -105,9 +107,22 @@ class CommentMonitorTests(unittest.TestCase):
 
     def test_targets_fail_closed_when_managed_work_snapshot_unavailable(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
-        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low")
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)
+        output = StringIO()
         with mock.patch("codex_refactor_loop.monitors.comment.load_open_managed_work_snapshot", return_value=snapshot):
-            self.assertEqual(monitor.targets(), [])
+            with redirect_stdout(output):
+                self.assertEqual(monitor.targets(), [])
+                self.assertEqual(monitor._search_active(), {})
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=comment-monitor.targets reason=graphql-headroom-low "
+            "source=unavailable age_seconds=901 items=0 target=all-open-managed",
+            output.getvalue(),
+        )
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=comment-monitor.search-active reason=graphql-headroom-low "
+            "source=unavailable age_seconds=901 items=0 target=active-comments",
+            output.getvalue(),
+        )
 
     def active_snapshot(self, number: str = "42", updated_at: str = "2026-05-30T00:00:00Z") -> ManagedWorkSnapshotResult:
         return ManagedWorkSnapshotResult((ManagedWorkSnapshotItem(kind="issue", number=int(number), updated_at=updated_at),), True, "cache:fresh")

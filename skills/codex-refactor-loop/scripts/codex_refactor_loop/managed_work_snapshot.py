@@ -115,6 +115,15 @@ class ManagedWorkSnapshotResult:
     reason: str | None = None
     age_seconds: float | None = None
 
+    def unavailable_diagnostic(self, caller: str, *, target_context: str) -> str:
+        reason = self.reason or "unknown"
+        age = _format_age_seconds(self.age_seconds)
+        return (
+            "managed-work-snapshot-unavailable "
+            f"caller={caller} reason={reason} source={self.source} "
+            f"age_seconds={age} items={len(self.items)} target={target_context}"
+        )
+
 
 class ManagedWorkSnapshot:
     def __init__(
@@ -150,7 +159,13 @@ class ManagedWorkSnapshot:
             stale = self._cached_result_if_usable(cached, max_age=self.stale_max_seconds, source="cache:stale")
             if stale is not None:
                 return stale
-            return ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low")
+            return ManagedWorkSnapshotResult(
+                (),
+                False,
+                "unavailable",
+                "graphql-headroom-low",
+                self._cache_age_seconds(cached),
+            )
         with self._lock():
             cached = self._read_cache()
             fresh = self._cached_result_if_usable(cached, max_age=self.ttl_seconds, source="cache:fresh")
@@ -161,7 +176,7 @@ class ManagedWorkSnapshot:
                 stale = self._cached_result_if_usable(cached, max_age=self.stale_max_seconds, source="cache:stale")
                 if stale is not None:
                     return stale
-                return ManagedWorkSnapshotResult((), False, "unavailable", "fetch-failed")
+                return ManagedWorkSnapshotResult((), False, "unavailable", "fetch-failed", self._cache_age_seconds(cached))
             self._write_cache(items)
             return ManagedWorkSnapshotResult(tuple(items), True, "live", None, 0.0)
 
@@ -341,12 +356,8 @@ class ManagedWorkSnapshot:
         return data if isinstance(data, dict) else None
 
     def _cached_result_if_usable(self, data: dict[str, Any] | None, *, max_age: int, source: str) -> ManagedWorkSnapshotResult | None:
-        if not data:
-            return None
-        fetched_at = data.get("fetched_at_epoch")
-        try:
-            age = self.now() - float(fetched_at)
-        except (TypeError, ValueError):
+        age = self._cache_age_seconds(data)
+        if data is None or age is None:
             return None
         if age < 0 or age > max_age:
             return None
@@ -359,6 +370,15 @@ class ManagedWorkSnapshot:
             if item is not None
         )
         return ManagedWorkSnapshotResult(normalized, True, source, None, age)
+
+    def _cache_age_seconds(self, data: dict[str, Any] | None) -> float | None:
+        if not data:
+            return None
+        fetched_at = data.get("fetched_at_epoch")
+        try:
+            return self.now() - float(fetched_at)
+        except (TypeError, ValueError):
+            return None
 
     def _write_cache(self, items: Sequence[ManagedWorkSnapshotItem]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -399,6 +419,12 @@ def _positive_int(value: int | None, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _format_age_seconds(value: float | None) -> str:
+    if value is None:
+        return "unknown"
+    return str(max(0, int(value)))
 
 
 def _escape_search_label(label: str) -> str:

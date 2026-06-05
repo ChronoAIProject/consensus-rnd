@@ -11,6 +11,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +23,7 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
@@ -33,6 +36,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
+    load_github_items_with_status,
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
     repository_stalled_meta_reflector_actions,
@@ -1905,6 +1909,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 467)
         self.assertFalse(action.get("status_only"))
 
+    def test_completed_marker_uses_repo_local_host_env_when_outer_locator_points_elsewhere(self) -> None:
+        self.write_completed_log("review-pr468-architect-r1.log", "REVIEW_DONE:468:architect:approve")
+        with tempfile.TemporaryDirectory(prefix="outer-host-env-") as other_raw:
+            other = Path(other_raw)
+            (other / ".config" / "consensus-rnd").mkdir(parents=True)
+            outer_host_env = other / ".config" / "consensus-rnd" / "host.env"
+            outer_host_env.write_text(
+                f"REPO_ROOT={other}\nGH_REPO_SLUG=outer/repo\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outer_host_env)}):
+                actions = completed_marker_actions(self.repo)
+
+        action = next(item for item in actions if item["action_id"].startswith("completed-marker:review-pr468"))
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 468)
+        self.assertFalse(action.get("status_only"))
+
     def test_completed_marker_keeps_latest_non_design_target_marker_only(self) -> None:
         self.write_completed_log("fix-pr77-r2.log", "FIX_DONE")
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
@@ -3752,6 +3775,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(query_log, ["api milestones"])
         snapshot = json.loads((self.repo / ".refactor-loop/state/managed-work-snapshot.json").read_text(encoding="utf-8"))
         self.assertEqual(len(snapshot["items"]), 4)
+
+    def test_load_github_items_logs_unavailable_managed_work_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)
+        output = StringIO()
+        with mock.patch("codex_refactor_loop.wakeup_plan.load_open_managed_work_snapshot", return_value=snapshot):
+            with redirect_stderr(output):
+                items, loaded_ok = load_github_items_with_status(self.repo)
+
+        self.assertEqual(items, [])
+        self.assertFalse(loaded_ok)
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=wakeup-plan.load-github-items reason=graphql-headroom-low "
+            "source=unavailable age_seconds=901 items=0 target=projection-open-managed",
+            output.getvalue(),
+        )
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
         plan = self.run_plan(fixture="non_action_statuses")

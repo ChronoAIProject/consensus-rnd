@@ -306,6 +306,11 @@ class ConcurrencyMonitor:
         seen: set[tuple[str, int]] = set()
         snapshot = load_open_managed_work_snapshot(self.ctx)
         if not snapshot.loaded_ok:
+            print(
+                snapshot.unavailable_diagnostic("concurrency-monitor.list-auto-loop-issues", target_context="expected-worker-count"),
+                file=sys.stderr,
+                flush=True,
+            )
             return items
         for entry in snapshot.items:
             num = entry.number

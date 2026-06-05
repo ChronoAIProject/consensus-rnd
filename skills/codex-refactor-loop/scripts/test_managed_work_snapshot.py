@@ -212,6 +212,12 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
 
         self.assertFalse(unavailable.loaded_ok)
         self.assertEqual("graphql-headroom-low", unavailable.reason)
+        self.assertEqual(1001, unavailable.age_seconds)
+        self.assertEqual(
+            "managed-work-snapshot-unavailable caller=unit-test reason=graphql-headroom-low "
+            "source=unavailable age_seconds=1001 items=0 target=open-managed",
+            unavailable.unavailable_diagnostic("unit-test", target_context="open-managed"),
+        )
 
     def test_fetch_failure_with_headroom_uses_stale_cache(self) -> None:
         path = self.tmp / STATE_RELATIVE_PATH

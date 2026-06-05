@@ -10,7 +10,9 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stderr
 from datetime import datetime, timezone
+from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
@@ -139,6 +141,20 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                 ("pr", 73, label_catalog.PHASE_REVIEWING),
                 ("pr", 74, label_catalog.PHASE_DESIGN_SOLVING),
             ],
+        )
+
+    def test_list_auto_loop_issues_logs_unavailable_managed_work_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "fetch-failed", 1200)
+        output = StringIO()
+        with mock.patch("codex_refactor_loop.monitors.concurrency.load_open_managed_work_snapshot", return_value=snapshot):
+            with redirect_stderr(output):
+                items = self.monitor.list_auto_loop_issues()
+
+        self.assertEqual(items, [])
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=concurrency-monitor.list-auto-loop-issues reason=fetch-failed "
+            "source=unavailable age_seconds=1200 items=0 target=expected-worker-count",
+            output.getvalue(),
         )
 
     def test_tick_writes_snapshot_json_with_required_fields(self) -> None:

@@ -9,6 +9,8 @@ import re
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -49,6 +51,10 @@ def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult
             )
         )
     return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
+
+
+def unavailable_managed_snapshot(reason: str = "graphql-headroom-low", age_seconds: float | None = 950) -> ManagedWorkSnapshotResult:
+    return ManagedWorkSnapshotResult((), False, "unavailable", reason, age_seconds)
 
 
 class Phase9RouterDaemonTests(unittest.TestCase):
@@ -556,6 +562,23 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("WORK_UNIT_SOURCE_REF=gh-issue-416", prompt)
         self.assertIn("Convergence marker: DesignConsensusIssueIntake", prompt)
         self.assertEqual(self.pending_events(), "")
+
+    def test_phase9_router_records_snapshot_unavailable_diagnostic(self) -> None:
+        output = StringIO()
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.load_open_managed_work_snapshot",
+            return_value=unavailable_managed_snapshot("fetch-failed", 1200),
+        ):
+            with redirect_stdout(output):
+                self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.pending_events(), "")
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=phase9-router.design-consensus-issue-intake reason=fetch-failed "
+            "source=unavailable age_seconds=1200 items=0 target=open-design-consensus-issues",
+            output.getvalue(),
+        )
 
     def test_phase9_router_design_issue_intake_suppresses_after_clean_consensus_judge_log(self) -> None:
         issue = {

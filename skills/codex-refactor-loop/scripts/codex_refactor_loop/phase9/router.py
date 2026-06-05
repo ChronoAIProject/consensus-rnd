@@ -626,6 +626,13 @@ class Phase9Router:
     def _open_design_consensus_issues(self) -> list[DesignConsensusIssue]:
         snapshot = load_open_managed_work_snapshot(self.ctx)
         if not snapshot.loaded_ok:
+            print(
+                snapshot.unavailable_diagnostic(
+                    "phase9-router.design-consensus-issue-intake",
+                    target_context="open-design-consensus-issues",
+                ),
+                flush=True,
+            )
             return []
         issues: list[DesignConsensusIssue] = []
         for row in snapshot.items:

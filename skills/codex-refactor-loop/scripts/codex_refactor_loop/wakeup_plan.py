@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Mapping
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
@@ -857,7 +857,7 @@ def completed_marker_actions(
     if not logs_dir.exists():
         return []
     if ctx is None:
-        ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+        ctx = LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True)
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = read_worker_terminal_marker(log_path).marker
@@ -928,6 +928,37 @@ def completed_marker_actions(
             )
         )
     return [candidate.action for candidate in _latest_completed_marker_candidates(candidates)]
+
+
+def _repo_local_context_env(repo_root: Path, env: Mapping[str, str]) -> dict[str, str]:
+    context_env = dict(env)
+    raw = context_env.get("CONSENSUS_RND_HOST_ENV")
+    if raw is None:
+        return context_env
+    root = repo_root.resolve()
+    if _host_env_path_is_repo_local(root, raw):
+        return context_env
+    local_default = root / ".config" / "consensus-rnd" / "host.env"
+    if local_default.is_file():
+        context_env["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
+    else:
+        context_env.pop("CONSENSUS_RND_HOST_ENV", None)
+    return context_env
+
+
+def _host_env_path_is_repo_local(repo_root: Path, raw_value: str) -> bool:
+    raw = raw_value.strip()
+    if not raw:
+        return False
+    candidate = Path(raw).expanduser()
+    if any(part == ".." for part in candidate.parts):
+        return False
+    path = (candidate if candidate.is_absolute() else repo_root / candidate).resolve()
+    try:
+        path.relative_to(repo_root)
+    except ValueError:
+        return False
+    return path.is_file()
 
 
 def _marker_mtime(log_path: Path) -> float:
@@ -1669,6 +1700,11 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     snapshot = load_open_managed_work_snapshot(ctx)
     items: list[GhItem] = []
     if not snapshot.loaded_ok:
+        print(
+            snapshot.unavailable_diagnostic("wakeup-plan.load-github-items", target_context="projection-open-managed"),
+            file=sys.stderr,
+            flush=True,
+        )
         return items, False
     for raw in snapshot.items:
         number = raw.number
