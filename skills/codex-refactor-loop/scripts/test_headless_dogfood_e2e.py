@@ -224,6 +224,13 @@ class HeadlessDogfoodFixture:
         if args[:3] == ["gh", "pr", "view"]:
             number = int(args[3])
             pr = self.prs.get(number, {})
+            if "--json" in args and "body,headRefName,headRefOid" in args:
+                return subprocess.CompletedProcess(
+                    args,
+                    0,
+                    json.dumps({"body": pr.get("body", ""), "headRefName": pr.get("headRefName", ""), "headRefOid": pr.get("headRefOid", "")}),
+                    "",
+                )
             if "--jq" in args and ".headRefOid" in args:
                 return subprocess.CompletedProcess(args, 0, str(pr.get("headRefOid") or ""), "")
             if "--json" in args and "mergeable,isDraft" in args:
@@ -232,6 +239,15 @@ class HeadlessDogfoodFixture:
 
     def _fake_gh_api(self, args: list[str]) -> subprocess.CompletedProcess[str]:
         path = args[2]
+        if path.startswith("repos/owner/repo/issues?state=open"):
+            rows = []
+            for issue in self.issues.values():
+                if str(issue.get("state")).upper() == "OPEN":
+                    rows.append({"number": issue["number"], "title": issue["title"], "updated_at": "2026-06-05T00:00:00Z", "labels": [{"name": name} for name in issue["labels"]]})
+            for pr in self.prs.values():
+                if str(pr.get("state")).upper() == "OPEN":
+                    rows.append({"number": pr["number"], "title": pr["title"], "updated_at": "2026-06-05T00:00:00Z", "pull_request": {"url": "https://api.github.test/pr"}, "labels": [{"name": name} for name in pr["labels"]]})
+            return subprocess.CompletedProcess(args, 0, json.dumps(rows), "")
         if path.startswith("repos/owner/repo/issues/") and path.endswith("/comments?per_page=20"):
             return subprocess.CompletedProcess(args, 0, "[]", "")
         if path.startswith("repos/owner/repo/issues/"):

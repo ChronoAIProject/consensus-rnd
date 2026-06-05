@@ -24,7 +24,6 @@ ACTIVE_CONTROLLER = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "active_con
 
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
-    # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
     "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
@@ -38,9 +37,11 @@ TARGET_ANCHORS = {
     "integration-sync-release-rollup-65": "## Named runtime exception — integration sync daemon(per #65)",
     "statusline-51": "## Claude Code statusline(per #51 consensus)",
     "anti-stop-restart-helper-49": "## Named runtime exception — anti-stop restart helper(per #49)",
+    "runtime-retention-437": "## Named runtime exception - RuntimeRetention(per #437)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
+    "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
 }
 
@@ -229,6 +230,51 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
 
+    def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "runtime-retention-437")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - RuntimeRetention(per #437)") :]
+        claude = self.repo_rules
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        runtime_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "runtime_retention.py")
+
+        for needle in (
+            "#437",
+            "RuntimeRetention",
+            "RUNTIME_RETENTION_ENABLE=true",
+            "only canonical owner",
+            "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "same-inode compact",
+            ".refactor-loop/state/runtime-retention-plan.json",
+            "no_in_flight",
+            "no_open_issue_or_pr",
+            "no_dirty",
+            "no_local_ahead",
+            "merged_or_missing_safe",
+            "git worktree remove <path>",
+            "git worktree prune",
+            "no GitHub write",
+            "no `git fetch`",
+            "no branch deletion",
+            "no worktree cleanup without planner proof",
+            "no generic lifecycle actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "#437 是唯一 skill-private runtime-retention local-GC carveout",
+            "checked-in `RuntimeRetention` helper",
+            "same-inode compact",
+            "`git worktree remove <path>` 与 `git worktree prune`",
+            "禁止 `git fetch`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+        self.assertIn("Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#runtime-retention-437`", skill_section)
+        self.assertIn('"runtime-retention": CommandSpec(', cli_source)
+        self.assertNotIn('"' + "log" + '-retention": CommandSpec(', cli_source)
+        self.assertIn("runtime_retention_main", cli_source)
+        self.assertIn("RuntimeRetentionPlan", runtime_source)
+
     def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
         entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")
         skill_section = self.skill[self.skill.index("## Named runtime exception - global-dashboard-status-card(per #504)") :]
@@ -405,9 +451,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_release_publication_322_preserves_controller_only_boundary(self) -> None:
-        # Refactor (iter1/issue-322):
-        #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
-        #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
         entry = mirror_entry(self.mirror, "release-publication-322")
 
         for required in (
@@ -604,9 +647,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "wakeup-runner",
             "active-controller owner",
             "`wakeup-plan` evidence-bound closed action projection",
-            'mode: "closed-action-projection"',
-            'apply_authority: "wakeup-runner-396-only"',
-            'runner_authority: "wakeup-runner-396"',
             "clean `EXIT=0` source marker",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
             "missing/stale per-reviewer head SHA",
@@ -614,6 +654,10 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "OPEN/live GitHub state",
             "release #322 preflight",
             "helper-specific precondition",
+            "empty reservation commit",
+            "`early_pr_missing` fresh redispatch",
+            "exactly one matching open managed PR",
+            "stale-base clean output fails closed/status-only",
             "spawn codex",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
@@ -654,7 +698,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "`ControllerTurnDecision`",
             "controller-turn worker",
-            "private schema",
             "active-active scheduler",
             "`.refactor-loop/host.env` as host production SSOT",
             "generic lifecycle actor",
@@ -723,6 +766,81 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotIn("named helper `dispatch_design_consensus` through phase9-router deterministic routes", self.repo_rules)
         self.assertIn("不得新增 `ControllerTurnDecision`/controller-turn worker/schema", self.repo_rules)
 
+    def test_repository_stalled_meta_reflector_506_is_spawn_only_recommendation_only(self) -> None:
+        entry = mirror_entry(self.mirror, "repository-stalled-meta-reflector-506")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py")
+        prompt = read(SKILL_ROOT / "prompts" / "meta-reflector-repository-stalled.md")
+
+        for required in (
+            "#506",
+            "wakeup-plan spawn-only repository stalled reflector",
+            "r4",
+            "META_ESCALATION_STUCK_HOURS=max(meta, STALE_REVIVAL_HOURS)",
+            "spawn_codex_harness_background",
+            "meta-reflector-repository-stalled.md",
+            "no_lifecycle_authority: true",
+            "no_generic_command: true",
+            ".refactor-loop/runs/meta-escalation/",
+            "recommendation artifacts are advisory only",
+            "existing design-consensus",
+            "#403 validated `IssueDecompositionPlan`",
+            "normal narrow-fix/review gate",
+            "#396 clean `META_RESOLVED:drop` close path",
+            "test_marker_emission_contract.py",
+            "test_host_env_surface_matrix.py",
+            "test_runtime_exception_authorization_sources.py",
+            "no root CLAUDE lifecycle carveout",
+            "no public CLI",
+            "no validator module",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no standalone lifecycle or escalation system",
+            "no direct decompose",
+            "no `IssueDecompositionPlan` or `apply_issue_decomposition_plan` projection from `wakeup-plan`",
+            "no close",
+            "merge",
+            "label",
+            "commit",
+            "push",
+            "git",
+            "gh",
+            "cmd",
+            "argv",
+            "shell",
+            "env",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "prompt-body apply decision",
+            "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        for prompt_required in (
+            "META_ESCALATION_DONE:recommendations:<artifact>",
+            "META_ESCALATION_BLOCKED:<reason>",
+            "The recommendation artifact is not side-effect authorization",
+            "Forbidden actions: no `git`, no `gh`",
+            "no lifecycle authority",
+        ):
+            with self.subTest(prompt_required=prompt_required):
+                self.assertIn(prompt_required, prompt)
+
+        self.assertIn("repository_stalled_meta_reflector_actions", wakeup_source)
+        self.assertIn('"controller_action": "spawn_codex_harness_background"', wakeup_source)
+        self.assertIn('"no_lifecycle_authority": True', wakeup_source)
+        self.assertIn('"no_generic_command": True', wakeup_source)
+        self.assertIn("meta_escalation_stuck_seconds", wakeup_source)
+        self.assertFalse((SKILL_ROOT / "scripts" / "codex_refactor_loop" / "meta_escalation.py").exists())
+        self.assertNotIn("#506 是唯一", self.repo_rules)
+        self.assertNotIn("long-stuck repository meta-reflector carveout", self.repo_rules)
+
     def test_update_check_mirror_preserves_notify_only_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "update-check-231")
 
@@ -750,8 +868,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_anti_stop_restart_helper_mirror_preserves_duplicate_canonical_boundary(self) -> None:
-        # Refactor (issue-264): Old: #49 mirror did not lock duplicate canonical skip narrowing.
-        # New: source-regression requires helper-private inventory, static allowlist, and no lifecycle authority.
         entry = mirror_entry(self.mirror, "anti-stop-restart-helper-49")
 
         for required in (
@@ -846,7 +962,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         entry = mirror_entry(self.mirror, "phase9-router-open-state-gate-229")
 
         for token in (
-            "`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`",
             "`gh api repos/<slug>/issues/<N>`",
             "`gh api repos/<slug>/issues/<N>/comments?per_page=20`",
             "issue state/title/body",
@@ -882,10 +997,40 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "test_wakeup_runner.py",
             "test_cli_command_router.py",
             "test_skill_reference_anchors.py",
+            "`ManagedWorkSnapshot` open managed projection",
+            "skill-private read-only owner for open managed work discovery",
+            "`.refactor-loop/state/managed-work-snapshot.json`",
+            "`.refactor-loop/locks/managed-work-snapshot.lock`",
+            "`MANAGED_WORK_SNAPSHOT_TTL_SECONDS=300`",
+            "`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`",
+            "reuses `github_budget.py`",
+            "returns `loaded_ok=false`",
+            "cache is too stale or absent under low GraphQL headroom",
+            "not GitHub live state fact source",
+            "not host production SSOT",
+            "not #191/#396/#238/#322 lifecycle permit",
+            "snapshot unavailable",
+            "fail closed",
+            "without writing spawn intent or dispatch ledger",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, entry)
                 self.assertIn(token, self.skill)
+        self.assertIn("discover open managed `crnd:phase:design-solving` issue", entry)
+        self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
+        for mirror_token in (
+            'search shape `repo:<slug> is:open label:"crnd:lifecycle:managed"`',
+            "Issue and PullRequest nodes",
+            "labels(first: 30)",
+            "PullRequest body",
+            "headRefName",
+            "headRefOid",
+            "`gh api repos/<slug>/issues?state=open&labels=<label>&per_page=100`",
+            "`gh pr view <N> --repo <slug> --json body,headRefName,headRefOid`",
+            "cache-only/read-only status",
+        ):
+            with self.subTest(mirror_token=mirror_token):
+                self.assertIn(mirror_token, entry)
         self.assertNotIn("with no r1 solver evidence", self.skill)
         for forbidden in (
             "gh issue close",
@@ -999,11 +1144,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotIn("revive-design-consensus", entry)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
-        # Refactor (iter193/issue-193):
-        #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
-        #   per-work ownership as a second authority for issue/PR writes.
-        #   New principle: author.login+updatedAt are metadata only; issue/PR
-        #   write permits come only from #191 ActiveControllerLease.
         entry = mirror_entry(self.mirror, "active-controller-lease-191")
 
         for required in (
@@ -1069,9 +1209,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_active_controller_git_allowlist_matches_implementation(self) -> None:
-        # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old:
-        # authorization anchors named only part of the lease CAS git surface.
-        # New: source-regression compares both anchors to active_controller.py.
         entry = mirror_entry(self.mirror, "active-controller-lease-191")
         skill_section = re.search(
             r"(?ms)^## Named runtime exception - active controller lease\(per #191\).*?(?=^## )",
@@ -1119,40 +1256,43 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, observability_entry)
 
     def test_wakeup_runner_batch_budget_is_spawn_only_and_per_action_validated(self) -> None:
-        runner = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
-        run_once = runner[runner.index("    def run_once(self)") : runner.index("    def apply_action(self,")]
-        budget = runner[runner.index("class WakeupApplyBudget") : runner.index("@dataclass(frozen=True)", runner.index("class WakeupApplyBudget"))]
+        entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        combined_authority = "\n".join((entry, self.skill, self.repo_rules))
 
         for required in (
-            "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
-            "{\"spawn_codex_harness_background\"}",
-            "class WakeupApplyBudget",
-            "hard_gate.dispatch_required/concurrency.deficit",
-            "return cls.legacy()",
-            "min(dispatch_required, deficit)",
-            "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
-            "budget = WakeupApplyBudget.from_plan(plan)",
-            "consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)",
-            "result = self.apply_action(action)",
-            "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
-            "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
-            "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
-            "is_spawn_action = budget.is_spawn_action(action)",
-            "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
+            "对每个 action 重新验证",
+            "each executable action",
+            "spawn codex",
+            "dispatch reviewers/fix/remote-ci worker",
+            "merge PR under review truth table",
+            "close managed item from drop marker",
+            "publish release through #322",
+            "禁止任意 git/gh 命令",
+            "label/merge/close outside existing helper or named #396 helper",
+            "generic lifecycle actor",
+            "test_wakeup_runner.py",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, runner)
-        self.assertIn("applied_spawns += 1", run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
-        for forbidden in (
-            "for action in plan.get(\"actions\", [])[:",
-            "dispatch_required = int(",
-            "controller_action in SUPPORTED_CONTROLLER_ACTIONS",
-            "blocked_non_spawn_before_spawn",
-        ):
+                self.assertIn(required, combined_authority)
+
+        forbidden_action_fields = {
+            "argv",
+            "args",
+            "shell",
+            "cmd",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        }
+        for forbidden in sorted(forbidden_action_fields):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, budget + run_once)
+                self.assertIn(forbidden, combined_authority)
+        self.assertIn("test_forbidden_fields_fail_closed", read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"))
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"

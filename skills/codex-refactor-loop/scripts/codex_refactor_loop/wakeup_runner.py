@@ -17,15 +17,17 @@ from typing import Any, Callable, Mapping, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
 from .context import LoopContext
-from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
+from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
+from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
 from .worker_markers import read_worker_terminal_marker
 
@@ -66,6 +68,8 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_pr_rebase_resolve",
+    "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
@@ -263,11 +267,6 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
-        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
-            return self._record(
-                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
-                action,
-            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
         if exit_code != 0:
@@ -317,6 +316,10 @@ class WakeupRunner:
             and action.get("controller_action") != "publish_release_candidate"
         ):
             path = self.ctx.repo_root / source_artifact
+            if action.get("controller_action") == "commit_push_resolved_pr_rebase":
+                if _source_log_has_clean_rebase_resolve_marker(path, source_marker):
+                    return None
+                return "clean_exit_marker_missing"
             if not _source_log_has_clean_marker(path, source_marker):
                 return "clean_exit_marker_missing"
             return None
@@ -378,6 +381,10 @@ class WakeupRunner:
             return self._validate_publish_implementation(action)
         if controller_action == "dispatch_reviewers":
             return self._validate_dispatch_reviewers(action)
+        if controller_action == "dispatch_pr_rebase_resolve":
+            return self._validate_dispatch_pr_rebase_resolve(action)
+        if controller_action == "commit_push_resolved_pr_rebase":
+            return self._validate_commit_push_resolved_pr_rebase(action)
         if controller_action == "open_release_rollup_pr_from_action":
             return self._validate_release_rollup(action)
         if controller_action == "close_managed_item_from_drop_marker":
@@ -517,7 +524,8 @@ class WakeupRunner:
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
-            "no_duplicate_open_pr",
+            "worker_authored_pr_artifacts",
+            "no_conflicting_open_implementation_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -525,14 +533,72 @@ class WakeupRunner:
             return "publish_implementation_target_missing"
         if not self._live_target_has_managed_label("issue", int(action["target_number"])):
             return "publish_implementation_target_not_managed"
-        duplicate_error = self._validate_no_duplicate_open_pr(action)
-        if duplicate_error:
-            return duplicate_error
-        return self._validate_implementation_worktree(action)
+        artifact_error = self._validate_implementation_pr_artifacts(action)
+        if artifact_error:
+            return artifact_error
+        worktree_error = self._validate_implementation_worktree(action)
+        if worktree_error:
+            return worktree_error
+        return self._validate_no_conflicting_open_implementation_pr(action)
+
+    def _validate_implementation_pr_artifacts(self, action: Mapping[str, Any]) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, target)
+        if not validation.reason:
+            return None
+        return _publish_implementation_artifact_reason(validation.reason)
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
             return "dispatch_reviewers_target_missing"
+        return None
+
+    def _validate_dispatch_pr_rebase_resolve(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "dispatch_pr_rebase_resolve_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "dispatch_pr_rebase_resolve_missing_preconditions"
+        for required in ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"):
+            if required not in preconditions:
+                return f"dispatch_pr_rebase_resolve_missing_precondition:{required}"
+        target = int(action["target_number"])
+        if not self._live_target_has_managed_label("pr", target):
+            return "dispatch_pr_rebase_resolve_target_not_managed"
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _managed_pr_head_ref(head_ref):
+            return "dispatch_pr_rebase_resolve_invalid_head_ref"
+        live_head = self._pr_head_ref(target)
+        if live_head != head_ref:
+            return f"dispatch_pr_rebase_resolve_stale_head:{live_head or 'unknown'}"
+        return None
+
+    def _validate_commit_push_resolved_pr_rebase(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "commit_push_resolved_pr_rebase_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "commit_push_resolved_pr_rebase_missing_preconditions"
+        for required in ("active_controller_owner", "clean_exit_source_marker"):
+            if required not in preconditions:
+                return f"commit_push_resolved_pr_rebase_missing_precondition:{required}"
+        marker = str(action.get("source_marker") or "")
+        if not (
+            re.fullmatch(r"REBASE_RESOLVE_DONE:[1-9][0-9]*:[^\s`]+", marker)
+            or re.fullmatch(r"REBASE_RESOLVE_BLOCKED:[1-9][0-9]*:(?:conflict|human-decision|build-broken|other):[^\n]+", marker)
+        ):
+            return "commit_push_resolved_pr_rebase_invalid_marker"
+        target = int(action["target_number"])
+        if not self._live_target_has_managed_label("pr", target):
+            return "commit_push_resolved_pr_rebase_target_not_managed"
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _managed_pr_head_ref(head_ref):
+            return "commit_push_resolved_pr_rebase_invalid_head_ref"
+        live_head = self._pr_head_ref(target)
+        if live_head != head_ref:
+            return f"commit_push_resolved_pr_rebase_stale_head:{live_head or 'unknown'}"
         return None
 
     def _validate_release_rollup(self, action: Mapping[str, Any]) -> str | None:
@@ -549,19 +615,43 @@ class WakeupRunner:
             return "release_rollup_body_missing"
         return None
 
-    def _validate_no_duplicate_open_pr(self, action: Mapping[str, Any]) -> str | None:
+    def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
             return "publish_implementation_invalid_head_ref"
-        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number"])
+        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"])
         if result.returncode != 0:
-            return "publish_implementation_duplicate_pr_unavailable"
+            return "publish_implementation_matching_pr_unavailable"
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return "publish_implementation_duplicate_pr_invalid_json"
+            return "publish_implementation_matching_pr_invalid_json"
         if not isinstance(payload, list):
-            return "publish_implementation_duplicate_pr_invalid_json"
+            return "publish_implementation_matching_pr_invalid_json"
+        if len(payload) == 0:
+            return None
+        if len(payload) > 1:
+            return "publish_implementation_multiple_matching_open_pr"
+        pr = payload[0]
+        if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+            return "publish_implementation_matching_pr_invalid_json"
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "publish_implementation_matching_pr_head_mismatch"
+        base = str(pr.get("baseRefName") or "")
+        integration_branch = str(getattr(self.actions, "integration_branch", "") or self.ctx.host_env.get("INTEGRATION_BRANCH", "")).strip()
+        if integration_branch and base != integration_branch:
+            return "publish_implementation_matching_pr_base_mismatch"
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "publish_implementation_matching_pr_not_managed"
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "publish_implementation_matching_pr_not_managed"
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        if _single_linked_issue_from_body(str(pr.get("body") or "")) != target:
+            return "publish_implementation_matching_pr_issue_mismatch"
         return None
 
     def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
@@ -618,6 +708,10 @@ class WakeupRunner:
                 if fix_publish_rc != 0:
                     return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
+        if controller_action == "dispatch_pr_rebase_resolve":
+            return self.actions.dispatch_pr_rebase_resolve(dict(action))
+        if controller_action == "commit_push_resolved_pr_rebase":
+            return self.actions.commit_push_resolved_pr_rebase(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
@@ -1070,6 +1164,18 @@ def _spawn_log_suppresses_retry(path: Path) -> bool:
     return True
 
 
+def _source_log_has_clean_rebase_resolve_marker(path: Path, marker: str) -> bool:
+    if not marker.startswith(("REBASE_RESOLVE_DONE:", "REBASE_RESOLVE_BLOCKED:")):
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    if not any(line.strip() == "EXIT=0" for line in lines[-30:]):
+        return False
+    return any(line.strip().strip("`") == marker for line in lines[-30:])
+
+
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
 
@@ -1087,6 +1193,11 @@ def _extract_review_head_sha(text: str) -> str:
     return match.group(1) if match else ""
 
 
+def _single_linked_issue_from_body(body: str) -> int | None:
+    numbers = extract_closing_issue_numbers(body)
+    return numbers[0] if len(numbers) == 1 else None
+
+
 def _target_from_text(text: str) -> tuple[str, int] | None:
     for pattern, kind in TARGET_TEXT_PATTERNS:
         match = pattern.search(text)
@@ -1095,8 +1206,20 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
     return None
 
 
+def _managed_pr_head_ref(value: str) -> bool:
+    return bool(re.fullmatch(r"refactor/iter[1-9][0-9]*-[A-Za-z0-9._-]+", value))
+
+
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _publish_implementation_artifact_reason(reason: str) -> str:
+    prefix = "implementation_pr_"
+    if not reason.startswith(prefix):
+        return reason
+    local = reason.removeprefix(prefix)
+    return "publish_implementation_" + local
 
 
 def _spawn_launch_failure(result: RunnerResult) -> bool:

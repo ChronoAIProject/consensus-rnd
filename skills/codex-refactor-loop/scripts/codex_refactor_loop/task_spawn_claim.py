@@ -84,7 +84,11 @@ class TaskSpawnClaimStore:
         if claimed_task != task_id or claimed_log != str(log_path):
             raise TaskSpawnClaimError(f"spawn claim metadata mismatch: {lock_path}")
         claimed_log_path = Path(claimed_log)
-        return _worker_terminal_completion_marker_found(claimed_log_path)
+        if _worker_terminal_completion_marker_found(claimed_log_path):
+            return True
+        # A dead holder means the spawn crashed or exited without releasing the lock.
+        # Recycling prevents permanent SPAWN_CLAIM_HELD when the log was cleared for fresh re-dispatch.
+        return not _holder_process_alive(metadata)
 
     def _read_metadata(self, lock_path: Path) -> dict[str, object]:
         try:
@@ -131,6 +135,19 @@ def _worker_terminal_completion_marker_found(path: Path) -> bool:
     if not path.is_file():
         return _marker_from_companion_artifact(path).found
     return _log_has_exit_marker(path)
+
+
+def _holder_process_alive(metadata: dict[str, object]) -> bool:
+    pid = metadata.get("pid")
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _log_has_exit_marker(path: Path) -> bool:

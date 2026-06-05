@@ -100,7 +100,7 @@ class ReviewGateEndToEndTests(unittest.TestCase):
                 head_sha=HEAD_SHA,
             )
         ]
-        actions = completed_marker_actions(self.repo, {("PR", 480)}, gh_items, None)
+        actions = completed_marker_actions(self.repo, ctx=self.ctx, open_targets={("PR", 480)}, gh_items=gh_items)
         review_actions = [action for action in actions if action.get("controller_action") == "review_gate"]
         self.assertEqual(len(review_actions), 1, json.dumps(actions, sort_keys=True))
         action = review_actions[0]

@@ -306,14 +306,14 @@ class WakeupRunnerReviewGateTests(unittest.TestCase):
         self.assertEqual(result.status, "applied")
         self.assertEqual(self.actions.merged, ["12"])
 
-    def test_duplicate_review_completion_marker_fails_closed(self) -> None:
+    def test_conflicting_review_completion_marker_fails_closed(self) -> None:
         self.write_review("architect", "approve")
         self.write_review("tests", "approve")
         self.write_review("quality", "comment")
         (self.repo / ".refactor-loop/logs/review-pr12-quality-r1.log").write_text(
             f"head_sha: {'a' * 40}\n"
             "REVIEW_DONE:12:quality:comment\n"
-            "REVIEW_DONE:12:quality:comment\n"
+            "REVIEW_DONE:12:quality:reject\n"
             "EXIT=0\n",
             encoding="utf-8",
         )

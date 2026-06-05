@@ -11,7 +11,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from string import Template
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
@@ -20,12 +20,24 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
-from .implement_lifecycle import clear_redispatchable_implement_log
+from .implementation_pr_artifacts import (
+    FINAL_SENTINEL,
+    implementation_cluster_id,
+    implementation_pr_body_path,
+    implementation_pr_title_path,
+    validate_implementation_pr_artifacts,
+)
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
-from .release.publisher import ReleasePublishResult, ReleasePublisher
-from .review_fix_dispatch import ReviewFixDispatchSpec
+from .processes import launch_spawn_codex_supervisor
+from .release.publisher import ReleasePublisher
 from .git import Git
+from .review_fix_dispatch import (
+    ReviewFixDispatchSpec,
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
+)
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
@@ -53,6 +65,11 @@ GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
 PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
+MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_BLOCKED_RE = re.compile(
+    r"^REBASE_RESOLVE_BLOCKED:([1-9][0-9]*):(conflict|human-decision|build-broken|other):(.+)$"
+)
 
 
 class ControllerActions:
@@ -651,16 +668,27 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        diff_ready = self._require_publish_implementation_diff(worktree)
+        if diff_ready != 0:
+            return diff_ready
+        title_error = self._implementation_pr_title_error(action, issue_target)
+        if title_error:
+            sys.stderr.write(f"publish_implementation_output: {title_error}\n")
+            return 2
+        body_error = self._implementation_pr_body_error(action, issue_target)
+        if body_error:
+            sys.stderr.write(f"publish_implementation_output: {body_error}\n")
+            return 2
+        pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
+        if pr_error:
+            sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
+            return 2
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        existing_pr = self._open_pr_for_head(head_ref)
-        if existing_pr == 0:
-            sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
-            return 2
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
@@ -668,12 +696,13 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        if existing_pr is None:
-            body_file = self._implementation_pr_body_file(action, issue_target)
-            title = str(action.get("title") or f"实现 issue #{issue_target}")
-            pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-        else:
-            pr_target = existing_pr
+        if pr_target is None:
+            pr_target, _url = self.open_pr_with_label(
+                self._implementation_pr_title(action, issue_target),
+                str(self._implementation_pr_body_file(action, issue_target)),
+                base=self.integration_branch,
+                head=head_ref,
+            )
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -695,6 +724,43 @@ class ControllerActions:
             return "noncanonical branch"
         return None
 
+    def _require_publish_implementation_diff(self, worktree: Path) -> int:
+        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
+        if diff.returncode == 1:
+            return 0
+        if diff.returncode != 0:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        committed_delta = self._has_committed_implementation_delta(worktree)
+        if committed_delta is None:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        if committed_delta:
+            return 0
+        sys.stderr.write("publish_implementation_output: implementation_produced_no_diff\n")
+        return 2
+
+    def _has_committed_implementation_delta(self, worktree: Path) -> bool | None:
+        integration, _review_base = self._require_branch_config()
+        for ref in (f"origin/{integration}", integration):
+            current = self._git_in(worktree, ["rev-parse", "--verify", ref], check=False)
+            if current.returncode != 0:
+                continue
+            merge_base = self._git_in(worktree, ["merge-base", "HEAD", ref], check=False)
+            if merge_base.returncode != 0:
+                return None
+            base_sha = merge_base.stdout.strip()
+            if not base_sha:
+                return None
+            # A committed implementation diff is a valid publish input; compare merge-base..HEAD.
+            diff = self._git_in(worktree, ["diff", "--quiet", base_sha, "HEAD"], check=False)
+            if diff.returncode == 0:
+                return False
+            if diff.returncode == 1:
+                return True
+            return None
+        return None
+
     def _commit_publish_implementation_diff(
         self,
         action: Mapping[str, object],
@@ -702,38 +768,25 @@ class ControllerActions:
         head_ref: str,
         worktree: Path,
     ) -> int:
-        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
-        if diff.returncode == 0:
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        if status.returncode != 0:
+            if status.stderr:
+                sys.stderr.write(status.stderr)
+            sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+            return 2
+        if not status.stdout.strip():
             return 0
-        if diff.returncode != 1:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_diff_unavailable",
-            )
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
-            return self._delegate_publish_implementation_fallback(
-                action,
-                issue_target,
-                head_ref,
-                worktree,
-                "publish_add_failed",
-            )
+            sys.stderr.write("publish_implementation_output: publish_add_failed\n")
+            return 2
         commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
         if commit.returncode == 0:
             return 0
         if commit.stderr:
             sys.stderr.write(commit.stderr)
-        return self._delegate_publish_implementation_fallback(
-            action,
-            issue_target,
-            head_ref,
-            worktree,
-            "publish_commit_failed",
-        )
+        sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+        return 2
 
     def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
         integration, _review_base = self._require_branch_config()
@@ -1022,6 +1075,322 @@ class ControllerActions:
                 return True
         return False
 
+    def dispatch_pr_rebase_resolve(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("dispatch-pr-rebase-resolve", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="dispatch-pr-rebase-resolve")
+        if pr_target is None:
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = facts["head_ref"]
+        if not self._canonical_managed_head(head_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            sys.stderr.write("dispatch_pr_rebase_resolve: live PR is not managed\n")
+            return 2
+        worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree branch mismatch\n")
+            return 2
+        if self._worktree_has_unrelated_dirty_state(worktree):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree dirty before merge\n")
+            return 2
+        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
+        if fetch.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: fetch failed: {_single_line(fetch.stderr or fetch.stdout)}\n")
+            return 2
+        base_ref = f"origin/{self.integration_branch}"
+        if not self._branch_is_base_behind(worktree, base_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: branch already contains {base_ref}; noop\n")
+            return 0
+        merge = self._git_in(worktree, ["merge", "--no-commit", "--no-ff", base_ref], check=False)
+        if merge.returncode == 0:
+            return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+        unmerged = self._unmerged_paths(worktree)
+        if not unmerged:
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(
+                "dispatch_pr_rebase_resolve: merge failed without unmerged paths: "
+                f"{_single_line(merge.stderr or merge.stdout)}\n"
+            )
+            return 2
+        round_number = self._next_rebase_resolve_round(pr_target)
+        prompt = self.ctx.paths.prompts / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        output = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        log = self.ctx.paths.logs / f"rebase-resolve-pr{pr_target}-r{round_number}.log"
+        context_path = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}-context.json"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(
+            json.dumps(
+                {
+                    "pr_number": pr_target,
+                    "base_branch": self.integration_branch,
+                    "head_branch": head_ref,
+                    "worktree_path": str(worktree),
+                    "unmerged_paths": unmerged,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "rebase-resolve.md"),
+            str(prompt),
+            env={
+                "PR_NUMBER": pr_target,
+                "BASE_BRANCH": self.integration_branch,
+                "HEAD_BRANCH": head_ref,
+                "BRANCH": head_ref,
+                "WORKTREE_PATH": str(worktree),
+                "REBASE_CONTEXT_PATH": self.ctx.durable_artifact_path(context_path),
+                "REBASE_RESOLVE_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
+            },
+        )
+        self._replace_rebase_resolve_shell_defaults(prompt)
+        self._ensure_rebase_resolve_prompt_fully_rendered(prompt)
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            add_dirs=(self.ctx.repo_root,),
+            env=self.ctx.env_for_subprocess(),
+        )
+
+    def commit_push_resolved_pr_rebase(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("commit-push-resolved-pr-rebase", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="commit-push-resolved-pr-rebase")
+        if pr_target is None:
+            return 2
+        marker = str(action.get("source_marker") or action.get("marker") or "")
+        blocked = REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker)
+        if blocked:
+            if blocked.group(1) != pr_target:
+                sys.stderr.write("commit_push_resolved_pr_rebase: blocked marker PR mismatch\n")
+                return 2
+            worktree = self._worktree_from_rebase_action(action, pr_target)
+            if worktree is not None:
+                self._abort_merge_if_present(worktree)
+            self._append_pending_event(
+                f"REBASE_RESOLVE_BLOCKED:{pr_target}:{blocked.group(2)}:{_single_line(blocked.group(3))}"
+            )
+            return 3
+        done = REBASE_RESOLVE_DONE_RE.fullmatch(marker)
+        if marker and done is None:
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid source marker\n")
+            return 2
+        if done is not None and done.group(1) != pr_target:
+            sys.stderr.write("commit_push_resolved_pr_rebase: done marker PR mismatch\n")
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = str(action.get("head_ref") or facts["head_ref"]).strip()
+        if head_ref != facts["head_ref"]:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: stale head_ref {head_ref!r}\n")
+            return 2
+        worktree = self._worktree_from_rebase_action(action, pr_target)
+        if worktree is None:
+            worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+
+    def _commit_push_resolved_pr_rebase(self, *, pr_target: str, head_ref: str, worktree: Path) -> int:
+        if not self._canonical_managed_head(head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: live PR is not managed\n")
+            return 2
+        if not self._worktree_under_controller_root(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree outside controller-owned .worktrees\n")
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree branch mismatch\n")
+            return 2
+        if not self._merge_in_progress(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: merge not in progress\n")
+            return 2
+        unmerged = self._unmerged_paths(worktree)
+        if unmerged:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: unresolved conflicts: {','.join(unmerged)}\n")
+            return 2
+        commit = self._git_in(worktree, ["commit", "--no-edit"], check=False)
+        if commit.returncode != 0:
+            sys.stderr.write(
+                "commit_push_resolved_pr_rebase: merge commit failed: "
+                f"{_single_line(commit.stderr or commit.stdout or 'nothing-to-commit')}\n"
+            )
+            return 2
+        return self.safe_push(branch=head_ref, worktree=worktree)
+
+    def _managed_pr_target(self, action: Mapping[str, object], *, action_name: str) -> str | None:
+        target = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="pr",
+            action=action_name,
+            source="wakeup-runner-action",
+        )
+        if target is None:
+            return None
+        if action.get("target_kind") != "PR":
+            sys.stderr.write(f"{action_name.replace('-', '_')}: target_kind must be PR\n")
+            return None
+        return target
+
+    def _pr_rebase_facts(self, pr_target: str) -> dict[str, str] | None:
+        result = self.gh(
+            ["pr", "view", pr_target, "--json", "baseRefName,headRefName,headRefOid"],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR metadata unavailable: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            sys.stderr.write("dispatch_pr_rebase_resolve: invalid PR metadata JSON\n")
+            return None
+        head_ref = str(payload.get("headRefName") or "").strip()
+        base_ref = str(payload.get("baseRefName") or "").strip()
+        if base_ref != self.integration_branch:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR base mismatch {base_ref!r}\n")
+            return None
+        if not head_ref:
+            sys.stderr.write("dispatch_pr_rebase_resolve: missing head_ref\n")
+            return None
+        return {"head_ref": head_ref, "head_sha": str(payload.get("headRefOid") or ""), "base_ref": base_ref}
+
+    def _ensure_managed_pr_worktree(self, head_ref: str) -> Path | None:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: invalid managed head_ref {head_ref!r}\n")
+            return None
+        existing = self._worktree_for_branch(head_ref)
+        if existing is not None:
+            resolved = existing.resolve()
+            if self._worktree_under_controller_root(resolved):
+                return resolved
+            sys.stderr.write("dispatch_pr_rebase_resolve: existing worktree outside controller-owned .worktrees\n")
+            return None
+        wt_path = self.ctx.repo_root / ".worktrees" / f"iter{match.group(1)}-{match.group(2)}"
+        (self.ctx.repo_root / ".worktrees").mkdir(parents=True, exist_ok=True)
+        result = self.git(["worktree", "add", str(wt_path), head_ref], check=False)
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: worktree add failed: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        return wt_path.resolve()
+
+    def _canonical_managed_head(self, head_ref: str) -> bool:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            return False
+        try:
+            _validate_safe_worktree_fields(match.group(1), match.group(2))
+        except ValueError:
+            return False
+        return head_ref not in {self.integration_branch, self.review_base_branch}
+
+    def _worktree_under_controller_root(self, worktree: Path) -> bool:
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return False
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return False
+        return True
+
+    def _worktree_is_on_branch(self, worktree: Path, head_ref: str) -> bool:
+        branch = self._git_in(worktree, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return branch.returncode == 0 and branch.stdout.strip() == head_ref
+
+    def _worktree_has_unrelated_dirty_state(self, worktree: Path) -> bool:
+        if self._merge_in_progress(worktree):
+            return True
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        return status.returncode != 0 or bool(status.stdout.strip())
+
+    def _merge_in_progress(self, worktree: Path) -> bool:
+        git_dir = self._git_in(worktree, ["rev-parse", "--git-dir"], check=False)
+        if git_dir.returncode != 0 or not git_dir.stdout.strip():
+            return False
+        path = Path(git_dir.stdout.strip())
+        if not path.is_absolute():
+            path = worktree / path
+        return (path / "MERGE_HEAD").exists()
+
+    def _unmerged_paths(self, worktree: Path) -> list[str]:
+        result = self._git_in(worktree, ["diff", "--name-only", "--diff-filter=U"], check=False)
+        if result.returncode != 0:
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def _branch_is_base_behind(self, worktree: Path, base_ref: str) -> bool:
+        merge_base = self._git_in(worktree, ["merge-base", "HEAD", base_ref], check=False)
+        base = self._git_in(worktree, ["rev-parse", "--verify", base_ref], check=False)
+        return merge_base.returncode == 0 and base.returncode == 0 and merge_base.stdout.strip() != base.stdout.strip()
+
+    def _abort_merge_if_present(self, worktree: Path) -> None:
+        if self._merge_in_progress(worktree):
+            abort = self._git_in(worktree, ["merge", "--abort"], check=False)
+            if abort.returncode != 0:
+                sys.stderr.write(f"rebase_resolve: merge_abort_failed:{_single_line(abort.stderr or abort.stdout)}\n")
+
+    def _next_rebase_resolve_round(self, pr_target: str) -> int:
+        rounds: list[int] = []
+        pattern = re.compile(rf"^rebase-resolve-pr{re.escape(pr_target)}-r([1-9][0-9]*)\.(?:md|log)$")
+        for directory in (self.ctx.paths.prompts, self.ctx.paths.runs, self.ctx.paths.logs):
+            for path in directory.glob(f"rebase-resolve-pr{pr_target}-r*.*"):
+                match = pattern.match(path.name)
+                if match:
+                    rounds.append(int(match.group(1)))
+        return (max(rounds) if rounds else 0) + 1
+
+    def _worktree_from_rebase_action(self, action: Mapping[str, object], pr_target: str) -> Path | None:
+        raw = str(action.get("worktree") or "").strip()
+        if raw:
+            candidate = Path(raw)
+            if candidate.is_absolute() and self._worktree_under_controller_root(candidate):
+                return candidate.resolve()
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid worktree path\n")
+            return None
+        head_ref = str(action.get("head_ref") or "").strip()
+        if head_ref:
+            return self._worktree_for_branch(head_ref)
+        for path in sorted((self.ctx.repo_root / ".worktrees").glob(f"iter{pr_target}-*")):
+            if path.is_dir():
+                return path.resolve()
+        return None
+
+    def _ensure_rebase_resolve_prompt_fully_rendered(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"rebase-resolve prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _replace_rebase_resolve_shell_defaults(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", "CLAUDE.md")
+        prompt_path.write_text(text, encoding="utf-8")
+
     def open_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
         event = action.get("event")
         event_json = json.dumps(event, sort_keys=True) if isinstance(event, dict) else str(action.get("event_json") or "")
@@ -1112,21 +1481,42 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _open_pr_for_head(self, head_ref: str) -> int | None:
-        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+    def _matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+        result = self.gh(
+            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
+            check=False,
+        )
         if result.returncode != 0:
-            return 0
+            return "matching_pr_unavailable", None
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return 0
-        if not isinstance(payload, list) or not payload:
-            return None
-        first = payload[0]
-        if not isinstance(first, dict):
-            return 0
-        number = first.get("number")
-        return number if isinstance(number, int) and number > 0 else 0
+            return "matching_pr_invalid_json", None
+        if not isinstance(payload, list):
+            return "matching_pr_invalid_json", None
+        if len(payload) == 0:
+            return None, None
+        if len(payload) > 1:
+            return "multiple_matching_open_pr", None
+        pr = payload[0]
+        if not isinstance(pr, dict):
+            return "matching_pr_invalid_json", None
+        number = pr.get("number")
+        if not isinstance(number, int) or number <= 0:
+            return "matching_pr_invalid_json", None
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "matching_pr_head_mismatch", None
+        if str(pr.get("baseRefName") or "") != self.integration_branch:
+            return "matching_pr_base_mismatch", None
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "matching_pr_not_managed", None
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "matching_pr_not_managed", None
+        if _single_linked_issue(str(pr.get("body") or "")) != issue_target:
+            return "matching_pr_issue_mismatch", None
+        return None, number
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
@@ -1148,19 +1538,25 @@ class ControllerActions:
         return result.returncode
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
-        raw = str(action.get("body_file") or "").strip()
-        if raw:
-            path = Path(raw)
-            return path if path.is_absolute() else self.ctx.repo_root / path
-        path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"## issue #{issue_target} 实现\n\n"
-            f"Closes #{issue_target}\n\n"
-            "⟦AI:AUTO-LOOP⟧\n",
-            encoding="utf-8",
-        )
-        return path
+        return implementation_pr_body_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title_file(self, action: Mapping[str, object], issue_target: str) -> Path:
+        return implementation_pr_title_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title(self, action: Mapping[str, object], issue_target: str) -> str:
+        return self._implementation_pr_title_file(action, issue_target).read_text(encoding="utf-8", errors="replace").strip()
+
+    def _implementation_pr_title_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_title_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
+
+    def _implementation_pr_body_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_body_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -1255,6 +1651,9 @@ class ControllerActions:
         render_env = {
             "AUDIT_PATH": "",
             "IMPLEMENT_SUMMARY_PATH": "",
+            "CLUSTER_ID": "",
+            "ISSUE_NUMBER": "",
+            "ITERATION": "",
             "PROJECT_RULES": "CLAUDE.md",
             "HOST_REFACTOR_COMMENT_POLICY": "none",
         }
@@ -1271,6 +1670,7 @@ class ControllerActions:
         )
         self._replace_review_fix_shell_defaults(prompt_path, render_env)
         self._ensure_review_fix_prompt_fully_rendered(prompt_path)
+        self._write_review_thread_completion_seed(pr_number)
         return spec
 
     def _replace_review_fix_shell_defaults(self, prompt_path: Path, render_env: Mapping[str, str]) -> None:
@@ -1283,6 +1683,105 @@ class ControllerActions:
         unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
         if unresolved:
             raise RuntimeError(f"review-fix prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _write_review_thread_completion_seed(self, pr_number: int) -> None:
+        state_dir = self.ctx.repo_root / ".refactor-loop" / "state" / "review-thread-completion"
+        state_path = state_dir / f"pr{pr_number}.json"
+        thread = self._first_unresolved_review_thread(pr_number)
+        if thread is None:
+            state_path.unlink(missing_ok=True)
+            return
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": thread["id"],
+                    "replied": False,
+                    "resolved": False,
+                    "source": thread["source"],
+                },
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+
+    def _first_unresolved_review_thread(self, pr_number: int) -> dict[str, Any] | None:
+        slug = self.ctx.gh_repo_slug
+        if not slug:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        owner, _, repo = slug.partition("/")
+        if not owner or not repo:
+            return {"id": "", "source": "live-pr-review-thread-unknown"}
+        query = (
+            "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
+            "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
+            "reviewThreads(first:100, after:$after){ "
+            "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
+            "} } } }"
+        )
+        after = ""
+        while True:
+            args = [
+                "api",
+                "graphql",
+                "-f",
+                f"owner={owner}",
+                "-f",
+                f"repo={repo}",
+                "-F",
+                f"number={pr_number}",
+                "-f",
+                f"query={query}",
+            ]
+            if after:
+                args.extend(["-f", f"after={after}"])
+            result = subprocess.run(
+                ["gh", *args],
+                cwd=str(self.ctx.repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode != 0:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            try:
+                payload = json.loads(result.stdout or "{}")
+            except json.JSONDecodeError:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            review_threads = (
+                (((payload.get("data") or {}).get("repository") or {}).get("pullRequest") or {})
+                .get("reviewThreads")
+            )
+            if not isinstance(review_threads, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            nodes = review_threads.get("nodes")
+            if not isinstance(nodes, list):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            for node in nodes:
+                if not isinstance(node, dict):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+                thread_id = node.get("id")
+                is_resolved = node.get("isResolved")
+                if isinstance(thread_id, str) and thread_id and is_resolved is False:
+                    return {"id": thread_id, "source": "live-pr-review-thread"}
+                if not isinstance(is_resolved, bool):
+                    return {"id": "", "source": "live-pr-review-thread-unknown"}
+            page_info = review_threads.get("pageInfo")
+            if not isinstance(page_info, dict):
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            has_next_page = page_info.get("hasNextPage")
+            if has_next_page is False:
+                return None
+            if has_next_page is not True:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            end_cursor = page_info.get("endCursor")
+            if not isinstance(end_cursor, str) or not end_cursor:
+                return {"id": "", "source": "live-pr-review-thread-unknown"}
+            after = end_cursor
+
+    def validate_review_fix_completion(self, evidence: ReviewThreadCompletionEvidence) -> None:
+        validate_review_thread_completion(evidence)
 
     def _resolve_template_input(self, input_path: str) -> Path:
         if not input_path.startswith("host:"):
@@ -1428,3 +1927,26 @@ def _review_fix_log_has_exit_zero(path: Path) -> bool:
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
+    return implementation_cluster_id(action, issue_target)
+
+
+def _controller_implementation_pr_error(reason: str, detail: str = "") -> str:
+    messages = {
+        "implementation_pr_title_artifact_invalid_path": "implementation PR title artifact outside runs",
+        "implementation_pr_title_artifact_missing": "implementation PR title artifact missing",
+        "implementation_pr_title_artifact_invalid": "implementation PR title must be exactly one non-empty line",
+        "implementation_pr_title_placeholder": "implementation PR title is placeholder",
+        "implementation_pr_title_contains_body_content": "implementation PR title contains body-only content",
+        "implementation_pr_body_artifact_invalid_path": "implementation PR body artifact outside runs",
+        "implementation_pr_body_artifact_missing": "implementation PR body artifact missing",
+        "implementation_pr_body_sentinel_missing": "implementation PR body sentinel must be final standalone line",
+        "implementation_pr_body_closes_mismatch": "implementation PR body must contain exactly one matching Closes link",
+        "implementation_pr_body_required_section_missing": "implementation PR body missing required section",
+        "implementation_pr_body_placeholder": "implementation PR body is placeholder",
+        "implementation_pr_body_github_body_invalid": "implementation PR body invalid",
+    }
+    message = messages.get(reason, reason)
+    return f"{message}: {detail}" if detail else message

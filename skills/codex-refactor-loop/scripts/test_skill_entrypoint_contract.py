@@ -12,6 +12,7 @@ SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
+IMPLEMENT_PROMPT = SKILL_ROOT / "prompts" / "implement.md"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
@@ -117,6 +118,20 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
+
+    def test_implement_prompt_redline_allows_required_pr_artifacts(self) -> None:
+        prompt = read(IMPLEMENT_PROMPT)
+        required = (
+            "$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
+            "$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log",
+            "除此之外 `.refactor-loop/` 一律禁改",
+        )
+
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
 
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
@@ -529,7 +544,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "git branch -D",
         )
         allowed_history = "must not run `gh pr create`"
-        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        runtime_retention = section_between(
+            self.skill,
+            r"^## Named runtime exception - RuntimeRetention\(per #437\)$",
+            r"^## Large issue decomposition",
+        )
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "").replace(runtime_retention, "")
+        skill_without_forbidden_history = re.sub(
+            r"(?m)^.*(?:RuntimeRetention|runtime-retention).*\n?",
+            "",
+            skill_without_forbidden_history,
+        )
         for needle in forbidden:
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, skill_without_forbidden_history)

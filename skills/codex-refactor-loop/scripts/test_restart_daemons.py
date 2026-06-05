@@ -29,6 +29,7 @@ from codex_refactor_loop.restart import (
     daemon_targets,
     restart_managed_daemon_names,
 )
+from codex_refactor_loop.runtime_retention import RuntimeRetentionResult
 
 
 DAEMON_NAMES = restart_managed_daemon_names()
@@ -127,13 +128,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.skill / "scripts").mkdir(parents=True)
         (self.skill / "scripts" / "consensus-rnd-cli").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
+        self.host_env_path = self.repo / ".config" / "consensus-rnd" / "host.env"
+        self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
         self.env_patch = mock.patch.dict(
             os.environ,
-            {"CONSENSUS_RND_HOST_ENV": str(self.repo / ".config" / "consensus-rnd" / "host.env")},
+            {"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
         )
         self.env_patch.start()
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
@@ -146,7 +148,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def run_helper(self) -> RestartDaemons:
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
                 helper.run()
                 return helper
@@ -159,6 +161,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
                     with mock.patch("codex_refactor_loop.restart.pid_alive", self.runtime.pid_alive):
                         with mock.patch("codex_refactor_loop.restart.time.time", return_value=self.runtime.now()):
                             return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+
+    def noop_retention(self) -> RuntimeRetentionResult:
+        return RuntimeRetentionResult(False, 0, 0, False, 0, False, self.repo / ".refactor-loop", False)
 
     def start_count(self, name: str) -> int:
         path = self.repo / ".refactor-loop" / "logs" / f"{name}.starts"
@@ -188,8 +193,88 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             self.assertIn("consensus-rnd-cli", joined)
             self.assertIn("--daemon", command)
         self.assertIn(("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")), DAEMON_COMMANDS)
-        self.assertIn(("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")), DAEMON_COMMANDS)
+        self.assertIn(
+            (
+                "phase9_router_daemon",
+                (
+                    "python3",
+                    "{skill_root}/scripts/consensus-rnd-cli",
+                    "phase9-router",
+                    "--daemon",
+                    "--interval",
+                    "{phase9_router_interval_seconds}",
+                ),
+            ),
+            DAEMON_COMMANDS,
+        )
+        self.assertIn(
+            (
+                "wakeup_runner_daemon",
+                (
+                    "python3",
+                    "{skill_root}/scripts/consensus-rnd-cli",
+                    "wakeup-runner",
+                    "--daemon",
+                    "--interval-seconds",
+                    "{wakeup_runner_interval_seconds}",
+                ),
+            ),
+            DAEMON_COMMANDS,
+        )
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
+
+    def test_restart_daemon_intervals_resolve_from_host_env_with_default_fallback(self) -> None:
+        phase9_template = next(command for name, command in DAEMON_COMMANDS if name == "phase9_router_daemon")
+        wakeup_template = next(command for name, command in DAEMON_COMMANDS if name == "wakeup_runner_daemon")
+        default_phase9 = restart.daemon_target(self.ctx, "phase9_router_daemon", phase9_template)
+        default_wakeup = restart.daemon_target(self.ctx, "wakeup_runner_daemon", wakeup_template)
+
+        self.assertEqual("120", default_phase9.command[-1])
+        self.assertEqual("120", default_wakeup.command[-1])
+
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export PHASE9_ROUTER_INTERVAL_SECONDS="45"\n'
+            'export WAKEUP_RUNNER_INTERVAL_SECONDS="75"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+        )
+        host_phase9 = restart.daemon_target(ctx, "phase9_router_daemon", phase9_template)
+        host_wakeup = restart.daemon_target(ctx, "wakeup_runner_daemon", wakeup_template)
+
+        self.assertEqual("45", host_phase9.command[-1])
+        self.assertEqual("75", host_wakeup.command[-1])
+        runtime = FakeRestartDaemonRuntime()
+        helper = RestartDaemons(ctx, self.config, runtime=runtime)
+        helper.start_daemon("phase9_router_daemon", phase9_template)
+        helper.start_daemon("wakeup_runner_daemon", wakeup_template)
+        self.assertEqual("45", runtime.launch_envs["phase9_router_daemon"]["PHASE9_ROUTER_INTERVAL_SECONDS"])
+        self.assertEqual("75", runtime.launch_envs["wakeup_runner_daemon"]["WAKEUP_RUNNER_INTERVAL_SECONDS"])
+
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export PHASE9_ROUTER_INTERVAL_SECONDS="0"\n'
+            'export WAKEUP_RUNNER_INTERVAL_SECONDS="not-an-int"\n',
+            encoding="utf-8",
+        )
+        invalid_ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+        )
+        invalid_phase9 = restart.daemon_target(invalid_ctx, "phase9_router_daemon", phase9_template)
+        invalid_wakeup = restart.daemon_target(invalid_ctx, "wakeup_runner_daemon", wakeup_template)
+
+        self.assertEqual("120", invalid_phase9.command[-1])
+        self.assertEqual("120", invalid_wakeup.command[-1])
 
     def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
         self.assertEqual(tuple(name for name, _command in DAEMON_COMMANDS), restart_managed_daemon_names())
@@ -383,7 +468,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             calls.append(name)
 
         with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
-            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", return_value={"status": "disabled", "reason": "noop"}) as update:
                         helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
@@ -393,7 +478,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         update.assert_called_once_with(self.ctx, startup=True)
 
         with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
-            with mock.patch("codex_refactor_loop.restart.retain_logs", return_value=(0, 0, self.repo / ".refactor-loop" / "logs", False)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", side_effect=RuntimeError("network")):
                         helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
@@ -505,6 +590,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("heartbeat_file", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_FILE", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_INTERVAL", source)
+        self.assertIn("PHASE9_ROUTER_INTERVAL_SECONDS", source)
+        self.assertIn("WAKEUP_RUNNER_INTERVAL_SECONDS", source)
         history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
         for needle in history_forbidden:
             with self.subTest(needle=needle):

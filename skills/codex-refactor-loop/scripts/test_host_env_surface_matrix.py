@@ -161,14 +161,21 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "UPDATE_CHECK_ENABLE": ("false", "disabled update-check state"),
             "UPDATE_CHECK_INTERVAL_SECONDS": ("21600", "fresh local update-check state"),
             "UPDATE_CHECK_TIMEOUT_SECONDS": ("5", "failures write unknown state"),
+            "RUNTIME_RETENTION_ENABLE": ("false", "same-inode pending-events compaction"),
             "CODEX_FLOOR": ("5", "hard min `2`"),
             "ACTIVE_CONTROLLER_DEVICE_ID": ("", "single-device local-owner noop"),
             "ACTIVE_CONTROLLER_TTL_SECONDS": ("1800", "expired lease may be acquired by another device"),
+            "MANAGED_WORK_SNAPSHOT_TTL_SECONDS": ("300", "fresh read-only snapshot is reused"),
+            "MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS": ("900", "discovery returns `loaded_ok=false`"),
+            "PHASE9_ROUTER_INTERVAL_SECONDS": ("120", "phase9-router daemon command"),
+            "WAKEUP_RUNNER_INTERVAL_SECONDS": ("120", "wakeup-runner daemon command"),
             "COMMENT_MONITOR_INTERVAL": ("30", "unchanged `updatedAt` items skip comments queries"),
             "COMMENT_MONITOR_LOOKBACK": ("", "empty adds no lookback filter"),
             "HOST_HOLISTIC_STATUS_ENABLE": ("false", "progress-reporter issue-comment PATCH subpath"),
             "HOST_HOLISTIC_STATUS_INTERVAL_SECONDS": ("600", "unchanged rendered hash skips PATCH"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
+            "STALE_REVIVAL_HOURS": ("3", "redispatchable implement log"),
+            "META_ESCALATION_STUCK_HOURS": ("24", "max(META_ESCALATION_STUCK_HOURS, STALE_REVIVAL_HOURS)"),
         }
         for key, (default, behavior) in cases.items():
             with self.subTest(key=key):
@@ -189,6 +196,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
 
         self.assertEqual("optional-noop", self.rows["ACTIVE_CONTROLLER_DEVICE_ID"]["Category"])
         self.assertEqual("optional-noop", self.rows["UPDATE_CHECK_ENABLE"]["Category"])
+        self.assertEqual("optional-noop", self.rows["RUNTIME_RETENTION_ENABLE"]["Category"])
+        self.assertEqual("RuntimeRetention", self.rows["RUNTIME_RETENTION_ENABLE"]["Owner"])
+        self.assertIn("planner-proven stale worktree remove/prune", self.rows["RUNTIME_RETENTION_ENABLE"]["Missing/empty behavior"])
         self.assertEqual("defaulted", self.rows["UPDATE_CHECK_INTERVAL_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["UPDATE_CHECK_TIMEOUT_SECONDS"]["Category"])
         self.assertEqual("defaulted", self.rows["ACTIVE_CONTROLLER_TTL_SECONDS"]["Category"])
@@ -199,6 +209,17 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
         self.assertIn("Mixed old/new versions are not safe for multi-device mode", read(SKILL_MD))
         self.assertIn("active-controller lease ref is a code-owned singleton constant", read(SKILL_MD))
+
+        meta_escalation = self.rows["META_ESCALATION_STUCK_HOURS"]
+        self.assertEqual("defaulted", meta_escalation["Category"])
+        self.assertEqual("repository stalled meta-reflector", meta_escalation["Owner"])
+        self.assertEqual("wakeup plan", meta_escalation["Consumer"])
+        self.assertIn("missing, invalid, or non-positive defaults to `24` hours", meta_escalation["Missing/empty behavior"])
+        self.assertIn("later than ordinary stale revival", meta_escalation["Missing/empty behavior"])
+        self.assertEqual("24", self.exports["META_ESCALATION_STUCK_HOURS"]["value"])
+        self.assertIn("defaulted", self.exports["META_ESCALATION_STUCK_HOURS"]["section"])
+        self.assertIn("META_ESCALATION_STUCK_HOURS", read(HOST_ENV_EXAMPLE))
+        self.assertIn("test_wakeup_plan.py", meta_escalation["Test owner"])
 
         whitelist = self.rows["MAINTAINER_WHITELIST"]
         self.assertEqual("conditional-fail-closed", whitelist["Category"])

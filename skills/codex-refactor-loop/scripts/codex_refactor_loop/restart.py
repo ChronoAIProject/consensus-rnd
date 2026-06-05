@@ -18,7 +18,7 @@ from typing import Any, Protocol, Sequence
 from .active_controller import require_active_controller, write_active_controller_status
 from .context import LoopContext, LoopContextError
 from .gh_accounting import accounting_env
-from .retention import retain_logs
+from .runtime_retention import retain_runtime, runtime_retention_enabled
 from .update_check import maybe_run_update_check
 
 
@@ -29,10 +29,21 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("comment-monitor", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "comment-monitor", "--daemon")),
     ("codex-progress-reporter", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "progress-reporter", "--daemon")),
     ("dev_sync_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "dev-sync", "--daemon")),
-    ("phase9_router_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon")),
+    (
+        "phase9_router_daemon",
+        ("python3", "{skill_root}/scripts/consensus-rnd-cli", "phase9-router", "--daemon", "--interval", "{phase9_router_interval_seconds}"),
+    ),
     ("closed_label_reconciler", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "closed-label-reconciler", "--daemon")),
-    ("wakeup_runner_daemon", ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon")),
+    (
+        "wakeup_runner_daemon",
+        ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "{wakeup_runner_interval_seconds}"),
+    ),
 )
+
+DAEMON_COMMAND_ENV_PLACEHOLDERS: dict[str, tuple[str, str]] = {
+    "{phase9_router_interval_seconds}": ("PHASE9_ROUTER_INTERVAL_SECONDS", "120"),
+    "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "120"),
+}
 
 def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
@@ -184,10 +195,7 @@ class DaemonProcessInventory:
 
 
 def daemon_target(ctx: LoopContext, name: str, command_template: Sequence[str]) -> DaemonTarget:
-    command = tuple(
-        part.replace("{skill_root}", str(ctx.skill_root)).replace("{repo_root}", str(ctx.repo_root))
-        for part in command_template
-    )
+    command = tuple(_resolve_daemon_command_part(ctx, part) for part in command_template)
     return DaemonTarget(
         name=name,
         command=command,
@@ -344,7 +352,7 @@ class RestartDaemons:
             return 0
         self._acquire_restart_lock()
         try:
-            self._run_log_retention()
+            self._run_runtime_retention()
             for name, command in DAEMON_COMMANDS:
                 self.start_daemon(name, command)
         finally:
@@ -412,14 +420,19 @@ class RestartDaemons:
         for path in (self.ctx.paths.refactor_loop / "locks", self.ctx.paths.heartbeats, self.ctx.paths.logs):
             path.mkdir(parents=True, exist_ok=True)
 
-    def _run_log_retention(self) -> None:
+    def _run_runtime_retention(self) -> None:
         try:
-            deleted, kept, target, missing = retain_logs(self.ctx.repo_root)
+            result = retain_runtime(self.ctx.repo_root, enabled=runtime_retention_enabled(self.ctx))
         except Exception:
-            self._log("log_retention warning: helper failed; continuing daemon restart")
+            self._log("runtime_retention warning: helper failed; continuing daemon restart")
             return
-        suffix = " missing=true" if missing else ""
-        self._log(f"log_retention: ttl_hours=24 deleted={deleted} kept={kept} target={target}{suffix}")
+        suffix = " missing=true" if result.missing else ""
+        self._log(
+            "runtime_retention: "
+            f"enabled={str(result.enabled).lower()} ttl_hours=24 deleted={result.deleted} kept={result.kept} "
+            f"compacted_events={str(result.compacted_events).lower()} removed_worktrees={result.removed_worktrees} "
+            f"pruned_worktrees={str(result.pruned_worktrees).lower()} target={result.target}{suffix}"
+        )
 
     def _run_update_check(self) -> None:
         try:
@@ -506,10 +519,7 @@ class RestartDaemons:
             stored_fingerprint = DaemonLaunchFingerprint.read(self._fingerprint_path(name))
             if stored_fingerprint is not None:
                 current_command = next((command for daemon, command in DAEMON_COMMANDS if daemon == name), ())
-                resolved = tuple(
-                    part.replace("{skill_root}", str(self.ctx.skill_root)).replace("{repo_root}", str(self.ctx.repo_root))
-                    for part in current_command
-                )
+                resolved = daemon_target(self.ctx, name, current_command).command
                 if stored_fingerprint.matches(self._current_fingerprint(name, resolved)):
                     return pid
         return min(live)
@@ -543,6 +553,22 @@ class RestartDaemons:
     @staticmethod
     def _log(message: str) -> None:
         print(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] {message}")
+
+
+def _resolve_daemon_command_part(ctx: LoopContext, part: str) -> str:
+    if part in DAEMON_COMMAND_ENV_PLACEHOLDERS:
+        env_name, default = DAEMON_COMMAND_ENV_PLACEHOLDERS[part]
+        return _positive_env_int(ctx, env_name, default)
+    return part.replace("{skill_root}", str(ctx.skill_root)).replace("{repo_root}", str(ctx.repo_root))
+
+
+def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
+    raw = ctx.host_env.get(env_name) or ctx.env_for_subprocess().get(env_name, default)
+    try:
+        parsed = int(str(raw))
+    except ValueError:
+        return default
+    return str(parsed) if parsed > 0 else default
 
 
 WRAPPER_CODE = r'''
