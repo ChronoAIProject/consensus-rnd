@@ -33,12 +33,12 @@ from codex_refactor_loop.context import LoopContext
 
 
 class ClosedPhaseProjectionTests(unittest.TestCase):
-    def test_merged_pr_projects_phase_merged_and_removes_inflight_cleanup(self) -> None:
+    def test_merged_pr_projects_phase_merged_and_removes_canonical_inflight_labels(self) -> None:
         plan = plan_closed_phase_labels(
             kind="pr",
             number=10,
             state="MERGED",
-            labels=[labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO, labels.STUCK, "🆘 human:卡死"],
+            labels=[labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO, labels.STUCK, "historical-residue"],
             merged=True,
         )
 
@@ -48,7 +48,7 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
         self.assertEqual((labels.PHASE_MERGED,), plan.add_labels)
         self.assertIn(labels.PHASE_REVIEWING, plan.remove_labels)
         self.assertIn(labels.STUCK, plan.remove_labels)
-        self.assertIn("🆘 human:卡死", plan.remove_labels)
+        self.assertNotIn("historical-residue", plan.remove_labels)
 
     def test_closed_unmerged_pr_projects_phase_closed(self) -> None:
         plan = plan_closed_phase_labels(
@@ -93,7 +93,7 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
         self.assertEqual((labels.PHASE_MERGED,), plan.add_labels)
         self.assertEqual((labels.PHASE_CLOSED,), plan.remove_labels)
 
-    def test_legacy_phase_alias_removal_uses_live_alias_not_missing_canonical(self) -> None:
+    def test_historical_residue_without_canonical_managed_label_is_unmanaged(self) -> None:
         plan = plan_closed_phase_labels(
             kind="issue",
             number=20,
@@ -102,12 +102,7 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
             linked_merged=True,
         )
 
-        self.assertIsNotNone(plan)
-        assert plan is not None
-        self.assertEqual(labels.PHASE_MERGED, plan.terminal_phase)
-        self.assertEqual((labels.PHASE_MERGED,), plan.add_labels)
-        self.assertEqual(("🛠️ phase:implementing",), plan.remove_labels)
-        self.assertNotIn(labels.PHASE_IMPLEMENTING, plan.remove_labels)
+        self.assertIsNone(plan)
 
     def test_idempotent_terminal_phase_has_no_edit_plan(self) -> None:
         plan = plan_closed_phase_labels(
@@ -271,7 +266,7 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
             labels.PHASE_REVIEWING,
             labels.HUMAN_AUTO,
             labels.HUMAN_MAINTAINER_DECISION,
-            "🆘 human:卡死",
+            "historical-residue",
         ]
         plan = plan_closed_phase_labels(
             kind="issue",
@@ -285,7 +280,7 @@ class ClosedPhaseProjectionTests(unittest.TestCase):
         after = labels_after_plan(source_labels, plan)
         self.assertIn(labels.HUMAN_AUTO, after)
         self.assertIn(labels.HUMAN_MAINTAINER_DECISION, after)
-        self.assertNotIn("🆘 human:卡死", after)
+        self.assertIn("historical-residue", after)
 
 
 class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
@@ -541,7 +536,7 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
             "labels": [
                 {"name": labels.MANAGED},
                 {"name": labels.PHASE_FIXING},
-                {"name": "🆘 human:卡死"},
+                {"name": "historical-residue"},
                 {"name": labels.HUMAN_AUTO},
             ],
             "title": "closed pr",
@@ -631,8 +626,6 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
                     labels.PHASE_CLOSED,
                     "--remove-label",
                     labels.PHASE_FIXING,
-                    "--remove-label",
-                    "🆘 human:卡死",
                 ),
             ],
             edit_commands,
@@ -754,7 +747,7 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
         for command in edit_commands:
             self.assertFalse(any(str(part).startswith("crnd:human:") for part in command), command)
 
-    def test_legacy_emoji_label_host_writes_existing_alias_without_canonical_retry_noise(self) -> None:
+    def test_historical_residue_labels_are_not_reconciler_candidates(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="closed-label-reconciler", lease_id="lease", expires_at="")
         issue_row = {
             "number": 33,
@@ -766,71 +759,29 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
             ],
             "title": "legacy closed issue",
         }
-        after_row = {
-            "number": 33,
-            "state": "CLOSED",
-            "labels": [
-                {"name": "auto-loop"},
-                {"name": "🎉 phase:merged"},
-                {"name": "🤖 human:auto-推进"},
-            ],
-        }
-        gh_json_responses = {
-            ("label", "list", "--json", "name", "--limit", "1000"): [
-                {"name": "auto-loop"},
-                {"name": "🛠️ phase:implementing"},
-                {"name": "🎉 phase:merged"},
-                {"name": "🤖 human:auto-推进"},
-            ],
-            ("issue", "list", "--label", "🛠️ phase:implementing", "--state", "closed", "--limit", "100", "--json", "number,state,labels,title"): [issue_row],
-            ("pr", "list", "--state", "merged", "--search", "in:body Closes #33", "--limit", "1", "--json", "number,mergedAt"): [{"number": 70, "mergedAt": "2026-05-31T00:00:00Z"}],
-            ("issue", "view", "33", "--json", "number,state,labels"): after_row,
-        }
         edit_commands: list[tuple[str, ...]] = []
-        view_counts: dict[tuple[str, ...], int] = {}
+        calls: list[tuple[str, ...]] = []
 
         def fake_gh(args: tuple[str, ...] | list[str], *, check: bool = True) -> CompletedProcess[str]:
             command = tuple(args)
+            calls.append(command)
             if command[:2] == ("issue", "list"):
                 self.assertIn("--label", command)
-                self.assertIn(command[command.index("--label") + 1], labels.query_labels_for(labels.MANAGED))
-                if "--search" in command and "🛠️ phase:implementing" in " ".join(command):
-                    return CompletedProcess(["gh", *command], 0, json.dumps([issue_row]), "")
+                self.assertEqual(command[command.index("--label") + 1], labels.MANAGED)
                 return CompletedProcess(["gh", *command], 0, "[]", "")
-            if command == ("issue", "view", "33", "--json", "number,state,labels"):
-                count = view_counts.get(command, 0)
-                view_counts[command] = count + 1
-                item = issue_row if count == 0 else after_row
-                return CompletedProcess(["gh", *command], 0, json.dumps(item), "")
-            if command in gh_json_responses:
-                return CompletedProcess(["gh", *command], 0, json.dumps(gh_json_responses[command]), "")
             if len(command) >= 2 and command[1] == "list":
                 return CompletedProcess(["gh", *command], 0, "[]", "")
             edit_commands.append(command)
-            if any(label.startswith("crnd:") for label in command):
-                return CompletedProcess(["gh", *command], 1, "", "'crnd:phase:implementing' not found")
             return CompletedProcess(["gh", *command], 0, "", "")
 
         reconciler = ClosedLabelReconciler(self.ctx)
         with mock.patch("codex_refactor_loop.closed_label_reconciler.require_active_controller", return_value=decision):
             with mock.patch.object(reconciler, "_gh", side_effect=fake_gh):
                 self.assertEqual(0, reconciler.run_once())
-                self.assertEqual(0, reconciler.run_once())
 
-        self.assertEqual(
-            [
-                (
-                    "issue",
-                    "edit",
-                    "33",
-                    "--add-label",
-                    "🎉 phase:merged",
-                    "--remove-label",
-                    "🛠️ phase:implementing",
-                )
-            ],
-            edit_commands,
-        )
+        self.assertEqual([], edit_commands)
+        self.assertFalse(any("auto-loop" in command for command in calls))
+        self.assertFalse(any("🛠️ phase:implementing" in command for command in calls))
 
     def test_unresolvable_terminal_label_warns_skips_and_does_not_retry_failed_edit(self) -> None:
         plan = ClosedPhaseLabelPlan(
@@ -838,22 +789,22 @@ class ClosedLabelReconcilerBehaviorTests(unittest.TestCase):
             number=34,
             terminal_phase=labels.PHASE_CLOSED,
             add_labels=(labels.PHASE_CLOSED,),
-            remove_labels=("🛠️ phase:implementing",),
+            remove_labels=(labels.PHASE_IMPLEMENTING,),
             reason="closed-no-merged-evidence",
         )
         gh_json_responses = {
             ("label", "list", "--json", "name", "--limit", "1000"): [
-                {"name": "auto-loop"},
-                {"name": "🛠️ phase:implementing"},
-                {"name": "🤖 human:auto-推进"},
+                {"name": labels.MANAGED},
+                {"name": labels.PHASE_IMPLEMENTING},
+                {"name": labels.HUMAN_AUTO},
             ],
             ("issue", "view", "34", "--json", "number,state,labels"): {
                 "number": 34,
                 "state": "CLOSED",
                 "labels": [
-                    {"name": "auto-loop"},
-                    {"name": "🛠️ phase:implementing"},
-                    {"name": "🤖 human:auto-推进"},
+                    {"name": labels.MANAGED},
+                    {"name": labels.PHASE_IMPLEMENTING},
+                    {"name": labels.HUMAN_AUTO},
                 ],
             },
             ("pr", "list", "--state", "merged", "--search", "in:body Closes #34", "--limit", "1", "--json", "number,mergedAt"): [],

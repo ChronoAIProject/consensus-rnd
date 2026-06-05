@@ -88,17 +88,11 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertEqual(state_file, monitor.state_file)
         self.assertEqual(9, monitor.interval)
 
-    def test_targets_queries_canonical_and_legacy_managed_labels_for_issues_and_prs(self) -> None:
+    def test_targets_queries_canonical_managed_label_for_issues_and_prs(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         responses = {
             ("issue", label_catalog.MANAGED): "8\n2\n",
-            ("issue", "auto-loop"): "2\n11\n",
-            ("issue", "phase9-auto-solve"): "11\n",
-            ("issue", "refactor-design-needed"): "",
             ("pr", label_catalog.MANAGED): "3\n8\n",
-            ("pr", "auto-loop"): "1\n3\n",
-            ("pr", "phase9-auto-solve"): "",
-            ("pr", "refactor-design-needed"): "8\n",
         }
         calls: list[tuple[str, str]] = []
 
@@ -111,12 +105,11 @@ class CommentMonitorTests(unittest.TestCase):
             return mock.Mock(returncode=0, stdout=responses[(kind, label)], stderr="")
 
         with mock.patch("codex_refactor_loop.monitors.comment._run", side_effect=fake_run):
-            self.assertEqual(monitor.targets(), ["1", "2", "3", "8", "11"])
+            self.assertEqual(monitor.targets(), ["2", "3", "8"])
 
         expected_calls = {
-            (kind, label)
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
+            ("issue", label_catalog.MANAGED),
+            ("pr", label_catalog.MANAGED),
         }
         self.assertEqual(set(calls), expected_calls)
         self.assertEqual(len(calls), len(expected_calls))

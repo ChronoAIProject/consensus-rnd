@@ -328,10 +328,7 @@ class ConcurrencyMonitor:
         items: list[dict] = []
         seen: set[tuple[str, int]] = set()
         for kind in ("issue", "pr"):
-            rows: list[dict] = []
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                rows.extend(self._gh_list_by_label(kind, query_label))
-            for entry in rows:
+            for entry in self._gh_list_by_label(kind, label_catalog.MANAGED):
                 try:
                     num = int(entry.get("number"))
                 except (TypeError, ValueError):

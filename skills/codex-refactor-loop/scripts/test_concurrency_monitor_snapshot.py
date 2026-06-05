@@ -34,7 +34,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                 "GH_REPO_SLUG": "owner/repo",
                 "CODEX_FLOOR": "4",
             },
-            clear=False,
+            clear=True,
         )
         self.env.start()
         from codex_refactor_loop.context import LoopContext
@@ -75,17 +75,17 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                         {
                             "number": 51,
                             "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "🛠️ phase:implementing"},
-                                {"name": "🤖 human:codex"},
+                                {"name": label_catalog.MANAGED},
+                                {"name": label_catalog.PHASE_IMPLEMENTING},
+                                {"name": label_catalog.HUMAN_AUTO},
                             ],
                         },
                         {
                             "number": 52,
                             "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "⏸️ phase:blocked"},
-                                {"name": "👤 human:需-maintainer-决策"},
+                                {"name": label_catalog.MANAGED},
+                                {"name": label_catalog.PHASE_BLOCKED},
+                                {"name": label_catalog.HUMAN_MAINTAINER_DECISION},
                             ],
                         },
                     ]
@@ -99,9 +99,9 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                         {
                             "number": 9,
                             "labels": [
-                                {"name": "auto-loop"},
-                                {"name": "👀 phase:reviewing"},
-                                {"name": "🤖 human:codex"},
+                                {"name": label_catalog.MANAGED},
+                                {"name": label_catalog.PHASE_REVIEWING},
+                                {"name": label_catalog.HUMAN_AUTO},
                             ],
                             "body": "",
                         }
@@ -112,7 +112,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             return SimpleNamespace(returncode=0, stdout="")
         return SimpleNamespace(returncode=1, stdout="")
 
-    def test_list_auto_loop_issues_queries_canonical_and_legacy_managed_labels_once(self) -> None:
+    def test_list_auto_loop_issues_queries_canonical_managed_label_once(self) -> None:
         responses = {
             ("issue", label_catalog.MANAGED): [
                 {
@@ -124,26 +124,6 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                     ],
                 }
             ],
-            ("issue", "auto-loop"): [
-                {
-                    "number": 71,
-                    "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_IMPLEMENTING},
-                        {"name": label_catalog.HUMAN_AUTO},
-                    ],
-                },
-                {
-                    "number": 72,
-                    "labels": [
-                        {"name": "auto-loop"},
-                        {"name": "🔧 phase:fixing"},
-                        {"name": "🤖 human:codex"},
-                    ],
-                },
-            ],
-            ("issue", "phase9-auto-solve"): [],
-            ("issue", "refactor-design-needed"): [],
             ("pr", label_catalog.MANAGED): [
                 {
                     "number": 73,
@@ -152,29 +132,6 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                         {"name": label_catalog.MANAGED},
                         {"name": label_catalog.PHASE_REVIEWING},
                         {"name": label_catalog.HUMAN_AUTO},
-                    ],
-                }
-            ],
-            ("pr", "auto-loop"): [
-                {
-                    "number": 73,
-                    "body": "",
-                    "labels": [
-                        {"name": label_catalog.MANAGED},
-                        {"name": label_catalog.PHASE_REVIEWING},
-                        {"name": label_catalog.HUMAN_AUTO},
-                    ],
-                }
-            ],
-            ("pr", "phase9-auto-solve"): [],
-            ("pr", "refactor-design-needed"): [
-                {
-                    "number": 74,
-                    "body": "",
-                    "labels": [
-                        {"name": "refactor-design-needed"},
-                        {"name": "🔍 phase:design-solving"},
-                        {"name": "🤖 human:auto-推进"},
                     ],
                 }
             ],
@@ -195,9 +152,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             [(item["kind"], item["number"], item["phase"]) for item in items],
             [
                 ("issue", 71, label_catalog.PHASE_IMPLEMENTING),
-                ("issue", 72, label_catalog.PHASE_FIXING),
                 ("pr", 73, label_catalog.PHASE_REVIEWING),
-                ("pr", 74, label_catalog.PHASE_DESIGN_SOLVING),
             ],
         )
         expected_calls = {
@@ -293,9 +248,9 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                             {
                                 "number": 59,
                                 "labels": [
-                                    {"name": "auto-loop"},
-                                    {"name": "👀 phase:reviewing"},
-                                    {"name": "🤖 human:codex"},
+                                    {"name": label_catalog.MANAGED},
+                                    {"name": label_catalog.PHASE_REVIEWING},
+                                    {"name": label_catalog.HUMAN_AUTO},
                                 ],
                             }
                         ]

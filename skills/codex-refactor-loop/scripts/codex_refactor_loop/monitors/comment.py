@@ -98,11 +98,9 @@ class CommentMonitor:
     def _search_active(self) -> dict[str, str]:
         active: dict[str, str] = {}
         lookback = _lookback_minimum_updated_at()
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            endpoint = f"repos/{self.repo}/issues?state=open&labels={quote(query_label, safe='')}&per_page=100"
-            rows = self._gh_api_json(endpoint)
-            if not isinstance(rows, list):
-                continue
+        endpoint = f"repos/{self.repo}/issues?state=open&labels={quote(label_catalog.MANAGED, safe='')}&per_page=100"
+        rows = self._gh_api_json(endpoint)
+        if isinstance(rows, list):
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -119,13 +117,13 @@ class CommentMonitor:
     def targets(self) -> list[str]:
         numbers: set[str] = set()
         for kind in ("issue", "pr"):
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                result = self.gh(
-                    [kind, "list", "--state", "open", "--label", query_label, "--json", "number", "-q", ".[].number"],
-                    check=False,
-                )
-                if result.returncode == 0:
-                    numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+            result = self.gh(
+                [kind, "list", "--state", "open", "--label", label_catalog.MANAGED, "--json", "number", "-q", ".[].number"],
+                check=False,
+            )
+            if result.returncode != 0:
+                continue
+            numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:

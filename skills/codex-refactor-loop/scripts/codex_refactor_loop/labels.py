@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Iterable
 
 from .context import LoopContext, LoopContextError
 
@@ -41,7 +41,6 @@ class LabelSpec:
     slug: str
     description: str
     color: str
-    aliases: tuple[str, ...] = ()
     exclusive_axis: str | None = None
     expected_workers: int = 0
     route_actor: str | None = None
@@ -50,8 +49,6 @@ class LabelSpec:
 @dataclass(frozen=True)
 class LabelProjection:
     canonical: frozenset[str]
-    legacy: frozenset[str]
-    cleanup_only: frozenset[str]
     unknown_crnd: frozenset[str]
 
     def labels_for_group(self, group: str) -> tuple[str, ...]:
@@ -69,19 +66,10 @@ class LabelProjection:
 
 
 @dataclass(frozen=True)
-class MigrationStep:
-    live_label: str
-    add_labels: tuple[str, ...]
-    remove_labels: tuple[str, ...]
-    order: tuple[str, ...] = ("add-canonical", "reread-live-labels", "validate-exactly-one-phase-human", "remove-alias")
-
-
-@dataclass(frozen=True)
 class MigrationPlan:
     create: tuple[LabelSpec, ...]
     update: tuple[LabelSpec, ...]
     unknown_crnd: tuple[str, ...]
-    alias_migrations: tuple[MigrationStep, ...]
     external_defaults: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
@@ -89,15 +77,6 @@ class MigrationPlan:
             "create": [_spec_dict(spec) for spec in self.create],
             "update": [_spec_dict(spec) for spec in self.update],
             "unknown_crnd": list(self.unknown_crnd),
-            "alias_migrations": [
-                {
-                    "live_label": step.live_label,
-                    "add_labels": list(step.add_labels),
-                    "remove_labels": list(step.remove_labels),
-                    "order": list(step.order),
-                }
-                for step in self.alias_migrations
-            ],
             "external_defaults": list(self.external_defaults),
         }
 
@@ -116,7 +95,6 @@ def _spec(
     description: str,
     color: str,
     *,
-    aliases: Sequence[str] = (),
     exclusive_axis: str | None = None,
     expected_workers: int = 0,
     route_actor: str | None = None,
@@ -127,7 +105,6 @@ def _spec(
         slug=slug,
         description=description,
         color=color,
-        aliases=tuple(aliases),
         exclusive_axis=exclusive_axis,
         expected_workers=expected_workers,
         route_actor=route_actor,
@@ -135,48 +112,28 @@ def _spec(
 
 
 LABEL_SPECS: tuple[LabelSpec, ...] = (
-    _spec("phase", "design-solving", "Consensus design solving is active.", "0e8a16", aliases=("🔍 phase:design-solving",), exclusive_axis="phase", expected_workers=1, route_actor="phase9-solver-or-judge"),
-    _spec("phase", "consensus-reached", "Consensus is reached and implementation is ready.", "1d76db", aliases=("✅ phase:consensus-reached",), exclusive_axis="phase", route_actor="implement-codex"),
-    _spec("phase", "implementing", "Implementation worker is active.", "c5def5", aliases=("🛠️ phase:implementing",), exclusive_axis="phase", expected_workers=1, route_actor="implement-codex"),
-    _spec("phase", "pr-open", "Pull request is open and awaiting review or CI routing.", "5319e7", aliases=("🚀 phase:pr-open",), exclusive_axis="phase", route_actor="reviewer-codex"),
-    _spec("phase", "reviewing", "Review workers are active.", "5319e7", aliases=("👀 phase:reviewing",), exclusive_axis="phase", expected_workers=1, route_actor="reviewer-codex"),
-    _spec("phase", "fixing", "Fix worker is active.", "d93f0b", aliases=("🔧 phase:fixing",), exclusive_axis="phase", expected_workers=1, route_actor="fix-codex"),
-    _spec("phase", "ci-running", "CI watch is active.", "fbca04", aliases=("⚙️ phase:ci-running",), exclusive_axis="phase", route_actor="controller-ci-watch"),
-    _spec("phase", "blocked", "Work is blocked or explicitly waiting.", "b60205", aliases=("⏸️ phase:blocked",), exclusive_axis="phase", route_actor="controller"),
-    _spec("phase", "merged", "Work has landed.", "0e8a16", aliases=("🎉 phase:merged",), exclusive_axis="phase", route_actor="controller"),
+    _spec("phase", "design-solving", "Consensus design solving is active.", "0e8a16", exclusive_axis="phase", expected_workers=1, route_actor="phase9-solver-or-judge"),
+    _spec("phase", "consensus-reached", "Consensus is reached and implementation is ready.", "1d76db", exclusive_axis="phase", route_actor="implement-codex"),
+    _spec("phase", "implementing", "Implementation worker is active.", "c5def5", exclusive_axis="phase", expected_workers=1, route_actor="implement-codex"),
+    _spec("phase", "pr-open", "Pull request is open and awaiting review or CI routing.", "5319e7", exclusive_axis="phase", route_actor="reviewer-codex"),
+    _spec("phase", "reviewing", "Review workers are active.", "5319e7", exclusive_axis="phase", expected_workers=1, route_actor="reviewer-codex"),
+    _spec("phase", "fixing", "Fix worker is active.", "d93f0b", exclusive_axis="phase", expected_workers=1, route_actor="fix-codex"),
+    _spec("phase", "ci-running", "CI watch is active.", "fbca04", exclusive_axis="phase", route_actor="controller-ci-watch"),
+    _spec("phase", "blocked", "Work is blocked or explicitly waiting.", "b60205", exclusive_axis="phase", route_actor="controller"),
+    _spec("phase", "merged", "Work has landed.", "0e8a16", exclusive_axis="phase", route_actor="controller"),
     _spec("phase", "closed", "Closed terminal protocol state without merged evidence.", "ededed", exclusive_axis="phase", route_actor="closed-label-reconciler"),
-    _spec("human", "auto", "Controller may continue without maintainer intervention.", "bfd4f2", aliases=("🤖 human:auto-推进", "🤖 human:codex"), exclusive_axis="human"),
-    _spec("human", "maintainer-decision", "Maintainer decision is required.", "b60205", aliases=("👤 human:需-maintainer-决策", "needs-human-review"), exclusive_axis="human"),
-    _spec("lifecycle", "managed", "Item is managed by codex-refactor-loop.", "ededed", aliases=("auto-loop",)),
-    _spec("lifecycle", "stuck", "Item is stalled and waiting for loop recovery.", "b60205", aliases=("auto-loop-stuck",)),
-    _spec("lifecycle", "no-framing", "Item has no actionable framing.", "d4c5f9", aliases=("wontfix-no-framing",)),
-    _spec("triage", "pending", "External issue is pending manual intake triage.", "fbca04", aliases=("auto-loop-triage",)),
-    _spec("triage", "resume-requested", "Maintainer requested resumed implementation.", "1d76db", aliases=("auto-loop-resume",)),
-    _spec("milestone", "current", "Milestone-priority item.", "f9d0c4", aliases=("🎯 milestone",)),
+    _spec("human", "auto", "Controller may continue without maintainer intervention.", "bfd4f2", exclusive_axis="human"),
+    _spec("human", "maintainer-decision", "Maintainer decision is required.", "b60205", exclusive_axis="human"),
+    _spec("lifecycle", "managed", "Item is managed by codex-refactor-loop.", "ededed"),
+    _spec("lifecycle", "stuck", "Item is stalled and waiting for loop recovery.", "b60205"),
+    _spec("lifecycle", "no-framing", "Item has no actionable framing.", "d4c5f9"),
+    _spec("triage", "pending", "External issue is pending manual intake triage.", "fbca04"),
+    _spec("triage", "resume-requested", "Maintainer requested resumed implementation.", "1d76db"),
+    _spec("milestone", "current", "Milestone-priority item.", "f9d0c4"),
     _spec("milestone", "release-target", "Release countdown target issue/PR.", "f9d0c4"),
 )
 
-CLEANUP_ONLY_ALIASES = frozenset({"🆘 human:卡死", "🆘 human:卡死-需-rework"})
-COMPOSITE_ALIASES: dict[str, tuple[str, ...]] = {
-    "phase9-auto-solve": (
-        canonical_name("lifecycle", "managed"),
-        canonical_name("phase", "design-solving"),
-        canonical_name("human", "auto"),
-    ),
-    "refactor-design-needed": (
-        canonical_name("lifecycle", "managed"),
-        canonical_name("phase", "design-solving"),
-        canonical_name("human", "auto"),
-    ),
-}
-
 _spec_by_name = {spec.name: spec for spec in LABEL_SPECS}
-_aliases: dict[str, tuple[str, ...]] = {
-    alias: (spec.name,)
-    for spec in LABEL_SPECS
-    for alias in spec.aliases
-}
-_aliases.update(COMPOSITE_ALIASES)
 
 MANAGED = canonical_name("lifecycle", "managed")
 STUCK = canonical_name("lifecycle", "stuck")
@@ -201,10 +158,6 @@ PHASE_CLOSED = canonical_name("phase", "closed")
 
 def canonical_labels() -> tuple[str, ...]:
     return tuple(spec.name for spec in LABEL_SPECS)
-
-
-def legacy_to_canonical() -> dict[str, tuple[str, ...]]:
-    return dict(_aliases)
 
 
 def labels_for_group(group: str) -> tuple[str, ...]:
@@ -235,25 +188,15 @@ def is_allowed_external(label: str) -> bool:
 
 def normalize_label_set(labels: Iterable[str]) -> LabelProjection:
     canonical: set[str] = set()
-    legacy: set[str] = set()
-    cleanup: set[str] = set()
     unknown: set[str] = set()
     for raw in labels:
         label = str(raw)
         if label in _spec_by_name:
             canonical.add(label)
-        elif label in _aliases:
-            legacy.add(label)
-            canonical.update(_aliases[label])
-        elif label in CLEANUP_ONLY_ALIASES:
-            legacy.add(label)
-            cleanup.add(label)
         elif is_loop_owned(label):
             unknown.add(label)
     return LabelProjection(
         canonical=frozenset(canonical),
-        legacy=frozenset(legacy),
-        cleanup_only=frozenset(cleanup),
         unknown_crnd=frozenset(unknown),
     )
 
@@ -272,16 +215,8 @@ def validate_exactly_one_phase_human(labels: Iterable[str]) -> tuple[bool, list[
     return not errors, errors
 
 
-def cleanup_aliases() -> tuple[str, ...]:
-    return tuple(sorted(set(_aliases) | set(CLEANUP_ONLY_ALIASES)))
-
-
-def aliases_for(label: str) -> tuple[str, ...]:
-    return tuple(alias for alias, canonical in _aliases.items() if label in canonical)
-
-
 def query_labels_for(label: str) -> tuple[str, ...]:
-    return (label, *aliases_for(label))
+    return (label,)
 
 
 def design_issue_label_bundle() -> tuple[str, ...]:
@@ -305,21 +240,10 @@ def migration_plan(live_labels: Iterable[dict[str, str] | str]) -> MigrationPlan
         if str(live.get("description", "")) != spec.description or str(live.get("color", "")).lower().lstrip("#") != spec.color:
             update.append(spec)
     projection = normalize_label_set(live_by_name)
-    alias_steps = [
-        MigrationStep(live_label=alias, add_labels=tuple(canonical), remove_labels=(alias,))
-        for alias, canonical in sorted(_aliases.items())
-        if alias in live_by_name
-    ]
-    alias_steps.extend(
-        MigrationStep(live_label=alias, add_labels=(), remove_labels=(alias,))
-        for alias in sorted(CLEANUP_ONLY_ALIASES)
-        if alias in live_by_name
-    )
     return MigrationPlan(
         create=tuple(create),
         update=tuple(update),
         unknown_crnd=tuple(sorted(projection.unknown_crnd)),
-        alias_migrations=tuple(alias_steps),
         external_defaults=tuple(sorted(label for label in live_by_name if is_allowed_external(label))),
     )
 
@@ -328,9 +252,6 @@ def assert_catalog_valid() -> None:
     names = canonical_labels()
     if len(names) != len(set(names)):
         raise AssertionError("duplicate canonical label names")
-    aliases = [alias for spec in LABEL_SPECS for alias in spec.aliases] + list(COMPOSITE_ALIASES) + list(CLEANUP_ONLY_ALIASES)
-    if len(aliases) != len(set(aliases)):
-        raise AssertionError("duplicate legacy label aliases")
     for spec in LABEL_SPECS:
         if spec.group not in LABEL_GROUPS:
             raise AssertionError(f"unknown group for {spec.name}")

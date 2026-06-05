@@ -81,7 +81,7 @@ def plan_closed_phase_labels(
         phase_labels = set(label_projection.labels_for_group("phase"))
         if terminal in phase_labels:
             terminal_present = True
-        if label_projection.cleanup_only or label_catalog.STUCK in label_projection.canonical:
+        if label_catalog.STUCK in label_projection.canonical:
             remove.add(label)
         elif phase_labels and terminal not in phase_labels:
             remove.add(label)
@@ -116,7 +116,6 @@ def closed_reconcile_candidate_query_labels() -> tuple[str, ...]:
     for label in NONTERMINAL_PHASE_LABELS:
         query_labels.update(label_catalog.query_labels_for(label))
     query_labels.update(label_catalog.query_labels_for(label_catalog.STUCK))
-    query_labels.update(label_catalog.CLEANUP_ONLY_ALIASES)
     return tuple(sorted(query_labels))
 
 
@@ -170,8 +169,6 @@ def item_matches_closed_reconcile_query(kind: str, item: Mapping[str, object], q
         phase_labels = set(projection.labels_for_group("phase"))
         return phase_labels.isdisjoint(TERMINAL_PHASE_LABELS)
     dirty_projection = label_catalog.normalize_label_set([query.dirty_label])
-    if dirty_projection.cleanup_only:
-        return bool(projection.cleanup_only)
     return bool(projection.canonical.intersection(dirty_projection.canonical))
 
 

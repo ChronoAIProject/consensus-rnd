@@ -766,7 +766,7 @@ class ControllerActionsTests(unittest.TestCase):
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
         marker = "TRIAGE_DECISION_DONE:53:reject:.refactor-loop/runs/triage-issue-53.json"
-        with mock.patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with mock.patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             with mock.patch("codex_refactor_loop.triage.run_gh", fake_gh):
                 with mock.patch(
                     "codex_refactor_loop.controller_actions.subprocess.run",
@@ -778,7 +778,7 @@ class ControllerActionsTests(unittest.TestCase):
             calls,
             [
                 ["issue", "comment", "53", "--body-file", str(comment.resolve())],
-                ["issue", "edit", "53", "--remove-label", "auto-loop-triage"],
+                ["issue", "edit", "53", "--remove-label", labels.TRIAGE_PENDING],
             ],
         )
         applied = json.loads(
@@ -2618,11 +2618,10 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
         from codex_refactor_loop import labels as labels_mod
         from codex_refactor_loop.controller_actions import ISSUE_LABELS_REMOVE, PR_LABELS_REMOVE
 
-        aliases = set(labels_mod.cleanup_aliases())
         for name in (*ISSUE_LABELS_REMOVE, *PR_LABELS_REMOVE):
             with self.subTest(label=name):
                 self.assertTrue(name.startswith("crnd:"), name)
-                self.assertNotIn(name, aliases, name)
+                self.assertIn(name, labels_mod.canonical_labels(), name)
 
     def test_status_banner_action_is_owner_gated_and_uses_gh_comment_command(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")

@@ -155,9 +155,6 @@ class ClosedLabelReconciler:
         host_labels = self._host_labels()
         if canonical_label in host_labels:
             return canonical_label
-        for alias in label_catalog.aliases_for(canonical_label):
-            if alias in host_labels:
-                return alias
         return None
 
     def _host_labels(self) -> frozenset[str]:
