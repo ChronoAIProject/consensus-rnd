@@ -179,11 +179,6 @@ COMMANDS: dict[str, CommandSpec] = {
         "run canonical RuntimeRetention for skill-private generated artifacts",
         ("delete-runtime", "git-worktree"),
     ),
-    "log-retention": CommandSpec(
-        runtime_retention_main,
-        "one-release compatibility alias for runtime-retention",
-        ("delete-runtime", "git-worktree"),
-    ),
     "check-project-rules": CommandSpec(
         project_rules.main,
         "check host project rules fixed points and write patch artifact when needed",

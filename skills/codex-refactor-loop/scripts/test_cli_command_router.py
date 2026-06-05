@@ -69,7 +69,6 @@ DAEMON_COMMANDS = {
     "comment-monitor",
     "concurrency",
     "dev-sync",
-    "log-retention",
     "phase9-router",
     "progress-reporter",
     "release-gate",
@@ -93,7 +92,6 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
-    "log-retention": {"git-worktree"},
     "runtime-retention": {"git-worktree"},
     "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
 }
@@ -129,7 +127,6 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "labels",
                 "concurrency",
                 "dev-sync",
-                "log-retention",
                 "runtime-retention",
                 "spawn-codex",
                 "peek",
@@ -426,15 +423,23 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
 
-    def test_runtime_retention_is_canonical_and_log_retention_is_one_release_alias(self) -> None:
+    def test_runtime_retention_is_canonical_without_log_retention_alias(self) -> None:
         self.assertEqual(("delete-runtime", "git-worktree"), COMMANDS["runtime-retention"].authority)
-        self.assertEqual(COMMANDS["runtime-retention"].handler, COMMANDS["log-retention"].handler)
-        self.assertEqual(COMMANDS["runtime-retention"].authority, COMMANDS["log-retention"].authority)
         self.assertIn("canonical RuntimeRetention", COMMANDS["runtime-retention"].description)
-        self.assertIn("one-release compatibility alias", COMMANDS["log-retention"].description)
+        removed_legacy_command = "log" + "-retention"
+        self.assertNotIn(removed_legacy_command, COMMANDS)
         for forbidden in ("read-gh", "gh-close", "gh-edit", "gh-label", "gh-merge", "gh-open", "git-fetch", "git-push", "git-merge", "git-reset", "git-rebase"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, COMMANDS["runtime-retention"].authority)
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), removed_legacy_command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn(f"unknown command: {removed_legacy_command}", result.stderr)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():

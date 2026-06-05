@@ -482,7 +482,6 @@ class RuntimeRetentionSourceRegressionTests(unittest.TestCase):
         self.assertIn("_run_runtime_retention", restart)
         self.assertLess(restart.index("self._run_runtime_retention()"), restart.index("for name, command in DAEMON_COMMANDS"))
         self.assertIn("runtime_retention warning: helper failed; continuing daemon restart", restart)
-        self.assertNotIn("_run_log_retention", restart)
 
 
 if __name__ == "__main__":

@@ -236,14 +236,12 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         claude = self.repo_rules
         cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
         runtime_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "runtime_retention.py")
-        retention_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "retention.py")
 
         for needle in (
             "#437",
             "RuntimeRetention",
             "RUNTIME_RETENTION_ENABLE=true",
             "only canonical owner",
-            "one-release compatibility alias",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
             "same-inode compact",
             ".refactor-loop/state/runtime-retention-plan.json",
@@ -273,10 +271,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(needle, claude)
         self.assertIn("Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#runtime-retention-437`", skill_section)
         self.assertIn('"runtime-retention": CommandSpec(', cli_source)
-        self.assertIn('"log-retention": CommandSpec(', cli_source)
+        self.assertNotIn('"' + "log" + '-retention": CommandSpec(', cli_source)
         self.assertIn("runtime_retention_main", cli_source)
         self.assertIn("RuntimeRetentionPlan", runtime_source)
-        self.assertIn("Compatibility alias for RuntimeRetention", retention_source)
 
     def test_issue_504_global_dashboard_card_is_fixed_issue_comment_patch_only(self) -> None:
         entry = mirror_entry(self.mirror, "global-dashboard-status-card-504")

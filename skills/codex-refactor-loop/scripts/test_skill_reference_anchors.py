@@ -319,7 +319,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "RuntimeRetention(per #437)",
             "runtime-retention-437",
             "`consensus-rnd-cli runtime-retention` is the canonical command",
-            "`consensus-rnd-cli log-retention` is a one-release compatibility alias",
             "$RUNTIME_RETENTION_ENABLE=true",
             "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
             "same inode",
