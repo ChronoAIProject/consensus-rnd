@@ -207,7 +207,6 @@ in `SKILL.md` and the tests.
 - verification: `test_wakeup_runner.py`, `test_wakeup_runner_review_gate.py`, `test_wakeup_runner_release.py`, `test_wakeup_plan.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`, `test_restart_daemons.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This names only the #396 unattended runner carveout; it adds no public generic lifecycle CLI, no command bus, no controller-turn worker, and no authorization beyond checked-in closed projection validation plus existing helpers.
 
-<<<<<<< HEAD
 <a id="repository-stalled-meta-reflector-506"></a>
 ## repository-stalled-meta-reflector-506
 
@@ -221,7 +220,7 @@ in `SKILL.md` and the tests.
 - fact_source: `wakeup-plan` consumes GitHub open managed issue/PR metadata plus `META_ESCALATION_STUCK_HOURS` / `STALE_REVIVAL_HOURS`; recommendation artifacts are advisory only and are not side-effect authorization. Handoffs must go through existing design-consensus, #403 validated `IssueDecompositionPlan`, normal narrow-fix/review gate, or #396 clean `META_RESOLVED:drop` close path.
 - verification: `test_wakeup_plan.py`, `test_marker_emission_contract.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror anchors #506 v1 as read-only, spawn-only, and recommendation-only; it adds no root CLAUDE lifecycle carveout, no public CLI, no validator module, and no lifecycle authority beyond existing #396 spawn projection plus existing downstream gates.
-=======
+
 <a id="task-spawn-claim-490"></a>
 ## task-spawn-claim-490
 
@@ -235,7 +234,6 @@ in `SKILL.md` and the tests.
 - fact_source: `skills/codex-refactor-loop/scripts/codex_refactor_loop/task_spawn_claim.py` owns safe task-id validation, lock path, atomic create, metadata validation, and recycle policy; `spawn.py` is the only long-term enforcement caller before `ProcessSupervisor.supervise(...)`.
 - verification: `test_task_spawn_claim.py`, `test_spawn_claim.py`, `test_spawn_supervisor.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
 - no_new_runtime_authority: This is local spawn mutual exclusion only and does not grant lifecycle authority or distributed ownership.
->>>>>>> origin/auto-refact-dev
 
 <a id="global-dashboard-status-card-504"></a>
 ## global-dashboard-status-card-504
