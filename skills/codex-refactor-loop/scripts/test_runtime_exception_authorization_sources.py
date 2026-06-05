@@ -1117,9 +1117,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
     def test_wakeup_runner_batch_budget_is_spawn_only_and_per_action_validated(self) -> None:
         entry = mirror_entry(self.mirror, "wakeup-runner-396")
         combined_authority = "\n".join((entry, self.skill, self.repo_rules))
+        runner_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
 
         for required in (
-<<<<<<< HEAD
             "对每个 action 重新验证",
             "each executable action",
             "spawn codex",
@@ -1134,37 +1134,41 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(required=required):
                 self.assertIn(required, combined_authority)
-=======
-            "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
-            "{\"spawn_codex_harness_background\"}",
-            "class WakeupApplyBudget",
-            "hard_gate.dispatch_required/concurrency.deficit",
-            "return cls.legacy()",
-            "min(dispatch_required, deficit)",
-            "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
-            "budget = WakeupApplyBudget.from_plan(plan)",
-            "consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)",
-            "result = self.apply_action(action)",
-            "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
-            "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
-            "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
-            "is_spawn_action = budget.is_spawn_action(action)",
-            "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
+
+        for public_surface in (
+            "spawn_codex_harness_background",
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "open_release_rollup_pr_from_action",
+            "publish_worker_output_from_action",
+            "dispatch_reviewers",
+            "close_managed_item_from_drop_marker",
+            "review_gate",
+            "safe_push",
         ):
-            with self.subTest(required=required):
-                self.assertIn(required, runner)
-        self.assertIn("applied_spawns += 1", run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
+            with self.subTest(public_surface=public_surface):
+                self.assertIn(public_surface, runner_projection.string_literals)
+
+        for boundary in (
+            "hard_gate.dispatch_required/concurrency.deficit",
+            "min(dispatch_required, deficit)",
+        ):
+            with self.subTest(boundary=boundary):
+                self.assertIn(boundary, combined_authority)
+
         for forbidden in (
-            "for action in plan.get(\"actions\", [])[:",
-            "dispatch_required = int(",
-            "controller_action in SUPPORTED_CONTROLLER_ACTIONS",
-            "blocked_non_spawn_before_spawn",
+            "argv",
+            "shell",
+            "cmd",
+            "command_line",
+            "commands",
+            "env",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, budget + run_once)
->>>>>>> origin/auto-refact-dev
+                self.assertNotIn(forbidden, runner_projection.string_literals)
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"
