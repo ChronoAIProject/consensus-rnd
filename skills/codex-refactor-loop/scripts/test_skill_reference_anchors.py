@@ -674,6 +674,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, combined)
 
+    def test_skill_degradation_documents_private_419_host_fixture_smoke_boundary(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        combined = "\n".join((source_repo_validation, details))
+        for needle in (
+            "source-repo CI/release validation covering static contract checks plus one bounded temporary host-fixture smoke for the #419 profile",
+            "no `.version-bump.json`",
+            "fake/read-only open milestone",
+            "RELEASE_AUTO_ENABLE=false",
+            "runs only through existing `consensus-rnd-cli check-degradation --static`",
+            "writes only a temporary host fixture with host-owned `.config/consensus-rnd/host.env`",
+            "reports failures as `host-fixture-smoke` findings in the existing `skill-degradation` check-run",
+            "no public clean-room command",
+            "no clean-room artifact",
+            "no ninth internal release signal",
+            "no workflow job",
+            "no real GitHub repo lifecycle",
+            "no downstream runtime watch",
+            "no `.refactor-loop/host.env` production SSOT",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (

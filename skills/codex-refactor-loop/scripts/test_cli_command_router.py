@@ -225,6 +225,26 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
+    def test_check_degradation_remains_existing_private_read_surface(self) -> None:
+        self.assertEqual(("read-source", "read-state"), COMMANDS["check-degradation"].authority)
+        forbidden_authority = {
+            "read-gh",
+            "write-artifact",
+            "write-state",
+            "spawn",
+            "git-push",
+            "git-merge",
+            "git-reset",
+            "gh-open",
+            "gh-merge",
+            "gh-close",
+            "gh-label",
+        }
+        self.assertFalse(set(COMMANDS["check-degradation"].authority) & forbidden_authority)
+        for command in ("check-clean-room", "clean-room-smoke", "host-fixture-smoke"):
+            with self.subTest(command=command):
+                self.assertNotIn(command, COMMANDS)
+
     def test_activity_is_not_a_public_command_and_peek_remains_status_lens(self) -> None:
         self.assertNotIn("activity", COMMANDS)
         self.assertIn("peek", COMMANDS)
