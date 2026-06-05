@@ -394,6 +394,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    early_pr_issue20|local_iter_branch_issue20|local_iter_branch_issue20_stale_base)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":320,"title":"early PR","headRefName":"refactor/iter20-issue-20","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","body":"Closes #20","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     represented_parent)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
@@ -1604,7 +1611,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
         self.assertEqual(action["controller_action"], "publish_implementation_output")
         self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(action["suppressed_reason"], "early_pr_missing")
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("no_generic_command", action)
 
@@ -1625,6 +1632,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
+        self.assertIn("exactly_one_matching_open_pr", action["preconditions"])
+        self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
 
     def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
@@ -1640,6 +1649,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(publish["controller_action"], "publish_implementation_output")
         self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertEqual(publish["runner_authority"], "wakeup-runner-396")
+        self.assertIn("exactly_one_matching_open_pr", publish["preconditions"])
+        self.assertEqual(publish["target_pr_number"], 320)
         self.assertTrue(log.exists())
         self.assertFalse(
             any(
@@ -1660,7 +1672,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(action["target_kind"])
         self.assertIsNone(action["target_number"])
         self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(action["suppressed_reason"], "early_pr_missing")
         self.assertNotIn("runner_authority", action)
 
     def test_completed_marker_keeps_legacy_projection_without_open_managed_read_model(self) -> None:
@@ -2196,7 +2208,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             if action.get("controller_action") == "publish_implementation_output"
         )
         self.assertTrue(publish_action["status_only"])
-        self.assertEqual(publish_action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(publish_action["suppressed_reason"], "early_pr_missing")
         self.assertNotIn("runner_authority", publish_action)
         consensus_action = executable["dispatch_consensus_implementation"]
         self.assertEqual(consensus_action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
@@ -2607,7 +2619,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for token in (
             "publish_implementation_output",
             "close_managed_item_from_drop_marker",
-            "verified_pr_head_unavailable",
+            "early_pr_missing",
+            "exactly_one_matching_open_pr",
             "status_only",
         ):
             with self.subTest(token=token):

@@ -26,6 +26,7 @@ from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
+from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
 from .worker_markers import read_worker_terminal_marker
 
@@ -517,7 +518,7 @@ class WakeupRunner:
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
-            "no_duplicate_open_pr",
+            "exactly_one_matching_open_pr",
         ):
             if required not in preconditions:
                 return f"publish_implementation_missing_precondition:{required}"
@@ -525,10 +526,10 @@ class WakeupRunner:
             return "publish_implementation_target_missing"
         if not self._live_target_has_managed_label("issue", int(action["target_number"])):
             return "publish_implementation_target_not_managed"
-        duplicate_error = self._validate_no_duplicate_open_pr(action)
-        if duplicate_error:
-            return duplicate_error
-        return self._validate_implementation_worktree(action)
+        worktree_error = self._validate_implementation_worktree(action)
+        if worktree_error:
+            return worktree_error
+        return self._validate_exactly_one_matching_open_pr(action)
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
@@ -549,19 +550,43 @@ class WakeupRunner:
             return "release_rollup_body_missing"
         return None
 
-    def _validate_no_duplicate_open_pr(self, action: Mapping[str, Any]) -> str | None:
+    def _validate_exactly_one_matching_open_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
             return "publish_implementation_invalid_head_ref"
-        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number"])
+        result = self.command_runner(["gh", "pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"])
         if result.returncode != 0:
-            return "publish_implementation_duplicate_pr_unavailable"
+            return "publish_implementation_matching_pr_unavailable"
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return "publish_implementation_duplicate_pr_invalid_json"
+            return "publish_implementation_matching_pr_invalid_json"
         if not isinstance(payload, list):
-            return "publish_implementation_duplicate_pr_invalid_json"
+            return "publish_implementation_matching_pr_invalid_json"
+        if len(payload) == 0:
+            return "publish_implementation_early_pr_missing"
+        if len(payload) > 1:
+            return "publish_implementation_multiple_matching_open_pr"
+        pr = payload[0]
+        if not isinstance(pr, dict) or not isinstance(pr.get("number"), int):
+            return "publish_implementation_matching_pr_invalid_json"
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "publish_implementation_matching_pr_head_mismatch"
+        base = str(pr.get("baseRefName") or "")
+        integration_branch = str(getattr(self.actions, "integration_branch", "") or self.ctx.host_env.get("INTEGRATION_BRANCH", "")).strip()
+        if integration_branch and base != integration_branch:
+            return "publish_implementation_matching_pr_base_mismatch"
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "publish_implementation_matching_pr_not_managed"
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "publish_implementation_matching_pr_not_managed"
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        if _single_linked_issue_from_body(str(pr.get("body") or "")) != target:
+            return "publish_implementation_matching_pr_issue_mismatch"
         return None
 
     def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
@@ -1085,6 +1110,11 @@ def _is_relative_to(path: Path, parent: Path) -> bool:
 def _extract_review_head_sha(text: str) -> str:
     match = REVIEW_HEAD_RE.search(text)
     return match.group(1) if match else ""
+
+
+def _single_linked_issue_from_body(body: str) -> int | None:
+    numbers = extract_closing_issue_numbers(body)
+    return numbers[0] if len(numbers) == 1 else None
 
 
 def _target_from_text(text: str) -> tuple[str, int] | None:
