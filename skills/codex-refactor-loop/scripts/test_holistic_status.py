@@ -52,6 +52,10 @@ class HolisticStatusProjectionTests(unittest.TestCase):
             json.dumps({"merges": [{"pr": 1}, {"pr": 2}]}) + "\n",
             encoding="utf-8",
         )
+        (self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").write_text(
+            json.dumps({"status": "ok", "findings": [{"fingerprint": "a"}], "published": [{"issue": 1}]}) + "\n",
+            encoding="utf-8",
+        )
         (self.tmp / ".refactor-loop" / "dispatch-queue" / "p0" / "a.dispatch.json").write_text("{}\n", encoding="utf-8")
         (self.tmp / ".refactor-loop" / "dispatch-queue" / "p1" / "b.dispatch.json").write_text("{}\n", encoding="utf-8")
         self.ctx = LoopContext.load(
@@ -114,12 +118,14 @@ class HolisticStatusProjectionTests(unittest.TestCase):
         self.assertEqual(2, projection.throughput.queued_dispatches)
         self.assertEqual(("issue #10",), next(item.dependencies for item in projection.open_items if item.number == 20))
         markdown = render_markdown(projection)
-        for heading in ("### Throughput", "### Daemons", "### Open Managed Items", "### Dependencies"):
+        for heading in ("### Throughput", "### Daemons", "### Patrol", "### Open Managed Items", "### Dependencies"):
             self.assertIn(heading, markdown)
         self.assertIn("PR #20 -> issue #10", markdown)
         self.assertIn("reason `no-worker-capacity`", markdown)
+        self.assertIn("patrol-inspector: ok findings=1 published=1", markdown)
         summary = "\n".join(render_peek_summary(projection))
         self.assertIn("workers actual=1 target=4 floor=5 deficit=3 queue=2", summary)
+        self.assertIn("patrol=1", summary)
         self.assertIn("issue #13 reason=no-worker-capacity", summary)
 
     def test_source_does_not_read_prompt_body_or_worker_prose(self) -> None:

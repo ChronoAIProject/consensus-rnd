@@ -373,6 +373,42 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
 
+    def test_issue_541_patrol_inspector_anchor_and_boundaries(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception - patrol-inspector issue-intake(per #541)")
+
+        for needle in (
+            "PatrolFinding",
+            "PatrolIssuePublisher",
+            "$PATROL_INSPECTOR_ENABLE=true",
+            "#191 active-controller owner gate",
+            "exception logs",
+            "runs artifacts",
+            "wakeup-plan/peek projections",
+            "GitHub managed item snapshot",
+            "durable fingerprint",
+            "fixed patrol/design-intake label bundle",
+            "crnd:lifecycle:managed",
+            "crnd:phase:design-solving",
+            "crnd:human:auto",
+            "crnd:triage:pending",
+            "update may edit only the patrol issue body",
+            "no modification of non-patrol issues or PRs",
+            "no close/reopen/merge",
+            "no PR edit",
+            "no label mutation outside the create-time fixed bundle",
+            "no commit/push/tag/release",
+            "no public inspector CLI",
+            "no second dashboard/comment writer",
+            "no #396 `wakeup-plan` issue-create action",
+            "no #506 issue factory",
+            "no generic GitHub writer",
+            "no generic issue factory",
+            "test_patrol_inspector.py",
+            "test_patrol_issue_publisher.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.
@@ -1714,8 +1750,9 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
-    def test_restart_managed_daemon_list_mentions_seventh_daemon(self) -> None:
-        self.assertIn("All seven daemon command bodies", self.skill)
+    def test_restart_managed_daemon_list_mentions_eighth_daemon(self) -> None:
+        self.assertIn("All eight daemon command bodies", self.skill)
+        self.assertIn("patrol_inspector_daemon", self.skill)
         self.assertIn("wakeup_runner_daemon", self.skill)
         self.assertIn("`consensus-rnd-cli wakeup-runner`", self.skill)
 

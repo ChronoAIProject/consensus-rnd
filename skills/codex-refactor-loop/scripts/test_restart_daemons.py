@@ -181,9 +181,10 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.heartbeat_path(name).write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:
-        self.assertEqual(7, len(DAEMON_COMMANDS))
+        self.assertEqual(8, len(DAEMON_COMMANDS))
         self.assertIn("closed_label_reconciler", DAEMON_NAMES)
         self.assertIn("wakeup_runner_daemon", DAEMON_NAMES)
+        self.assertIn("patrol_inspector_daemon", DAEMON_NAMES)
         for _name, command in DAEMON_COMMANDS:
             joined = " ".join(command)
             self.assertIn("consensus-rnd-cli", joined)
@@ -217,23 +218,41 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             ),
             DAEMON_COMMANDS,
         )
+        self.assertIn(
+            (
+                "patrol_inspector_daemon",
+                (
+                    "python3",
+                    "{skill_root}/scripts/consensus-rnd-cli",
+                    "patrol-inspector",
+                    "--daemon",
+                    "--interval-seconds",
+                    "{patrol_inspector_interval_seconds}",
+                ),
+            ),
+            DAEMON_COMMANDS,
+        )
         self.assertEqual({name for name, _command in DAEMON_COMMANDS}, set(DAEMON_NAMES))
 
     def test_restart_daemon_intervals_resolve_from_host_env_with_default_fallback(self) -> None:
         phase9_template = next(command for name, command in DAEMON_COMMANDS if name == "phase9_router_daemon")
         wakeup_template = next(command for name, command in DAEMON_COMMANDS if name == "wakeup_runner_daemon")
+        patrol_template = next(command for name, command in DAEMON_COMMANDS if name == "patrol_inspector_daemon")
         default_phase9 = restart.daemon_target(self.ctx, "phase9_router_daemon", phase9_template)
         default_wakeup = restart.daemon_target(self.ctx, "wakeup_runner_daemon", wakeup_template)
+        default_patrol = restart.daemon_target(self.ctx, "patrol_inspector_daemon", patrol_template)
 
         self.assertEqual("120", default_phase9.command[-1])
         self.assertEqual("120", default_wakeup.command[-1])
+        self.assertEqual("7200", default_patrol.command[-1])
 
         self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\n'
             'export GH_REPO_SLUG="example/repo"\n'
             'export MAINTAINER_WHITELIST="maintainer"\n'
             'export PHASE9_ROUTER_INTERVAL_SECONDS="45"\n'
-            'export WAKEUP_RUNNER_INTERVAL_SECONDS="75"\n',
+            'export WAKEUP_RUNNER_INTERVAL_SECONDS="75"\n'
+            'export PATROL_INSPECTOR_INTERVAL_SECONDS="3600"\n',
             encoding="utf-8",
         )
         ctx = LoopContext.load(
@@ -243,15 +262,19 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         )
         host_phase9 = restart.daemon_target(ctx, "phase9_router_daemon", phase9_template)
         host_wakeup = restart.daemon_target(ctx, "wakeup_runner_daemon", wakeup_template)
+        host_patrol = restart.daemon_target(ctx, "patrol_inspector_daemon", patrol_template)
 
         self.assertEqual("45", host_phase9.command[-1])
         self.assertEqual("75", host_wakeup.command[-1])
+        self.assertEqual("3600", host_patrol.command[-1])
         runtime = FakeRestartDaemonRuntime()
         helper = RestartDaemons(ctx, self.config, runtime=runtime)
         helper.start_daemon("phase9_router_daemon", phase9_template)
         helper.start_daemon("wakeup_runner_daemon", wakeup_template)
+        helper.start_daemon("patrol_inspector_daemon", patrol_template)
         self.assertEqual("45", runtime.launch_envs["phase9_router_daemon"]["PHASE9_ROUTER_INTERVAL_SECONDS"])
         self.assertEqual("75", runtime.launch_envs["wakeup_runner_daemon"]["WAKEUP_RUNNER_INTERVAL_SECONDS"])
+        self.assertEqual("3600", runtime.launch_envs["patrol_inspector_daemon"]["PATROL_INSPECTOR_INTERVAL_SECONDS"])
 
         self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\n'
@@ -274,7 +297,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_restart_managed_daemon_names_projects_daemon_commands(self) -> None:
         self.assertEqual(tuple(name for name, _command in DAEMON_COMMANDS), restart_managed_daemon_names())
-        self.assertEqual(7, len(restart_managed_daemon_names()))
+        self.assertEqual(8, len(restart_managed_daemon_names()))
         self.assertIn("closed_label_reconciler", restart_managed_daemon_names())
         self.assertIn("wakeup_runner_daemon", restart_managed_daemon_names())
         patched = (
@@ -588,6 +611,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("RESTART_DAEMON_HEARTBEAT_INTERVAL", source)
         self.assertIn("PHASE9_ROUTER_INTERVAL_SECONDS", source)
         self.assertIn("WAKEUP_RUNNER_INTERVAL_SECONDS", source)
+        self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", source)
         history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
         for needle in history_forbidden:
             with self.subTest(needle=needle):

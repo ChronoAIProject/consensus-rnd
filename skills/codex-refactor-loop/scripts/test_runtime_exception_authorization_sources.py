@@ -42,6 +42,7 @@ TARGET_ANCHORS = {
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
+    "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -291,6 +292,70 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in ("prompt.read_text", "worker prose", "discussion"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, holistic_source)
+
+    def test_issue_541_patrol_inspector_issue_intake_is_narrow(self) -> None:
+        entry = mirror_entry(self.mirror, "patrol-inspector-issue-intake-541")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - patrol-inspector issue-intake(per #541)") :]
+        claude = self.repo_rules
+        cli_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
+        patrol_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol.py")
+        publisher_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "patrol_issue_publisher.py")
+        restart_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py")
+        holistic_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "holistic_status.py")
+
+        for needle in (
+            "active-controller owner only",
+            "$PATROL_INSPECTOR_ENABLE=true",
+            "exception logs",
+            "runs artifacts",
+            "wakeup-plan/peek projections",
+            "GitHub managed item snapshot",
+            "PatrolFinding",
+            "durable fingerprint",
+            "fixed patrol/design-intake label bundle",
+            "update may edit only the patrol issue body",
+            "cache and #504 dashboard input only",
+            "no modification of non-patrol issues or PRs",
+            "no close/reopen/merge",
+            "no PR edit",
+            "no label mutation outside the create-time fixed bundle",
+            "no commit",
+            "push",
+            "tag",
+            "release",
+            "no public inspector CLI",
+            "no second dashboard/comment writer",
+            "no generic issue factory",
+            "no lifecycle actor",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, skill_section)
+        for needle in (
+            "#541 是唯一 patrol-inspector issue-intake carveout",
+            "host opt-in",
+            "PatrolFinding",
+            "fingerprint create/update patrol-owned issue",
+            "update 仅改该 patrol issue body",
+            "generic issue factory",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, claude)
+
+        self.assertIn('"patrol-inspector": CommandSpec(', cli_source)
+        self.assertIn('"patrol_inspector_daemon"', restart_source)
+        self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", restart_source)
+        self.assertIn("class PatrolFinding", patrol_source)
+        self.assertIn("require_active_controller", patrol_source)
+        self.assertIn("PATROL_INSPECTOR_ENABLE", patrol_source)
+        self.assertIn("PATROL_LABEL_BUNDLE", publisher_source)
+        self.assertIn('"create"', publisher_source)
+        self.assertIn('"edit"', publisher_source)
+        self.assertIn('"issue"', publisher_source)
+        self.assertIn("patrol-inspector.json", holistic_source)
+        for forbidden in ("git push", "git commit", "gh pr", "issue close", "issue reopen", "release create"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, (patrol_source + publisher_source).lower())
 
     def test_maintainer_directive_entries_have_required_fields(self) -> None:
         self.assertEqual(len(MAINTAINER_DIRECTIVE_ANCHORS), 7)
