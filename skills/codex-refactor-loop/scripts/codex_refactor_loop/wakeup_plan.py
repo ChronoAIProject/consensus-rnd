@@ -992,6 +992,13 @@ def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhIt
         }
         if worktree is not None:
             action["worktree"] = str(worktree)
+        if not _worktree_merge_in_progress_resolved(repo_root, worktree):
+            action["status_only"] = True
+            action["no_lifecycle_authority"] = True
+            action["reason"] = "rebase_resolve_done_without_resolved_merge"
+            action.pop("controller_action", None)
+            action.pop("runner_authority", None)
+            action.pop("no_generic_command", None)
         actions.append(action)
     return actions
 
@@ -1873,6 +1880,27 @@ def _worktree_for_head_ref(repo_root: Path, head_ref: str) -> Path | None:
     return worktree
 
 
+def _worktree_merge_in_progress_resolved(repo_root: Path, worktree: Path | None) -> bool:
+    if worktree is None:
+        return False
+    try:
+        worktree.resolve().relative_to((repo_root / ".worktrees").resolve())
+    except ValueError:
+        return False
+    git_dir_result = git_text(["git", "-C", str(worktree), "rev-parse", "--git-dir"], cwd=repo_root)
+    if git_dir_result.returncode != 0 or not git_dir_result.stdout.strip():
+        return False
+    git_dir = Path(git_dir_result.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = worktree / git_dir
+    if not (git_dir / "MERGE_HEAD").exists():
+        return False
+    unmerged = git_text(["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"], cwd=repo_root)
+    if unmerged.returncode != 0:
+        return False
+    return not any(line.strip() for line in unmerged.stdout.splitlines())
+
+
 def safe_head_ref(value: str | None) -> str | None:
     if not value or value.startswith("-"):
         return None
@@ -1913,7 +1941,7 @@ def rebase_resolve_actions(
         if _rebase_resolve_in_flight(repo_root, item.number, monitor):
             actions.append(_rebase_resolve_status(item, "rebase_resolve_in_flight"))
             continue
-        if _rebase_resolve_pending_done(repo_root, item.number):
+        if _rebase_resolve_pending_done(repo_root, item.number, head_ref):
             actions.append(_rebase_resolve_status(item, "rebase_resolve_done_pending_commit"))
             continue
         base_status = _pr_branch_base_ahead_status(repo_root, head_ref, integration_branch)
@@ -1975,6 +2003,8 @@ def _rebase_resolve_status(item: GhItem, reason: str) -> dict[str, Any]:
 
 def _rebase_resolve_in_flight(repo_root: Path, pr_number: int, monitor: Any | None) -> bool:
     for log in (repo_root / ".refactor-loop" / "logs").glob(f"rebase-resolve-pr{pr_number}-r*.log"):
+        if _rebase_resolve_marker_from_log(log):
+            continue
         if _harness_spawn_intent_log_suppresses_retry(log) or _canonical_in_flight_for_log(log, monitor):
             return True
     pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
@@ -1995,11 +2025,17 @@ def _rebase_resolve_in_flight(repo_root: Path, pr_number: int, monitor: Any | No
     return False
 
 
-def _rebase_resolve_pending_done(repo_root: Path, pr_number: int) -> bool:
+def _rebase_resolve_pending_done(repo_root: Path, pr_number: int, head_ref: str) -> bool:
+    worktree: Path | None = None
     for log in (repo_root / ".refactor-loop" / "logs").glob(f"rebase-resolve-pr{pr_number}-r*.log"):
         marker = _rebase_resolve_marker_from_log(log)
-        if REBASE_RESOLVE_DONE_RE.fullmatch(marker) or REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker):
+        if REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker):
             return True
+        if REBASE_RESOLVE_DONE_RE.fullmatch(marker):
+            if worktree is None:
+                worktree = _worktree_for_head_ref(repo_root, head_ref)
+            if _worktree_merge_in_progress_resolved(repo_root, worktree):
+                return True
     return False
 
 

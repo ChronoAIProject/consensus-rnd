@@ -192,10 +192,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             head_ref="refactor/iter77-stale",
             head_sha="abc123",
         )
-        with mock.patch(
-            "codex_refactor_loop.wakeup_plan.git_text",
-            return_value=subprocess.CompletedProcess([], 0, stdout=porcelain, stderr=""),
-        ):
+        git_dir = self.repo / ".git" / "worktrees" / "iter77-stale"
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(git_dir) + "\n", stderr="")
+            if command == ["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
             actions = rebase_resolve_completed_marker_actions(self.repo, [item])
         action = actions[0]
         self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
@@ -216,20 +226,68 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertTrue(action["no_generic_command"])
 
-    def test_wakeup_plan_projects_rebase_resolve_done_marker_as_executable_commit_push(self) -> None:
-        log = self.logs / "rebase-resolve-pr77-r1.log"
-        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+    def test_wakeup_plan_stale_rebase_done_clean_worktree_projects_fresh_dispatch(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=False)
 
-        plan = self.run_plan(fixture="open_pr_77")
+        plan = self.run_plan(fixture="stale_base_done_clean")
 
-        action = next(item for item in plan["actions"] if item.get("controller_action") == "commit_push_resolved_pr_rebase")
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_pr_rebase_resolve"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+
+    def test_wakeup_plan_projects_rebase_done_only_for_resolved_in_progress_merge(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=())
+
+        plan = self.run_plan(fixture="stale_base_done_resolved_merge")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
         self.assertEqual("completed-marker", action["kind"])
-        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual("REBASE_RESOLVE_DONE:177:ok", action["source_marker"])
         self.assertEqual("PR", action["target_kind"])
-        self.assertEqual(77, action["target_number"])
+        self.assertEqual(177, action["target_number"])
         self.assertFalse(action.get("status_only", False))
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_rebase_done_with_unmerged_paths_never_projects_commit_push(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=("skills/example.py",))
+
+        plan = self.run_plan(fixture="stale_base_done_unmerged")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
 
     def test_wakeup_plan_keeps_branch_current_rebase_resolve_status_only(self) -> None:
         plan = self.run_plan(fixture="stale_base_branch_current")
@@ -540,7 +598,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    stale_base_conflicting_pr|stale_base_branch_current)
+                    stale_base_conflicting_pr|stale_base_branch_current|stale_base_done_clean|stale_base_done_resolved_merge|stale_base_done_unmerged)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":177,"title":"stale-base PR","headRefName":"refactor/iter177-stale","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -838,6 +896,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "stale_base_conflicting_pr": [
                 pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
             ],
+            "stale_base_done_clean": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_resolved_merge": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_unmerged": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
             "stale_base_branch_current": [
                 pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
             ],
@@ -897,6 +964,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
+                  if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'worktree %s/.worktrees/iter177-stale\nbranch refs/heads/refactor/iter177-stale\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/refactor/iter77-worker\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                   exit 0
                 fi
@@ -918,17 +989,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
-                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" ]] && printf 'stale-head-sha\n' && exit 0
+                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]] && printf 'stale-head-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
-                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
                     printf 'base-sha\n'
                     exit 0
                   fi
                 fi
                 if [[ "$*" == *"merge-base origin/refactor/iter177-stale origin/auto-refact-dev"* ]]; then
-                  if [[ "$fixture" == "stale_base_conflicting_pr" ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
                     printf 'old-base-sha\n'
                     exit 0
                   fi
@@ -937,6 +1008,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"rev-parse --git-dir"* ]]; then
+                  printf '%s/.git/worktrees/iter177-stale\n' "$WAKEUP_PLAN_REPO_ROOT"
+                  exit 0
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"diff --name-only --diff-filter=U"* ]]; then
+                  if [[ -f "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt" ]]; then
+                    cat "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt"
+                  fi
+                  exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
                   exit 1
@@ -1163,6 +1244,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         path = self.logs / name
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
         return path
+
+    def write_rebase_resolve_worktree_state(self, *, merge_head: bool, unmerged_paths: tuple[str, ...] = ()) -> None:
+        worktree = self.repo / ".worktrees" / "iter177-stale"
+        worktree.mkdir(parents=True, exist_ok=True)
+        git_dir = self.repo / ".git" / "worktrees" / "iter177-stale"
+        git_dir.mkdir(parents=True, exist_ok=True)
+        if merge_head:
+            (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+        else:
+            (git_dir / "MERGE_HEAD").unlink(missing_ok=True)
+        unmerged = self.repo / ".refactor-loop" / "state" / "rebase-unmerged-paths.txt"
+        unmerged.parent.mkdir(parents=True, exist_ok=True)
+        unmerged.write_text("".join(f"{path}\n" for path in unmerged_paths), encoding="utf-8")
 
     def write_run_artifact(self, stem: str, *lines: str) -> Path:
         path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
