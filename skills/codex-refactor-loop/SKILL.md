@@ -435,7 +435,7 @@ These are local controller contract rules learned from dogfood incidents:
 1. Audit fallback may have only one active `audit-iter-N` for the same `N` at a time; never start parallel audit runs that reuse `audit-iter-N.md`, `audit-iter-N-candidates.ndjson`, or `audit-iter-N.log`.
 2. Audit prompt rendering fails closed when `ITERATION` is empty; do not write `audit-iter-.md`, `audit-iter--candidates.ndjson`, or similarly empty-identity artifacts.
 3. Any new role prompt under `skills/codex-refactor-loop/prompts/*.md` must be registered in `test_marker_emission_contract.py` prompt inventory, including both `PROMPT_ALLOWLISTS` and `PROMPT_ARTIFACT_PROFILES`.
-4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; only missing or invalid review artifacts fall back to clean log-tail `REVIEW_DONE` markers.
+4. Review verdict authority for merge-readiness starts from `.refactor-loop/runs/review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`; `REVIEW_DONE` is only clean worker completion/routing evidence read through `codex_refactor_loop.worker_markers`.
 5. To read daemon state, run `python3 <skill-root>/scripts/consensus-rnd-cli daemon-status --json`; daemon repair/reload goes through `python3 <skill-root>/scripts/consensus-rnd-cli restart-daemons`; controller must not hand-kill daemon processes, probe process lists as liveness authority, or bypass the restart helper.
 
 ## Wakeup Skeleton
@@ -2177,6 +2177,8 @@ Each reviewer outputs `REVIEW_DONE:${PR}:${role}:<approve|comment|reject>` marke
 | Same preconditions | `reject>=1` | `FIX`: enter fix-retry loop; do not ready, do not merge; fix codex consumes reject evidence as blocking input and comments as context. Do NOT escalate to human on first reject. |
 | Any gate incomplete or invalid | missing role, duplicate/unknown verdict, no `EXIT=0`, missing/stale per-reviewer head SHA, CI pending/fail, or non-mergeable PR | `WAIT_OR_REDISPATCH`: wait or re-dispatch invalid/missing reviewer once; do not ready, never merge. |
 
+Clean worker terminal marker consumers use `codex_refactor_loop.worker_markers` as the shared source for detection, runner revalidation, implement readiness, and review completion evidence. The reader accepts standalone allowlisted terminal markers only after clean `EXIT=0`; when the log lacks a marker it may read only the same-stem `.refactor-loop/runs/<stem>.md` companion artifact for allowlisted worker roles. Duplicate, malformed, or conflicting marker evidence fails closed. Implement readiness recognizes `IMPLEMENT_DONE:*:ok` through this log-first plus same-stem companion artifact path. Review-gate verdict authority remains artifact-frontmatter-first; `REVIEW_DONE` does not override frontmatter verdicts.
+
 ### Fix-retry loop (AI iterates until consensus)
 
 Policy: AI keeps iterating until the fixed Consensus-rnd Phase review-gate truth table resolves to `MERGE` or `MERGE_WITH_COMMENTS`, OR until escalation criteria are hit. Default `max_fix_rounds = 3` per PR。
@@ -2757,7 +2759,7 @@ Stale `updatedAt` is routing metadata only: it may trigger re-dispatch visibilit
 **填 floor 优先级**(从高到低):
 
 1. **Existing dispatch queue** — `.refactor-loop/dispatch-queue/{p0,p1,p2}/*.dispatch.json` remains first; queue schema is unchanged.
-2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only log-tail markers after `EXIT=0` count; in-flight codexes are not actionable.
+2. **Clean actionable marker / maintainer comment / CI red / no-gap** — only `codex_refactor_loop.worker_markers` clean worker terminal markers after `EXIT=0` count; same-stem run artifact fallback is allowed only through that shared reader, and in-flight codexes are not actionable.
 3. **Consensus-rnd Phase design-intake / Consensus-rnd Phase design-consensus actionable routes** — manual-issue intake and consensus routes that already have durable issue/comment/marker evidence.
 4. **Audit fallback** — envsubst next iteration `prompts/audit.md`; `AUDIT_DONE:none:0` still does not exempt a positive deficit, and there is no duplicate same-iteration audit.
 5. **Visible hard gate / blocked boundary** — when no real open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and `HARD_GATE:dispatch_required=N`; when the same-iteration audit slot is occupied, emit `WAIT:single-active-audit`, `dispatch_required=0`, and `blocked_deficit=N`; do not stop with a low-floor exemption.

@@ -36,10 +36,6 @@ from codex_refactor_loop.wakeup_runner import (
 
 class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
     def test_revalidation_falls_back_to_implement_run_artifact_for_markerless_log(self) -> None:
-        # Symmetric to wakeup_plan's detection fallback: a clean-exit implement
-        # worker may emit IMPLEMENT_DONE only into its run artifact, so source-
-        # marker revalidation must accept it from runs/implement-issue-<id>.md
-        # rather than rejecting publish as clean_exit_marker_missing.
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             logs = repo / ".refactor-loop" / "logs"
@@ -62,6 +58,19 @@ class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
             unclean.write_text("crash\nEXIT=1\n", encoding="utf-8")
             (runs / "implement-issue-777.md").write_text("IMPLEMENT_DONE:issue-777:ok\n", encoding="utf-8")
             self.assertFalse(_source_log_has_clean_marker(unclean, "IMPLEMENT_DONE:issue-777:ok"))
+
+    def test_revalidation_rejects_raw_embedded_marker_text_without_shared_reader_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            logs.mkdir(parents=True)
+            log = logs / "implement-issue-421.log"
+            log.write_text(
+                "controller saw IMPLEMENT_DONE:issue-421:ok in prose\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(_source_log_has_clean_marker(log, "IMPLEMENT_DONE:issue-421:ok"))
 
 
 class FakeSupervisor:
@@ -1482,7 +1491,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     action_id="publish-implementation:bad-marker",
                     source_marker="IMPLEMENT_DONE:issue-77:partial",
                 ),
-                "source_marker_missing",
+                "clean_exit_marker_missing",
                 1,
                 None,
             ),
