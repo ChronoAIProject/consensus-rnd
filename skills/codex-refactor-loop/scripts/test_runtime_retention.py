@@ -12,6 +12,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from typing import Callable, Sequence
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -84,6 +85,39 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         }
         (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(json.dumps(plan), encoding="utf-8")
         return stale
+
+    def write_plan(self, plan: object) -> None:
+        (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+    def git_recheck_runner(
+        self,
+        commands: list[tuple[str, ...]],
+        *,
+        status_stdout: str = "",
+        status_returncode: int = 0,
+        status_stderr: str = "",
+        ahead_stdout: str = "0\n",
+        ahead_returncode: int = 0,
+        ahead_stderr: str = "",
+        remove_returncode: int = 0,
+        remove_stderr: str = "",
+        prune_returncode: int = 0,
+        prune_stderr: str = "",
+    ) -> Callable[[Sequence[str]], subprocess.CompletedProcess[str]]:
+        def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            command_tuple = tuple(command)
+            commands.append(command_tuple)
+            if tuple(command[3:5]) == ("status", "--porcelain"):
+                return subprocess.CompletedProcess(command, status_returncode, status_stdout, status_stderr)
+            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
+                return subprocess.CompletedProcess(command, ahead_returncode, ahead_stdout, ahead_stderr)
+            if tuple(command[3:5]) == ("worktree", "remove"):
+                return subprocess.CompletedProcess(command, remove_returncode, "", remove_stderr)
+            if tuple(command[3:5]) == ("worktree", "prune"):
+                return subprocess.CompletedProcess(command, prune_returncode, "", prune_stderr)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        return runner
 
     def test_default_disabled_noops_even_when_old_files_exist(self) -> None:
         self.host_env.write_text(
@@ -180,15 +214,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(json.dumps(plan), encoding="utf-8")
         commands: list[tuple[str, ...]] = []
 
-        def runner(command):
-            commands.append(tuple(command))
-            if tuple(command[3:5]) == ("status", "--porcelain"):
-                return subprocess.CompletedProcess(command, 0, "", "")
-            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+        result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands))
 
         self.assertEqual(1, result.removed_worktrees)
         self.assertTrue(result.pruned_worktrees)
@@ -200,15 +226,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.write_stale_worktree_plan()
         commands: list[tuple[str, ...]] = []
 
-        def runner(command):
-            commands.append(tuple(command))
-            if tuple(command[3:5]) == ("status", "--porcelain"):
-                return subprocess.CompletedProcess(command, 0, " M changed.txt\n", "")
-            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+        result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands, status_stdout=" M changed.txt\n"))
 
         self.assertEqual(0, result.removed_worktrees)
         self.assertFalse(result.pruned_worktrees)
@@ -219,15 +237,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.write_stale_worktree_plan()
         commands: list[tuple[str, ...]] = []
 
-        def runner(command):
-            commands.append(tuple(command))
-            if tuple(command[3:5]) == ("status", "--porcelain"):
-                return subprocess.CompletedProcess(command, 0, "", "")
-            if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
-                return subprocess.CompletedProcess(command, 0, "2\n", "")
-            return subprocess.CompletedProcess(command, 0, "", "")
-
-        result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+        result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands, ahead_stdout="2\n"))
 
         self.assertEqual(0, result.removed_worktrees)
         self.assertFalse(result.pruned_worktrees)
@@ -239,16 +249,17 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
             with self.subTest(failing_command=failing_command):
                 self.write_stale_worktree_plan()
                 commands: list[tuple[str, ...]] = []
-
-                def runner(command):
-                    commands.append(tuple(command))
-                    if tuple(command[3:5]) == ("status", "--porcelain"):
-                        return subprocess.CompletedProcess(command, 1 if failing_command == "status" else 0, "", "fatal\n")
-                    if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
-                        return subprocess.CompletedProcess(command, 1 if failing_command == "rev-list" else 0, "0\n", "fatal\n")
-                    return subprocess.CompletedProcess(command, 0, "", "")
-
-                result = retain_runtime(self.repo, enabled=True, command_runner=runner)
+                result = retain_runtime(
+                    self.repo,
+                    enabled=True,
+                    command_runner=self.git_recheck_runner(
+                        commands,
+                        status_returncode=1 if failing_command == "status" else 0,
+                        status_stderr="fatal\n",
+                        ahead_returncode=1 if failing_command == "rev-list" else 0,
+                        ahead_stderr="fatal\n",
+                    ),
+                )
 
                 self.assertEqual(0, result.removed_worktrees)
                 self.assertFalse(result.pruned_worktrees)
@@ -261,6 +272,142 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("runtime_retention: enabled=true ttl_hours=24 deleted=1", result.stdout)
         self.assertIn("removed_worktrees=0", result.stdout)
+        self.assertIn("diagnostics=none", result.stdout)
+
+    def test_malformed_plan_shapes_emit_diagnostic_reasons(self) -> None:
+        cases: list[tuple[str, str, str]] = [
+            ("not-json", "{", "plan_json_invalid"),
+            ("wrong-top-level", "[]", "plan_shape_invalid"),
+            ("wrong-kind", json.dumps({"kind": "Other", "stale_worktrees": []}), "plan_kind_invalid"),
+            ("wrong-worktrees", json.dumps({"kind": "RuntimeRetentionPlan", "stale_worktrees": {}}), "stale_worktrees_invalid"),
+            ("invalid-item", json.dumps({"kind": "RuntimeRetentionPlan", "stale_worktrees": ["bad"]}), "invalid_item"),
+        ]
+        for name, content, reason in cases:
+            with self.subTest(name=name):
+                (self.refactor_loop / "state" / "runtime-retention-plan.json").write_text(content, encoding="utf-8")
+
+                result = retain_runtime(self.repo, enabled=True)
+
+                self.assertEqual(0, result.removed_worktrees)
+                self.assertTrue(any(f"reason={reason}" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+                self.assertTrue(any("target=" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+        plan_path = self.refactor_loop / "state" / "runtime-retention-plan.json"
+        plan_path.unlink()
+        plan_path.mkdir()
+
+        result = retain_runtime(self.repo, enabled=True)
+
+        self.assertEqual(0, result.removed_worktrees)
+        self.assertTrue(any(f"target={plan_path.resolve()}" in diagnostic and "reason=plan_read_failed" in diagnostic for diagnostic in result.diagnostics), result.diagnostics)
+
+    def test_planner_item_skip_paths_emit_target_and_reason(self) -> None:
+        full_proof = {
+            "no_in_flight": True,
+            "no_open_issue_or_pr": True,
+            "no_dirty": True,
+            "no_local_ahead": True,
+            "merged_or_missing_safe": True,
+        }
+        cases: list[tuple[str, dict[str, object], str, str]] = [
+            (
+                "not-eligible",
+                {"path": ".worktrees/iter1-issue-1", "eligible": False, "proof": full_proof},
+                "planner_not_eligible",
+                ".worktrees/iter1-issue-1",
+            ),
+            (
+                "invalid-proof",
+                {"path": ".worktrees/iter1-issue-1", "eligible": True, "proof": []},
+                "invalid_proof",
+                ".worktrees/iter1-issue-1",
+            ),
+            (
+                "false-proof",
+                {
+                    "path": ".worktrees/iter1-issue-1",
+                    "eligible": True,
+                    "proof": {**full_proof, "no_dirty": False},
+                },
+                "proof_no_dirty_not_true",
+                ".worktrees/iter1-issue-1",
+            ),
+            ("missing-path", {"eligible": True, "proof": full_proof}, "invalid_path", "entry:0"),
+            (
+                "escaped-path",
+                {"path": ".worktrees/../x", "eligible": True, "proof": full_proof},
+                "invalid_path",
+                ".worktrees/../x",
+            ),
+        ]
+        for name, item, reason, target in cases:
+            with self.subTest(name=name):
+                self.write_plan({"kind": "RuntimeRetentionPlan", "stale_worktrees": [item]})
+
+                result = retain_runtime(self.repo, enabled=True)
+
+                self.assertEqual(0, result.removed_worktrees)
+                self.assertTrue(
+                    any(f"target={target}" in diagnostic and f"reason={reason}" in diagnostic for diagnostic in result.diagnostics),
+                    result.diagnostics,
+                )
+
+    def test_missing_worktree_and_git_recheck_failures_emit_diagnostics(self) -> None:
+        cases: list[tuple[str, dict[str, object], str]] = [
+            ("missing", {}, "worktree_missing"),
+            ("dirty", {"status_stdout": " M changed.txt\n"}, "dirty_status"),
+            ("status-failed", {"status_returncode": 1, "status_stderr": "fatal status\n"}, "git_status_failed"),
+            ("ahead", {"ahead_stdout": "2\n"}, "local_ahead"),
+            ("ahead-failed", {"ahead_returncode": 1, "ahead_stderr": "fatal ahead\n"}, "git_ahead_failed"),
+        ]
+        for name, runner_kwargs, reason in cases:
+            with self.subTest(name=name):
+                stale = self.write_stale_worktree_plan()
+                if name == "missing":
+                    shutil.rmtree(stale)
+                commands: list[tuple[str, ...]] = []
+
+                result = retain_runtime(self.repo, enabled=True, command_runner=self.git_recheck_runner(commands, **runner_kwargs))
+
+                self.assertEqual(0, result.removed_worktrees)
+                self.assertFalse(result.pruned_worktrees)
+                self.assertTrue(
+                    any(f"target={stale.resolve()}" in diagnostic and f"reason={reason}" in diagnostic for diagnostic in result.diagnostics),
+                    result.diagnostics,
+                )
+                self.assertFalse(any(command[3:5] == ("worktree", "remove") for command in commands))
+
+    def test_worktree_remove_and_prune_failures_emit_diagnostics(self) -> None:
+        stale = self.write_stale_worktree_plan()
+        commands: list[tuple[str, ...]] = []
+
+        remove_failed = retain_runtime(
+            self.repo,
+            enabled=True,
+            command_runner=self.git_recheck_runner(commands, remove_returncode=1, remove_stderr="fatal remove\n"),
+        )
+
+        self.assertEqual(0, remove_failed.removed_worktrees)
+        self.assertFalse(remove_failed.pruned_worktrees)
+        self.assertTrue(
+            any(f"target={stale.resolve()}" in diagnostic and "reason=worktree_remove_failed" in diagnostic for diagnostic in remove_failed.diagnostics),
+            remove_failed.diagnostics,
+        )
+
+        stale = self.write_stale_worktree_plan()
+        commands = []
+        prune_failed = retain_runtime(
+            self.repo,
+            enabled=True,
+            command_runner=self.git_recheck_runner(commands, prune_returncode=1, prune_stderr="fatal prune\n"),
+        )
+
+        self.assertEqual(1, prune_failed.removed_worktrees)
+        self.assertFalse(prune_failed.pruned_worktrees)
+        self.assertTrue(
+            any(f"target={self.repo.resolve()}" in diagnostic and "reason=worktree_prune_failed" in diagnostic for diagnostic in prune_failed.diagnostics),
+            prune_failed.diagnostics,
+        )
 
     def test_refuses_without_repo_root_or_host_env(self) -> None:
         isolated = self.tmp_root / "isolated"
