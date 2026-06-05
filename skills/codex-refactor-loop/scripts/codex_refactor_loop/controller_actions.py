@@ -25,7 +25,7 @@ from .prompt_contracts import inline_prompt_contracts
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
 from .git import Git
-from .triage import TriageApplyConfig, apply_decision, load_triage_apply_config
+from .triage import TriageApplyConfig, apply_decision
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec

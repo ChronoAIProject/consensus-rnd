@@ -1870,6 +1870,36 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assert_blocked_before_dispatch(results, "release-rollup-body:abc123", "release_rollup_body_exists", actions)
 
+    def test_release_rollup_body_spawn_blocks_invalid_narrow_allowlist_inputs_before_dispatch(self) -> None:
+        cases = (
+            (
+                "missing-event-precondition",
+                {"preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent", "target_body_absent"]},
+                "release_rollup_body_missing_precondition:release_rollup_event",
+            ),
+            (
+                "missing-body-absent-precondition",
+                {"preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "release_rollup_event", "target_log_absent"]},
+                "release_rollup_body_missing_precondition:target_body_absent",
+            ),
+            ("missing-event", {"event": None}, "release_rollup_body_event_missing"),
+            ("blank-integration-sha", {"event": {"integration_sha": "   "}}, "release_rollup_body_integration_sha_missing"),
+            ("body-outside-runs", {"body_file": ".refactor-loop/state/release-rollup-pr-body.md"}, "release_rollup_body_output_outside_runs"),
+            (
+                "prompt-mismatch",
+                {"prompt": str(self.repo / ".refactor-loop/prompts/other.md")},
+                "release_rollup_body_prompt_mismatch",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.release_rollup_body_action(action_id=f"release-rollup-body:{name}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_release_rollup_blocks_missing_event_fields_before_helper(self) -> None:
         body = self.repo / ".refactor-loop/runs/release-rollup-pr-body.md"
         cases = (
