@@ -111,6 +111,14 @@ class FakeActions:
         self.calls.append(("dispatch_reviewers", dict(action)))
         return 0
 
+    def dispatch_pr_rebase_resolve(self, action: dict) -> int:
+        self.calls.append(("dispatch_pr_rebase_resolve", dict(action)))
+        return 0
+
+    def commit_push_resolved_pr_rebase(self, action: dict) -> int:
+        self.calls.append(("commit_push_resolved_pr_rebase", dict(action)))
+        return 0
+
     def open_release_rollup_pr_from_action(self, action: dict) -> int:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
@@ -476,6 +484,54 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def rebase_dispatch_action(self, **overrides) -> dict:
+        action = {
+            "kind": "stale-base-conflicting-pr",
+            "action_id": "dispatch-pr-rebase-resolve:77:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "live_managed_target",
+                "conflicting_or_dirty_mergeability",
+                "base_ahead_pr_branch",
+            ],
+            "source_artifact": "github-managed-pr-mergeability",
+            "source_marker": "CONFLICTING_PR_STALE_BASE:77:abc123",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "head_ref": "refactor/iter77-worker",
+            "controller_action": "dispatch_pr_rebase_resolve",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
+    def rebase_commit_action(self, **overrides) -> dict:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:rebase-resolve-pr77-r1.log:REBASE_RESOLVE_DONE:77:ok",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            "source_artifact": ".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            "source_marker": "REBASE_RESOLVE_DONE:77:ok",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "head_ref": "refactor/iter77-worker",
+            "worktree": str(worktree),
+            "controller_action": "commit_push_resolved_pr_rebase",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
     def assert_blocked_ledger(self, action_id: str, reason: str) -> None:
         rows = [
             json.loads(line)
@@ -817,6 +873,20 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.action_id for result in results], ["close-managed-item:53:first"])
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
+
+    def test_wakeup_runner_routes_dispatch_pr_rebase_resolve_action(self) -> None:
+        action = self.rebase_dispatch_action()
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+
+    def test_wakeup_runner_routes_commit_push_resolved_pr_rebase_action(self) -> None:
+        action = self.rebase_commit_action()
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["commit_push_resolved_pr_rebase"])
 
     def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:
         blocked = self.implementation_output_action(

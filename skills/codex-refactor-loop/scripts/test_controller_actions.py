@@ -260,6 +260,213 @@ class ControllerActionsTests(unittest.TestCase):
             raise AssertionError(result.stderr.strip() or result.stdout.strip() or f"git {' '.join(args)} failed")
         return result
 
+    def write_rebase_prompt_template(self) -> None:
+        prompt = self.tmp / "prompts" / "rebase-resolve.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text(
+            "PR ${PR_NUMBER}\nbase ${BASE_BRANCH}\nhead ${HEAD_BRANCH}\nbranch ${BRANCH}\n"
+            "worktree ${WORKTREE_PATH}\ncontext ${REBASE_CONTEXT_PATH}\noutput ${REBASE_RESOLVE_OUTPUT_PATH}\n",
+            encoding="utf-8",
+        )
+
+    def init_rebase_repo(self, *, conflict: bool = True, already_contains_base: bool = False) -> tuple[Path, str]:
+        self.run_git(self.tmp, ["init", "--bare", "origin.git"])
+        source = self.tmp / "source"
+        self.run_git(self.tmp, ["init", str(source)])
+        self.run_git(source, ["config", "user.email", "test@example.com"])
+        self.run_git(source, ["config", "user.name", "Test User"])
+        (source / "file.txt").write_text("base\n", encoding="utf-8")
+        self.run_git(source, ["add", "file.txt"])
+        self.run_git(source, ["commit", "-m", "base"])
+        self.run_git(source, ["branch", "-M", "canonical-integration"])
+        self.run_git(source, ["remote", "add", "origin", str(self.tmp / "origin.git")])
+        self.run_git(source, ["push", "-u", "origin", "canonical-integration"])
+        head_ref = "refactor/iter77-stale"
+        self.run_git(source, ["checkout", "-b", head_ref])
+        (source / "file.txt").write_text("head\n" if conflict else "base\nhead\n", encoding="utf-8")
+        self.run_git(source, ["commit", "-am", "head change"])
+        if already_contains_base:
+            self.run_git(source, ["checkout", "canonical-integration"])
+            (source / "base-only.txt").write_text("new base\n", encoding="utf-8")
+            self.run_git(source, ["add", "base-only.txt"])
+            self.run_git(source, ["commit", "-m", "base advance"])
+            self.run_git(source, ["checkout", head_ref])
+            self.run_git(source, ["merge", "--no-edit", "canonical-integration"])
+        self.run_git(source, ["push", "-u", "origin", head_ref])
+        if not already_contains_base:
+            self.run_git(source, ["checkout", "canonical-integration"])
+            if conflict:
+                (source / "file.txt").write_text("integration\n", encoding="utf-8")
+                self.run_git(source, ["commit", "-am", "base conflict"])
+            else:
+                (source / "base-only.txt").write_text("new base\n", encoding="utf-8")
+                self.run_git(source, ["add", "base-only.txt"])
+                self.run_git(source, ["commit", "-m", "base clean"])
+            self.run_git(source, ["push", "origin", "canonical-integration"])
+        self.run_git(self.tmp, ["init"])
+        self.run_git(self.tmp, ["config", "user.email", "test@example.com"])
+        self.run_git(self.tmp, ["config", "user.name", "Test User"])
+        self.run_git(self.tmp, ["remote", "add", "origin", str(self.tmp / "origin.git")])
+        self.run_git(self.tmp, ["fetch", "origin"])
+        self.run_git(self.tmp, ["worktree", "add", str(self.tmp / ".worktrees" / "iter77-stale"), head_ref])
+        worktree = self.tmp / ".worktrees" / "iter77-stale"
+        self.run_git(worktree, ["config", "user.email", "test@example.com"])
+        self.run_git(worktree, ["config", "user.name", "Test User"])
+        return worktree, head_ref
+
+    def patch_rebase_owner_and_gh(self, head_ref: str):
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="dispatch-pr-rebase-resolve",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:3] == ["pr", "view", "77"] and "--json" in args:
+                fields = args[args.index("--json") + 1]
+                if fields == "labels,body":
+                    return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"baseRefName": "canonical-integration", "headRefName": head_ref, "headRefOid": "abc123"}),
+                    stderr="",
+                )
+            return mock.Mock(returncode=1, stdout="", stderr="unexpected gh")
+
+        return mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision), mock.patch.object(
+            self.actions, "gh", side_effect=fake_gh
+        )
+
+    def test_dispatch_pr_rebase_resolve_conflicting_pr_dispatches_resolver_and_leaves_merge_in_progress(self) -> None:
+        self.write_rebase_prompt_template()
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        launches: list[dict[str, object]] = []
+
+        def fake_launch(**kwargs: object) -> int:
+            launches.append(dict(kwargs))
+            return 0
+
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        with owner_patch, gh_patch, mock.patch("codex_refactor_loop.controller_actions.launch_spawn_codex_supervisor", side_effect=fake_launch):
+            rc = self.actions.dispatch_pr_rebase_resolve({"target_kind": "PR", "target_number": 77, "head_ref": head_ref})
+
+        self.assertEqual(0, rc)
+        self.assertEqual(1, len(launches))
+        self.assertEqual(worktree.resolve(), launches[0]["cd"])
+        self.assertEqual((self.tmp / ".refactor-loop" / "logs" / "rebase-resolve-pr77-r1.log").resolve(), Path(launches[0]["log"]).resolve())
+        prompt_text = (self.tmp / ".refactor-loop" / "prompts" / "rebase-resolve-pr77-r1.md").read_text(encoding="utf-8")
+        self.assertIn("PR **77**", prompt_text)
+        self.assertIn("REBASE_RESOLVE_DONE:77:<status>", prompt_text)
+        self.assertTrue((worktree / ".git").is_file() or (worktree / ".git").exists())
+        self.assertNotEqual("", self.run_git(worktree, ["diff", "--name-only", "--diff-filter=U"]).stdout.strip())
+        self.assertTrue(self.actions._merge_in_progress(worktree))
+
+    def test_dispatch_pr_rebase_resolve_clean_merge_commits_and_pushes_without_resolver(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=False)
+        pushes: list[dict[str, str]] = []
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        with owner_patch, gh_patch, mock.patch.object(
+            self.actions,
+            "safe_push",
+            side_effect=lambda branch, worktree: pushes.append({"branch": branch, "worktree": str(worktree)}) or 0,
+        ), mock.patch("codex_refactor_loop.controller_actions.launch_spawn_codex_supervisor") as launch:
+            rc = self.actions.dispatch_pr_rebase_resolve({"target_kind": "PR", "target_number": 77, "head_ref": head_ref})
+
+        self.assertEqual(0, rc)
+        self.assertEqual([], launch.mock_calls)
+        self.assertEqual([{"branch": head_ref, "worktree": str(worktree.resolve())}], pushes)
+        self.assertFalse(self.actions._merge_in_progress(worktree))
+
+    def test_dispatch_pr_rebase_resolve_already_contains_base_noops(self) -> None:
+        _worktree, head_ref = self.init_rebase_repo(already_contains_base=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        with owner_patch, gh_patch, mock.patch("codex_refactor_loop.controller_actions.launch_spawn_codex_supervisor") as launch:
+            with mock.patch.object(self.actions, "safe_push") as push:
+                rc = self.actions.dispatch_pr_rebase_resolve({"target_kind": "PR", "target_number": 77, "head_ref": head_ref})
+        self.assertEqual(0, rc)
+        self.assertEqual([], launch.mock_calls)
+        self.assertEqual([], push.mock_calls)
+
+    def test_dispatch_pr_rebase_resolve_rejects_nonmanaged_or_noncanonical_head_without_side_effects(self) -> None:
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="dispatch-pr-rebase-resolve",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(
+                self.actions,
+                "gh",
+                return_value=mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps({"baseRefName": "canonical-integration", "headRefName": "feature", "headRefOid": "abc"}),
+                    stderr="",
+                ),
+            ):
+                with mock.patch("codex_refactor_loop.controller_actions.launch_spawn_codex_supervisor") as launch:
+                    rc = self.actions.dispatch_pr_rebase_resolve({"target_kind": "PR", "target_number": 77})
+        self.assertEqual(2, rc)
+        self.assertEqual([], launch.mock_calls)
+
+    def test_commit_push_resolved_pr_rebase_commits_resolved_merge_and_pushes_head(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        self.run_git(worktree, ["fetch", "origin"])
+        subprocess.run(["git", "-C", str(worktree), "merge", "--no-commit", "--no-ff", "origin/canonical-integration"], capture_output=True, text=True, check=False)
+        (worktree / "file.txt").write_text("resolved\n", encoding="utf-8")
+        self.run_git(worktree, ["add", "file.txt"])
+        pushes: list[str] = []
+        with owner_patch, gh_patch, mock.patch.object(
+            self.actions,
+            "safe_push",
+            side_effect=lambda branch, worktree: pushes.append(f"{branch}:{worktree}") or 0,
+        ):
+            rc = self.actions.commit_push_resolved_pr_rebase(
+                {"target_kind": "PR", "target_number": 77, "head_ref": head_ref, "worktree": str(worktree), "source_marker": "REBASE_RESOLVE_DONE:77:ok"}
+            )
+        self.assertEqual(0, rc)
+        self.assertEqual([f"{head_ref}:{worktree.resolve()}"], pushes)
+        self.assertFalse(self.actions._merge_in_progress(worktree))
+
+    def test_commit_push_resolved_pr_rebase_blocks_when_unmerged_paths_remain(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        self.run_git(worktree, ["fetch", "origin"])
+        subprocess.run(["git", "-C", str(worktree), "merge", "--no-commit", "--no-ff", "origin/canonical-integration"], capture_output=True, text=True, check=False)
+        with owner_patch, gh_patch, mock.patch.object(self.actions, "safe_push") as push:
+            rc = self.actions.commit_push_resolved_pr_rebase(
+                {"target_kind": "PR", "target_number": 77, "head_ref": head_ref, "worktree": str(worktree), "source_marker": "REBASE_RESOLVE_DONE:77:ok"}
+            )
+        self.assertEqual(2, rc)
+        self.assertEqual([], push.mock_calls)
+        self.assertTrue(self.actions._merge_in_progress(worktree))
+
+    def test_commit_push_resolved_pr_rebase_blocked_marker_aborts_and_surfaces_event(self) -> None:
+        worktree, head_ref = self.init_rebase_repo(conflict=True)
+        owner_patch, gh_patch = self.patch_rebase_owner_and_gh(head_ref)
+        self.run_git(worktree, ["fetch", "origin"])
+        subprocess.run(["git", "-C", str(worktree), "merge", "--no-commit", "--no-ff", "origin/canonical-integration"], capture_output=True, text=True, check=False)
+        with owner_patch, gh_patch, mock.patch.object(self.actions, "safe_push") as push:
+            rc = self.actions.commit_push_resolved_pr_rebase(
+                {
+                    "target_kind": "PR",
+                    "target_number": 77,
+                    "head_ref": head_ref,
+                    "worktree": str(worktree),
+                    "source_marker": "REBASE_RESOLVE_BLOCKED:77:conflict:needs-human",
+                }
+            )
+        self.assertEqual(3, rc)
+        self.assertEqual([], push.mock_calls)
+        self.assertFalse(self.actions._merge_in_progress(worktree))
+        self.assertIn("REBASE_RESOLVE_BLOCKED:77:conflict:needs-human", self.pending_events())
+
     def publish_implementation_git_worktree(self) -> Path:
         repo = self.tmp / "publish-implementation-repo"
         repo.mkdir()

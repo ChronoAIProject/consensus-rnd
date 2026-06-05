@@ -40,6 +40,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
     repository_stalled_meta_reflector_actions,
+    rebase_resolve_actions,
+    rebase_resolve_completed_marker_actions,
     release_countdown_actions,
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
@@ -92,6 +94,72 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+
+    def test_rebase_resolve_actions_project_conflicting_managed_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_rebase_resolve_actions_suppress_in_flight_resolve(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        (self.logs / "rebase-resolve-pr77-r1.log").write_text("worker running\n", encoding="utf-8")
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        self.assertEqual("rebase_resolve_in_flight", actions[0]["reason"])
+        self.assertTrue(actions[0]["status_only"])
+
+    def test_rebase_resolve_completed_marker_projects_commit_push_action(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        with mock.patch(
+            "codex_refactor_loop.wakeup_plan.git_text",
+            return_value=subprocess.CompletedProcess([], 0, stdout=porcelain, stderr=""),
+        ):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+        action = actions[0]
+        self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual(str(worktree), action["worktree"])
 
     def write_fake_gh(self) -> None:
         gh = self.fakebin / "gh"

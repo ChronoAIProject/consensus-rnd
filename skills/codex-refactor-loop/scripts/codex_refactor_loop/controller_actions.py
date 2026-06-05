@@ -30,6 +30,7 @@ from .implementation_pr_artifacts import (
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
+from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
 from .git import Git
 from .review_fix_dispatch import (
@@ -64,6 +65,11 @@ GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
 PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
+MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_BLOCKED_RE = re.compile(
+    r"^REBASE_RESOLVE_BLOCKED:([1-9][0-9]*):(conflict|human-decision|build-broken|other):(.+)$"
+)
 
 
 class ControllerActions:
@@ -1068,6 +1074,322 @@ class ControllerActions:
             if isinstance(intent, dict) and intent.get("intent_id") == intent_id:
                 return True
         return False
+
+    def dispatch_pr_rebase_resolve(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("dispatch-pr-rebase-resolve", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="dispatch-pr-rebase-resolve")
+        if pr_target is None:
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = facts["head_ref"]
+        if not self._canonical_managed_head(head_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            sys.stderr.write("dispatch_pr_rebase_resolve: live PR is not managed\n")
+            return 2
+        worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree branch mismatch\n")
+            return 2
+        if self._worktree_has_unrelated_dirty_state(worktree):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree dirty before merge\n")
+            return 2
+        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
+        if fetch.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: fetch failed: {_single_line(fetch.stderr or fetch.stdout)}\n")
+            return 2
+        base_ref = f"origin/{self.integration_branch}"
+        if not self._branch_is_base_behind(worktree, base_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: branch already contains {base_ref}; noop\n")
+            return 0
+        merge = self._git_in(worktree, ["merge", "--no-commit", "--no-ff", base_ref], check=False)
+        if merge.returncode == 0:
+            return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+        unmerged = self._unmerged_paths(worktree)
+        if not unmerged:
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(
+                "dispatch_pr_rebase_resolve: merge failed without unmerged paths: "
+                f"{_single_line(merge.stderr or merge.stdout)}\n"
+            )
+            return 2
+        round_number = self._next_rebase_resolve_round(pr_target)
+        prompt = self.ctx.paths.prompts / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        output = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        log = self.ctx.paths.logs / f"rebase-resolve-pr{pr_target}-r{round_number}.log"
+        context_path = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}-context.json"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(
+            json.dumps(
+                {
+                    "pr_number": pr_target,
+                    "base_branch": self.integration_branch,
+                    "head_branch": head_ref,
+                    "worktree_path": str(worktree),
+                    "unmerged_paths": unmerged,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "rebase-resolve.md"),
+            str(prompt),
+            env={
+                "PR_NUMBER": pr_target,
+                "BASE_BRANCH": self.integration_branch,
+                "HEAD_BRANCH": head_ref,
+                "BRANCH": head_ref,
+                "WORKTREE_PATH": str(worktree),
+                "REBASE_CONTEXT_PATH": self.ctx.durable_artifact_path(context_path),
+                "REBASE_RESOLVE_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
+            },
+        )
+        self._replace_rebase_resolve_shell_defaults(prompt)
+        self._ensure_rebase_resolve_prompt_fully_rendered(prompt)
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            add_dirs=(self.ctx.repo_root,),
+            env=self.ctx.env_for_subprocess(),
+        )
+
+    def commit_push_resolved_pr_rebase(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("commit-push-resolved-pr-rebase", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="commit-push-resolved-pr-rebase")
+        if pr_target is None:
+            return 2
+        marker = str(action.get("source_marker") or action.get("marker") or "")
+        blocked = REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker)
+        if blocked:
+            if blocked.group(1) != pr_target:
+                sys.stderr.write("commit_push_resolved_pr_rebase: blocked marker PR mismatch\n")
+                return 2
+            worktree = self._worktree_from_rebase_action(action, pr_target)
+            if worktree is not None:
+                self._abort_merge_if_present(worktree)
+            self._append_pending_event(
+                f"REBASE_RESOLVE_BLOCKED:{pr_target}:{blocked.group(2)}:{_single_line(blocked.group(3))}"
+            )
+            return 3
+        done = REBASE_RESOLVE_DONE_RE.fullmatch(marker)
+        if marker and done is None:
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid source marker\n")
+            return 2
+        if done is not None and done.group(1) != pr_target:
+            sys.stderr.write("commit_push_resolved_pr_rebase: done marker PR mismatch\n")
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = str(action.get("head_ref") or facts["head_ref"]).strip()
+        if head_ref != facts["head_ref"]:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: stale head_ref {head_ref!r}\n")
+            return 2
+        worktree = self._worktree_from_rebase_action(action, pr_target)
+        if worktree is None:
+            worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+
+    def _commit_push_resolved_pr_rebase(self, *, pr_target: str, head_ref: str, worktree: Path) -> int:
+        if not self._canonical_managed_head(head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: live PR is not managed\n")
+            return 2
+        if not self._worktree_under_controller_root(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree outside controller-owned .worktrees\n")
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree branch mismatch\n")
+            return 2
+        if not self._merge_in_progress(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: merge not in progress\n")
+            return 2
+        unmerged = self._unmerged_paths(worktree)
+        if unmerged:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: unresolved conflicts: {','.join(unmerged)}\n")
+            return 2
+        commit = self._git_in(worktree, ["commit", "--no-edit"], check=False)
+        if commit.returncode != 0:
+            sys.stderr.write(
+                "commit_push_resolved_pr_rebase: merge commit failed: "
+                f"{_single_line(commit.stderr or commit.stdout or 'nothing-to-commit')}\n"
+            )
+            return 2
+        return self.safe_push(branch=head_ref, worktree=worktree)
+
+    def _managed_pr_target(self, action: Mapping[str, object], *, action_name: str) -> str | None:
+        target = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="pr",
+            action=action_name,
+            source="wakeup-runner-action",
+        )
+        if target is None:
+            return None
+        if action.get("target_kind") != "PR":
+            sys.stderr.write(f"{action_name.replace('-', '_')}: target_kind must be PR\n")
+            return None
+        return target
+
+    def _pr_rebase_facts(self, pr_target: str) -> dict[str, str] | None:
+        result = self.gh(
+            ["pr", "view", pr_target, "--json", "baseRefName,headRefName,headRefOid"],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR metadata unavailable: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            sys.stderr.write("dispatch_pr_rebase_resolve: invalid PR metadata JSON\n")
+            return None
+        head_ref = str(payload.get("headRefName") or "").strip()
+        base_ref = str(payload.get("baseRefName") or "").strip()
+        if base_ref != self.integration_branch:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR base mismatch {base_ref!r}\n")
+            return None
+        if not head_ref:
+            sys.stderr.write("dispatch_pr_rebase_resolve: missing head_ref\n")
+            return None
+        return {"head_ref": head_ref, "head_sha": str(payload.get("headRefOid") or ""), "base_ref": base_ref}
+
+    def _ensure_managed_pr_worktree(self, head_ref: str) -> Path | None:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: invalid managed head_ref {head_ref!r}\n")
+            return None
+        existing = self._worktree_for_branch(head_ref)
+        if existing is not None:
+            resolved = existing.resolve()
+            if self._worktree_under_controller_root(resolved):
+                return resolved
+            sys.stderr.write("dispatch_pr_rebase_resolve: existing worktree outside controller-owned .worktrees\n")
+            return None
+        wt_path = self.ctx.repo_root / ".worktrees" / f"iter{match.group(1)}-{match.group(2)}"
+        (self.ctx.repo_root / ".worktrees").mkdir(parents=True, exist_ok=True)
+        result = self.git(["worktree", "add", str(wt_path), head_ref], check=False)
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: worktree add failed: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        return wt_path.resolve()
+
+    def _canonical_managed_head(self, head_ref: str) -> bool:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            return False
+        try:
+            _validate_safe_worktree_fields(match.group(1), match.group(2))
+        except ValueError:
+            return False
+        return head_ref not in {self.integration_branch, self.review_base_branch}
+
+    def _worktree_under_controller_root(self, worktree: Path) -> bool:
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return False
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return False
+        return True
+
+    def _worktree_is_on_branch(self, worktree: Path, head_ref: str) -> bool:
+        branch = self._git_in(worktree, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return branch.returncode == 0 and branch.stdout.strip() == head_ref
+
+    def _worktree_has_unrelated_dirty_state(self, worktree: Path) -> bool:
+        if self._merge_in_progress(worktree):
+            return True
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        return status.returncode != 0 or bool(status.stdout.strip())
+
+    def _merge_in_progress(self, worktree: Path) -> bool:
+        git_dir = self._git_in(worktree, ["rev-parse", "--git-dir"], check=False)
+        if git_dir.returncode != 0 or not git_dir.stdout.strip():
+            return False
+        path = Path(git_dir.stdout.strip())
+        if not path.is_absolute():
+            path = worktree / path
+        return (path / "MERGE_HEAD").exists()
+
+    def _unmerged_paths(self, worktree: Path) -> list[str]:
+        result = self._git_in(worktree, ["diff", "--name-only", "--diff-filter=U"], check=False)
+        if result.returncode != 0:
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def _branch_is_base_behind(self, worktree: Path, base_ref: str) -> bool:
+        merge_base = self._git_in(worktree, ["merge-base", "HEAD", base_ref], check=False)
+        base = self._git_in(worktree, ["rev-parse", "--verify", base_ref], check=False)
+        return merge_base.returncode == 0 and base.returncode == 0 and merge_base.stdout.strip() != base.stdout.strip()
+
+    def _abort_merge_if_present(self, worktree: Path) -> None:
+        if self._merge_in_progress(worktree):
+            abort = self._git_in(worktree, ["merge", "--abort"], check=False)
+            if abort.returncode != 0:
+                sys.stderr.write(f"rebase_resolve: merge_abort_failed:{_single_line(abort.stderr or abort.stdout)}\n")
+
+    def _next_rebase_resolve_round(self, pr_target: str) -> int:
+        rounds: list[int] = []
+        pattern = re.compile(rf"^rebase-resolve-pr{re.escape(pr_target)}-r([1-9][0-9]*)\.(?:md|log)$")
+        for directory in (self.ctx.paths.prompts, self.ctx.paths.runs, self.ctx.paths.logs):
+            for path in directory.glob(f"rebase-resolve-pr{pr_target}-r*.*"):
+                match = pattern.match(path.name)
+                if match:
+                    rounds.append(int(match.group(1)))
+        return (max(rounds) if rounds else 0) + 1
+
+    def _worktree_from_rebase_action(self, action: Mapping[str, object], pr_target: str) -> Path | None:
+        raw = str(action.get("worktree") or "").strip()
+        if raw:
+            candidate = Path(raw)
+            if candidate.is_absolute() and self._worktree_under_controller_root(candidate):
+                return candidate.resolve()
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid worktree path\n")
+            return None
+        head_ref = str(action.get("head_ref") or "").strip()
+        if head_ref:
+            return self._worktree_for_branch(head_ref)
+        for path in sorted((self.ctx.repo_root / ".worktrees").glob(f"iter{pr_target}-*")):
+            if path.is_dir():
+                return path.resolve()
+        return None
+
+    def _ensure_rebase_resolve_prompt_fully_rendered(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"rebase-resolve prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _replace_rebase_resolve_shell_defaults(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", "CLAUDE.md")
+        prompt_path.write_text(text, encoding="utf-8")
 
     def open_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
         event = action.get("event")
