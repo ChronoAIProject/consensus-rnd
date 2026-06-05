@@ -21,6 +21,7 @@ from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
 from .implementation_pr_artifacts import (
+    FINAL_SENTINEL,
     implementation_cluster_id,
     implementation_pr_body_path,
     implementation_pr_title_path,
@@ -885,6 +886,15 @@ class ControllerActions:
     def _reserve_implementation_pr(self, *, issue_target: str, head_ref: str, action: Mapping[str, object]) -> int:
         body_file = self._implementation_pr_body_file(action, issue_target)
         worktree = self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{str(action.get('cluster_id') or '').strip()}"
+        pr_error, _pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
+        if pr_error is None:
+            return 0
+        remote_head_exists = self._git_in(worktree, ["ls-remote", "--exit-code", "--heads", "origin", head_ref], check=False).returncode == 0
+        if remote_head_exists:
+            reset = self._reset_reserved_implementation_head(worktree)
+            if reset != 0:
+                return reset
+        self._write_placeholder_implementation_pr_body_if_missing(body_file, issue_target)
         empty = self._git_in(
             worktree,
             ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}", "-m", "⟦AI:AUTO-LOOP⟧"],
@@ -895,15 +905,39 @@ class ControllerActions:
             if empty.stderr:
                 sys.stderr.write(empty.stderr)
             return empty.returncode
-        if self._git_in(worktree, ["push", "origin", f"{head_ref}:{head_ref}"], check=False).returncode != 0:
+        push_args = ["push", "origin", f"{head_ref}:{head_ref}"]
+        if remote_head_exists:
+            push_args.insert(1, "--force-with-lease")
+        if self._git_in(worktree, push_args, check=False).returncode != 0:
             sys.stderr.write("dispatch_consensus_implementation: failed to push reserved head\n")
             return 2
         title = str(action.get("title") or f"Implement issue #{issue_target}")
         try:
             self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-        except RuntimeError as exc:
+        except (RuntimeError, OSError) as exc:
             sys.stderr.write(f"dispatch_consensus_implementation: early PR reservation failed: {exc}\n")
             return 2
+        return 0
+
+    def _write_placeholder_implementation_pr_body_if_missing(self, body_file: Path, issue_target: str) -> None:
+        if body_file.exists():
+            return
+        body_file.parent.mkdir(parents=True, exist_ok=True)
+        body_file.write_text(_placeholder_implementation_pr_body(issue_target), encoding="utf-8")
+
+    def _reset_reserved_implementation_head(self, worktree: Path) -> int:
+        fetch = self._git_in(worktree, ["fetch", "origin", self.integration_branch], check=False)
+        if fetch.returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to fetch integration branch for reserved head\n")
+            if fetch.stderr:
+                sys.stderr.write(fetch.stderr)
+            return fetch.returncode
+        reset = self._git_in(worktree, ["reset", "--hard", f"origin/{self.integration_branch}"], check=False)
+        if reset.returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to reset reserved head\n")
+            if reset.stderr:
+                sys.stderr.write(reset.stderr)
+            return reset.returncode
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
@@ -1581,6 +1615,21 @@ def _single_line(value: str) -> str:
 
 def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
     return " ".join(f"{key}={json.dumps(str(value), ensure_ascii=False)}" for key, value in fields.items())
+
+
+def _placeholder_implementation_pr_body(issue_target: str) -> str:
+    implement_label = b"\xe5\xae\x9e\xe7\x8e\xb0".decode("utf-8")
+    body = (
+        f"## issue #{issue_target} {implement_label}\n"
+        "\n"
+        "Implementation PR reservation placeholder.\n"
+        "\n"
+        f"Closes #{issue_target}\n"
+        "\n"
+        f"{FINAL_SENTINEL}\n"
+    )
+    validate_self_contained_github_body(body, authority_required=False)
+    return body
 
 
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:

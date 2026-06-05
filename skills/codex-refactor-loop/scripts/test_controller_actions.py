@@ -1561,6 +1561,8 @@ class ControllerActionsTests(unittest.TestCase):
 
         def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> mock.Mock:
             git_calls.append([str(cwd), *list(args)])
+            if args[:4] == ["ls-remote", "--exit-code", "--heads", "origin"]:
+                return mock.Mock(returncode=2, stdout="", stderr="")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
@@ -1590,6 +1592,159 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("HARNESS_SPAWN_INTENT", pending)
         self.assertIn('"intent_id": "dispatch-consensus-implementation:413"', pending)
         self.assertIn('"task_id": "implement-issue-413"', pending)
+
+    def test_reserve_implementation_pr_writes_placeholder_when_body_missing(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter541-issue-541"
+        worktree.mkdir(parents=True)
+        action = {"cluster_id": "issue-541"}
+        body = self.tmp / ".refactor-loop" / "runs" / "implementation-pr-issue-541-body.md"
+        git_calls: list[list[str]] = []
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(worktree.resolve(), cwd.resolve())
+            git_calls.append(list(args))
+            if args[:4] == ["ls-remote", "--exit-code", "--heads", "origin"]:
+                return mock.Mock(returncode=2, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="[]", stderr="")):
+            with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+                with mock.patch.object(self.actions, "open_pr_with_label", return_value=(901, "https://github.com/owner/repo/pull/901")) as open_pr:
+                    self.assertEqual(
+                        0,
+                        self.actions._reserve_implementation_pr(
+                            issue_target="541",
+                            head_ref="refactor/iter541-issue-541",
+                            action=action,
+                        ),
+                    )
+
+        open_pr.assert_called_once()
+        open_args, open_kwargs = open_pr.call_args
+        self.assertEqual("Implement issue #541", open_args[0])
+        self.assertEqual(body.resolve(), Path(open_args[1]).resolve())
+        self.assertEqual({"base": "canonical-integration", "head": "refactor/iter541-issue-541"}, open_kwargs)
+        text = body.read_text(encoding="utf-8")
+        self.assertIn(("## issue #541 " + b"\xe5\xae\x9e\xe7\x8e\xb0".decode("utf-8") + "\n"), text)
+        self.assertEqual(1, len(re.findall(r"(?im)\bCloses\s+#541\b", text)))
+        self.assertEqual("⟦AI:AUTO-LOOP⟧", text.rstrip("\n").splitlines()[-1])
+        self.assertIn(["commit", "--allow-empty", "-m", "Reserve implementation PR for issue #541", "-m", "⟦AI:AUTO-LOOP⟧"], git_calls)
+        self.assertIn(["push", "origin", "refactor/iter541-issue-541:refactor/iter541-issue-541"], git_calls)
+
+    def test_reserve_implementation_pr_does_not_overwrite_existing_real_body(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter542-issue-542"
+        worktree.mkdir(parents=True)
+        _title, body = self.write_implementation_pr_artifacts(issue=542, cluster="issue-542")
+        original = body.read_text(encoding="utf-8")
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(worktree.resolve(), cwd.resolve())
+            if args[:4] == ["ls-remote", "--exit-code", "--heads", "origin"]:
+                return mock.Mock(returncode=2, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="[]", stderr="")):
+            with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+                with mock.patch.object(self.actions, "open_pr_with_label", return_value=(902, "https://github.com/owner/repo/pull/902")):
+                    self.assertEqual(
+                        0,
+                        self.actions._reserve_implementation_pr(
+                            issue_target="542",
+                            head_ref="refactor/iter542-issue-542",
+                            action={"cluster_id": "issue-542"},
+                        ),
+                    )
+
+        self.assertEqual(original, body.read_text(encoding="utf-8"))
+
+    def test_reserve_implementation_pr_existing_open_linked_pr_returns_without_push(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter543-issue-543"
+        worktree.mkdir(parents=True)
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:4] == ["pr", "list", "--state", "open"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        [
+                            {
+                                "number": 903,
+                                "baseRefName": "canonical-integration",
+                                "headRefName": "refactor/iter543-issue-543",
+                                "labels": [{"name": labels.MANAGED}],
+                                "body": "Closes #543\n",
+                            }
+                        ]
+                    ),
+                    stderr="",
+                )
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+            with mock.patch.object(self.actions, "_git_in", side_effect=AssertionError("reservation should not touch git")):
+                with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("reservation should not create PR")):
+                    self.assertEqual(
+                        0,
+                        self.actions._reserve_implementation_pr(
+                            issue_target="543",
+                            head_ref="refactor/iter543-issue-543",
+                            action={"cluster_id": "issue-543"},
+                        ),
+                    )
+
+    def test_reserve_implementation_pr_remote_head_without_pr_force_lease_recovers(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter544-issue-544"
+        worktree.mkdir(parents=True)
+        git_calls: list[list[str]] = []
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(worktree.resolve(), cwd.resolve())
+            git_calls.append(list(args))
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="[]", stderr="")):
+            with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+                with mock.patch.object(self.actions, "open_pr_with_label", return_value=(904, "https://github.com/owner/repo/pull/904")) as open_pr:
+                    self.assertEqual(
+                        0,
+                        self.actions._reserve_implementation_pr(
+                            issue_target="544",
+                            head_ref="refactor/iter544-issue-544",
+                            action={"cluster_id": "issue-544"},
+                        ),
+                    )
+
+        self.assertIn(["fetch", "origin", "canonical-integration"], git_calls)
+        self.assertIn(["reset", "--hard", "origin/canonical-integration"], git_calls)
+        self.assertIn(["push", "--force-with-lease", "origin", "refactor/iter544-issue-544:refactor/iter544-issue-544"], git_calls)
+        open_pr.assert_called_once()
+
+    def test_reserve_implementation_pr_catches_oserror_from_open_pr_body_read(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter545-issue-545"
+        worktree.mkdir(parents=True)
+
+        def fake_git_in(cwd: Path, args: Sequence[str], *, check: bool = True) -> mock.Mock:
+            self.assertEqual(worktree.resolve(), cwd.resolve())
+            if args[:4] == ["ls-remote", "--exit-code", "--heads", "origin"]:
+                return mock.Mock(returncode=2, stdout="", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        err = io.StringIO()
+        with mock.patch.object(self.actions, "gh", return_value=mock.Mock(returncode=0, stdout="[]", stderr="")):
+            with mock.patch.object(self.actions, "_git_in", side_effect=fake_git_in):
+                with mock.patch.object(self.actions, "open_pr_with_label", side_effect=FileNotFoundError("missing body")):
+                    with mock.patch("sys.stderr", err):
+                        self.assertEqual(
+                            2,
+                            self.actions._reserve_implementation_pr(
+                                issue_target="545",
+                                head_ref="refactor/iter545-issue-545",
+                                action={"cluster_id": "issue-545"},
+                            ),
+                        )
+
+        self.assertIn("dispatch_consensus_implementation: early PR reservation failed:", err.getvalue())
+        self.assertIn("missing body", err.getvalue())
 
     def test_dispatch_consensus_implementation_phase_transition_failure_blocks_before_worktree(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="dispatch-consensus-implementation", lease_id="lease", expires_at="soon")
