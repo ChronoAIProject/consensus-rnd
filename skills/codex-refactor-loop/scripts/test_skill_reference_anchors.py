@@ -1568,6 +1568,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`in_flight_implement`",
             "`scope_conflict_waiting`",
             "overlapping normalized `scope_paths`",
+            "empty reservation commit",
+            "`early_pr_missing`",
+            "exactly one matching open managed PR",
+            "`implementation_refresh_needed:stale_base`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):

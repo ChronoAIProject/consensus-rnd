@@ -20,7 +20,7 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
-from .implement_lifecycle import clear_redispatchable_implement_log
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
 from .release.publisher import ReleasePublishResult, ReleasePublisher
@@ -651,16 +651,16 @@ class ControllerActions:
         if identity_error:
             sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        pr_error, pr_target = self._exactly_one_matching_implementation_pr(head_ref, issue_target)
+        if pr_error:
+            sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
+            return 2
         committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
         if committed != 0:
             return committed
         base_error = self._recover_publish_implementation_base(worktree)
         if base_error:
             return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
-        existing_pr = self._open_pr_for_head(head_ref)
-        if existing_pr == 0:
-            sys.stderr.write("publish_implementation_output: open PR head lookup unavailable\n")
-            return 2
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
@@ -668,12 +668,6 @@ class ControllerActions:
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        if existing_pr is None:
-            body_file = self._implementation_pr_body_file(action, issue_target)
-            title = str(action.get("title") or f"实现 issue #{issue_target}")
-            pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
-        else:
-            pr_target = existing_pr
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
 
     def _validate_publish_implementation_identity(
@@ -821,7 +815,11 @@ class ControllerActions:
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
             return 2
         readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
-        if readiness_reason:
+        early_pr_missing_redispatch = (
+            readiness_reason == "implementation_ready_to_publish"
+            and self._implementation_early_pr_missing(action, issue_target=number)
+        )
+        if readiness_reason and not early_pr_missing_redispatch:
             sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
             return 2
         phase_result = self._move_issue_to_implementing_phase(number)
@@ -830,8 +828,14 @@ class ControllerActions:
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
         worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        pr_result = self._reserve_implementation_pr(issue_target=number, head_ref=branch, action=action)
+        if pr_result != 0:
+            return pr_result
         log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
-        self._clear_stale_implement_log_for_fresh_dispatch(log, action)
+        if early_pr_missing_redispatch:
+            log.unlink(missing_ok=True)
+        else:
+            self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -861,6 +865,42 @@ class ControllerActions:
             stall=5400,
             reason=f"issue #{number} consensus implementation",
         )
+        return 0
+
+    def _implementation_early_pr_missing(self, action: Mapping[str, object], *, issue_target: str) -> bool:
+        state = classify_implement_attempt(
+            repo_root=self.ctx.repo_root,
+            action=action,
+            integration_branch=self.integration_branch,
+            command_runner=lambda command: self._git_lifecycle_command(command),
+        )
+        if not (state.publish_ready or state.refresh_needed):
+            return False
+        error, _number = self._exactly_one_matching_implementation_pr(state.head_ref, issue_target)
+        return error == "early_pr_missing"
+
+    def _reserve_implementation_pr(self, *, issue_target: str, head_ref: str, action: Mapping[str, object]) -> int:
+        body_file = self._implementation_pr_body_file(action, issue_target)
+        worktree = self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{str(action.get('cluster_id') or '').strip()}"
+        empty = self._git_in(
+            worktree,
+            ["commit", "--allow-empty", "-m", f"Reserve implementation PR for issue #{issue_target}", "-m", "⟦AI:AUTO-LOOP⟧"],
+            check=False,
+        )
+        if empty.returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to create reserved head commit\n")
+            if empty.stderr:
+                sys.stderr.write(empty.stderr)
+            return empty.returncode
+        if self._git_in(worktree, ["push", "origin", f"{head_ref}:{head_ref}"], check=False).returncode != 0:
+            sys.stderr.write("dispatch_consensus_implementation: failed to push reserved head\n")
+            return 2
+        title = str(action.get("title") or f"Implement issue #{issue_target}")
+        try:
+            self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        except RuntimeError as exc:
+            sys.stderr.write(f"dispatch_consensus_implementation: early PR reservation failed: {exc}\n")
+            return 2
         return 0
 
     def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
@@ -1112,21 +1152,42 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _open_pr_for_head(self, head_ref: str) -> int | None:
-        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+    def _exactly_one_matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+        result = self.gh(
+            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
+            check=False,
+        )
         if result.returncode != 0:
-            return 0
+            return "matching_pr_unavailable", None
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return 0
-        if not isinstance(payload, list) or not payload:
-            return None
-        first = payload[0]
-        if not isinstance(first, dict):
-            return 0
-        number = first.get("number")
-        return number if isinstance(number, int) and number > 0 else 0
+            return "matching_pr_invalid_json", None
+        if not isinstance(payload, list):
+            return "matching_pr_invalid_json", None
+        if len(payload) == 0:
+            return "early_pr_missing", None
+        if len(payload) > 1:
+            return "multiple_matching_open_pr", None
+        pr = payload[0]
+        if not isinstance(pr, dict):
+            return "matching_pr_invalid_json", None
+        number = pr.get("number")
+        if not isinstance(number, int) or number <= 0:
+            return "matching_pr_invalid_json", None
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "matching_pr_head_mismatch", None
+        if str(pr.get("baseRefName") or "") != self.integration_branch:
+            return "matching_pr_base_mismatch", None
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "matching_pr_not_managed", None
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "matching_pr_not_managed", None
+        if _single_linked_issue(str(pr.get("body") or "")) != issue_target:
+            return "matching_pr_issue_mismatch", None
+        return None, number
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()

@@ -2062,7 +2062,7 @@ def consensus_implementation_suppressed_reason(
     )
     if lifecycle.in_flight:
         return "in_flight_implement"
-    if lifecycle.publish_ready:
+    if lifecycle.publish_ready or lifecycle.refresh_needed:
         return "implementation_ready_to_publish"
     if not ignore_pending_implement_intent and _pending_implement_intent_exists(repo_root, target_number, action):
         return "pending_implement_intent"
@@ -2476,7 +2476,7 @@ def suppress_stale_unexecutable_actions(
             continue
         if action.get("controller_action") == "publish_implementation_output" and worktrees is None:
             worktrees = _worktrees_by_branch(repo_root)
-        reason = _stale_unexecutable_reason(action, repo_root, open_targets, worktrees or {})
+        reason = _stale_unexecutable_reason(action, repo_root, open_targets, worktrees or {}, gh_items)
         if not reason:
             continue
         action["status_only"] = True
@@ -2491,10 +2491,11 @@ def _stale_unexecutable_reason(
     repo_root: Path,
     open_targets: set[tuple[str, int]],
     worktrees: dict[str, Path],
+    gh_items: list[GhItem],
 ) -> str | None:
     controller_action = action.get("controller_action")
     if controller_action == "publish_implementation_output":
-        return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees)
+        return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees, gh_items)
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
         if target is not None and target in open_targets:
@@ -2507,16 +2508,17 @@ def _stale_publish_implementation_reason(
     repo_root: Path,
     open_targets: set[tuple[str, int]],
     worktrees: dict[str, Path],
+    gh_items: list[GhItem],
 ) -> str | None:
     target = _action_target_key(action)
     if target is not None and target not in open_targets:
         return "target_not_open"
     head_ref = _implementation_head_ref(action, target)
     if not head_ref:
-        return "verified_pr_head_unavailable"
+        return "early_pr_missing"
     worktree = worktrees.get(head_ref)
     if worktree is None:
-        return "verified_pr_head_unavailable"
+        return "early_pr_missing"
     state = classify_implement_attempt(
         repo_root=repo_root,
         action=action,
@@ -2537,6 +2539,9 @@ def _stale_publish_implementation_reason(
         return f"implementation_redispatch:{state.reason}"
     if state.in_flight:
         return "in_flight_implement"
+    match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref, worktree=worktree)
+    if match_error:
+        return match_error
     action["head_ref"] = head_ref
     action["worktree"] = str(worktree)
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
@@ -2544,7 +2549,7 @@ def _stale_publish_implementation_reason(
         "canonical_implementation_identity",
         "fresh_integration_base",
         "single_linked_managed_issue",
-        "no_duplicate_open_pr",
+        "exactly_one_matching_open_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -2554,6 +2559,36 @@ def _stale_publish_implementation_reason(
         preconditions.remove("verified_pr_head")
     action["preconditions"] = preconditions
     return None
+
+
+def _matching_open_pr_error(
+    action: dict[str, Any],
+    target: tuple[str, int] | None,
+    *,
+    gh_items: list[GhItem],
+    head_ref: str,
+    worktree: Path,
+) -> str | None:
+    if target is None or target[0] != "issue":
+        return "single_linked_managed_issue_missing"
+    matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
+    if not matches:
+        return "early_pr_missing"
+    if len(matches) > 1:
+        return "multiple_matching_open_pr"
+    pr = matches[0]
+    normalized = label_catalog.normalize_label_set(pr.labels).canonical
+    if label_catalog.MANAGED not in normalized:
+        return "matching_pr_not_managed"
+    if _single_linked_issue_from_body(pr.body) != target[1]:
+        return "matching_pr_issue_mismatch"
+    action["target_pr_number"] = pr.number
+    return None
+
+
+def _single_linked_issue_from_body(body: str) -> int | None:
+    numbers = extract_closing_issue_numbers(body)
+    return numbers[0] if len(numbers) == 1 else None
 
 
 def _worktree_has_non_empty_diff(worktree: Path) -> bool:
