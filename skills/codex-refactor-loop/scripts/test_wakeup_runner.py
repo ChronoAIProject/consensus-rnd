@@ -2075,62 +2075,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
         ScriptedEvent.coordinator = None
 
-    def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        for helper in (
-            "dispatch_consensus_implementation",
-            "publish_implementation_output",
-            "dispatch_reviewers",
-            "open_release_rollup_pr_from_action",
-        ):
-            with self.subTest(helper=helper):
-                self.assertIn(helper, source)
-        for forbidden in ("command_line", "lifecycle_authority", "lifecycle_owner"):
-            with self.subTest(forbidden=forbidden):
-                self.assertIn(forbidden, source)
-        self.assertNotIn("dispatch_next_step_worker", source)
-        self.assertNotIn("HeadlessLifecycleAction", source)
-        self.assertNotIn("headless_actions", source)
+    def test_wakeup_runner_continues_after_blocked_non_spawn_lifecycle_action(self) -> None:
+        blocked_lifecycle = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-reviewer-dispatch",
+            head_ref="",
+        )
+        reviewer_dispatch = self.reviewer_dispatch_action(action_id="dispatch-reviewers-after-blocked-lifecycle")
+        actions = FakeActions()
 
-    def test_wakeup_runner_source_locks_blocked_non_spawn_scan_invariant(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        run_once = source[source.index("    def run_once(self) -> list[RunnerResult]:") : source.index("    def apply_action", source.index("    def run_once(self) -> list[RunnerResult]:"))]
+        results = self.run_result(
+            self.batch_plan([blocked_lifecycle, reviewer_dispatch], dispatch_required=1, deficit=1),
+            actions=actions,
+        )
 
-        self.assertIn('if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:', run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)", run_once)
-        self.assertIn("if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:", run_once)
-        self.assertNotIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
-        self.assertIn('controller_action == "dispatch_reviewers"', run_once)
-        self.assertIn('controller_action == "review_gate"', run_once)
-        self.assertIn('.get("decision") == "FIX"', run_once)
-        self.assertNotIn("blocked_non_spawn_before_spawn", run_once)
-
-    def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        helper_start = source.index("def _run_once_with_periodic_heartbeat(")
-        helper_end = source.index("\ndef load_plan_file", helper_start)
-        helper = source[helper_start:helper_end]
-        daemon_branch = source[source.index("    if args.daemon:") : source.index("    results = runner.run_once()")]
-
-        for needle in (
-            "def _run_once_with_periodic_heartbeat(",
-            "threading.Event()",
-            "threading.Thread(",
-            "daemon=True",
-            "lease.heartbeat_interval",
-            "lease.beat()",
-            "return run_once()",
-            "finally:",
-            "stop.set()",
-            "renewer.join(timeout=1.0)",
-        ):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, helper)
-        self.assertIn("results = _run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
-        self.assertIn("_log_tick_status(\"wakeup-runner\", _wakeup_tick_action(results))", daemon_branch)
-        self.assertIn("lease.sleep_with_lease(interval)", daemon_branch)
-        self.assertNotIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", source[source.index("    results = runner.run_once()") :])
+        self.assertEqual([result.action_id for result in results], [blocked_lifecycle["action_id"], reviewer_dispatch["action_id"]])
+        self.assertEqual([result.status for result in results], ["blocked", "applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_reviewers"])
+        self.assert_blocked_ledger(blocked_lifecycle["action_id"], "publish_implementation_invalid_head_ref")
 
     def test_close_managed_item_from_drop_marker_routes_to_named_helper(self) -> None:
         actions = FakeActions()

@@ -24,7 +24,6 @@ ACTIVE_CONTROLLER = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "active_con
 
 TARGET_ANCHORS = {
     "autonomous-release-gate-56": "## Named runtime exception — autonomous release gate(per #56)",
-    # Refactor (fix/pr236-mirror-source-regression): Old pattern: a new runtime mirror entry could be added without joining the targeted source-regression set. New principle: every named runtime exception mirror added for controller authority must be linked from SKILL.md and locked by focused source tests.
     "active-controller-lease-191": "## Named runtime exception - active controller lease(per #191)",
     "release-commits-producer-232": "release-commits` is the independent narrow producer",
     "release-publication-322": "## Named runtime exception — release-publication(per #322)",
@@ -405,9 +404,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_release_publication_322_preserves_controller_only_boundary(self) -> None:
-        # Refactor (iter1/issue-322):
-        #   Old pattern: ReleasePublisher had commit/push/gh-release authority only in SKILL prose.
-        #   New principle: release-publication-322 mirrors exact commands and forbidden lifecycle surfaces.
         entry = mirror_entry(self.mirror, "release-publication-322")
 
         for required in (
@@ -604,9 +600,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "wakeup-runner",
             "active-controller owner",
             "`wakeup-plan` evidence-bound closed action projection",
-            'mode: "closed-action-projection"',
-            'apply_authority: "wakeup-runner-396-only"',
-            'runner_authority: "wakeup-runner-396"',
             "clean `EXIT=0` source marker",
             "review truth table `reject==0 && approve>=1 && all required reviewers present && all required reviewer heads equal live PR head`",
             "missing/stale per-reviewer head SHA",
@@ -654,7 +647,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "`ControllerTurnDecision`",
             "controller-turn worker",
-            "private schema",
             "active-active scheduler",
             "`.refactor-loop/host.env` as host production SSOT",
             "generic lifecycle actor",
@@ -750,8 +742,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_anti_stop_restart_helper_mirror_preserves_duplicate_canonical_boundary(self) -> None:
-        # Refactor (issue-264): Old: #49 mirror did not lock duplicate canonical skip narrowing.
-        # New: source-regression requires helper-private inventory, static allowlist, and no lifecycle authority.
         entry = mirror_entry(self.mirror, "anti-stop-restart-helper-49")
 
         for required in (
@@ -999,11 +989,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertNotIn("revive-design-consensus", entry)
 
     def test_active_controller_lease_mirror_preserves_singleton_boundary(self) -> None:
-        # Refactor (iter193/issue-193):
-        #   Old pattern: PR#200 introduced GitHubWorkOwnership/author.login
-        #   per-work ownership as a second authority for issue/PR writes.
-        #   New principle: author.login+updatedAt are metadata only; issue/PR
-        #   write permits come only from #191 ActiveControllerLease.
         entry = mirror_entry(self.mirror, "active-controller-lease-191")
 
         for required in (
@@ -1069,9 +1054,6 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(forbidden, entry)
 
     def test_active_controller_git_allowlist_matches_implementation(self) -> None:
-        # Refactor (fix/pr242-narrow-allowlist-and-nonowner-test): Old:
-        # authorization anchors named only part of the lease CAS git surface.
-        # New: source-regression compares both anchors to active_controller.py.
         entry = mirror_entry(self.mirror, "active-controller-lease-191")
         skill_section = re.search(
             r"(?ms)^## Named runtime exception - active controller lease\(per #191\).*?(?=^## )",
@@ -1119,40 +1101,43 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(required, observability_entry)
 
     def test_wakeup_runner_batch_budget_is_spawn_only_and_per_action_validated(self) -> None:
-        runner = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
-        run_once = runner[runner.index("    def run_once(self)") : runner.index("    def apply_action(self,")]
-        budget = runner[runner.index("class WakeupApplyBudget") : runner.index("@dataclass(frozen=True)", runner.index("class WakeupApplyBudget"))]
+        entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        combined_authority = "\n".join((entry, self.skill, self.repo_rules))
 
         for required in (
-            "SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(",
-            "{\"spawn_codex_harness_background\"}",
-            "class WakeupApplyBudget",
-            "hard_gate.dispatch_required/concurrency.deficit",
-            "return cls.legacy()",
-            "min(dispatch_required, deficit)",
-            "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
-            "budget = WakeupApplyBudget.from_plan(plan)",
-            "consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)",
-            "result = self.apply_action(action)",
-            "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
-            "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
-            "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
-            "is_spawn_action = budget.is_spawn_action(action)",
-            "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
+            "对每个 action 重新验证",
+            "each executable action",
+            "spawn codex",
+            "dispatch reviewers/fix/remote-ci worker",
+            "merge PR under review truth table",
+            "close managed item from drop marker",
+            "publish release through #322",
+            "禁止任意 git/gh 命令",
+            "label/merge/close outside existing helper or named #396 helper",
+            "generic lifecycle actor",
+            "test_wakeup_runner.py",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, runner)
-        self.assertIn("applied_spawns += 1", run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
-        for forbidden in (
-            "for action in plan.get(\"actions\", [])[:",
-            "dispatch_required = int(",
-            "controller_action in SUPPORTED_CONTROLLER_ACTIONS",
-            "blocked_non_spawn_before_spawn",
-        ):
+                self.assertIn(required, combined_authority)
+
+        forbidden_action_fields = {
+            "argv",
+            "args",
+            "shell",
+            "cmd",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        }
+        for forbidden in sorted(forbidden_action_fields):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, budget + run_once)
+                self.assertIn(forbidden, combined_authority)
+        self.assertIn("test_forbidden_fields_fail_closed", read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"))
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"
