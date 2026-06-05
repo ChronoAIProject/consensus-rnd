@@ -121,6 +121,47 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("wakeup-runner-396", action["runner_authority"])
         self.assertTrue(action["no_generic_command"])
 
+    def test_rebase_resolve_actions_fetch_live_mergeability_for_snapshot_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="",
+            merge_state_status="",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with (
+            mock.patch(
+                "codex_refactor_loop.wakeup_plan.run_json",
+                return_value={
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "headRefOid": "abc123",
+                },
+            ) as run_json_mock,
+            mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock,
+        ):
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        run_json_mock.assert_called_once_with(
+            ["gh", "pr", "view", "77", "--json", "mergeable,mergeStateStatus,headRefOid"],
+            cwd=self.repo,
+        )
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("abc123", action["head_sha"])
+
     def test_rebase_resolve_actions_suppress_in_flight_resolve(self) -> None:
         item = GhItem(
             kind="PR",

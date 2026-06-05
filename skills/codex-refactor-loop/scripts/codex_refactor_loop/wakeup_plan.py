@@ -1900,6 +1900,8 @@ def rebase_resolve_actions(
             label_catalog.PHASE_CI_RUNNING,
         }:
             continue
+        if not item.mergeable and not item.merge_state_status:
+            item = _with_live_mergeability(repo_root, item)
         mergeable = item.mergeable.upper()
         merge_state = item.merge_state_status.upper()
         if mergeable != "CONFLICTING" and merge_state != "DIRTY":
