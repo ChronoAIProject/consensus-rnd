@@ -720,13 +720,40 @@ class ControllerActions:
 
     def _require_publish_implementation_diff(self, worktree: Path) -> int:
         diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
-        if diff.returncode == 0:
-            sys.stderr.write("publish_implementation_output: implementation_produced_no_diff\n")
-            return 2
-        if diff.returncode != 1:
+        if diff.returncode == 1:
+            return 0
+        if diff.returncode != 0:
             sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
             return 2
-        return 0
+        committed_delta = self._has_committed_implementation_delta(worktree)
+        if committed_delta is None:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        if committed_delta:
+            return 0
+        sys.stderr.write("publish_implementation_output: implementation_produced_no_diff\n")
+        return 2
+
+    def _has_committed_implementation_delta(self, worktree: Path) -> bool | None:
+        integration, _review_base = self._require_branch_config()
+        for ref in (f"origin/{integration}", integration):
+            current = self._git_in(worktree, ["rev-parse", "--verify", ref], check=False)
+            if current.returncode != 0:
+                continue
+            merge_base = self._git_in(worktree, ["merge-base", "HEAD", ref], check=False)
+            if merge_base.returncode != 0:
+                return None
+            base_sha = merge_base.stdout.strip()
+            if not base_sha:
+                return None
+            # A committed implementation diff is a valid publish input; compare merge-base..HEAD.
+            diff = self._git_in(worktree, ["diff", "--quiet", base_sha, "HEAD"], check=False)
+            if diff.returncode == 0:
+                return False
+            if diff.returncode == 1:
+                return True
+            return None
+        return None
 
     def _commit_publish_implementation_diff(
         self,
@@ -735,6 +762,14 @@ class ControllerActions:
         head_ref: str,
         worktree: Path,
     ) -> int:
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        if status.returncode != 0:
+            if status.stderr:
+                sys.stderr.write(status.stderr)
+            sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+            return 2
+        if not status.stdout.strip():
+            return 0
         add = self._git_in(worktree, ["add", "-A"], check=False)
         if add.returncode != 0:
             sys.stderr.write("publish_implementation_output: publish_add_failed\n")
