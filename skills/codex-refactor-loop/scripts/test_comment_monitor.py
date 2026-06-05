@@ -20,27 +20,35 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
+from test_support.authorization_projection import project_python
+
+
+def comment_monitor_projection():
+    text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+    return project_python(text)
 
 
 class CommentMonitorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="comment-monitor-test-"))
         (self.tmp / ".refactor-loop").mkdir()
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
-        self.ctx = LoopContext.load(repo_root=self.tmp)
+        self.ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def test_fails_closed_without_maintainer_whitelist(self) -> None:
-        (self.tmp / ".refactor-loop" / "host.env").write_text(
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
             encoding="utf-8",
         )
-        ctx = LoopContext.load(repo_root=self.tmp)
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
         with self.assertRaisesRegex(RuntimeError, "MAINTAINER_WHITELIST"):
             CommentMonitor(ctx)
 
@@ -55,6 +63,7 @@ class CommentMonitorTests(unittest.TestCase):
             os.environ,
             {
                 "PATH": os.environ.get("PATH", ""),
+                "COMMENT_MONITOR_INTERVAL": "",
                 "STATE_FILE": str(override_root / "state.json"),
                 "INTERVAL": "1",
             },
@@ -121,6 +130,10 @@ class CommentMonitorTests(unittest.TestCase):
             del cwd, check
             calls.append(list(command))
             text = " ".join(command)
+            if command == ["gh", "api", "user"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"login": "controller-bot"}), stderr="")
+            if command == ["gh", "api", "repos/owner/repo/collaborators/controller-bot/permission"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"permission": "write"}), stderr="")
             if "reactions" in text:
                 return mock.Mock(returncode=0, stdout="", stderr="")
             if "issue comment" in text:
@@ -136,9 +149,6 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertIn("new-team-comment 42 maintainer 99", pending)
         self.assertTrue(any("reactions" in " ".join(call) for call in calls))
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern: comment
-    # monitor instances on multiple devices could all mutate GitHub for one
-    # maintainer comment. New principle: non-owner remains read-only/noop.
     def test_non_owner_team_comment_does_not_react_post_or_mark_seen(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="comment-monitor-write", lease_id="", expires_at="")
@@ -158,18 +168,20 @@ class CommentMonitorTests(unittest.TestCase):
         api_calls: list[list[str]] = []
 
         with mock.patch("codex_refactor_loop.monitors.comment.require_active_controller", return_value=decision):
-            with mock.patch.object(
-                monitor,
-                "gh",
-                side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", ""),
-            ):
+            with mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission") as admission:
                 with mock.patch.object(
                     monitor,
-                    "gh_api",
-                    side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", ""),
+                    "gh",
+                    side_effect=lambda args, check=True: gh_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "https://github.test/comment\n", ""),
                 ):
-                    monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
+                    with mock.patch.object(
+                        monitor,
+                        "gh_api",
+                        side_effect=lambda args, check=True: api_calls.append(list(args)) or subprocess.CompletedProcess(args, 0, "", ""),
+                    ):
+                        monitor.handle_comment("42", {"id": 99, "author": "maintainer", "body": "please check"})
 
+        admission.assert_called_once_with("comment-monitor-write")
         self.assertTrue(any("reactions" in call[0] for call in api_calls), api_calls)
         self.assertTrue(any(call[:2] == ["issue", "comment"] for call in gh_calls), gh_calls)
         self.assertTrue(monitor.seen("99"))
@@ -220,6 +232,7 @@ class CommentMonitorTests(unittest.TestCase):
 
         with (
             mock.patch.object(monitor, "gh_api", side_effect=fake_gh_api),
+            mock.patch("codex_refactor_loop.monitors.comment.GitHubAuthenticatedActor.require_admission"),
             mock.patch.object(monitor, "post_banner") as post_banner,
         ):
             monitor.tick()
@@ -323,37 +336,32 @@ class CommentMonitorTests(unittest.TestCase):
 
 class CommentMonitorSourceRegressionTests(unittest.TestCase):
     def test_forbidden_lifecycle_tokens_are_absent(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+        projection = comment_monitor_projection()
         for token in ("pr merge", "issue close", "git push", "git commit", "create release"):
             with self.subTest(token=token):
-                self.assertNotIn(token, text)
+                self.assertNotIn(token, projection.string_literals)
 
     def test_updated_at_comment_query_throttle_is_locked(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        self.assertIn("last_updated_at", text)
-        self.assertIn("updated_at > previous", text)
-        self.assertIn("/comments?per_page=20", text)
-        self.assertNotIn("def _gh_graphql", text)
-        self.assertNotIn('"graphql"', text.lower())
+        projection = comment_monitor_projection()
+        self.assertIn("_last_updated_at", projection.function_names)
+        self.assertIn("_should_fetch_comments", projection.function_names)
+        self.assertTrue(any(value.endswith("/comments?per_page=20") for value in projection.string_literals))
+        self.assertNotIn("_gh_graphql", projection.function_names)
+        self.assertNotIn("graphql", {value.lower() for value in projection.string_literals})
 
     def test_comment_monitor_lookback_surface_is_locked(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', text)
-        self.assertIn('raw.startswith("updated:")', text)
-        self.assertIn('return f"updated:>={raw}"', text)
-        self.assertIn("def _lookback_minimum_updated_at", text)
+        projection = comment_monitor_projection()
+        self.assertIn("COMMENT_MONITOR_LOOKBACK", projection.env_get_names)
+        self.assertIn("updated:", projection.string_literals)
+        self.assertIn("updated:>=", projection.string_literals)
+        self.assertIn("_lookback_minimum_updated_at", projection.function_names)
 
     def test_generic_env_override_surfaces_are_not_consumed(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        for token in (
-            'os.environ.get("STATE_FILE"',
-            'os.environ.get("INTERVAL"',
-            "PROGRESS_REPORTER_INTERVAL",
-        ):
-            with self.subTest(token=token):
-                self.assertNotIn(token, executable)
-        self.assertIn('os.environ.get("COMMENT_MONITOR_INTERVAL")', executable)
+        projection = comment_monitor_projection()
+        for env_name in ("STATE_FILE", "INTERVAL", "PROGRESS_REPORTER_INTERVAL"):
+            with self.subTest(env_name=env_name):
+                self.assertNotIn(env_name, projection.env_get_names)
+        self.assertIn("COMMENT_MONITOR_INTERVAL", projection.env_get_names)
 
 
 if __name__ == "__main__":

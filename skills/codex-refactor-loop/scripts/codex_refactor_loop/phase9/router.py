@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Narrow design-consensus deterministic router daemon.
 
-This daemon owns only four design-consensus direct-dispatch routes:
+This daemon owns only five design-consensus direct-dispatch routes:
 design-consensus issue intake -> r1 solver triplet, solver triplet ->
-meta-judge, converge -> next solver triplet, and valid stalled -> reflector.
-Every other marker is forwarded to the existing controller pending-event file
-without spawning.
+meta-judge, converge -> next solver triplet, valid stalled -> reflector,
+and re-design reflector decisions -> next solver triplet. Every other marker
+is forwarded to the existing controller pending-event file without spawning.
 """
 
 from __future__ import annotations
@@ -20,14 +20,16 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from string import Template
 from typing import Any, Callable, Iterable, Literal, cast
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
+from ..prompt_contracts import inline_prompt_contracts
 from ..transition_assessment import TransitionAssessment, TransitionAssessmentReader, projection_lines
 from ..workflow_stages import format_stage
 from .. import labels as label_catalog
@@ -140,6 +142,28 @@ class Phase9TerminalDecision:
 
 
 @dataclass(frozen=True)
+class Phase9ActorHealth:
+    issue: str
+    round: int
+    actor: str
+    key: str
+    log_path: Path
+    ledgered: bool
+    target_log_exists: bool
+    equivalent_log_exists: bool
+    pending_intent: bool
+    in_flight: bool
+    source_allowed: bool
+    terminal_allowed: bool
+    valid_marker: str | None = None
+    markerless_clean_log: Path | None = None
+    dispatched_at: datetime | None = None
+
+    def stale_for_recovery(self, now: datetime, threshold: timedelta) -> bool:
+        return self.dispatched_at is not None and now - self.dispatched_at >= threshold
+
+
+@dataclass(frozen=True)
 class MetaJudgePromptContext:
     issue: str
     round: int
@@ -213,7 +237,7 @@ class MetaJudgePromptRenderer:
         rendered = template
         for key in self.PLACEHOLDERS:
             rendered = rendered.replace("${" + key + "}", values[key])
-        return rendered
+        return inline_prompt_contracts(rendered, skill_root=self.template_path.parents[1])
 
 
 PHASE9_LOG_RE = re.compile(
@@ -267,6 +291,10 @@ class Phase9Router:
         if ctx is None:
             if repo_root is None:
                 raise ValueError("repo_root or ctx is required")
+            # Read the process environment (the daemon is started after sourcing
+            # host.env) so GH_REPO_SLUG and other host facts resolve. Restricting
+            # env to {REPO_ROOT} drops the slug -> _open_design_consensus_issues
+            # returns [] and DesignConsensusIssueIntake silently never dispatches.
             ctx = LoopContext.load(repo_root=repo_root)
         self.ctx = ctx
         self.repo_root = ctx.repo_root
@@ -274,6 +302,7 @@ class Phase9Router:
         self.dry_run = dry_run
         self.loop_dir = ctx.paths.refactor_loop
         self.logs_dir = ctx.paths.logs
+        self.runs_dir = ctx.paths.runs
         self.prompts_dir = ctx.paths.prompts / "phase9"
         self.ledger_path = self.loop_dir / "phase9-router-ledger.jsonl"
         # Artifact parity: ctx.paths.pending_events resolves to
@@ -285,27 +314,45 @@ class Phase9Router:
         self._source_issue_decisions: dict[str, Phase9SourceIssueDecision] = {}
         self._issue_source_snapshots: dict[str, IssueSourceSnapshot] = {}
         self._terminal_decisions: dict[str, Phase9TerminalDecision] = {}
+        self._pending_spawn_intent_logs: set[str] = set()
+        self._ledger_entries_by_key: dict[str, list[dict[str, object]]] = {}
+        self._tick_dispatch_count = 0
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("phase9-router")
+            self._log_tick_status("skip:graphql-backoff remaining=unknown")
             return
         decision = require_active_controller(self.ctx, "phase9-router")
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
+            self._log_tick_status(f"noop:not-owner:{decision.status}")
             return
         self.loop_dir.mkdir(parents=True, exist_ok=True)
         self.logs_dir.mkdir(parents=True, exist_ok=True)
         self.prompts_dir.mkdir(parents=True, exist_ok=True)
+        self._tick_dispatch_count = 0
+        before_fallbacks = len(self._fallback_seen)
         self._source_issue_decisions = {}
         self._issue_source_snapshots = {}
         self._terminal_decisions = {}
-        ledger = self._read_ledger()
+        self._pending_spawn_intent_logs = self._read_pending_spawn_intent_logs()
+        self._ledger_entries_by_key = self._read_ledger_entries_by_key()
+        ledger = set(self._ledger_entries_by_key)
         markers = self._collect_markers()
+        self._recover_actor_health(ledger)
         self._dispatch_design_issue_intake(ledger)
         self._dispatch_solver_triplets(markers, ledger)
         self._dispatch_meta_judge_routes(markers, ledger)
+        self._dispatch_reflector_routes(markers, ledger)
         self._append_fallbacks(markers, ledger)
+        dispatched = self._tick_dispatch_count
+        fallbacks = len(self._fallback_seen) - before_fallbacks
+        if dispatched > 0:
+            self._log_tick_status(f"dispatched {dispatched} spawn-intent")
+        elif fallbacks > 0:
+            self._log_tick_status(f"dispatched {fallbacks} fallback-event")
+        else:
+            self._log_tick_status("noop:no-dispatchable-markers")
 
     @contextlib.contextmanager
     def singleton(self) -> Iterable[None]:
@@ -356,6 +403,9 @@ class Phase9Router:
         return markers
 
     def _final_marker_from_path(self, path: Path) -> str | None:
+        return self._final_marker_from_completed_log(path) or self._companion_artifact_marker_fallback(path)
+
+    def _final_marker_from_completed_log(self, path: Path) -> str | None:
         tail = self._read_tail_lines(path, self.MARKER_TAIL_LINES)
         try:
             exit_index = max(index for index, line in enumerate(tail) if line.strip() == "EXIT=0")
@@ -377,6 +427,22 @@ class Phase9Router:
                 marker = self._extract_marker(candidate.strip())
                 if marker is not None:
                     return marker
+        return None
+
+    def _companion_artifact_marker_fallback(self, log_path: Path) -> str | None:
+        identity = self._identity_from_path(log_path)
+        if identity is None:
+            return None
+        if identity.actor not in (*self._solver_roles(), self._judge_role()):
+            return None
+        if not self._is_clean_exit(log_path):
+            return None
+        artifact = self.runs_dir / f"{log_path.stem}.md"
+        allowed_prefix = "SOLVER_DONE:" if identity.actor in self._solver_roles() else "META_JUDGE_DONE:"
+        for line in reversed(self._read_tail_lines(artifact, self.MARKER_TAIL_LINES)):
+            marker = self._extract_marker(line.strip())
+            if marker and marker.startswith(allowed_prefix):
+                return marker
         return None
 
     def _extract_marker(self, line: str) -> str | None:
@@ -452,6 +518,8 @@ class Phase9Router:
             if isinstance(key, str) and key.startswith("phase9-triplet-suppression:"):
                 seen.add(key)
             if isinstance(key, str) and key.startswith("phase9-terminal-eligibility:"):
+                seen.add(key)
+            if isinstance(key, str) and key.startswith("phase9-actor-health:"):
                 seen.add(key)
         return seen
 
@@ -681,6 +749,52 @@ class Phase9Router:
             self._fallback_seen.add(event_key)
             self._append_pending_event(marker)
 
+    def _dispatch_reflector_routes(self, markers: list[Marker], ledger: set[str]) -> None:
+        for marker in markers:
+            if not marker.marker.startswith("META_RESOLVED:re-design:"):
+                continue
+            if marker.role != "reflector":
+                continue
+            target_round = marker.round + 1
+            for role in self._solver_roles():
+                key = self._key(marker.issue, target_round, role)
+                log_path = self._log_path(marker.issue, target_round, role)
+                if key in ledger or self._in_flight(log_path):
+                    continue
+                terminal_decision = self._solver_dispatch_terminal_decision(marker.issue)
+                if not terminal_decision.allowed:
+                    self._append_terminal_fallback_event(
+                        marker.issue,
+                        target_round,
+                        "redesign_to_next_solvers",
+                        marker.marker,
+                        marker.log_path,
+                        terminal_decision,
+                    )
+                    continue
+                if not self._require_open_source_issue(
+                    marker.issue,
+                    target_round,
+                    "redesign_to_next_solvers",
+                    marker.marker,
+                    marker.log_path,
+                ):
+                    continue
+                prompt = self._write_prompt(
+                    marker.issue,
+                    target_round,
+                    role,
+                    self._solver_prompt(marker.issue, target_round, role, marker.marker),
+                )
+                if self._spawn(
+                    prompt,
+                    log_path,
+                    route="redesign_to_next_solvers",
+                    reason="phase9-router re-design continuation",
+                ):
+                    self._append_ledger(key, marker.marker, log_path)
+                    ledger.add(key)
+
     def _directly_handled(self, marker: Marker, ledger: set[str]) -> bool:
         if marker.marker.startswith("META_JUDGE_DONE:converge:round-"):
             if marker.role != self._judge_role():
@@ -703,6 +817,15 @@ class Phase9Router:
             if f"phase9-source-eligibility:{marker.issue}-{marker.round}-stalled_to_reflector" in self._fallback_seen:
                 return True
             return self._key(marker.issue, marker.round, "reflector") in ledger
+        if marker.marker.startswith("META_RESOLVED:re-design:"):
+            if marker.role != "reflector":
+                return False
+            target_round = marker.round + 1
+            if f"phase9-terminal-eligibility:{marker.issue}-{target_round}-redesign_to_next_solvers" in self._fallback_seen:
+                return True
+            if f"phase9-source-eligibility:{marker.issue}-{target_round}-redesign_to_next_solvers" in self._fallback_seen:
+                return True
+            return all(self._key(marker.issue, target_round, role) in ledger for role in self._solver_roles())
         return False
 
     def _round_from_converge(self, marker: str) -> int | None:
@@ -780,6 +903,239 @@ class Phase9Router:
                 return True
         return False
 
+    def _read_pending_spawn_intent_logs(self) -> set[str]:
+        logs: set[str] = set()
+        if not self.pending_events_path.exists():
+            return logs
+        try:
+            content = self.pending_events_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return logs
+        for line in content.splitlines():
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            try:
+                event = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            except json.JSONDecodeError:
+                continue
+            log = event.get("log")
+            if isinstance(log, str):
+                logs.add(self._stored_artifact_path_key(log))
+        return logs
+
+    def _actor_health(self, issue: str, round_no: int, actor: str, ledger: set[str]) -> Phase9ActorHealth:
+        key = self._key(issue, round_no, actor)
+        log_path = self._log_path(issue, round_no, actor)
+        valid_marker = self._valid_actor_marker(issue, round_no, actor)
+        markerless_clean_log = self._markerless_clean_actor_log(issue, round_no, actor)
+        terminal_decision = (
+            Phase9TerminalDecision(True, "phase9-terminal-open")
+            if actor == self._judge_role()
+            else self._solver_dispatch_terminal_decision(issue)
+        )
+        return Phase9ActorHealth(
+            issue=issue,
+            round=round_no,
+            actor=actor,
+            key=key,
+            log_path=log_path,
+            ledgered=key in ledger,
+            target_log_exists=log_path.exists(),
+            equivalent_log_exists=self._equivalent_actor_log_exists(issue, round_no, actor),
+            pending_intent=self._artifact_path(log_path) in self._pending_spawn_intent_logs,
+            in_flight=self._spawn_codex_in_flight(log_path),
+            source_allowed=self._source_issue_decision(issue).allowed,
+            terminal_allowed=terminal_decision.allowed,
+            valid_marker=valid_marker,
+            markerless_clean_log=markerless_clean_log,
+            dispatched_at=self._last_dispatched_at(key),
+        )
+
+    def _valid_actor_marker(self, issue: str, round_no: int, actor: str) -> str | None:
+        for path in self._actor_log_paths(issue, round_no, actor):
+            if not path.exists() or not self._is_clean_exit(path):
+                continue
+            marker = self._final_marker_from_path(path)
+            if marker is not None:
+                return marker
+        return None
+
+    def _markerless_clean_actor_log(self, issue: str, round_no: int, actor: str) -> Path | None:
+        for path in self._actor_log_paths(issue, round_no, actor):
+            if not path.exists() or not self._is_clean_exit(path):
+                continue
+            if self._final_marker_from_path(path) is None:
+                return path
+        return None
+
+    def _actor_log_paths(self, issue: str, round_no: int, actor: str) -> tuple[Path, ...]:
+        paths: list[Path] = [self._log_path(issue, round_no, actor)]
+        if actor in self._solver_roles():
+            paths.append(self.logs_dir / f"solver-issue{issue}-r{round_no}-{actor}.log")
+        if actor == self._judge_role():
+            paths.append(self.logs_dir / f"meta-judge-issue{issue}-r{round_no}.log")
+        return tuple(paths)
+
+    def _last_dispatched_at(self, key: str) -> datetime | None:
+        for entry in reversed(self._ledger_entries_by_key.get(key, [])):
+            raw = entry.get("dispatched_at")
+            if not isinstance(raw, str):
+                continue
+            parsed = self._parse_utc(raw)
+            if parsed is not None:
+                return parsed
+        return None
+
+    def _parse_utc(self, value: str) -> datetime | None:
+        try:
+            return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+
+    def _stale_revival_threshold(self) -> timedelta:
+        raw = self.ctx.host_env.get("STALE_REVIVAL_HOURS") or os.environ.get("STALE_REVIVAL_HOURS") or "3"
+        try:
+            hours = float(raw)
+        except ValueError:
+            hours = 3.0
+        if hours <= 0:
+            hours = 3.0
+        return timedelta(hours=hours)
+
+    def _recover_actor_health(self, ledger: set[str]) -> None:
+        self._quarantine_markerless_solver_logs()
+        self._recover_stale_ledgered_actors(ledger)
+
+    def _quarantine_markerless_solver_logs(self) -> None:
+        markerless_by_round: dict[tuple[str, int], list[Phase9ActorHealth]] = {}
+        for log_path in sorted(self.logs_dir.glob("*.log")):
+            identity = self._identity_from_path(log_path)
+            if identity is None or identity.actor not in self._solver_roles():
+                continue
+            health = self._actor_health(identity.issue, identity.round, identity.actor, set(self._ledger_entries_by_key))
+            if health.markerless_clean_log is not None and health.valid_marker is None:
+                markerless_by_round.setdefault((identity.issue, identity.round), []).append(health)
+        for (issue, round_no), healths in markerless_by_round.items():
+            quarantined = []
+            for health in healths:
+                assert health.markerless_clean_log is not None
+                quarantined.append(self._quarantine_markerless_log(health.markerless_clean_log))
+            self._append_actor_health_fallback_event(
+                issue,
+                round_no,
+                "phase9-actor-markerless-quarantine",
+                "solver_triplet_to_judge",
+                {
+                    "quarantined_logs": [self._artifact_path(path) for path in quarantined],
+                    "roles": sorted(health.actor for health in healths),
+                },
+            )
+
+    def _quarantine_markerless_log(self, log_path: Path) -> Path:
+        target = log_path.with_name(f"{log_path.stem}.markerless-quarantine.log")
+        if not target.exists():
+            log_path.replace(target)
+            return target
+        suffix = 1
+        while True:
+            candidate = log_path.with_name(f"{log_path.stem}.markerless-quarantine-{suffix}.log")
+            if not candidate.exists():
+                log_path.replace(candidate)
+                return candidate
+            suffix += 1
+
+    def _recover_stale_ledgered_actors(self, ledger: set[str]) -> None:
+        now = datetime.now(timezone.utc)
+        threshold = self._stale_revival_threshold()
+        for key, entries in sorted(self._ledger_entries_by_key.items()):
+            parsed = self._parse_key(key)
+            if parsed is None:
+                continue
+            issue, round_no, actor = parsed
+            if actor not in (*self._solver_roles(), self._judge_role()):
+                continue
+            health = self._actor_health(issue, round_no, actor, ledger)
+            if not self._actor_recovery_allowed(health, now, threshold):
+                continue
+            source_marker = self._ledger_source_marker(entries)
+            prompt_body = self._recovery_prompt_body(issue, round_no, actor, source_marker)
+            if prompt_body is None:
+                continue
+            prompt = self._write_prompt(issue, round_no, actor, prompt_body)
+            if self._spawn(
+                prompt,
+                health.log_path,
+                route="actor_health_recovery",
+                reason="phase9-router actor health recovery",
+            ):
+                self._append_ledger(
+                    key,
+                    source_marker,
+                    health.log_path,
+                    extra={
+                        "route": "actor_health_recovery",
+                        "issue": issue,
+                        "round": round_no,
+                        "target_actor": actor,
+                        "recovery": "Phase9ActorHealth",
+                        "recovered_from_ledger_rows": len(entries),
+                    },
+                )
+
+    def _actor_recovery_allowed(self, health: Phase9ActorHealth, now: datetime, threshold: timedelta) -> bool:
+        return (
+            health.ledgered
+            and health.stale_for_recovery(now, threshold)
+            and health.valid_marker is None
+            and health.markerless_clean_log is None
+            and not health.target_log_exists
+            and not health.equivalent_log_exists
+            and not health.pending_intent
+            and not health.in_flight
+            and health.source_allowed
+            and health.terminal_allowed
+        )
+
+    def _ledger_source_marker(self, entries: list[dict[str, object]]) -> str:
+        for entry in reversed(entries):
+            marker = entry.get("marker")
+            if isinstance(marker, str) and marker.strip():
+                return marker
+        return "Phase9ActorHealth:recovery"
+
+    def _recovery_prompt_body(self, issue: str, round_no: int, actor: str, marker: str) -> str | None:
+        if actor in self._solver_roles():
+            return self._solver_prompt(issue, round_no, actor, marker)
+        if actor == self._judge_role():
+            role_markers = self._role_markers_for_round(issue, round_no)
+            if role_markers is None:
+                return None
+            return self._meta_judge_prompt(issue, round_no, role_markers)
+        return None
+
+    def _role_markers_for_round(self, issue: str, round_no: int) -> list[Marker] | None:
+        markers: list[Marker] = []
+        for role in self._solver_roles():
+            for path in self._actor_log_paths(issue, round_no, role):
+                if not path.exists() or not self._is_clean_exit(path):
+                    continue
+                marker = self._final_marker_from_path(path)
+                if marker and marker.startswith(f"SOLVER_DONE:{role}:"):
+                    markers.append(Marker(marker, path, issue, round_no, role))
+                    break
+        if {marker.role for marker in markers} != set(self._solver_roles()):
+            return None
+        return markers
+
+    def _parse_key(self, key: str) -> tuple[str, int, str] | None:
+        parts = key.split("-", 2)
+        if len(parts) != 3:
+            return None
+        issue, round_text, actor = parts
+        if not issue.isdigit() or not round_text.isdigit():
+            return None
+        return issue, int(round_text), actor
+
     def _solver_triplet_suppression_reason(
         self,
         issue: str,
@@ -808,18 +1164,23 @@ class Phase9Router:
         return any(path.exists() for path in paths)
 
     def _read_ledger(self) -> set[str]:
-        keys: set[str] = set()
+        return set(self._read_ledger_entries_by_key())
+
+    def _read_ledger_entries_by_key(self) -> dict[str, list[dict[str, object]]]:
+        entries: dict[str, list[dict[str, object]]] = {}
         if not self.ledger_path.exists():
-            return keys
+            return entries
         for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(entry, dict):
+                continue
             key = entry.get("key")
             if isinstance(key, str):
-                keys.add(key)
-        return keys
+                entries.setdefault(key, []).append(entry)
+        return entries
 
     def _append_ledger(self, key: str, marker: str, log_path: Path, *, extra: dict[str, object] | None = None) -> None:
         self.ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1256,6 +1617,34 @@ class Phase9Router:
         with self.pending_events_path.open("a", encoding="utf-8") as pending:
             pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
 
+    def _append_actor_health_fallback_event(
+        self,
+        issue: str,
+        round_no: int,
+        reason: Literal[
+            "phase9-actor-markerless-quarantine",
+            "phase9-actor-recovery-prompt-unavailable",
+        ],
+        route: str,
+        extra: dict[str, object],
+    ) -> None:
+        event_key = f"phase9-actor-health:{issue}-{round_no}-{reason}"
+        if event_key in self._fallback_seen:
+            return
+        self._fallback_seen.add(event_key)
+        self.pending_events_path.parent.mkdir(parents=True, exist_ok=True)
+        event = {
+            "key": event_key,
+            "reason": reason,
+            "issue": issue,
+            "round": round_no,
+            "route": route,
+            "dispatched_at": self._now(),
+            **extra,
+        }
+        with self.pending_events_path.open("a", encoding="utf-8") as pending:
+            pending.write(f"{self._now()} phase9-router-fallback {json.dumps(event, ensure_ascii=False, sort_keys=True)}\n")
+
     def _spawn(
         self,
         prompt: Path,
@@ -1284,6 +1673,7 @@ class Phase9Router:
             "no_lifecycle_authority": True,
         }
         self.command_runner(intent)
+        self._tick_dispatch_count += 1
         return True
 
     def _default_runner(self, intent: dict[str, object]) -> None:
@@ -1296,6 +1686,9 @@ class Phase9Router:
         if identity is None:
             return f"phase9-router:{log_path.stem}"
         return f"phase9-router:{identity.issue}:{identity.round}:{identity.actor}"
+
+    def _log_tick_status(self, action: str) -> None:
+        print(f"[{self._now()}] phase9-router: tick {action}", flush=True)
 
     def _write_prompt(self, issue: str, round_no: int, actor: str, body: str) -> Path:
         prompt = self.prompts_dir / f"phase9-issue{issue}-r{round_no}-{actor}.md"
@@ -1383,12 +1776,25 @@ class Phase9Router:
         )
 
     def _solver_prompt(self, issue: str, round_no: int, role: str, marker: str) -> str:
+        prompt = self._issue_snapshot_preferred_text(issue, self._render_solver_template(issue, round_no, role))
         return (
             f"# {format_stage('design-consensus')} {role} solver\n\n"
             f"{self._solver_work_unit_header(issue, round_no, role)}\n\n"
             f"{self._issue_source_snapshot_markdown(issue)}\n\n"
-            f"Convergence marker: {marker}\n\nUse prompts/solver-{role}.md contract and emit SOLVER_DONE:{role}:...\n"
+            f"Convergence marker: {marker}\n\n"
+            f"## Full solver template\n\n{prompt}\n"
         )
+
+    def _render_solver_template(self, issue: str, round_no: int, role: str) -> str:
+        template_path = self.skill_root / "prompts" / f"solver-{role}.md"
+        template = template_path.read_text(encoding="utf-8")
+        values = {
+            "ISSUE_NUMBER": issue,
+            "CLUSTER_ID": f"issue-{issue}",
+            "CONVERGENCE_ROUND": str(round_no),
+            "SOLVER_OUTPUT_PATH": f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md",
+        }
+        return inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.skill_root)
 
     def _solver_work_unit_header(self, issue: str, round_no: int, role: str) -> str:
         output_path = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-{role}.md"
@@ -1564,9 +1970,10 @@ class Phase9Router:
                 continue
             except OSError:
                 continue
+            scanned = self._peer_reference_scan_region(prompt)
             for peer_role in sorted(set(self._solver_roles()) - {role}):
                 for token in self._peer_solver_reference_tokens(issue, round_no, peer_role):
-                    if token in prompt:
+                    if token in scanned:
                         return {
                             "role": role,
                             "peer_role": peer_role,
@@ -1574,6 +1981,24 @@ class Phase9Router:
                             "matched_token": token,
                         }
         return None
+
+    def _peer_reference_scan_region(self, prompt: str) -> str:
+        """Return only the router-controlled regions of a solver prompt for
+        peer-isolation scanning. The router-injected issue source snapshot is
+        issue-author content and may legitimately quote prior-round peer solver
+        log/run paths (e.g. a previous round's audit trail that was posted back
+        onto the GitHub issue body/comments). Quoting those paths inside the
+        snapshot is not an isolation breach and must not block judge dispatch;
+        only a peer reference the router itself emits into the header or the
+        solver template is a real violation, so the snapshot region between
+        '## Issue source snapshot' and '## Full solver template' is excluded."""
+        start = prompt.find("## Issue source snapshot")
+        if start == -1:
+            return prompt
+        end = prompt.find("## Full solver template", start)
+        if end == -1:
+            return prompt[:start]
+        return prompt[:start] + prompt[end:]
 
     def _peer_solver_reference_tokens(self, issue: str, round_no: int, peer_role: str) -> tuple[str, ...]:
         return (

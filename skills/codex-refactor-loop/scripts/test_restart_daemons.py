@@ -3,15 +3,13 @@
 
 from __future__ import annotations
 
-import os
 import json
+import os
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
-import time
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
 from unittest import mock
 
@@ -19,36 +17,107 @@ from unittest import mock
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
+from codex_refactor_loop import restart
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.daemon_status import DaemonStatusProjection, collect as collect_daemon_status
-from codex_refactor_loop import restart
-from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcess, DaemonProcessInventory, RestartConfig, RestartDaemons, daemon_targets, restart_managed_daemon_names
+from codex_refactor_loop.restart import (
+    DAEMON_COMMANDS,
+    DaemonProcess,
+    DaemonProcessInventory,
+    RestartConfig,
+    RestartDaemons,
+    daemon_targets,
+    restart_managed_daemon_names,
+)
 from codex_refactor_loop.runtime_retention import RuntimeRetentionResult
 
 
 DAEMON_NAMES = restart_managed_daemon_names()
-FAKE_DAEMON = """import os, signal, sys, time
-from pathlib import Path
-repo = Path(os.environ["REPO_ROOT"])
-name = os.environ["RESTART_DAEMON_NAME"]
-hb = Path(os.environ["RESTART_DAEMON_HEARTBEAT_FILE"])
-hb.parent.mkdir(parents=True, exist_ok=True)
-(repo / ".refactor-loop" / "logs" / f"{name}.starts").open("a", encoding="utf-8").write(str(os.getpid()) + "\\n")
-hb.write_text(str(int(os.environ.get("TEST_HEARTBEAT_EPOCH", str(int(time.time()))))) + "\\n")
-running = True
-def stop(_signum, _frame):
-    global running
-    running = False
-signal.signal(signal.SIGTERM, stop)
-signal.signal(signal.SIGINT, stop)
-while running:
-    signal.pause()
-"""
+FAKE_COMMAND = (sys.executable, "-m", "codex_refactor_loop.fake_daemon")
 
 
-# Refactor (iter204/issue-204):
-#   Old pattern: restart-daemons kill daemon 后读 stale pidfile + 90s 内 heartbeat 误判存活、跳过 respawn(实测手 kill 5 daemon 后未 respawn 造成 outage);且无代码变更重启(daemon import 缓存旧代码)。
-#   New principle: 按 r2 consensus structural 锁定:引入 restart-daemons 代码指纹 artifact(检测 daemon 脚本 mtime/hash vs 启动时,变更则 force-restart)+ 值对象边界,kill 后不误判 stale-pid 存活。配套 behavior(指纹变更触发 restart、kill 后正确 respawn)+ source-regression 测试。不扩大 process authority surface。
+@dataclass
+class FakeWrapper:
+    pid: int
+
+
+class FakeRestartDaemonRuntime:
+    def __init__(self, now: int = 1_700_000_000) -> None:
+        self._now = now
+        self._pid = 9000
+        self._next_pid = 10000
+        self.live_pids: set[int] = set()
+        self.wrapper_commands: dict[int, str] = {}
+        self.terminated: list[tuple[int, int]] = []
+        self.sleeps: list[float] = []
+        self.inventory_override: DaemonProcessInventory | None = None
+        self.launch_envs: dict[str, dict[str, str]] = {}
+
+    def now(self) -> int:
+        return self._now
+
+    def getpid(self) -> int:
+        return self._pid
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+
+    def pid_alive(self, pid: int) -> bool:
+        return pid in self.live_pids or pid == self._pid
+
+    def collect_inventory(self) -> DaemonProcessInventory:
+        if self.inventory_override is not None:
+            return self.inventory_override
+        return DaemonProcessInventory(
+            tuple(DaemonProcess(pid, command) for pid, command in sorted(self.wrapper_commands.items()))
+        )
+
+    def terminate_pid(self, pid: int, grace: int) -> None:
+        self.terminated.append((pid, grace))
+        self.live_pids.discard(pid)
+        self.wrapper_commands.pop(pid, None)
+
+    def launch_wrapper(
+        self,
+        *,
+        ctx: LoopContext,
+        target,
+        wrapper_code: str,
+        env: dict[str, str],
+        log_file: Path,
+    ) -> FakeWrapper:
+        pid = self._next_pid
+        self._next_pid += 1
+        self.live_pids.add(pid)
+        target.pid_file.parent.mkdir(parents=True, exist_ok=True)
+        target.pid_file.write_text(f"{pid}\n", encoding="utf-8")
+        target.heartbeat_file.parent.mkdir(parents=True, exist_ok=True)
+        target.heartbeat_file.write_text(f"{self._now}\n", encoding="utf-8")
+        starts = ctx.paths.logs / f"{target.name}.starts"
+        starts.parent.mkdir(parents=True, exist_ok=True)
+        with starts.open("a", encoding="utf-8") as handle:
+            handle.write(f"{pid}\n")
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        log_file.touch()
+        self.launch_envs[target.name] = dict(env)
+        self.wrapper_commands[pid] = self.canonical_command(ctx, target.name, target.command, pid=pid)
+        return FakeWrapper(pid)
+
+    def canonical_command(self, ctx: LoopContext, name: str, command: tuple[str, ...], *, pid: int = 111) -> str:
+        target = restart.daemon_target(ctx, name, command)
+        parts = (
+            sys.executable,
+            "-c",
+            restart.WRAPPER_CODE,
+            name,
+            str(ctx.repo_root),
+            str(target.pid_file),
+            str(target.died_file),
+            *target.command,
+        )
+        return " ".join(parts)
+
+
 class RestartDaemonsBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="restart-daemons-test-"))
@@ -56,53 +125,41 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.skill = self.tmp_root / "skill"
         for rel in (".refactor-loop/logs", ".refactor-loop/locks", ".refactor-loop/heartbeats"):
             (self.repo / rel).mkdir(parents=True, exist_ok=True)
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.skill / "scripts").mkdir(parents=True)
         (self.skill / "scripts" / "consensus-rnd-cli").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
+        self.env_patch = mock.patch.dict(
+            os.environ,
+            {"CONSENSUS_RND_HOST_ENV": str(self.repo / ".config" / "consensus-rnd" / "host.env")},
+        )
+        self.env_patch.start()
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
         self.config = RestartConfig(heartbeat_fresh_seconds=30, heartbeat_interval=1, stop_grace_seconds=1)
-        self.helpers: list[RestartDaemons] = []
+        self.runtime = FakeRestartDaemonRuntime()
 
     def tearDown(self) -> None:
-        for helper in self.helpers:
-            for proc in helper._wrappers:
-                self.terminate_proc(proc)
-        for pid_file in (self.repo / ".refactor-loop" / "locks").glob("*.pid"):
-            try:
-                pid = int(pid_file.read_text(encoding="utf-8").strip())
-            except Exception:
-                continue
-            self.terminate(pid)
+        self.env_patch.stop()
         shutil.rmtree(self.tmp_root, ignore_errors=True)
 
-    def run_helper(self) -> subprocess.CompletedProcess[str]:
-        command = (sys.executable, "-c", FAKE_DAEMON)
-        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=DaemonProcessInventory(())):
-                with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
-                    helper = RestartDaemons(self.ctx, self.config)
-                    self.helpers.append(helper)
-                    helper.run()
-        return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
-
-    def run_helper_with_inventory(self, inventory: DaemonProcessInventory) -> subprocess.CompletedProcess[str]:
-        command = (sys.executable, "-c", FAKE_DAEMON)
-        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.restart.DaemonProcessInventory.collect", return_value=inventory):
-                with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
-                    helper = RestartDaemons(self.ctx, self.config)
-                    self.helpers.append(helper)
-                    helper.run()
-        return subprocess.CompletedProcess(["restart-daemons"], 0, "", "")
+    def run_helper(self) -> RestartDaemons:
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
+                helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+                helper.run()
+                return helper
 
     def collect_status_with_fake_allowlist(self, inventory: DaemonProcessInventory | None = None):
-        command = (sys.executable, "-c", FAKE_DAEMON)
-        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, command) for name in DAEMON_NAMES)):
-            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=inventory or DaemonProcessInventory(())):
-                return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
+        collected = inventory or self.runtime.collect_inventory()
+        with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", tuple((name, FAKE_COMMAND) for name in DAEMON_NAMES)):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect", return_value=collected):
+                with mock.patch("codex_refactor_loop.daemon_status.pid_alive", self.runtime.pid_alive):
+                    with mock.patch("codex_refactor_loop.restart.pid_alive", self.runtime.pid_alive):
+                        with mock.patch("codex_refactor_loop.restart.time.time", return_value=self.runtime.now()):
+                            return collect_daemon_status(repo_root=self.repo, skill_root=self.skill)
 
     def noop_retention(self) -> RuntimeRetentionResult:
         return RuntimeRetentionResult(False, 0, 0, False, 0, False, self.repo / ".refactor-loop", False)
@@ -120,40 +177,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
     def fingerprint_path(self, name: str) -> Path:
         return self.repo / ".refactor-loop" / "locks" / f"{name}.fingerprint.json"
 
+    def heartbeat_path(self, name: str) -> Path:
+        return self.repo / ".refactor-loop" / "heartbeats" / f"{name}.ts"
+
     def stale_heartbeat(self, name: str) -> None:
-        (self.repo / ".refactor-loop" / "heartbeats" / f"{name}.ts").write_text(f"{int(time.time()) - 120}\n", encoding="utf-8")
-
-    def terminate(self, pid: int) -> None:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-        try:
-            os.waitpid(pid, 0)
-            return
-        except ChildProcessError:
-            pass
-        if not restart.pid_alive(pid):
-            return
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        restart._reap_child_if_exited(pid)
-
-    def terminate_proc(self, proc: subprocess.Popen[bytes]) -> None:
-        if proc.poll() is not None:
-            return
-        proc.terminate()
-        try:
-            proc.wait(timeout=2)
-            return
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        try:
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            pass
+        self.heartbeat_path(name).write_text(f"{self.runtime.now() - 120}\n", encoding="utf-8")
 
     def test_restart_commands_use_single_cli_entrypoint_and_daemon_flag(self) -> None:
         self.assertEqual(7, len(DAEMON_COMMANDS))
@@ -191,13 +219,13 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         self.assertEqual(1, self.start_count("concurrency_monitor"))
         self.assertTrue(self.fingerprint_path("concurrency_monitor").exists())
+        self.assertEqual([], self.runtime.sleeps)
 
     def test_restarts_dead_wrapper_pid_even_with_fresh_heartbeat(self) -> None:
         self.run_helper()
-        self.assert_start_count("concurrency_monitor", 1)
         old_pid = self.read_pid("concurrency_monitor")
-        (self.repo / ".refactor-loop" / "heartbeats" / "concurrency_monitor.ts").write_text(f"{int(time.time())}\n", encoding="utf-8")
-        self.terminate(old_pid)
+        self.heartbeat_path("concurrency_monitor").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
+        self.runtime.live_pids.discard(old_pid)
         self.run_helper()
         new_pid = self.read_pid("concurrency_monitor")
         self.assertNotEqual(old_pid, new_pid)
@@ -271,119 +299,70 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
     def test_restarts_when_heartbeat_missing(self) -> None:
         self.run_helper()
-        (self.repo / ".refactor-loop" / "heartbeats" / "codex-progress-reporter.ts").unlink()
+        self.heartbeat_path("codex-progress-reporter").unlink()
         self.run_helper()
         self.assertEqual(2, self.start_count("codex-progress-reporter"))
 
     def test_restarts_when_heartbeat_malformed(self) -> None:
         self.run_helper()
-        (self.repo / ".refactor-loop" / "heartbeats" / "phase9_router_daemon.ts").write_text("not-a-timestamp\n", encoding="utf-8")
+        self.heartbeat_path("phase9_router_daemon").write_text("not-a-timestamp\n", encoding="utf-8")
         self.run_helper()
         self.assertEqual(2, self.start_count("phase9_router_daemon"))
 
     def test_restarts_when_pid_dead(self) -> None:
+        self.runtime.live_pids.discard(999999)
         (self.repo / ".refactor-loop" / "locks" / "dev_sync_daemon.pid").write_text("999999\n", encoding="utf-8")
-        (self.repo / ".refactor-loop" / "heartbeats" / "dev_sync_daemon.ts").write_text(f"{int(time.time())}\n", encoding="utf-8")
+        self.heartbeat_path("dev_sync_daemon").write_text(f"{self.runtime.now()}\n", encoding="utf-8")
         self.run_helper()
         self.assertEqual(1, self.start_count("dev_sync_daemon"))
 
     def test_duplicate_canonical_wrappers_are_reconciled_without_spawn(self) -> None:
-        # Refactor (issue-264): Old: one fresh wrapper let duplicate canonical wrappers persist.
-        # New: duplicate static-allowlist wrappers are terminated before skip/start re-evaluation.
         self.run_helper()
         old_pid = self.read_pid("concurrency_monitor")
         duplicate_pid = 424242
-        command = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
-            str(self.ctx.paths.logs / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        inventory = DaemonProcessInventory(
+        command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        self.runtime.live_pids.add(duplicate_pid)
+        self.runtime.inventory_override = DaemonProcessInventory(
             (
-                DaemonProcess(old_pid, " ".join(command)),
-                DaemonProcess(duplicate_pid, " ".join(command)),
+                DaemonProcess(old_pid, command),
+                DaemonProcess(duplicate_pid, command),
             )
         )
 
-        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
-            with mock.patch("codex_refactor_loop.restart._terminate_pid") as terminate:
-                self.run_helper_with_inventory(inventory)
+        self.run_helper()
 
-        terminate.assert_called_once_with(duplicate_pid, self.config.stop_grace_seconds)
+        self.assertEqual([(duplicate_pid, self.config.stop_grace_seconds)], self.runtime.terminated)
         self.assert_start_count("concurrency_monitor", 1)
         self.assertEqual(old_pid, self.read_pid("concurrency_monitor"))
 
     def test_duplicate_canonical_matching_ignores_other_repo_and_non_allowlist_commands(self) -> None:
-        command = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
-            str(self.ctx.paths.logs / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        other_repo = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            "/tmp/other-repo",
-            str(self.repo / ".refactor-loop" / "locks" / "concurrency_monitor.pid"),
-            str(self.repo / ".refactor-loop" / "logs" / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
-        non_allowlist = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "not_allowlisted",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "not_allowlisted.pid"),
-            str(self.ctx.paths.logs / "not_allowlisted.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
+        command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        other_repo = command.replace(str(self.ctx.repo_root), "/tmp/other-repo")
+        non_allowlist = self.runtime.canonical_command(self.ctx, "not_allowlisted", FAKE_COMMAND)
         inventory = DaemonProcessInventory(
             (
-                DaemonProcess(111, " ".join(command)),
-                DaemonProcess(222, " ".join(other_repo)),
-                DaemonProcess(333, " ".join(non_allowlist)),
+                DaemonProcess(111, command),
+                DaemonProcess(222, other_repo),
+                DaemonProcess(333, non_allowlist),
             )
         )
+        self.runtime.live_pids.update({111, 222, 333})
 
-        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
-            live = inventory.live_canonical_wrappers(
-                name="concurrency_monitor",
-                repo_root=self.ctx.repo_root,
-                pid_file=self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid",
-                died_file=self.ctx.paths.logs / "concurrency_monitor.died",
-                command=(sys.executable, "-c", FAKE_DAEMON),
-            )
+        live = inventory.live_canonical_wrappers(
+            name="concurrency_monitor",
+            repo_root=self.ctx.repo_root,
+            pid_file=self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid",
+            died_file=self.ctx.paths.logs / "concurrency_monitor.died",
+            command=FAKE_COMMAND,
+            is_alive=self.runtime.pid_alive,
+        )
 
         self.assertEqual((111,), live)
 
-    # Refactor (impl/issue191-single-active-controller): Old pattern:
-    # restart-daemons started controller write daemons on every device. New
-    # principle: non-owner restart-daemons writes active_controller=noop and
-    # starts no write daemon.
     def test_non_owner_restart_daemons_writes_noop_and_starts_no_daemons(self) -> None:
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="restart-daemons", lease_id="lease", expires_at="")
         with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
-            helper = RestartDaemons(self.ctx, self.config)
+            helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
             helper.run()
 
         self.assertEqual([], helper._wrappers)
@@ -411,7 +390,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", return_value={"status": "disabled", "reason": "noop"}) as update:
-                        helper = RestartDaemons(self.ctx, self.config)
+                        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
                         self.assertEqual(0, helper.run())
 
         self.assertEqual(list(DAEMON_NAMES), calls)
@@ -421,12 +400,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
                 with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
                     with mock.patch("codex_refactor_loop.restart.maybe_run_update_check", side_effect=RuntimeError("network")):
-                        helper = RestartDaemons(self.ctx, self.config)
+                        helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
                         self.assertEqual(0, helper.run())
 
-    # Refactor (issue-298): Old: daemon health reads were coupled to
-    # restart-daemons or process probes. New: daemon-status projects
-    # running/stale/dead/not-owner from restart helper facts without repair.
     def test_daemon_status_reports_running_stale_dead_and_not_owner_without_repair(self) -> None:
         self.run_helper()
         (self.repo / ".refactor-loop" / "state").mkdir(parents=True, exist_ok=True)
@@ -442,7 +418,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.stale_heartbeat("comment-monitor")
         self.fingerprint_path("phase9_router_daemon").unlink()
         dead_pid = self.read_pid("dev_sync_daemon")
-        self.terminate(dead_pid)
+        self.runtime.live_pids.discard(dead_pid)
         (self.repo / ".refactor-loop" / "locks" / "closed_label_reconciler.pid").unlink()
 
         report = self.collect_status_with_fake_allowlist()
@@ -465,28 +441,16 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.run_helper()
         old_pid = self.read_pid("concurrency_monitor")
         duplicate_pid = 424242
-        command = (
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-            "concurrency_monitor",
-            str(self.ctx.repo_root),
-            str(self.ctx.paths.refactor_loop / "locks" / "concurrency_monitor.pid"),
-            str(self.ctx.paths.logs / "concurrency_monitor.died"),
-            sys.executable,
-            "-c",
-            FAKE_DAEMON,
-        )
+        command = self.runtime.canonical_command(self.ctx, "concurrency_monitor", FAKE_COMMAND)
+        self.runtime.live_pids.add(duplicate_pid)
         inventory = DaemonProcessInventory(
             (
-                DaemonProcess(old_pid, " ".join(command)),
-                DaemonProcess(duplicate_pid, " ".join(command)),
+                DaemonProcess(old_pid, command),
+                DaemonProcess(duplicate_pid, command),
             )
         )
 
-        with mock.patch("codex_refactor_loop.restart.pid_alive", return_value=True):
-            with mock.patch("codex_refactor_loop.daemon_status.pid_alive", return_value=True):
-                report = self.collect_status_with_fake_allowlist(inventory)
+        report = self.collect_status_with_fake_allowlist(inventory)
 
         by_name = {daemon.name: daemon for daemon in report.daemons}
         self.assertEqual("stale", by_name["concurrency_monitor"].status)
@@ -508,11 +472,26 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             daemon_targets(self.ctx, "not-allowlisted")
 
+    def test_suite_level_global_ps_leak_guard_is_deleted(self) -> None:
+        guard = SCRIPT_DIR / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
+        for path in (
+            SCRIPT_DIR / "test_restart_daemons.py",
+            SCRIPT_DIR / "test_cli_daemon_help_smoke.py",
+            SCRIPT_DIR / "test_cli_command_router.py",
+        ):
+            with self.subTest(path=path.name):
+                source = path.read_text(encoding="utf-8")
+                self.assertNotIn("ps " + "-eo", source)
+                self.assertNotIn(" phase9-router " + "--daemon", source)
+
     def test_restart_helper_source_mentions_launch_fingerprint_contract(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "restart.py").read_text(encoding="utf-8")
         for needle in (
             "DaemonLaunchFingerprint",
             "DaemonTarget",
+            "RestartDaemonRuntime",
+            "RealRestartDaemonRuntime",
             "daemon_targets",
             "read_daemon_pid",
             "read_heartbeat_age_seconds",
@@ -530,12 +509,37 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("heartbeat_file", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_FILE", source)
         self.assertIn("RESTART_DAEMON_HEARTBEAT_INTERVAL", source)
-        self.assertNotIn("Refactor (", source)
-        self.assertNotIn("Old pattern", source)
-        self.assertNotIn("New principle", source)
+        history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
+        for needle in history_forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, source)
         for forbidden in ("gh issue", "gh pr", "git fetch", "git push", "git merge"):
             self.assertNotIn(forbidden, source)
         self.assertNotIn("RESTART_MANAGED_DAEMON_NAMES", source)
+
+    def test_default_restart_unit_tests_do_not_active_use_real_process_harness(self) -> None:
+        source = Path(__file__).read_text(encoding="utf-8")
+        forbidden = (
+            "FAKE_DAEMON",
+            "signal.pause(",
+            "subprocess.Popen(",
+            "os.kill(",
+            "os.waitpid(",
+            "proc.wait(",
+            "proc.kill(",
+            "time.sleep(",
+        )
+        lines = source.splitlines()
+        guard_start = next(index for index, line in enumerate(lines) if "forbidden = (" in line)
+        guard_end = next(index for index in range(guard_start + 1, len(lines)) if lines[index].strip() == ")")
+        active_source = "\n".join(lines[:guard_start] + lines[guard_end + 1 :])
+        for needle in forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, active_source)
+        history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
+        for needle in history_forbidden:
+            with self.subTest(needle=needle):
+                self.assertNotIn(needle, source)
 
 
 if __name__ == "__main__":

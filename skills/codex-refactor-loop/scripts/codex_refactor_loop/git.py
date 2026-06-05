@@ -40,6 +40,17 @@ class Git:
             self.run(["worktree", "add", "-b", branch, str(wt_path), base_ref])
         return wt_path, branch
 
+    def fresh_safe_worktree(self, iteration: str | int, cluster: str, base_ref: str) -> tuple[Path, str]:
+        _validate_safe_worktree_fields(str(iteration), cluster)
+        wt_path = self.repo_root / ".worktrees" / f"iter{iteration}-{cluster}"
+        branch = f"refactor/iter{iteration}-{cluster}"
+        self.run(["fetch", "origin", base_ref])
+        self.run(["worktree", "remove", str(wt_path), "--force"], check=False)
+        self.run(["branch", "-D", branch], check=False)
+        (self.repo_root / ".worktrees").mkdir(parents=True, exist_ok=True)
+        self.run(["worktree", "add", "-b", branch, str(wt_path), f"origin/{base_ref}"])
+        return wt_path, branch
+
     def merge_ff_only(self, ref: str) -> subprocess.CompletedProcess[str]:
         return self.run(["merge", "--ff-only", ref])
 

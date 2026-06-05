@@ -83,6 +83,67 @@ class ProcessSupervisor:
         return exit_code
 
 
+def launch_spawn_codex_supervisor(
+    *,
+    repo_root: Path,
+    cd: Path,
+    prompt: Path,
+    log: Path,
+    stall: int,
+    add_dirs: Sequence[Path] = (),
+    env: Mapping[str, str] | None = None,
+    stdout_to_log: bool = False,
+) -> int:
+    """Launch the blocking spawn-codex supervisor outside the daemon process."""
+    if not prompt.is_file():
+        return 2
+    if stall <= 0:
+        raise ValueError(f"stall must be positive: {stall}")
+    repo_root = repo_root.resolve()
+    command = [
+        str(repo_root / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"),
+        "spawn-codex",
+        "--cd",
+        str(cd),
+    ]
+    for directory in add_dirs:
+        command.extend(["--add-dir", str(directory)])
+    command.extend(
+        [
+            "--prompt",
+            str(prompt),
+            "--log",
+            str(log),
+            "--stall",
+            str(stall),
+        ]
+    )
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if stdout_to_log:
+        handle = log.open("ab", buffering=0)
+        try:
+            subprocess.Popen(
+                command,
+                cwd=str(repo_root),
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env=dict(env) if env is not None else None,
+            )
+        finally:
+            handle.close()
+    else:
+        subprocess.Popen(
+            command,
+            cwd=str(repo_root),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            env=dict(env) if env is not None else None,
+        )
+    return 0
+
+
 def prompt_file_from_text(text: str) -> Path:
     fd, name = tempfile.mkstemp(prefix="codex-prompt.", dir="/tmp")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:

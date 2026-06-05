@@ -25,8 +25,11 @@ class LogRetentionCompatibilityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp_root = Path(tempfile.mkdtemp(prefix="log-retention-alias-test-"))
         self.repo = self.tmp_root / "repo"
-        (self.repo / ".refactor-loop").mkdir(parents=True)
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        self.logs = self.repo / ".refactor-loop" / "logs"
+        self.logs.mkdir(parents=True)
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True)
+        host_env.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport RUNTIME_RETENTION_ENABLE="false"\n',
             encoding="utf-8",
         )
@@ -34,15 +37,26 @@ class LogRetentionCompatibilityTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.tmp_root, ignore_errors=True)
 
-    def test_log_retention_cli_is_runtime_retention_alias(self) -> None:
-        result = subprocess.run(
+    def run_cli(self, *, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+        run_env = os.environ.copy()
+        run_env.pop("REPO_ROOT", None)
+        if cwd is None or cwd.resolve() == self.repo.resolve():
+            run_env["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
+        else:
+            run_env.pop("CONSENSUS_RND_HOST_ENV", None)
+        if env:
+            run_env.update(env)
+        return subprocess.run(
             [sys.executable, str(CLI), "log-retention"],
-            cwd=self.repo,
-            env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+            cwd=cwd or self.repo,
+            env=run_env,
             capture_output=True,
             text=True,
             check=False,
         )
+
+    def test_log_retention_cli_is_runtime_retention_alias(self) -> None:
+        result = self.run_cli()
 
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("runtime_retention: enabled=false", result.stdout)

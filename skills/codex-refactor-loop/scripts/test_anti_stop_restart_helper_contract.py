@@ -48,7 +48,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
     def test_scheduler_docs_use_single_cli_entrypoint(self) -> None:
         self.assertIn("consensus-rnd-cli restart-daemons", self.skill)
         self.assertIn("consensus-rnd-cli daemon-status --json", self.skill)
-        self.assertIn("source .refactor-loop/host.env", self.skill)
+        self.assertIn('source "$CONSENSUS_RND_HOST_ENV"', self.skill)
+        self.assertIn("not a runtime fallback", self.skill)
         self.assertIn("cron/launchd-only", self.skill)
 
     def test_restart_module_contains_singleton_and_heartbeat_checks(self) -> None:

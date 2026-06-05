@@ -27,6 +27,18 @@ class PrChecksProjectionTests(unittest.TestCase):
 
         return PrChecksProjection(runner=runner).check_pr("owner/repo", 31), calls
 
+    def run_projection_sequence(self, responses: dict[tuple[str, ...], list[subprocess.CompletedProcess[str]]]):
+        calls: list[list[str]] = []
+
+        def runner(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            calls.append(list(cmd))
+            key = tuple(cmd)
+            if key not in responses or not responses[key]:
+                return subprocess.CompletedProcess(list(cmd), 99, "", "unexpected command")
+            return responses[key].pop(0)
+
+        return PrChecksProjection(runner=runner).check_pr("owner/repo", 31), calls
+
     def test_reads_pull_head_then_paginated_slurp_check_runs(self) -> None:
         responses = {
             ("gh", "api", "repos/owner/repo/pulls/31"): subprocess.CompletedProcess(
@@ -84,6 +96,53 @@ class PrChecksProjectionTests(unittest.TestCase):
         self.assertEqual(data["bucket_counts"], {"pass": 1, "fail": 1, "pending": 1})
         self.assertEqual(set(data["checks"][0]), {"name", "bucket", "state", "link", "conclusion", "status", "started_at", "completed_at"})
 
+    def test_retries_transient_pull_and_check_run_api_failures(self) -> None:
+        responses = {
+            ("gh", "api", "repos/owner/repo/pulls/31"): [
+                subprocess.CompletedProcess(["gh"], 1, "", "temporary pull failure"),
+                subprocess.CompletedProcess(["gh"], 0, json.dumps({"head": {"sha": "abc123"}}), ""),
+            ],
+            ("gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"): [
+                subprocess.CompletedProcess(["gh"], 2, "", "temporary checks failure"),
+                subprocess.CompletedProcess(
+                    ["gh"],
+                    0,
+                    json.dumps({"check_runs": [{"name": "unit", "status": "completed", "conclusion": "success"}]}),
+                    "",
+                ),
+            ],
+        }
+
+        status, calls = self.run_projection_sequence(responses)
+
+        self.assertTrue(status.ok)
+        self.assertEqual("abc123", status.head_sha)
+        self.assertEqual([run.name for run in status.runs], ["unit"])
+        self.assertEqual(
+            calls,
+            [
+                ["gh", "api", "repos/owner/repo/pulls/31"],
+                ["gh", "api", "repos/owner/repo/pulls/31"],
+                ["gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"],
+                ["gh", "api", "repos/owner/repo/commits/abc123/check-runs", "--paginate", "--slurp"],
+            ],
+        )
+
+    def test_persistent_api_failure_still_fails_closed_after_bounded_retries(self) -> None:
+        responses = {
+            ("gh", "api", "repos/owner/repo/pulls/31"): [
+                subprocess.CompletedProcess(["gh"], 1, "", "pull failure"),
+                subprocess.CompletedProcess(["gh"], 1, "", "pull failure"),
+                subprocess.CompletedProcess(["gh"], 1, "", "pull failure"),
+            ],
+        }
+
+        status, calls = self.run_projection_sequence(responses)
+
+        self.assertFalse(status.ok)
+        self.assertEqual("pull_api_failure", status.reason)
+        self.assertEqual(calls, [["gh", "api", "repos/owner/repo/pulls/31"]] * 3)
+
     def test_flat_slurp_pages_are_accepted(self) -> None:
         responses = {
             ("gh", "api", "repos/owner/repo/pulls/31"): subprocess.CompletedProcess(
@@ -132,6 +191,17 @@ class PrChecksProjectionTests(unittest.TestCase):
 
 
 class PrChecksSourceRegressionTests(unittest.TestCase):
+    def test_direct_script_help_still_imports(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "codex_refactor_loop" / "pr_checks.py"), "--help"],
+            cwd=str(SCRIPT_DIR),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("--repo", result.stdout)
+
     def test_production_source_uses_rest_projection_not_legacy_or_lifecycle_surfaces(self) -> None:
         production_dir = SCRIPT_DIR / "codex_refactor_loop"
         texts = {

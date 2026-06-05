@@ -31,7 +31,7 @@ Refactor (iter364/issue364):
    - Use only the router-injected validated transition projection lines (`TRANSITION_TYPE`, `TRANSITION_CONFIDENCE`, `TRANSITION_EVIDENCE_REFS`) for transition assessment context. Missing, malformed, or untrusted sidecars are projected as `unknown` with confidence `0`; the sidecar is not approval, not a consensus substitute, and cannot override the meta-judge truth table. `positive-discovery` is valid only with classifier-surface delta and `net_positive_signal=true`.
    - If it points to an existing local artifact or audit section, read that source and verify it.
    - If it is `gh-issue-<N>` or a referenced local artifact is missing, treat the GitHub issue body/comments from `gh issue view ${ISSUE_NUMBER}` as the scope spec.
-   - If issue body/comments cite files absent from the current checkout, look for a read-only source locator in that source: `git show <ref>:<path>`, raw URL, `gh api`, or a host-provided path from `.refactor-loop/host.env`. Use it only to read source; must not fetch/checkout/switch/merge/rebase/reset; must not create source worktree/add-dir. If the locator is missing or invalid and the current checkout cannot verify the cited source, emit `SOLVER_DONE:delete:escalate:no-plan:source-location-missing-or-invalid` instead of a generic no-plan.
+   - If issue body/comments cite files absent from the current checkout, look for a read-only source locator in that source: `git show <ref>:<path>`, raw URL, `gh api`, or a host-provided path from the explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`. Use it only to read source; must not fetch/checkout/switch/merge/rebase/reset; must not create source worktree/add-dir. If the locator is missing or invalid and the current checkout cannot verify the cited source, emit `SOLVER_DONE:delete:escalate:no-plan:source-location-missing-or-invalid` instead of a generic no-plan.
    - `audit-iter-${ITERATION}.md if present` is an audit-backed source only when the current `WORK_UNIT_SOURCE_REF` / `source_ref` points to it; do not fabricate audit artifacts.
    - For issue-driven / Path A greenfield work, `WORK_UNIT_PRODUCER=manual-issue (prompt-only provenance)` with `WORK_UNIT_SOURCE_REF=gh-issue-<N>` means absence of existing local code to delete is neutral evidence: classify as genuinely needed/no current deletion dependency and abstain when deletion/collapse is not justified.
 3. `$REPO_ROOT/${PROJECT_RULES:-CLAUDE.md}` "删除优先" clause; "Deletion-first" principle. `$REPO_ROOT/AGENTS.md` is supporting input when present.
@@ -133,7 +133,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 - You do NOT delete code in this run; controller decides whether to act on your plan.
 - You do NOT commit / push / open PRs.
 - You do NOT run or propose GitHub lifecycle mutation. Decomposition plans may output `IssueDecompositionPlan` and child body artifact requirements, but active-controller checked-in helpers own issue creation.
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - Abstaining is honorable. Forcing a deletion that doesn't fit is worse than abstaining.
 - Philosophy is evolvable: touching CLAUDE.md/L0/L1/L2, Tier boundaries, SPEC, or architecture vocabulary is allowed when it is part of the best deletion/collapse plan.
 - Escalate only for physical ratification/reinstall or total inability to classify; never escalate just because deletion changes an existing philosophy boundary.
@@ -142,12 +142,9 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
 
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+{{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---

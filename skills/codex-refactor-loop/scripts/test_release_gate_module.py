@@ -259,21 +259,21 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertEqual(human_signal["reason"], "no_human_decision_label:failed")
             self.assertEqual(human_signal["issue"]["reason"], "label_present:👤 human:需-maintainer-决策")
 
-    def test_host_env_reads_canonical_refactor_loop_file_and_ignores_root(self) -> None:
+    def test_host_env_reads_explicit_host_owned_file_and_ignores_root(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             (repo / "host.env").write_text(
                 "export RELEASE_AUTO_ENABLE=false\nexport REVIEW_BASE_BRANCH=root-review\n",
                 encoding="utf-8",
             )
-            nested = repo / ".refactor-loop/host.env"
-            nested.parent.mkdir(parents=True, exist_ok=True)
-            nested.write_text(
+            explicit = repo / ".config/consensus-rnd/host.env"
+            explicit.parent.mkdir(parents=True, exist_ok=True)
+            explicit.write_text(
                 "export RELEASE_AUTO_ENABLE=true\nexport INTEGRATION_BRANCH=integration\n",
                 encoding="utf-8",
             )
 
-            loaded = gate.load_host_env(repo)
+            loaded = gate.load_host_env(repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
             self.assertEqual(loaded["RELEASE_AUTO_ENABLE"], "true")
             self.assertNotIn("REVIEW_BASE_BRANCH", loaded)

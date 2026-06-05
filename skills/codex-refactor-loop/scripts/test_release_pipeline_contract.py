@@ -19,6 +19,7 @@ REPO_ROOT = SCRIPT_PATH.parents[3]
 BUMP_PATH = REPO_ROOT / ".github/scripts/bump_version.py"
 WORKFLOW_PATH = REPO_ROOT / ".github/workflows/release.yml"
 REQUIRED_CHECKS_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py"
+RELEASE_GATE_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py"
 PUBLISH_PREFLIGHT_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publish_preflight.py"
 PUBLISHER_PATH = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/publisher.py"
 
@@ -46,6 +47,7 @@ class ReleasePipelineContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.bump = load_bump_module()
         self.workflow = read(WORKFLOW_PATH)
+        self.release_gate = read(RELEASE_GATE_PATH)
         self.required_checks = read(REQUIRED_CHECKS_PATH)
         self.publish_preflight = read(PUBLISH_PREFLIGHT_PATH)
         self.publisher = read(PUBLISHER_PATH)
@@ -232,6 +234,26 @@ class ReleasePipelineContractTests(unittest.TestCase):
         for forbidden in ('"contract-tests"', '"manifest-version-sync"', '"skill-degradation"'):
             with self.subTest(forbidden_runtime_default=forbidden):
                 self.assertNotIn(forbidden, self.required_checks)
+
+    def test_release_gate_has_no_clean_room_internal_signal_or_artifact(self) -> None:
+        expected_signals = (
+            "required_checks_recent_green",
+            "no_open_blocked_pr",
+            "no_human_decision_label",
+            "no_phase8_reject_churn",
+            "p0_alert_streak_ok",
+            "recent_pr_merges_min",
+            "fresh_heartbeats",
+            "no_unresolved_human_escalation",
+        )
+        for signal in expected_signals:
+            with self.subTest(signal=signal):
+                self.assertIn(f'"{signal}"', self.release_gate)
+        signal_block = self.release_gate.split("SIGNAL_NAMES = (", 1)[1].split(")", 1)[0]
+        self.assertEqual(signal_block.count('"'), len(expected_signals) * 2)
+        for forbidden in ("clean_room", "clean-room", "host-fixture-smoke", "clean-room-", "cleanroom"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, self.release_gate)
 
     def test_release_publish_preflight_source_guards_candidate_artifact_path(self) -> None:
         for needle in (

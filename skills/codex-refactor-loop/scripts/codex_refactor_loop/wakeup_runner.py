@@ -10,21 +10,24 @@ import subprocess
 import sys
 import threading
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
-from .context import LoopContext, LoopContextError
-from .controller_actions import ControllerActions
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .context import LoopContext
+from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
+from .gh_invoke import build_gh_argv
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
-from .phase9.router import Marker, Phase9Router, Phase9SourceIssueDecision
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .pr_checks import PrChecksProjection
-from .processes import ProcessSupervisor
+from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
-from .wakeup_plan import build_plan
+from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
+from .worker_markers import read_worker_terminal_marker
 
 
 RUNNER_AUTHORITY = "wakeup-runner-396"
@@ -59,7 +62,6 @@ TARGET_TEXT_PATTERNS = (
 SUPPORTED_CONTROLLER_ACTIONS = {
     "spawn_codex_harness_background",
     "safe_push",
-    "dispatch_design_consensus",
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
@@ -69,6 +71,13 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "review_gate",
     "publish_release_candidate",
 }
+# Worker-dispatch (non-lifecycle) controller actions that may batch up to the
+# per-tick spawn budget. Both directly spawn codex workers and carry no
+# lifecycle authority, so batching them only fills the concurrency floor faster
+# and never batches review/merge/close/release lifecycle actions.
+SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
+    {"spawn_codex_harness_background"}
+)
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,37 @@ class RunnerResult:
     action_id: str
     status: str
     reason: str = ""
+
+
+@dataclass(frozen=True)
+class WakeupApplyBudget:
+    spawn_budget: int
+    source: str
+
+    @classmethod
+    def from_plan(cls, plan: Mapping[str, Any]) -> "WakeupApplyBudget":
+        hard_gate = plan.get("hard_gate")
+        if not isinstance(hard_gate, Mapping):
+            concurrency_hard_gate = plan.get("concurrency")
+            if isinstance(concurrency_hard_gate, Mapping):
+                hard_gate = concurrency_hard_gate.get("hard_gate")
+        concurrency = plan.get("concurrency")
+        if not isinstance(hard_gate, Mapping) or not isinstance(concurrency, Mapping):
+            return cls.legacy()
+        if hard_gate.get("active") is not True:
+            return cls.legacy()
+        dispatch_required = _positive_int(hard_gate.get("dispatch_required"))
+        deficit = _positive_int(concurrency.get("deficit"))
+        if dispatch_required is None or deficit is None:
+            return cls.legacy()
+        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit")
+
+    @classmethod
+    def legacy(cls) -> "WakeupApplyBudget":
+        return cls(1, "legacy-single-apply")
+
+    def is_spawn_action(self, action: Mapping[str, Any]) -> bool:
+        return action.get("controller_action") in SPAWN_BATCH_CONTROLLER_ACTIONS
 
 
 @dataclass(frozen=True)
@@ -157,7 +197,6 @@ class WakeupRunner:
 
     def run_once(self) -> list[RunnerResult]:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("wakeup-runner")
             return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
         write_active_controller_status(self.ctx, owner)
@@ -171,21 +210,47 @@ class WakeupRunner:
             result = RunnerResult("", "blocked", plan_error)
             self._record(result, action=None)
             return [result]
+        budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
+        applied_spawns = 0
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
+            is_spawn_action = budget.is_spawn_action(action)
+            consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
+                continue
             result = self.apply_action(action)
             results.append(result)
-            if result.status == "applied":
+            if result.status == "skipped" and consumes_spawn_budget:
+                continue
+            if result.status != "applied":
+                if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:
+                    continue
+                if result.status == "blocked" and consumes_spawn_budget and not _spawn_launch_failure(result):
+                    continue
                 break
+            if consumes_spawn_budget:
+                applied_spawns += 1
+                continue
+            break
         return results
+
+    def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:
+        controller_action = str(action.get("controller_action") or "")
+        if controller_action == "dispatch_reviewers":
+            return True
+        if controller_action == "review_gate":
+            if self._validate_action(action) is not None:
+                return False
+            return self._review_gate_decision(action).get("decision") == "FIX"
+        return False
 
     def apply_action(self, action: Mapping[str, Any]) -> RunnerResult:
         action_id = str(action.get("action_id") or "")
         if not action_id:
             return self._blocked(action, "missing_action_id")
-        if self._ledger_has(action_id):
+        if self._ledger_has(action):
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
@@ -198,8 +263,15 @@ class WakeupRunner:
             exit_code = self._dispatch(controller_action, action)
         except Exception as exc:
             return self._blocked(action, f"exception:{exc}")
+        if exit_code == PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT and controller_action == "publish_implementation_output":
+            return self._record(
+                RunnerResult(action_id, "delegated", "publish_implementation_fallback_delegated"),
+                action,
+            )
         status = "applied" if exit_code == 0 else "blocked"
         reason = "" if exit_code == 0 else f"helper_exit:{exit_code}"
+        if exit_code != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_HELPER_EXIT:{action_id}:{controller_action}:{exit_code}")
         return self._record(RunnerResult(action_id, status, reason), action)
 
     def _validate_plan(self, plan: Mapping[str, Any]) -> str | None:
@@ -240,6 +312,14 @@ class WakeupRunner:
     def _validate_evidence(self, action: Mapping[str, Any]) -> str | None:
         source_artifact = str(action.get("source_artifact") or "")
         source_marker = str(action.get("source_marker") or "")
+        if (
+            "clean_exit_source_marker" in action.get("preconditions", [])
+            and action.get("controller_action") != "publish_release_candidate"
+        ):
+            path = self.ctx.repo_root / source_artifact
+            if not _source_log_has_clean_marker(path, source_marker):
+                return "clean_exit_marker_missing"
+            return None
         if source_artifact.startswith(".refactor-loop/") and source_marker:
             path = self.ctx.repo_root / source_artifact
             try:
@@ -248,10 +328,6 @@ class WakeupRunner:
                 return "source_artifact_missing"
             if source_marker not in text:
                 return "source_marker_missing"
-        if "clean_exit_source_marker" in action.get("preconditions", []):
-            path = self.ctx.repo_root / source_artifact
-            if not _source_log_has_clean_marker(path, source_marker):
-                return "clean_exit_marker_missing"
         return None
 
     def _validate_target(self, action: Mapping[str, Any]) -> str | None:
@@ -298,8 +374,6 @@ class WakeupRunner:
             return self._validate_release(action)
         if controller_action == "dispatch_consensus_implementation":
             return self._validate_consensus_implementation(action)
-        if controller_action == "dispatch_design_consensus":
-            return self._validate_design_consensus(action)
         if controller_action == "publish_implementation_output":
             return self._validate_publish_implementation(action)
         if controller_action == "dispatch_reviewers":
@@ -315,7 +389,7 @@ class WakeupRunner:
         if not isinstance(preconditions, list) or "target_log_absent" not in preconditions:
             return "spawn_missing_precondition:target_log_absent"
         log = Path(str(action.get("log") or ""))
-        if log.exists():
+        if self._spawn_log_suppresses_retry(log):
             return "target_log_exists"
         return None
 
@@ -395,6 +469,9 @@ class WakeupRunner:
                 return f"consensus_implementation_missing_field:{field}"
         if str(action.get("design_decision_path") or "") != str(action.get("consensus_artifact") or ""):
             return "consensus_implementation_design_path_mismatch"
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        if readiness_reason:
+            return f"consensus_implementation_not_ready:{readiness_reason}"
         return None
 
     def _validate_consensus_artifact(self, action: Mapping[str, Any]) -> str | None:
@@ -426,20 +503,6 @@ class WakeupRunner:
             return "consensus_artifact_marker_missing"
         return None
 
-    def _validate_design_consensus(self, action: Mapping[str, Any]) -> str | None:
-        preconditions = action.get("preconditions")
-        if not isinstance(preconditions, list):
-            return "design_consensus_missing_preconditions"
-        for required in ("active_controller_owner", "clean_exit_source_marker"):
-            if required not in preconditions:
-                return f"design_consensus_missing_precondition:{required}"
-        if "live_open_target" not in preconditions and "live_open_target_if_present" not in preconditions:
-            return "design_consensus_missing_precondition:live_open_target"
-        marker_error = self._design_consensus_marker(action)
-        if isinstance(marker_error, str):
-            return marker_error
-        return None
-
     def _validate_publish_implementation(self, action: Mapping[str, Any]) -> str | None:
         marker = str(action.get("source_marker") or "")
         if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith(":ok"):
@@ -449,7 +512,8 @@ class WakeupRunner:
             return "publish_implementation_missing_preconditions"
         for required in (
             "clean_exit_source_marker",
-            "verified_pr_head",
+            "canonical_implementation_identity",
+            "fresh_integration_base",
             "clean_scoped_diff",
             "host_checks_green",
             "single_linked_managed_issue",
@@ -498,8 +562,6 @@ class WakeupRunner:
             return "publish_implementation_duplicate_pr_invalid_json"
         if not isinstance(payload, list):
             return "publish_implementation_duplicate_pr_invalid_json"
-        if payload:
-            return "publish_implementation_duplicate_open_pr"
         return None
 
     def _validate_implementation_worktree(self, action: Mapping[str, Any]) -> str | None:
@@ -513,11 +575,30 @@ class WakeupRunner:
             worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
         except ValueError:
             return "publish_implementation_worktree_outside_controller_owned_root"
-        diff = self.command_runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
+        if identity_error:
+            return identity_error
+        diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
         if diff.returncode != 1:
             return "publish_implementation_diff_unavailable"
+        return None
+
+    def _validate_canonical_implementation_identity(self, action: Mapping[str, Any], worktree: Path, head_ref: str) -> str | None:
+        target = action.get("target_number")
+        if not isinstance(target, int):
+            return "publish_implementation_target_missing"
+        marker = str(action.get("source_marker") or "")
+        marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+        candidate = marker_id.replace("_", "-").strip("-") or f"issue-{target}"
+        expected_head = f"refactor/iter{target}-{candidate}"
+        expected_worktree = (self.ctx.repo_root / ".worktrees" / f"iter{target}-{candidate}").resolve()
+        if head_ref != expected_head or worktree.resolve() != expected_worktree:
+            return "publish_implementation_noncanonical_identity"
+        branch = self.command_runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
+        if branch.returncode != 0 or branch.stdout.strip() != head_ref:
+            return "publish_implementation_noncanonical_identity"
         return None
 
     def _dispatch(self, controller_action: str, action: Mapping[str, Any]) -> int:
@@ -527,13 +608,15 @@ class WakeupRunner:
             return self.actions.safe_push(branch=str(action.get("head_ref") or ""), worktree=str(action.get("worktree") or ""))
         if controller_action == "dispatch_consensus_implementation":
             return self.actions.dispatch_consensus_implementation(dict(action))
-        if controller_action == "dispatch_design_consensus":
-            return self._dispatch_design_consensus(action)
         if controller_action == "publish_implementation_output":
             return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
         if controller_action == "dispatch_reviewers":
+            if str(action.get("source_marker") or "").startswith("FIX_DONE"):
+                fix_publish_rc = self._commit_and_push_review_fix_output(action)
+                if fix_publish_rc != 0:
+                    return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
@@ -561,7 +644,7 @@ class WakeupRunner:
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action.get('action_id', '')}:graphql-headroom-low")
-            log_graphql_backoff("wakeup-runner")
+            _log_tick_status("wakeup-runner", "skip:graphql-backoff remaining=unknown")
             return 3
         cd = Path(str(action.get("cd") or self.ctx.repo_root))
         prompt = Path(str(action.get("prompt") or ""))
@@ -569,84 +652,122 @@ class WakeupRunner:
         stall = int(action.get("stall") or 5400)
         if not prompt.is_file():
             return 2
-        return self.supervisor.supervise(["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(cd), "-"], stdin=prompt, log=log, stall=stall)
+        self._clear_redispatchable_spawn_log(log)
+        exit_code = self._launch_spawn_codex_supervisor(cd=cd, prompt=prompt, log=log, stall=stall)
+        if exit_code != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_LAUNCH_EXIT:{action.get('action_id', '')}:{exit_code}")
+        return exit_code
 
-    def _dispatch_design_consensus(self, action: Mapping[str, Any]) -> int:
-        marker = self._design_consensus_marker(action)
-        if isinstance(marker, str):
-            return 2
-        intents: list[dict[str, object]] = []
-        router = Phase9Router(ctx=self.ctx, command_runner=lambda intent: intents.append(dict(intent)))
-        router._source_issue_decisions[str(marker.issue)] = Phase9SourceIssueDecision(True, "OPEN", "phase9-source-open")
-        ledger = router._read_ledger()
-        if marker.marker.startswith("SOLVER_DONE:"):
-            triplet_markers = [
-                candidate
-                for candidate in router._collect_markers()
-                if candidate.issue == marker.issue and candidate.round == marker.round
-            ]
-            router._dispatch_solver_triplets(triplet_markers, ledger)
-        elif marker.marker.startswith("META_JUDGE_DONE:converge:round-") or marker.marker.startswith("META_JUDGE_DONE:escalate:stalled:"):
-            router._dispatch_meta_judge_routes([marker], ledger)
-        elif marker.marker.startswith("META_RESOLVED:"):
-            router._append_fallbacks([marker], ledger)
-        else:
-            return 2
-        for intent in intents:
-            spawn_action = {
-                "action_id": f"design-consensus-spawn:{intent.get('intent_id', '')}",
-                "runner_authority": RUNNER_AUTHORITY,
-                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
-                "source_artifact": str(action.get("source_artifact") or ""),
-                "source_marker": str(action.get("source_marker") or ""),
-                "target_kind": "codex",
-                "target_number": None,
-                "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent.get("intent_id") or "")},
-                "controller_action": "spawn_codex_harness_background",
-                "no_generic_command": True,
-                "cd": str(intent.get("cd") or self.ctx.repo_root),
-                "prompt": str(self.ctx.artifact_execution_path(str(intent.get("prompt") or ""))),
-                "log": str(self.ctx.artifact_execution_path(str(intent.get("log") or ""))),
-                "stall": int(intent.get("stall") or 5400),
-            }
-            error = self._validate_spawn_codex(spawn_action)
-            if error:
-                self._append_pending_event(f"WAKEUP_RUNNER_BLOCKED:{spawn_action['action_id']}:{error}")
-                return 3
-            exit_code = self._spawn_codex(spawn_action)
-            if exit_code != 0:
-                return exit_code
-        return 0 if intents else 3
+    def _spawn_log_suppresses_retry(self, log: Path) -> bool:
+        if is_implement_log(log):
+            state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
+            return state.in_flight or state.publish_ready
+        return _spawn_log_suppresses_retry(log)
 
-    def _design_consensus_marker(self, action: Mapping[str, Any]) -> Marker | str:
-        source_artifact = str(action.get("source_artifact") or "")
-        try:
-            log_path = self.ctx.artifact_execution_path(source_artifact)
-        except LoopContextError:
-            return "design_consensus_source_artifact_invalid"
-        identity = Phase9Router(ctx=self.ctx)._identity_from_path(log_path)
-        if identity is None:
-            return "design_consensus_source_identity_invalid"
-        marker = str(action.get("source_marker") or action.get("marker") or "").strip()
-        if not marker:
-            return "design_consensus_marker_missing"
-        if marker.startswith("SOLVER_DONE:"):
-            role = marker.split(":", 3)[1] if len(marker.split(":", 3)) >= 2 else identity.actor
-        else:
-            role = identity.actor
-        if role not in {"minimal", "structural", "delete", "judge", "reflector"}:
-            return "design_consensus_role_invalid"
-        return Marker(marker=marker, log_path=log_path, issue=identity.issue, round=identity.round, role=role)
+    def _clear_redispatchable_spawn_log(self, log: Path) -> None:
+        if not is_implement_log(log):
+            return
+        clear_redispatchable_implement_log(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
+
+    def _launch_spawn_codex_supervisor(self, *, cd: Path, prompt: Path, log: Path, stall: int) -> int:
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=cd,
+            prompt=prompt,
+            log=log,
+            stall=stall,
+            env=self.ctx.env_for_subprocess(),
+        )
 
     def _dispatch_review_fix(self, pr_number: int) -> int:
         round_number = self._next_fix_round(pr_number)
         spec = self.actions.render_review_fix_prompt(pr_number, round_number)
-        return self.supervisor.supervise(
-            ["codex", "exec", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check", "-C", str(self.ctx.repo_root), "-"],
-            stdin=self.ctx.repo_root / spec.prompt_path,
+        worktree = self._review_fix_worktree(pr_number)
+        if worktree is None:
+            return 3
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=worktree,
+            prompt=self.ctx.repo_root / spec.prompt_path,
             log=self.ctx.repo_root / spec.log_path,
             stall=5400,
+            add_dirs=(self.ctx.repo_root,),
         )
+
+    def _review_fix_worktree(self, pr_number: int) -> Path | None:
+        head_ref = self._pr_head_ref_from_json(pr_number)
+        if not head_ref:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_HEAD_REF_MISSING:{pr_number}")
+            return None
+        worktree = self._worktree_for_branch(head_ref)
+        if worktree is None:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:{pr_number}:{head_ref}")
+            return None
+        return worktree
+
+    def _pr_head_ref_from_json(self, pr_number: int) -> str:
+        result = self.command_runner(["gh", "pr", "view", str(pr_number), "--json", "headRefName"])
+        if result.returncode != 0:
+            return ""
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return ""
+        value = payload.get("headRefName") if isinstance(payload, dict) else None
+        return value.strip() if isinstance(value, str) else ""
+
+    def _commit_and_push_review_fix_output(self, action: Mapping[str, Any]) -> int:
+        """Commit and push uncommitted review-fix output before re-review.
+
+        Headless gap: a fix codex emits FIX_DONE but workers never commit, so the
+        fix sits uncommitted in the PR worktree and dispatch_reviewers would re-review
+        the stale head forever. Mirror the interactive controller, which commits and
+        pushes the fix codex's changes to the PR head before re-dispatching reviewers.
+        A clean worktree (already committed or no changes) is a no-op.
+        """
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return 2
+        worktree = self._review_fix_worktree(target)
+        if worktree is None:
+            return 3
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_STATUS_FAILED:{target}")
+            return 2
+        if not status.stdout.strip():
+            return 0
+        if self.command_runner(["git", "-C", str(worktree), "add", "-A"]).returncode != 0:
+            return 2
+        commit = self.command_runner(
+            ["git", "-C", str(worktree), "commit", "-m", f"PR #{target} review-fix output"]
+        )
+        if commit.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_COMMIT_FAILED:{target}")
+            return 2
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        return self.actions.safe_push(branch=head_ref, worktree=worktree)
+
+    def _worktree_for_branch(self, branch: str) -> Path | None:
+        result = self.command_runner(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"])
+        if result.returncode != 0:
+            return None
+        worktrees_root = (self.ctx.repo_root / ".worktrees").resolve()
+        current_path: Path | None = None
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                current_path = Path(line.removeprefix("worktree ").strip())
+                continue
+            if line.startswith("branch ") and current_path is not None:
+                listed_branch = line.removeprefix("branch ").strip()
+                if listed_branch == f"refs/heads/{branch}":
+                    resolved = current_path.resolve()
+                    if _is_relative_to(resolved, worktrees_root) and resolved != worktrees_root:
+                        return resolved
+                current_path = None
+        return None
 
     def _review_gate_decision(self, action: Mapping[str, Any]) -> dict[str, Any]:
         target = action.get("target_number")
@@ -679,7 +800,7 @@ class WakeupRunner:
         return {"decision": decision, "reason": "", "gate": gate}
 
     def _review_gate(self, pr_number: int) -> dict[str, Any]:
-        evidences = self._latest_review_round(pr_number)
+        evidences = self._latest_review_evidence_by_role(pr_number)
         verdicts = {role: evidence.verdict for role, evidence in evidences.items() if evidence.valid}
         invalid = [evidence.reason or f"invalid:{evidence.role}" for evidence in evidences.values() if not evidence.valid]
         heads = {role: evidence.head_sha for role, evidence in evidences.items() if evidence.valid and evidence.head_sha}
@@ -699,13 +820,16 @@ class WakeupRunner:
             invalid=invalid,
         ).as_dict()
 
-    def _latest_review_round(self, pr_number: int) -> dict[str, ReviewEvidence]:
-        by_round: dict[int, dict[str, ReviewEvidence]] = {}
+    def _latest_review_evidence_by_role(self, pr_number: int) -> dict[str, ReviewEvidence]:
+        latest: dict[str, ReviewEvidence] = {}
+        duplicate_keys: set[tuple[str, int]] = set()
         for evidence in self._review_evidences(pr_number):
-            round_bucket = by_round.setdefault(evidence.round_number, {})
-            existing = round_bucket.get(evidence.role)
-            if existing is not None:
-                round_bucket[evidence.role] = ReviewEvidence(
+            key = (evidence.role, evidence.round_number)
+            if key in duplicate_keys:
+                continue
+            existing = latest.get(evidence.role)
+            if existing is not None and existing.round_number == evidence.round_number:
+                latest[evidence.role] = ReviewEvidence(
                     role=evidence.role,
                     round_number=evidence.round_number,
                     verdict="",
@@ -714,11 +838,11 @@ class WakeupRunner:
                     valid=False,
                     reason=f"duplicate_reviewer_evidence:{evidence.role}",
                 )
+                duplicate_keys.add(key)
                 continue
-            round_bucket[evidence.role] = evidence
-        if not by_round:
-            return {}
-        return by_round[max(by_round)]
+            if existing is None or evidence.round_number > existing.round_number:
+                latest[evidence.role] = evidence
+        return latest
 
     def _review_evidences(self, pr_number: int) -> list[ReviewEvidence]:
         evidences: list[ReviewEvidence] = []
@@ -746,7 +870,10 @@ class WakeupRunner:
     def _review_evidence_from_artifact(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
         companion_log = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
-        if not _log_has_exit_zero(companion_log):
+        marker_read = read_worker_terminal_marker(companion_log)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
         verdict_lines = re.findall(r"(?m)^verdict:\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", text)
         if len(verdict_lines) != 1:
@@ -754,36 +881,43 @@ class WakeupRunner:
         verdict = verdict_lines[0]
         if verdict not in {"approve", "comment", "reject"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_verdict:{role}")
-        marker_count = sum(
-            1
-            for line in text.splitlines()
-            if REVIEW_DONE_RE.match(line.strip()) and line.strip().split(":")[1:3] == [str(pr_number), role]
-        )
-        if marker_count > 1:
-            return ReviewEvidence(role, round_number, "", "", str(path), False, f"duplicate_review_marker:{role}")
-        return ReviewEvidence(role, round_number, verdict, _extract_review_head_sha(text), str(path))
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
+        if not REVIEW_DONE_RE.match(marker_read.marker) or marker_read.marker.split(":")[1:3] != [str(pr_number), role]:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
+        prompt_path = self.ctx.paths.prompts / path.name
+        return ReviewEvidence(role, round_number, verdict, self._review_head_sha_for(prompt_path, companion_log, text), str(path))
 
     def _review_evidence_from_log(self, path: Path, pr_number: int, role: str, round_number: int) -> ReviewEvidence:
         text = path.read_text(encoding="utf-8", errors="replace")
-        if not _log_has_exit_zero(path):
+        marker_read = read_worker_terminal_marker(path)
+        if marker_read.reason == "log_unreadable":
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"log_unreadable:{role}")
+        if marker_read.reason == "missing_exit_zero":
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"missing_exit_zero:{role}")
-        verdicts: list[str] = []
-        invalid_marker = False
-        for line in text.splitlines():
-            stripped = line.strip()
-            if not stripped.startswith("REVIEW_DONE:"):
-                continue
-            match = REVIEW_DONE_RE.match(stripped)
-            if not match:
-                invalid_marker = True
-                continue
-            if match.group(1) == str(pr_number) and match.group(2) == role:
-                verdicts.append(match.group(3))
-        if invalid_marker:
+        if marker_read.reason in {"duplicate_or_conflicting_log_marker", "duplicate_or_conflicting_artifact_marker"}:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker:{role}")
-        if len(verdicts) != 1:
+        match = REVIEW_DONE_RE.match(marker_read.marker)
+        if match is None:
             return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
-        return ReviewEvidence(role, round_number, verdicts[0], _extract_review_head_sha(text), str(path))
+        if match.group(1) != str(pr_number) or match.group(2) != role:
+            return ReviewEvidence(role, round_number, "", "", str(path), False, f"invalid_review_marker_count:{role}")
+        prompt_path = self.ctx.paths.prompts / path.with_suffix(".md").name
+        return ReviewEvidence(role, round_number, match.group(3), self._review_head_sha_for(prompt_path, path, text), str(path))
+
+    def _review_head_sha_for(self, prompt_path: Path, log_path: Path, evidence_text: str) -> str:
+        head_sha = _extract_review_head_sha(evidence_text)
+        if head_sha:
+            return head_sha
+        for path in (prompt_path, log_path):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            head_sha = _extract_review_head_sha(text)
+            if head_sha:
+                return head_sha
+        return ""
 
     def _review_gate_ci_error(self, pr_number: int, live_head_sha: str) -> str | None:
         if not self.ctx.gh_repo_slug:
@@ -811,8 +945,6 @@ class WakeupRunner:
             return "mergeability_invalid_json"
         if not isinstance(payload, dict):
             return "mergeability_invalid_json"
-        if payload.get("isDraft") is True:
-            return "pr_draft"
         if payload.get("mergeable") != "MERGEABLE":
             return "non_mergeable_pr"
         return None
@@ -865,12 +997,11 @@ class WakeupRunner:
         return result.stdout.strip() if result.returncode == 0 else ""
 
     def _run_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-        full = [str(part) for part in command]
-        if full and full[0] == "gh" and self.ctx.gh_repo_slug and "--repo" not in full:
-            full[1:1] = ["--repo", self.ctx.gh_repo_slug]
+        full = build_gh_argv(self.ctx.gh_repo_slug, command)
         return subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
 
-    def _ledger_has(self, action_id: str) -> bool:
+    def _ledger_has(self, action: Mapping[str, Any]) -> bool:
+        action_id = str(action.get("action_id") or "")
         if not self.ledger_path.exists():
             return False
         for line in self.ledger_path.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -878,12 +1009,25 @@ class WakeupRunner:
                 row = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if row.get("action_id") == action_id and (
-                row.get("status") in {"applied", "dry-run"}
-                or (row.get("status") == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")))
-            ):
+            if row.get("action_id") != action_id:
+                continue
+            status = row.get("status")
+            if status == "dry-run":
+                return True
+            if status == "applied":
+                if self._applied_spawn_is_stale(action):
+                    self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:target-log-absent")
+                    continue
+                return True
+            if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
                 return True
         return False
+
+    def _applied_spawn_is_stale(self, action: Mapping[str, Any]) -> bool:
+        if action.get("controller_action") != "spawn_codex_harness_background":
+            return False
+        log = Path(str(action.get("log") or ""))
+        return not log.is_absolute() or not log.exists()
 
     def _blocked(self, action: Mapping[str, Any], reason: str) -> RunnerResult:
         self._append_pending_event(f"WAKEUP_RUNNER_BLOCKED:{action.get('action_id', '')}:{reason}")
@@ -908,30 +1052,34 @@ class WakeupRunner:
 
 
 def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return False
-    try:
-        marker_index = max(index for index, line in enumerate(lines) if marker in line)
-    except ValueError:
-        return False
-    try:
-        exit_index = max(index for index, line in enumerate(lines) if line == "EXIT=0")
-    except ValueError:
-        return False
-    return marker_index < exit_index
+    marker_read = read_worker_terminal_marker(path)
+    return marker_read.marker == marker
 
 
-def _log_has_exit_zero(path: Path) -> bool:
-    try:
-        return any(line == "EXIT=0" for line in path.read_text(encoding="utf-8", errors="replace").splitlines()[-5:])
-    except OSError:
+def _spawn_log_suppresses_retry(path: Path) -> bool:
+    if not path.exists():
         return False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-10:]
+    except OSError:
+        return True
+    for line in reversed(lines):
+        if not line.startswith("EXIT="):
+            continue
+        return line.strip() == "EXIT=0"
+    return True
 
 
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+    except ValueError:
+        return False
+    return True
 
 
 def _extract_review_head_sha(text: str) -> str:
@@ -949,6 +1097,16 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _spawn_launch_failure(result: RunnerResult) -> bool:
+    return result.reason.startswith("helper_exit:") or result.reason.startswith("exception:")
+
+
+def _positive_int(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return None
+    return value
 
 
 def _run_once_with_periodic_heartbeat(
@@ -1000,11 +1158,78 @@ def main(argv: Sequence[str] | None = None) -> int:
         lease.beat()
         interval = max(1, int(args.interval_seconds))
         while True:
-            _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            results = _run_once_with_periodic_heartbeat(runner.run_once, lease)
+            _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
             lease.sleep_with_lease(interval)
     results = runner.run_once()
+    _log_tick_status("wakeup-runner", _wakeup_tick_action(results))
     blocked = [result for result in results if result.status == "blocked"]
     return 3 if blocked else 0
+
+
+def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
+    if not results:
+        return "noop:no-actions"
+    by_status: dict[str, int] = {}
+    for result in results:
+        by_status[result.status] = by_status.get(result.status, 0) + 1
+    counts = ",".join(f"{key}={by_status[key]}" for key in sorted(by_status))
+    # Surface blocked/skipped actions that would otherwise be hidden behind a
+    # successful dispatch, so a single tick line shows what was applied AND what
+    # was rejected (and why) without grepping the ledger. graphql-backoff is a
+    # whole-tick gate, not a per-action reject, so it is reported on its own.
+    notable = [
+        result
+        for result in results
+        if result.status in ("blocked", "skipped")
+        and result.reason != "graphql-backoff"
+        and (result.reason or result.action_id)
+    ]
+
+    def _notable_suffix() -> str:
+        if not notable:
+            return ""
+        head = notable[0]
+        detail = f"{head.status}:{head.reason}" if head.reason else f"{head.status}:{head.action_id}"
+        if head.reason and head.action_id:
+            detail += f"({head.action_id[:56]})"
+        more = f"+{len(notable) - 1}" if len(notable) > 1 else ""
+        return f" | {detail}{more}"
+
+    applied_spawns = [
+        result
+        for result in results
+        if result.status == "applied"
+        and (
+            result.action_id.startswith("harness-spawn-intent:")
+            or result.action_id.startswith("design-consensus-spawn:")
+            or result.action_id.startswith("spawn:")
+        )
+    ]
+    if applied_spawns:
+        first_spawn = applied_spawns[0]
+        suffix = f"+{len(applied_spawns) - 1}" if len(applied_spawns) > 1 else ""
+        return f"dispatched {first_spawn.action_id or 'spawn'}{suffix}{_notable_suffix()} [{counts}]"
+    first = results[0]
+    if first.status == "applied":
+        return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
+    if first.status == "skipped" and first.reason == "graphql-backoff":
+        return f"skip:graphql-backoff remaining=unknown [{counts}]"
+    if first.status == "noop":
+        return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
+    if first.status == "blocked":
+        head = notable[0] if notable else first
+        detail = f"blocked:{head.reason or head.action_id or 'unknown'}"
+        if head.reason and head.action_id:
+            detail += f"({head.action_id[:56]})"
+        more = f"+{len(notable) - 1}" if len(notable) > 1 else ""
+        return f"{detail}{more} [{counts}]"
+    return f"noop:{first.status} [{counts}]"
+
+
+def _log_tick_status(daemon: str, action: str) -> None:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"[{ts}] {daemon}: tick {action}", flush=True)
 
 
 if __name__ == "__main__":

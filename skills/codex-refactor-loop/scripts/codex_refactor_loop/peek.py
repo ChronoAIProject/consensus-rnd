@@ -13,8 +13,14 @@ from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
 from . import labels as label_catalog
-from .closed_phase_labels import plan_from_gh_item
+from .closed_phase_labels import (
+    closed_reconcile_candidate_queries,
+    item_matches_closed_reconcile_query,
+    plan_closed_reconcile_candidate,
+)
 from .context import LoopContext, LoopContextError
+from .holistic_status import collect as collect_holistic_status
+from .holistic_status import render_peek_summary
 from .pr_checks import PrChecksProjection
 from .work_items import ManagedWorkProjection
 from .workflow_stages import format_stage
@@ -28,6 +34,9 @@ class PeekStatusLens:
     def render(self) -> str:
         lines: list[str] = []
         lines.append(f"═══════════════ peek {datetime.now(timezone.utc).strftime('%H:%M:%SZ')} ═══════════════")
+        lines.extend(["", *self._holistic_summary()])
+        lines.extend(["", "▍Activity timeline (read-only facts):"])
+        lines.extend(self._activity_timeline(limit=12))
         lines.extend(["", "▍🚨 maintainer comments (read first — missed read = controller bug):"])
         lines.extend(self._maintainer_comments())
         lines.extend(["", f"▍Active codex: {self._count_loop_codex()}"])
@@ -62,6 +71,23 @@ class PeekStatusLens:
         lines.extend(self._open_issues())
         lines.extend(["", "═══════════════════════════════════════════════════"])
         return "\n".join(lines) + "\n"
+
+    def _holistic_summary(self) -> list[str]:
+        try:
+            return render_peek_summary(collect_holistic_status(self.ctx))
+        except Exception as exc:
+            return ["▍Holistic status:", f"  unavailable: {exc}"]
+
+    def _activity_timeline(self, *, limit: int) -> list[str]:
+        events: list[tuple[str, str, str]] = []
+        for path in sorted(self.ctx.paths.logs.glob("*.log")):
+            events.extend(_unified_tick_events(path))
+        events.extend(_pending_event_facts(self.ctx.paths.pending_events))
+        events.extend(_phase9_ledger_facts(self.ctx.paths.refactor_loop / "phase9-router-ledger.jsonl"))
+        if not events:
+            return ["  (none)"]
+        events.sort(key=lambda item: item[0])
+        return [f"  • {ts} {source}: {message}" for ts, source, message in events[-limit:]]
 
     def _maintainer_comments(self) -> list[str]:
         output: list[str] = []
@@ -167,12 +193,29 @@ class PeekStatusLens:
 
     def _stale_labels(self) -> list[str]:
         out = []
+        seen: set[tuple[str, int]] = set()
         for kind in ("issue", "pr"):
-            for item in self._list_by_any_label(kind, label_catalog.query_labels_for(label_catalog.MANAGED), "number,state,labels", state="closed", limit="30"):
-                if not isinstance(item, dict):
-                    continue
-                plan = plan_from_gh_item(kind, item)
-                if plan and plan.needs_edit:
+            for query in closed_reconcile_candidate_queries(kind, "closed"):
+                rows = self._list_by_any_label(
+                    query.kind,
+                    (query.managed_label,),
+                    "number,state,labels",
+                    state=query.state,
+                    limit=query.limit,
+                    search=f'label:"{query.dirty_label}"' if query.dirty_label else None,
+                )
+                for item in rows:
+                    if not isinstance(item, dict):
+                        continue
+                    if not item_matches_closed_reconcile_query(kind, item, query):
+                        continue
+                    plan = plan_closed_reconcile_candidate(kind, item)
+                    if not plan:
+                        continue
+                    key = (plan.kind, plan.number)
+                    if key in seen:
+                        continue
+                    seen.add(key)
                     out.append(
                         f"  ⚠️ closed {kind} #{plan.number} terminal={plan.terminal_phase} "
                         f"add={','.join(plan.add_labels) or '-'} remove={','.join(plan.remove_labels) or '-'}"
@@ -360,6 +403,62 @@ def _tail(path: Path, count: int) -> list[str]:
 
 def _prefixed_tail(path: Path, count: int, prefix: str) -> list[str]:
     return [prefix + line for line in _tail(path, count)]
+
+
+_UNIFIED_TICK_RE = re.compile(r"^\[(?P<ts>[^\]]+)\]\s+(?P<daemon>[A-Za-z0-9_.-]+):\s+tick\s+(?P<action>.+)$")
+_ISO_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+
+
+def _unified_tick_events(path: Path) -> list[tuple[str, str, str]]:
+    events: list[tuple[str, str, str]] = []
+    for line in _tail(path, 80):
+        match = _UNIFIED_TICK_RE.fullmatch(line)
+        if not match:
+            continue
+        events.append((match.group("ts"), match.group("daemon"), match.group("action")))
+    return events
+
+
+def _pending_event_facts(path: Path) -> list[tuple[str, str, str]]:
+    events: list[tuple[str, str, str]] = []
+    for line in _tail(path, 40):
+        ts, rest = _split_ts_line(line)
+        if not rest:
+            continue
+        events.append((ts, "pending-events", rest))
+    return events
+
+
+def _phase9_ledger_facts(path: Path) -> list[tuple[str, str, str]]:
+    events: list[tuple[str, str, str]] = []
+    for line in _tail(path, 40):
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(entry, dict):
+            continue
+        ts = str(entry.get("dispatched_at") or "")
+        if not _ISO_TS_RE.fullmatch(ts):
+            continue
+        key = str(entry.get("key") or "?")
+        route = str(entry.get("route") or entry.get("dispatch_state") or "dispatch")
+        marker = str(entry.get("marker") or "")
+        target = str(entry.get("target_actor") or "")
+        detail = f"key={key} route={route}"
+        if target:
+            detail += f" target={target}"
+        if marker:
+            detail += f" marker={marker}"
+        events.append((ts, "phase9-ledger", detail))
+    return events
+
+
+def _split_ts_line(line: str) -> tuple[str, str]:
+    head, sep, tail = line.partition(" ")
+    if sep and _ISO_TS_RE.fullmatch(head):
+        return head, tail.strip()
+    return "0000-00-00T00:00:00Z", line.strip()
 
 
 def _parse_time(value: object) -> datetime | None:

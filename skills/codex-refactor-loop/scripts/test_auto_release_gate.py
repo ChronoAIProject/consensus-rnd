@@ -77,7 +77,7 @@ def write_opt_in(
     integration: str = "integration-branch",
     repo_slug: str = "owner/repo",
 ) -> None:
-    env_path = repo / ".refactor-loop" / "host.env"
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(
         "\n".join(
@@ -203,7 +203,7 @@ def write_heartbeat_files(repo: Path, values: dict[str, int | str]) -> None:
 
 
 def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "REPO_ROOT": str(repo)}
+    env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
     env.pop("REVIEW_BASE_BRANCH", None)
     env.pop("INTEGRATION_BRANCH", None)
     if bin_dir is not None:
@@ -384,6 +384,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "REPO_ROOT": str(repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             result = subprocess.run(
@@ -430,7 +431,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 with copy_repo_fixture() as tmp:
                     repo = Path(tmp) / "repo"
-                    env_path = repo / ".refactor-loop" / "host.env"
+                    env_path = repo / ".config" / "consensus-rnd" / "host.env"
                     env_path.parent.mkdir(parents=True, exist_ok=True)
                     env_path.write_text(host_env, encoding="utf-8")
                     write_live_state(repo)
@@ -547,6 +548,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                     env = {
                         **os.environ,
                         "REPO_ROOT": str(repo),
+                        "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                         "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
                     }
                     result = subprocess.run(
@@ -828,7 +830,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             write_opt_in(repo)
             write_green_signals(repo)
             before = (repo / "package.json").read_text(encoding="utf-8")
-            env = {**os.environ, "REPO_ROOT": str(repo)}
+            env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             result = subprocess.run(
                 [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
@@ -897,7 +899,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             write_opt_in(repo)
             write_green_signals(repo)
             before = (repo / "package.json").read_text(encoding="utf-8")
-            env = {**os.environ, "REPO_ROOT": str(repo)}
+            env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             result = subprocess.run(
                 [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
                 cwd=repo,
@@ -957,7 +959,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                     repo / ".refactor-loop/state/release-commits.json",
                     {"commits": [{"sha": "abc123", "subject": subject, "body": body}]},
                 )
-                env = {**os.environ, "REPO_ROOT": str(repo)}
+                env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
 
                 result = subprocess.run(
                     [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--dispatch", "--min-recent-merges", "0"],
@@ -1037,6 +1039,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             env = {
                 **os.environ,
                 "REPO_ROOT": str(repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
             }
             result = subprocess.run(

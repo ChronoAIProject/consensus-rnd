@@ -73,7 +73,7 @@ class SolverPromptScopeSourceTests(unittest.TestCase):
                     "git show <ref>:<path>",
                     "raw URL",
                     "gh api",
-                    ".refactor-loop/host.env",
+                    "explicit host-owned file named by `CONSENSUS_RND_HOST_ENV`",
                     "must not fetch/checkout/switch/merge/rebase/reset",
                     "must not create source worktree/add-dir",
                     "source-location-missing-or-invalid",
