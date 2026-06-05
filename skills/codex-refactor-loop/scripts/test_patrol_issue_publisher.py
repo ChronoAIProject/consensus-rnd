@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -27,20 +26,40 @@ from codex_refactor_loop.patrol_issue_publisher import (
 
 
 class FakeGhRunner:
-    def __init__(self, search_payload: object, create_stdout: str = "https://github.com/o/r/issues/42\n") -> None:
+    def __init__(
+        self,
+        search_payload: object,
+        *,
+        search_returncode: int = 0,
+        search_stdout: str | None = None,
+        search_stderr: str = "",
+        create_returncode: int = 0,
+        create_stdout: str = "https://github.com/o/r/issues/42\n",
+        create_stderr: str = "",
+        edit_returncode: int = 0,
+        edit_stderr: str = "",
+    ) -> None:
         self.search_payload = search_payload
+        self.search_returncode = search_returncode
+        self.search_stdout = search_stdout
+        self.search_stderr = search_stderr
+        self.create_returncode = create_returncode
         self.create_stdout = create_stdout
+        self.create_stderr = create_stderr
+        self.edit_returncode = edit_returncode
+        self.edit_stderr = edit_stderr
         self.calls: list[list[str]] = []
 
     def __call__(self, argv: Sequence[str]) -> subprocess.CompletedProcess[str]:
         command = list(argv)
         self.calls.append(command)
         if command[:3] == ["gh", "issue", "list"]:
-            return subprocess.CompletedProcess(command, 0, json.dumps(self.search_payload), "")
+            stdout = json.dumps(self.search_payload) if self.search_stdout is None else self.search_stdout
+            return subprocess.CompletedProcess(command, self.search_returncode, stdout, self.search_stderr)
         if command[:3] == ["gh", "issue", "create"]:
-            return subprocess.CompletedProcess(command, 0, self.create_stdout, "")
+            return subprocess.CompletedProcess(command, self.create_returncode, self.create_stdout, self.create_stderr)
         if command[:3] == ["gh", "issue", "edit"]:
-            return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, self.edit_returncode, "", self.edit_stderr)
         return subprocess.CompletedProcess(command, 1, "", "unexpected")
 
 
@@ -115,6 +134,99 @@ class PatrolIssuePublisherTests(unittest.TestCase):
                 title="x",
                 body="body\n",
             )
+
+    def test_failed_search_blocks_create_or_edit(self) -> None:
+        runner = FakeGhRunner([], search_returncode=1, search_stderr="rate limited")
+
+        with self.assertRaisesRegex(RuntimeError, "patrol issue search failed: rate limited"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="x",
+                body="body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "create"] for call in runner.calls))
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+
+    def test_malformed_search_json_blocks_create_or_edit(self) -> None:
+        runner = FakeGhRunner([], search_stdout="{not json")
+
+        with self.assertRaisesRegex(RuntimeError, "malformed JSON"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="x",
+                body="body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "create"] for call in runner.calls))
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+
+    def test_non_list_search_json_blocks_create_or_edit(self) -> None:
+        runner = FakeGhRunner({"items": []})
+
+        with self.assertRaisesRegex(RuntimeError, "non-list JSON"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="x",
+                body="body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "create"] for call in runner.calls))
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+
+    def test_failed_create_raises_without_reporting_issue(self) -> None:
+        runner = FakeGhRunner([], create_returncode=1, create_stderr="validation failed")
+
+        with self.assertRaisesRegex(RuntimeError, "patrol issue create failed: validation failed"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="x",
+                body="body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"], ["gh", "issue", "create"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+
+    def test_create_output_without_issue_number_raises(self) -> None:
+        runner = FakeGhRunner([], create_stdout="created patrol issue\n")
+
+        with self.assertRaisesRegex(RuntimeError, "did not return an issue number"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="x",
+                body="body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"], ["gh", "issue", "create"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "edit"] for call in runner.calls))
+
+    def test_failed_edit_raises_without_create_fallback(self) -> None:
+        runner = FakeGhRunner(
+            [
+                {
+                    "number": 77,
+                    "title": "old",
+                    "body": fingerprint_marker("abc123"),
+                    "labels": [{"name": labels.MANAGED}],
+                    "state": "open",
+                }
+            ],
+            edit_returncode=1,
+            edit_stderr="edit failed",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "patrol issue body update failed: edit failed"):
+            PatrolIssuePublisher(self.ctx, command_runner=runner).publish(
+                fingerprint="abc123",
+                title="new",
+                body="new body\n",
+            )
+
+        self.assertEqual([["gh", "issue", "list"], ["gh", "issue", "edit"]], [call[:3] for call in runner.calls])
+        self.assertFalse(any(call[:3] == ["gh", "issue", "create"] for call in runner.calls))
 
     def test_body_fingerprint_line_is_single_durable_marker(self) -> None:
         body = ensure_fingerprint_line("one\ncrnd:patrol:fingerprint:old\n", "new")

@@ -17,7 +17,7 @@ from .active_controller import require_active_controller, write_active_controlle
 from .context import LoopContext, LoopContextError
 from .heartbeat import DaemonHeartbeatLease
 from .patrol_issue_publisher import PatrolIssuePublisher
-from .wakeup_plan import GhItem, load_github_items
+from .wakeup_plan import GhItem, load_github_items_with_status
 
 
 DEFAULT_INTERVAL_SECONDS = 7200
@@ -96,7 +96,13 @@ class PatrolInspector:
             self._write_state(status="noop:not-owner", findings=(), published=(), reason=decision.status)
             print(f"patrol-inspector noop: active-controller {decision.status} owner={decision.owner_device}")
             return 0
-        findings = self.collect_findings()
+        try:
+            findings = self.collect_findings()
+        except RuntimeError as exc:
+            reason = str(exc)
+            self._write_state(status="failed", findings=(), published=(), reason=reason)
+            print(f"patrol-inspector failed: {reason}", file=sys.stderr)
+            raise
         if beat is not None:
             beat()
         published = []
@@ -119,19 +125,22 @@ class PatrolInspector:
         findings.extend(_find_log_exceptions(self.ctx.paths.logs))
         findings.extend(_find_runtime_artifact_gaps(self.ctx.paths.runs))
         findings.extend(_find_projection_gaps(self.ctx.paths.state))
-        findings.extend(_find_managed_snapshot_gaps(self._github_items()))
+        findings.extend(_find_managed_snapshot_gaps(self._load_github_items_or_fail()))
         deduped: dict[str, PatrolFinding] = {}
         for finding in findings:
             deduped.setdefault(finding.fingerprint, finding)
         return tuple(deduped.values())[: self.config.max_findings]
 
-    def _github_items(self) -> tuple[GhItem | Mapping[str, object], ...]:
+    def _load_github_items_or_fail(self) -> tuple[GhItem | Mapping[str, object], ...]:
         if self.github_items is not None:
             return self.github_items
         try:
-            return tuple(load_github_items(self.ctx.repo_root))
-        except Exception:
-            return ()
+            items, loaded_ok = load_github_items_with_status(self.ctx.repo_root)
+        except Exception as exc:
+            raise RuntimeError(f"patrol managed snapshot load failed: repo={self.ctx.repo_root} reason={exc}") from exc
+        if not loaded_ok:
+            raise RuntimeError(f"patrol managed snapshot load failed: repo={self.ctx.repo_root} reason=loaded_ok_false")
+        return tuple(items)
 
     def _write_state(
         self,

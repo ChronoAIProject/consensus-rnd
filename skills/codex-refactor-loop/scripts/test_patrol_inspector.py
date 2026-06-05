@@ -8,6 +8,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import sys
 
@@ -76,6 +77,42 @@ class PatrolInspectorTests(unittest.TestCase):
         self.assertEqual("ok", state["status"])
         self.assertEqual(1, len(state["findings"]))
         self.assertEqual(1, len(state["published"]))
+
+    def test_snapshot_load_failure_is_visible_and_blocks_publication(self) -> None:
+        (self.tmp / ".refactor-loop" / "logs" / "router.log").write_text("FATAL: failed\n", encoding="utf-8")
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+        )
+
+        with patch("codex_refactor_loop.patrol.load_github_items_with_status", side_effect=ValueError("bad snapshot")):
+            with self.assertRaisesRegex(RuntimeError, "patrol managed snapshot load failed"):
+                inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn("bad snapshot", state["reason"])
+        self.assertEqual([], state["published"])
+
+    def test_unavailable_snapshot_status_is_visible_and_blocks_publication(self) -> None:
+        publisher = FakePublisher()
+        inspector = PatrolInspector(
+            self.ctx,
+            config=PatrolInspectorConfig(enabled=True, interval_seconds=7200, max_findings=25),
+            publisher=publisher,
+        )
+
+        with patch("codex_refactor_loop.patrol.load_github_items_with_status", return_value=([], False)):
+            with self.assertRaisesRegex(RuntimeError, "loaded_ok_false"):
+                inspector.run_once()
+
+        self.assertEqual([], publisher.published)
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("failed", state["status"])
+        self.assertIn("loaded_ok_false", state["reason"])
 
 
 if __name__ == "__main__":
