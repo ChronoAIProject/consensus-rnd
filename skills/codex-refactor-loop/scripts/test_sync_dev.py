@@ -140,6 +140,9 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         self.worktree = self.repo / "wt"
         self.worktree.mkdir()
+        self.host_env = self.repo / ".refactor-loop" / "host.env"
+        self.host_env.parent.mkdir(parents=True, exist_ok=True)
+        self.host_env.write_text(f"export REPO_ROOT={self.repo}\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -487,7 +490,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
     # or pending-event mutation.
     def test_non_owner_dev_sync_does_not_touch_worktree_git_or_pending_events(self) -> None:
         fake = FakeGit(ahead=2)
-        ctx = LoopContext.load(repo_root=self.repo)
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"})
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="dev-sync", lease_id="", expires_at="")
 
         with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
@@ -499,7 +502,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
     def test_owner_dev_sync_keeps_existing_git_allowlist_path(self) -> None:
         fake = FakeGit(ahead=1)
-        ctx = LoopContext.load(repo_root=self.repo)
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"})
         decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="dev-sync", lease_id="lease", expires_at="")
 
         with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
@@ -559,7 +562,11 @@ class SyncDevBehaviorTests(unittest.TestCase):
         popen_calls: list[list[str]] = []
         logger_lines: list[str] = []
 
-        with mock.patch("codex_refactor_loop.sync.dev.time.time", return_value=1234), mock.patch(
+        with mock.patch("codex_refactor_loop.sync.dev.time.time", return_value=1234), mock.patch.dict(
+            "os.environ",
+            {"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"},
+            clear=False,
+        ), mock.patch(
             "codex_refactor_loop.sync.dev.subprocess.Popen",
             side_effect=lambda argv, **_kwargs: popen_calls.append(argv),
         ):

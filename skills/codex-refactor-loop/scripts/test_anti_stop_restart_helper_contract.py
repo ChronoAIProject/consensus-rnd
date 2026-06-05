@@ -82,12 +82,13 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             ("phase9_router_daemon", "phase9-router"),
             ("closed_label_reconciler", "closed-label-reconciler"),
             ("wakeup_runner_daemon", "wakeup-runner"),
+            ("patrol_inspector_daemon", "patrol-inspector"),
         ):
             with self.subTest(name=name):
                 self.assertIn(name, self.restart)
                 self.assertIn('"consensus-rnd-cli"', self.restart)
                 self.assertIn(f'"{op}"', self.restart)
-        self.assertEqual(7, self.restart.count('"--daemon"'))
+        self.assertEqual(8, self.restart.count('"--daemon"'))
 
     def test_restart_module_has_no_controller_lifecycle_authority(self) -> None:
         for token in ("gh ", "git ", "pr merge", "issue close", "git tag", "gh release"):
