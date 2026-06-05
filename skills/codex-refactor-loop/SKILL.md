@@ -941,7 +941,7 @@ State rules:
 3. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
 4. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
 5. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
-6. Public operational names remain stable: `cluster`, `refactor`, `*_DONE`, branch prefixes, marker names, and catalog-owned canonical label names. Legacy label names remain migration aliases only.
+6. Public operational names remain stable: `cluster`, `refactor`, `*_DONE`, branch prefixes, marker names, and catalog-owned canonical label names. Historical non-`crnd:*` label names are unmanaged residue and are excluded from the stability and migration rule.
 7. Specialized artifact examples live in [specialized state artifacts](#specialized-state-artifacts).
 
 State write timing:

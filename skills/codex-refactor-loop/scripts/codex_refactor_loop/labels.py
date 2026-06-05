@@ -9,7 +9,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from .context import LoopContext, LoopContextError
 
