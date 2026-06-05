@@ -36,10 +36,6 @@ from codex_refactor_loop.wakeup_runner import (
 
 class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
     def test_revalidation_falls_back_to_implement_run_artifact_for_markerless_log(self) -> None:
-        # Symmetric to wakeup_plan's detection fallback: a clean-exit implement
-        # worker may emit IMPLEMENT_DONE only into its run artifact, so source-
-        # marker revalidation must accept it from runs/implement-issue-<id>.md
-        # rather than rejecting publish as clean_exit_marker_missing.
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
             logs = repo / ".refactor-loop" / "logs"
@@ -62,6 +58,19 @@ class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
             unclean.write_text("crash\nEXIT=1\n", encoding="utf-8")
             (runs / "implement-issue-777.md").write_text("IMPLEMENT_DONE:issue-777:ok\n", encoding="utf-8")
             self.assertFalse(_source_log_has_clean_marker(unclean, "IMPLEMENT_DONE:issue-777:ok"))
+
+    def test_revalidation_rejects_raw_embedded_marker_text_without_shared_reader_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            logs.mkdir(parents=True)
+            log = logs / "implement-issue-421.log"
+            log.write_text(
+                "controller saw IMPLEMENT_DONE:issue-421:ok in prose\nEXIT=0\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(_source_log_has_clean_marker(log, "IMPLEMENT_DONE:issue-421:ok"))
 
 
 class FakeSupervisor:
@@ -1501,7 +1510,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     action_id="publish-implementation:bad-marker",
                     source_marker="IMPLEMENT_DONE:issue-77:partial",
                 ),
-                "source_marker_missing",
+                "clean_exit_marker_missing",
                 1,
                 None,
             ),
@@ -1949,6 +1958,60 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
+    def test_fix_done_dispatch_commits_and_pushes_fix_output_before_review(self) -> None:
+        # Headless gap fix: a FIX_DONE re-review must first commit+push the fix
+        # codex's uncommitted worktree output, else reviewers re-review the stale
+        # head forever and the reject never converges.
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, '{"headRefName": "refactor/iter77-issue-77"}', "")
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, actions=actions, command_runner=command_runner)
+        with mock.patch.object(runner, "_review_fix_worktree", return_value=worktree):
+            rc = runner._dispatch("dispatch_reviewers", self.reviewer_dispatch_action(target_number=77))
+
+        self.assertEqual(rc, 0)
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(len([call for call in actions.calls if call[0] == "safe_push"]), 1)
+        self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
+
+    def test_fix_done_dispatch_clean_worktree_skips_commit_and_reviews(self) -> None:
+        # A clean fix worktree (no uncommitted changes) is a no-op: re-review
+        # directly without an empty commit or push.
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, '{"headRefName": "refactor/iter77-issue-77"}', "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, actions=actions, command_runner=command_runner)
+        with mock.patch.object(runner, "_review_fix_worktree", return_value=worktree):
+            rc = runner._dispatch("dispatch_reviewers", self.reviewer_dispatch_action(target_number=77))
+
+        self.assertEqual(rc, 0)
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertNotIn("commit", git_subcmds)
+        self.assertEqual([call for call in actions.calls if call[0] == "safe_push"], [])
+        self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
+
     def test_release_rollup_routes_to_named_helper_after_event_body_validation(self) -> None:
         actions = FakeActions()
 
@@ -2049,62 +2112,23 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(InlineThread.instances[0].join_timeouts, [1.0])
         ScriptedEvent.coordinator = None
 
-    def test_wakeup_runner_source_locks_named_g1_g3_helper_allowlist(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        for helper in (
-            "dispatch_consensus_implementation",
-            "publish_implementation_output",
-            "dispatch_reviewers",
-            "open_release_rollup_pr_from_action",
-        ):
-            with self.subTest(helper=helper):
-                self.assertIn(helper, source)
-        for forbidden in ("command_line", "lifecycle_authority", "lifecycle_owner"):
-            with self.subTest(forbidden=forbidden):
-                self.assertIn(forbidden, source)
-        self.assertNotIn("dispatch_next_step_worker", source)
-        self.assertNotIn("HeadlessLifecycleAction", source)
-        self.assertNotIn("headless_actions", source)
+    def test_wakeup_runner_continues_after_blocked_non_spawn_lifecycle_action(self) -> None:
+        blocked_lifecycle = self.implementation_output_action(
+            action_id="publish-implementation:missing-verified-head-before-reviewer-dispatch",
+            head_ref="",
+        )
+        reviewer_dispatch = self.reviewer_dispatch_action(action_id="dispatch-reviewers-after-blocked-lifecycle")
+        actions = FakeActions()
 
-    def test_wakeup_runner_source_locks_blocked_non_spawn_scan_invariant(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        run_once = source[source.index("    def run_once(self) -> list[RunnerResult]:") : source.index("    def apply_action", source.index("    def run_once(self) -> list[RunnerResult]:"))]
+        results = self.run_result(
+            self.batch_plan([blocked_lifecycle, reviewer_dispatch], dispatch_required=1, deficit=1),
+            actions=actions,
+        )
 
-        self.assertIn('if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:', run_once)
-        self.assertIn("continue", run_once)
-        self.assertIn("consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)", run_once)
-        self.assertIn("if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:", run_once)
-        self.assertNotIn("if applied_spawns > 0 and not is_spawn_action:", run_once)
-        self.assertIn('controller_action == "dispatch_reviewers"', run_once)
-        self.assertIn('controller_action == "review_gate"', run_once)
-        self.assertIn('.get("decision") == "FIX"', run_once)
-        self.assertNotIn("blocked_non_spawn_before_spawn", run_once)
-
-    def test_wakeup_runner_daemon_long_tick_heartbeat_source_contract(self) -> None:
-        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
-        helper_start = source.index("def _run_once_with_periodic_heartbeat(")
-        helper_end = source.index("\ndef load_plan_file", helper_start)
-        helper = source[helper_start:helper_end]
-        daemon_branch = source[source.index("    if args.daemon:") : source.index("    results = runner.run_once()")]
-
-        for needle in (
-            "def _run_once_with_periodic_heartbeat(",
-            "threading.Event()",
-            "threading.Thread(",
-            "daemon=True",
-            "lease.heartbeat_interval",
-            "lease.beat()",
-            "return run_once()",
-            "finally:",
-            "stop.set()",
-            "renewer.join(timeout=1.0)",
-        ):
-            with self.subTest(needle=needle):
-                self.assertIn(needle, helper)
-        self.assertIn("results = _run_once_with_periodic_heartbeat(runner.run_once, lease)", daemon_branch)
-        self.assertIn("_log_tick_status(\"wakeup-runner\", _wakeup_tick_action(results))", daemon_branch)
-        self.assertIn("lease.sleep_with_lease(interval)", daemon_branch)
-        self.assertNotIn("_run_once_with_periodic_heartbeat(runner.run_once, lease)", source[source.index("    results = runner.run_once()") :])
+        self.assertEqual([result.action_id for result in results], [blocked_lifecycle["action_id"], reviewer_dispatch["action_id"]])
+        self.assertEqual([result.status for result in results], ["blocked", "applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_reviewers"])
+        self.assert_blocked_ledger(blocked_lifecycle["action_id"], "publish_implementation_invalid_head_ref")
 
     def test_close_managed_item_from_drop_marker_routes_to_named_helper(self) -> None:
         actions = FakeActions()

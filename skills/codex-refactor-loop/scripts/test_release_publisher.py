@@ -62,7 +62,14 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
 
 
 def release_env():
-    return mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, clear=False)
+    return mock.patch.dict(
+        os.environ,
+        {
+            "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            "ACTIVE_CONTROLLER_DEVICE_ID": "device-a",
+        },
+        clear=False,
+    )
 
 
 class FakePreflight:
@@ -634,6 +641,18 @@ class ReleasePublisherTests(unittest.TestCase):
             self.assertEqual(result.reasons, ("host_opt_in_not_true",))
             self.assertEqual(runner.commands, [])
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_publisher_does_not_define_github_actor_or_write_permit_authority(self) -> None:
+        source = (SCRIPT_PATH.parent / "codex_refactor_loop" / "release" / "publisher.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "GitHubAuthenticatedActor",
+            "ControllerWritePermit",
+            "GitHubWritePermit",
+            "author.login",
+            "updatedAt",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
     def test_publisher_refuses_when_release_commit_is_behind_origin_head(self) -> None:
         with copy_repo_fixture() as tmp:

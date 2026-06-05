@@ -17,7 +17,7 @@ from typing import Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from ..holistic_status import collect as collect_holistic_status
 from ..holistic_status import render_markdown as render_holistic_markdown
@@ -75,7 +75,7 @@ class ProgressReporter:
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("progress-reporter")
+            self.log_tick_status("skip:graphql-backoff remaining=unknown")
             return
         for log in sorted(self.log_dir.glob("*.log")):
             base = log.stem
@@ -340,6 +340,11 @@ Raw log tail is intentionally omitted while the worker is still running."""
     def log_msg(message: str) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         print(f"[{ts}] {message}", file=sys.stderr)
+
+    @staticmethod
+    def log_tick_status(action: str) -> None:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"[{ts}] progress-reporter: tick {action}", flush=True)
 
 
 @contextmanager

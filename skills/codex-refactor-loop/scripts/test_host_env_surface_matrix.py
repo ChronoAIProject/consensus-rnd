@@ -169,6 +169,8 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "HOST_HOLISTIC_STATUS_ENABLE": ("false", "progress-reporter issue-comment PATCH subpath"),
             "HOST_HOLISTIC_STATUS_INTERVAL_SECONDS": ("600", "unchanged rendered hash skips PATCH"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
+            "STALE_REVIVAL_HOURS": ("3", "redispatchable implement log"),
+            "META_ESCALATION_STUCK_HOURS": ("24", "max(META_ESCALATION_STUCK_HOURS, STALE_REVIVAL_HOURS)"),
         }
         for key, (default, behavior) in cases.items():
             with self.subTest(key=key):
@@ -199,6 +201,17 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertIn("all devices upgraded", read(HOST_ENV_EXAMPLE))
         self.assertIn("Mixed old/new versions are not safe for multi-device mode", read(SKILL_MD))
         self.assertIn("active-controller lease ref is a code-owned singleton constant", read(SKILL_MD))
+
+        meta_escalation = self.rows["META_ESCALATION_STUCK_HOURS"]
+        self.assertEqual("defaulted", meta_escalation["Category"])
+        self.assertEqual("repository stalled meta-reflector", meta_escalation["Owner"])
+        self.assertEqual("wakeup plan", meta_escalation["Consumer"])
+        self.assertIn("missing, invalid, or non-positive defaults to `24` hours", meta_escalation["Missing/empty behavior"])
+        self.assertIn("later than ordinary stale revival", meta_escalation["Missing/empty behavior"])
+        self.assertEqual("24", self.exports["META_ESCALATION_STUCK_HOURS"]["value"])
+        self.assertIn("defaulted", self.exports["META_ESCALATION_STUCK_HOURS"]["section"])
+        self.assertIn("META_ESCALATION_STUCK_HOURS", read(HOST_ENV_EXAMPLE))
+        self.assertIn("test_wakeup_plan.py", meta_escalation["Test owner"])
 
         whitelist = self.rows["MAINTAINER_WHITELIST"]
         self.assertEqual("conditional-fail-closed", whitelist["Category"])

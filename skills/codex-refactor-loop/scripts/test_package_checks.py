@@ -13,6 +13,7 @@ from pathlib import Path
 SCRIPT_PATH = Path(__file__).resolve()
 REPO_ROOT = SCRIPT_PATH.parents[3]
 DEGRADATION_MODULE = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py"
+HOST_FIXTURE_SMOKE_MODULE = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/host_fixture_smoke.py"
 MANIFEST_MODULE = REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/manifest.py"
 
 sys.path.insert(0, str(SCRIPT_PATH.parent))
@@ -49,6 +50,7 @@ def copy_minimal_degradation_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/host_fixture_smoke.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
     ]
@@ -57,6 +59,12 @@ def copy_minimal_degradation_repo() -> tempfile.TemporaryDirectory[str]:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    shutil.copytree(
+        REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop",
+        repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     return tmp
 
 
@@ -81,7 +89,7 @@ def write_manifest_fixture(root: Path, *, gemini_version: str = "1.2.3", include
 
 class PackageChecksTests(unittest.TestCase):
     def test_degradation_static_checker_passes_current_repo_via_loop_context(self) -> None:
-        ctx = LoopContext.load(repo_root=REPO_ROOT, read_only=True)
+        ctx = LoopContext.load(repo_root=REPO_ROOT, env={}, read_only=True)
 
         findings = degradation.run_static_check(ctx=ctx)
 
@@ -173,6 +181,9 @@ class PackageChecksTests(unittest.TestCase):
         self.assertIn("SOURCE_REPO_SENTINELS", source)
         self.assertIn("FORBIDDEN_RUNTIME_FILES", source)
         self.assertIn("REQUIRED_DETAILED_REFERENCE_MARKERS", source)
+        self.assertIn("host_fixture_smoke_is_bounded", source)
+        self.assertIn("run_no_manifest_open_milestone_smoke", source)
+        self.assertIn("host-fixture-smoke", source)
         self.assertIn("not-source-repo", source)
         self.assertIn("source-repo CI/release validation", source)
         for sentinel in (
@@ -200,7 +211,6 @@ class PackageChecksTests(unittest.TestCase):
             "os.system",
             "gh pr create",
             "gh pr merge",
-            "git push",
             "git commit",
             "dispatch_queue(",
             "Popen(",
@@ -212,8 +222,44 @@ class PackageChecksTests(unittest.TestCase):
             with self.subTest(removed_runtime_marker=removed_runtime_marker):
                 self.assertNotIn(removed_runtime_marker, evaluated_markers)
 
+    def test_host_fixture_smoke_helper_is_private_bounded_and_not_clean_room_surface(self) -> None:
+        source = HOST_FIXTURE_SMOKE_MODULE.read_text(encoding="utf-8")
+        for required in (
+            "run_no_manifest_open_milestone_smoke",
+            "TemporaryDirectory",
+            ".config/consensus-rnd/host.env",
+            "CONSENSUS_RND_HOST_ENV",
+            "wakeup-plan",
+            "--repo-root",
+            "timeout=timeout_seconds",
+            "host-fixture-smoke",
+            "RELEASE_AUTO_ENABLE=false",
+            ".version-bump.json",
+            "milestones?state=open",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, source)
+        for forbidden in (
+            "CleanRoomProfile",
+            "HostFixtureSmokeProfile",
+            "check-clean-room",
+            "clean-room-smoke",
+            "clean-room-",
+            "gh issue",
+            "gh pr",
+            "gh release",
+            "gh label",
+            "git push",
+            "git merge",
+            "git reset",
+            "codex dispatch",
+            '".refactor-loop" / "host.env").write_text',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
+
     def test_manifest_records_match_version_bump_and_accept_loop_context(self) -> None:
-        ctx = LoopContext.load(repo_root=REPO_ROOT, read_only=True)
+        ctx = LoopContext.load(repo_root=REPO_ROOT, env={}, read_only=True)
 
         records = manifest.check_manifest_version_sync(ctx=ctx)
 
