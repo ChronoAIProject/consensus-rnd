@@ -27,6 +27,7 @@ class ProjectRulesTestDisciplineTests(unittest.TestCase):
         for required in (
             "行为约束默认由 behavior test 或端到端可观察输入 / 输出 / 副作用验证",
             "source-regression / 段落 lint 仅用于跨 artifact 一致性、授权边界、" + FACT_SOURCE_UNIQUENESS + "、owner-local public / parsed / authorization interface、必备 anchor / path 存在",
+            "禁止对纯实现细节做同义反复精确字面断言",
             "若断言只因实现重构而必须同步修改且不验证行为或授权边界,应替换为 behavior test 或语义化的跨 artifact 一致性断言",
         ):
             with self.subTest(required=required):
@@ -41,11 +42,13 @@ class ProjectRulesTestDisciplineTests(unittest.TestCase):
             "behavior test",
             "端到端可观察输入 / 输出 / 副作用断言",
             "source-regression test",
+            "仅用于跨 artifact 一致性",
             "narrow allowlist",
             "授权来源 path",
             FACT_SOURCE_UNIQUENESS,
             "owner-local public / parsed / authorization interface",
             "必备 anchor / path",
+            "若断言只因实现重构而必须同步修改且不验证行为或授权边界,应替换为 behavior test 或语义化的跨 artifact 一致性断言",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, clause)
@@ -67,6 +70,7 @@ class ProjectRulesTestDisciplineTests(unittest.TestCase):
         self.assertIn("窄文档 / anchor / 授权边界改动可用 source-regression 覆盖", clause)
         self.assertIn("共享脚本、跨 skill 流程或可观察行为改动必须补 behavior test", clause)
         self.assertIn("source-regression 不得替代行为验证", clause)
+        self.assertIn("仅用于跨 artifact 一致性、授权边界、" + FACT_SOURCE_UNIQUENESS + "、owner-local public / parsed / authorization interface、必备 anchor / path 存在", clause)
         self.assertIn("不得把纯实现细节变成" + "事实源", clause)
 
     def _bullet(self, title: str) -> str:
