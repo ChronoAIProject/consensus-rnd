@@ -57,12 +57,25 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
         metadata = json.loads(first.lock_path.read_text(encoding="utf-8"))
         self.assertEqual("fix-pr490-round-1", metadata["task_id"])
 
-    def test_unreadable_or_mismatched_metadata_fails_closed(self) -> None:
+    def test_unreadable_metadata_fails_closed(self) -> None:
         claim = self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
         claim.lock_path.write_text("{not json", encoding="utf-8")
 
         with self.assertRaises(TaskSpawnClaimError):
             self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
+
+    def test_mismatched_metadata_fails_closed_before_recycle_or_acquire(self) -> None:
+        claim = self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
+        self.log.write_text("DONE\nEXIT=0\n", encoding="utf-8")
+        mismatched_metadata = json.loads(claim.lock_path.read_text(encoding="utf-8"))
+        mismatched_metadata["log_path"] = str((self.repo / ".refactor-loop" / "logs" / "other.log").resolve())
+        mismatched_payload = json.dumps(mismatched_metadata, sort_keys=True)
+        claim.lock_path.write_text(mismatched_payload, encoding="utf-8")
+
+        with self.assertRaises(TaskSpawnClaimError):
+            self.store.acquire("phase9-issue490-r4-judge", log_path=self.log)
+        self.assertTrue(claim.lock_path.is_file())
+        self.assertEqual(mismatched_payload, claim.lock_path.read_text(encoding="utf-8"))
 
     def test_safe_task_id_rejects_empty_or_unsafe_values(self) -> None:
         self.assertEqual("review-pr490-tests-r1", safe_task_id_from_task("review-pr490 tests r1"))

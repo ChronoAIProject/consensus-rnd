@@ -26,7 +26,6 @@ class TaskSpawnClaim:
 
 class TaskSpawnClaimStore:
     def __init__(self, repo_root: Path) -> None:
-        self.repo_root = repo_root
         self.lock_dir = repo_root / ".refactor-loop" / "locks" / "spawn-tasks"
 
     def acquire(self, task_id: str, *, log_path: Path) -> TaskSpawnClaim:
