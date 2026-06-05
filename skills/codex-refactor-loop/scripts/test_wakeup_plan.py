@@ -2551,7 +2551,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for token in ("dispatch_reviewers", "missing_or_stale_reviewer_head_evidence", "review-evidence-redispatch"):
             with self.subTest(token=token):
                 self.assertIn(token, projection.string_literals)
-        self.assertTrue(any(value.endswith("headRefName,headRefOid,body") for value in projection.string_literals))
+        self.assertIn("number,title,labels,headRefName,headRefOid,body,updatedAt", projection.string_literals)
+        self.assertIn("number,title,labels,updatedAt", projection.string_literals)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
 
