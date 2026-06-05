@@ -121,6 +121,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "closed-label-reconciler",
                 "daemon-status",
                 "gh-stats",
+                "holistic-status",
                 "labels",
                 "concurrency",
                 "dev-sync",
@@ -220,10 +221,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "daemon-status", "gh-stats", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "daemon-status", "gh-stats", "holistic-status", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
 
+<<<<<<< HEAD
     def test_check_degradation_remains_existing_private_read_surface(self) -> None:
         self.assertEqual(("read-source", "read-state"), COMMANDS["check-degradation"].authority)
         forbidden_authority = {
@@ -243,6 +245,25 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         for command in ("check-clean-room", "clean-room-smoke", "host-fixture-smoke"):
             with self.subTest(command=command):
                 self.assertNotIn(command, COMMANDS)
+=======
+    def test_activity_is_not_a_public_command_and_peek_remains_status_lens(self) -> None:
+        self.assertNotIn("activity", COMMANDS)
+        self.assertIn("peek", COMMANDS)
+        self.assertEqual(("read-state", "read-gh"), COMMANDS["peek"].authority)
+        self.assertIn("read-only state sweep", COMMANDS["peek"].description)
+
+    def test_holistic_status_is_read_only_shared_projection_command(self) -> None:
+        self.assertEqual(("read-state", "read-process", "read-gh"), COMMANDS["holistic-status"].authority)
+        self.assertFalse(set(COMMANDS["holistic-status"].authority) & MUTATION_TOKENS)
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
+        holistic = (SCRIPT_DIR / "codex_refactor_loop" / "holistic_status.py").read_text(encoding="utf-8")
+        self.assertIn('"holistic-status": CommandSpec(', source)
+        self.assertIn("render the shared read-only holistic status card", source)
+        self.assertIn("class HolisticStatusProjection", holistic)
+        for forbidden in ("dashboard-writer", "status-card-writer", "global-status-card", "write-holistic-status"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS)
+>>>>>>> origin/auto-refact-dev
 
     def test_daemon_status_is_read_only_status_projection(self) -> None:
         self.assertEqual(("read-state", "read-process"), COMMANDS["daemon-status"].authority)
@@ -380,6 +401,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "sync-request",
             "release-publish",
             "publish-release",
+            "dashboard-writer",
+            "global-status-card",
+            "write-holistic-status",
             "apply-update",
             "check-update",
             "install-update",

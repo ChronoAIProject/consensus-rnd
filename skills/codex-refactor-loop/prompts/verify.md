@@ -33,7 +33,9 @@ Artifact profile: marker-only-work-unit
 ### 3. 测试完备
 
 - `verification_hints` 指定的所有测试命令必须能跑且通过。
+- 对每个被触及模块，确认 implement 同步推进了相关 fast / hermetic / behavior-first 测试，或实施摘要说明已有等价覆盖且本次不需要新增。测试应使用 owner-local fact source、mock/fake/stub 外部进程与网络，并断言行为或 contract；只复述实现字面、依赖 ambient host state、或不触发被测行为的测试 → 标记缺陷。
 - 测试代码不得包含 `sleep/delay` 作为断言节奏。
+- 不得新增或保留 suite-level host-wide process-table guard 作为 daemon leak / duplicate 的 truth source；特别是 `ps -eo pid=,command=` 扫描当前机器进程。daemon leak / duplicate 覆盖必须在 helper-local fact source 或对应 helper 行为测试内。
 - 不得出现 `$PROJECT_RULES` / `$CI_GUARDS` 定义的禁用测试逃逸标记，除非实施摘要明确说明且有规则依据。
 - 关键路径测试覆盖率不得下降。
 

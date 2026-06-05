@@ -40,12 +40,18 @@ from codex_refactor_loop.restart import DAEMON_COMMANDS, DaemonProcessInventory,
 
 class GhAccountingBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
+        self._old_consensus_rnd_host_env = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = Path(tempfile.mkdtemp(prefix="gh-accounting-test-"))
         self.repo = self.tmp / "repo"
         self.realbin = self.tmp / "realbin"
         self.repo.mkdir()
         self.realbin.mkdir()
         (self.repo / ".refactor-loop" / "state").mkdir(parents=True)
+        (self.repo / ".config" / "consensus-rnd").mkdir(parents=True)
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
         self.usage = self.repo / ".refactor-loop" / "state" / "gh-usage.jsonl"
         self.fake_gh = self.realbin / "gh"
         self.fake_gh.write_text(
@@ -63,6 +69,8 @@ class GhAccountingBehaviorTests(unittest.TestCase):
         self.fake_gh.chmod(0o755)
 
     def tearDown(self) -> None:
+        if self._old_consensus_rnd_host_env is not None:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self._old_consensus_rnd_host_env
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_shim(self, args: list[str], *, source: str = "controller", extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -529,6 +537,40 @@ class GhAccountingSourceRegressionTests(unittest.TestCase):
                 self.assertIn("CRND_GH_USAGE_MAX_LINES", source)
                 self.assertIn("invalid, non-positive, or larger values fall back to the default", source)
                 self.assertIn("no accounting artifact outside `$REPO_ROOT`", source)
+
+    def test_closed_label_reconciler_avoids_full_history_closed_managed_hot_path(self) -> None:
+        reconciler = (SCRIPT_DIR / "codex_refactor_loop" / "closed_label_reconciler.py").read_text(encoding="utf-8")
+        projection = (SCRIPT_DIR / "codex_refactor_loop" / "closed_phase_labels.py").read_text(encoding="utf-8")
+        peek = (SCRIPT_DIR / "codex_refactor_loop" / "peek.py").read_text(encoding="utf-8")
+
+        self.assertIn("closed_reconcile_candidate_queries", reconciler)
+        self.assertIn("plan_closed_reconcile_candidate", reconciler)
+        self.assertIn("plan_closed_reconcile_candidate(kind, item) is None", reconciler)
+        self.assertIn("closed_reconcile_candidate_queries", peek)
+        self.assertIn("plan_closed_reconcile_candidate", peek)
+        self.assertIn("managed_label: str", projection)
+        self.assertIn("dirty_label: str | None", projection)
+        self.assertIn('args.extend(["--search", f\'label:"{self.dirty_label}"\'])', projection)
+        self.assertIn("item_matches_closed_reconcile_query", projection)
+        self.assertIn("label_catalog.MANAGED not in projection.canonical", projection)
+        self.assertIn("query.gh_args(fields)", reconciler)
+        self.assertIn("item_matches_closed_reconcile_query(kind, item, query)", reconciler)
+        self.assertIn("(query.managed_label,)", peek)
+        self.assertIn("item_matches_closed_reconcile_query(kind, item, query)", peek)
+        self.assertIn('search=f\'label:"{query.dirty_label}"\' if query.dirty_label else None', peek)
+        self.assertIn("RECENT_CLOSED_MANAGED_WINDOW_LIMIT", projection)
+        self.assertIn("NONTERMINAL_PHASE_LABELS", projection)
+        self.assertIn("label_catalog.STUCK", projection)
+        self.assertNotIn("def _has_human_label_drift", reconciler)
+        self.assertNotIn("expected exactly one canonical human label", reconciler)
+        self.assertNotIn("query.label", reconciler)
+        self.assertNotIn("query.label", peek)
+        for forbidden in (
+            '"--label", label_catalog.MANAGED, "--state", "closed", "--limit", "100"',
+            '"--label", query_label, "--state", state, "--limit", "100", "--json", fields',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, reconciler)
 
 
 if __name__ == "__main__":

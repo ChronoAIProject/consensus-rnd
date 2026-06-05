@@ -16,6 +16,8 @@ from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
+OLD_BACKOFF_PREFIX = "graphql-" + "backoff: skipping"
+OLD_BACKOFF_DETAIL = "remaining" + "<threshold"
 
 from codex_refactor_loop import github_budget
 from codex_refactor_loop.closed_label_reconciler import ClosedLabelReconciler
@@ -91,17 +93,20 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         ):
             monitor.tick()
 
-        self.assertIn("graphql-backoff: skipping comment-monitor tick (remaining<threshold)", out.getvalue())
+        self.assertIn("comment-monitor: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
 
     def test_comment_monitor_high_headroom_runs_tick_normally(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         with (
             mock.patch("codex_refactor_loop.monitors.comment.graphql_headroom_ok", return_value=True),
-            mock.patch.object(monitor, "_poll_once") as poll_once,
+            mock.patch.object(monitor, "_poll_once", return_value={"targets": 2, "fetched": 1, "comments": 3}) as poll_once,
+            redirect_stdout(out := io.StringIO()),
         ):
             monitor.tick()
 
         poll_once.assert_called_once()
+        self.assertIn("comment-monitor: tick noop:poll-complete targets=2 fetched=1 comments=3", out.getvalue())
 
     def test_concurrency_top_up_low_headroom_defers_spawn_intent_without_consuming_queue(self) -> None:
         monitor = ConcurrencyMonitor(self.ctx)
@@ -131,7 +136,8 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
 
         self.assertEqual(actual, 0)
         self.assertTrue(dispatch_file.exists())
-        self.assertIn("graphql-backoff: skipping concurrency-monitor tick (remaining<threshold)", out.getvalue())
+        self.assertIn("concurrency: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
         pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("DISPATCH_BACKOFF:graphql-headroom-low", pending)
 
@@ -146,7 +152,7 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "skipped")
         self.assertEqual(results[0].reason, "graphql-backoff")
-        self.assertIn("graphql-backoff: skipping wakeup-runner tick (remaining<threshold)", out.getvalue())
+        self.assertEqual("", out.getvalue())
 
     def test_wakeup_runner_spawn_low_headroom_records_backoff_and_does_not_spawn(self) -> None:
         supervisor = mock.Mock()
@@ -177,7 +183,8 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
 
         self.assertEqual(result.status, "blocked")
         self.assertEqual(result.reason, "helper_exit:3")
-        self.assertIn("graphql-backoff: skipping wakeup-runner tick (remaining<threshold)", out.getvalue())
+        self.assertIn("wakeup-runner: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
         pending = (self.tmp / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_SPAWN_BACKOFF:spawn-low-headroom:graphql-headroom-low", pending)
         supervisor.supervise.assert_not_called()
@@ -196,7 +203,8 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         ):
             reporter.tick()
 
-        self.assertIn("graphql-backoff: skipping progress-reporter tick (remaining<threshold)", out.getvalue())
+        self.assertIn("progress-reporter: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
 
     def test_closed_label_reconciler_low_headroom_skips_active_controller_and_plan_collection(self) -> None:
         reconciler = ClosedLabelReconciler(self.ctx)
@@ -213,7 +221,8 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
             result = reconciler.run_once()
 
         self.assertEqual(result, 0)
-        self.assertIn("graphql-backoff: skipping closed-label-reconciler tick (remaining<threshold)", out.getvalue())
+        self.assertIn("closed-label-reconciler: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
 
     def test_phase9_router_low_headroom_skips_marker_collection_and_dispatch(self) -> None:
         router = Phase9Router(ctx=self.ctx, command_runner=mock.Mock())
@@ -230,29 +239,32 @@ class GraphqlBackoffBehaviorTests(unittest.TestCase):
         ):
             router.tick()
 
-        self.assertIn("graphql-backoff: skipping phase9-router tick (remaining<threshold)", out.getvalue())
+        self.assertIn("phase9-router: tick skip:graphql-backoff remaining=unknown", out.getvalue())
+        self.assertNotIn(OLD_BACKOFF_PREFIX, out.getvalue())
 
 
 class GraphqlBudgetSourceRegressionTests(unittest.TestCase):
     def test_daemon_tick_entries_check_graphql_headroom_before_work(self) -> None:
         checks = {
-            "monitors/comment.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("comment-monitor")\n            return\n        self._poll_once()',
-            "monitors/progress.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("progress-reporter")\n            return\n        for log in sorted(self.log_dir.glob("*.log")):',
-            "closed_label_reconciler.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("closed-label-reconciler")\n            _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")\n            return 0\n        decision = require_active_controller',
-            "phase9/router.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("phase9-router")\n            self._log_tick_status("skip:graphql-backoff remaining=unknown")\n            return\n        decision = require_active_controller',
-            "wakeup_runner.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            log_graphql_backoff("wakeup-runner")\n            return [RunnerResult("", "skipped", "graphql-backoff")]\n        owner = require_active_controller',
+            "monitors/comment.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            self._log_tick_status("skip:graphql-backoff remaining=unknown")\n            return\n        summary = self._poll_once()',
+            "monitors/progress.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            self.log_tick_status("skip:graphql-backoff remaining=unknown")\n            return\n        for log in sorted(self.log_dir.glob("*.log")):',
+            "closed_label_reconciler.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")\n            return 0\n        decision = require_active_controller',
+            "phase9/router.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            self._log_tick_status("skip:graphql-backoff remaining=unknown")\n            return\n        decision = require_active_controller',
+            "wakeup_runner.py": 'if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):\n            return [RunnerResult("", "skipped", "graphql-backoff")]\n        owner = require_active_controller',
         }
         for rel_path, needle in checks.items():
             with self.subTest(rel_path=rel_path):
                 text = (SCRIPT_DIR / "codex_refactor_loop" / rel_path).read_text(encoding="utf-8")
                 self.assertIn(needle, text)
 
-    def test_backoff_log_and_rate_limit_endpoint_are_locked(self) -> None:
+    def test_budget_guard_keeps_rate_limit_endpoint_without_stdout_backoff_helper(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "github_budget.py").read_text(encoding="utf-8")
         self.assertIn('["gh", "api", "rate_limit"]', text)
         self.assertIn("remaining = (((payload.get(\"resources\") or {}).get(\"graphql\") or {}).get(\"remaining\")", text)
         self.assertIn("return True", text)
-        self.assertIn('graphql-backoff: skipping {daemon} tick (remaining<threshold)', text)
+        self.assertNotIn("log_" + "graphql_backoff", text)
+        self.assertNotIn(OLD_BACKOFF_PREFIX, text)
+        self.assertNotIn(OLD_BACKOFF_DETAIL, text)
 
     def test_spawn_side_backoff_is_locked(self) -> None:
         concurrency = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "concurrency.py").read_text(encoding="utf-8")
