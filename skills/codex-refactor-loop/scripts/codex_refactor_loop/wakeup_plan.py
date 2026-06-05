@@ -26,6 +26,10 @@ from codex_refactor_loop.implement_lifecycle import (
     clear_redispatchable_implement_log,
     is_implement_log,
 )
+from codex_refactor_loop.implementation_pr_artifacts import (
+    implementation_cluster_id,
+    validate_implementation_pr_artifacts,
+)
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
@@ -131,13 +135,6 @@ CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-
 DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge)\.log$")
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
-IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
-    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
-    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
-    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
-)
-PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
-PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
 
 
 @dataclass(frozen=True)
@@ -2518,65 +2515,15 @@ def _implementation_head_ref(action: dict[str, Any], target: tuple[str, int] | N
 
 
 def _implementation_cluster_id(action: Mapping[str, Any], issue_target: int) -> str:
-    marker = str(action.get("source_marker") or "")
-    marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
-    candidate = marker_id.replace("_", "-").strip("-") or f"issue-{issue_target}"
-    return candidate if re.fullmatch(r"[A-Za-z0-9._-]+", candidate) else f"issue-{issue_target}"
+    return implementation_cluster_id(action, issue_target)
 
 
 def _implementation_pr_artifact_invalid_reason(action: Mapping[str, Any], repo_root: Path) -> str | None:
     target = action.get("target_number")
     if not isinstance(target, int):
         return "implementation_pr_artifact_target_missing"
-    title_path = _repo_runs_artifact_path(repo_root, str(action.get("title_file") or ""))
-    body_path = _repo_runs_artifact_path(repo_root, str(action.get("body_file") or ""))
-    if title_path is None:
-        return "implementation_pr_title_artifact_invalid_path"
-    if body_path is None:
-        return "implementation_pr_body_artifact_invalid_path"
-    try:
-        title_text = title_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return "implementation_pr_title_artifact_missing"
-    title_lines = [line.strip() for line in title_text.splitlines() if line.strip()]
-    if len(title_lines) != 1:
-        return "implementation_pr_title_artifact_invalid"
-    title = title_lines[0]
-    title_bytes = title.encode("utf-8")
-    if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + str(target).encode("ascii") or title.lower().startswith(f"implement issue #{target}"):
-        return "implementation_pr_title_placeholder"
-    try:
-        body_text = body_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return "implementation_pr_body_artifact_missing"
-    if body_text.rstrip("\n").splitlines()[-1:] != ["⟦AI:AUTO-LOOP⟧"]:
-        return "implementation_pr_body_sentinel_missing"
-    if _closing_issue_numbers(body_text) != [target]:
-        return "implementation_pr_body_closes_mismatch"
-    body_bytes = body_text.encode("utf-8")
-    for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
-        if section not in body_bytes:
-            return "implementation_pr_body_required_section_missing"
-    if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % str(target).encode("ascii"), body_bytes):
-        return "implementation_pr_body_placeholder"
-    return None
-
-
-def _repo_runs_artifact_path(repo_root: Path, value: str) -> Path | None:
-    if not value:
-        return None
-    path = Path(value)
-    resolved = (path if path.is_absolute() else repo_root / path).resolve()
-    try:
-        resolved.relative_to((repo_root / ".refactor-loop" / "runs").resolve())
-    except ValueError:
-        return None
-    return resolved
-
-
-def _closing_issue_numbers(text: str) -> list[int]:
-    matches = re.findall(r"(?im)\bCloses\s+#([1-9][0-9]*)\b", text)
-    return [int(match) for match in matches]
+    validation = validate_implementation_pr_artifacts(repo_root, repo_root / ".refactor-loop" / "runs", action, target)
+    return validation.reason
 
 
 def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:

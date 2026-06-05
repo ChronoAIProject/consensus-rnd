@@ -20,6 +20,12 @@ from .context import LoopContext
 from .gh_invoke import build_gh_argv
 from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
+from .implementation_pr_artifacts import (
+    implementation_cluster_id,
+    implementation_pr_body_path,
+    implementation_pr_title_path,
+    validate_implementation_pr_artifacts,
+)
 from .implement_lifecycle import clear_redispatchable_implement_log
 from .issue_decomposition import load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
@@ -52,13 +58,6 @@ SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
 REVIEW_ROLES = ("architect", "tests", "quality")
-IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
-    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
-    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
-    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
-)
-PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
-PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
 
 
 class ControllerActions:
@@ -1108,76 +1107,25 @@ class ControllerActions:
         return result.returncode
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
-        raw = str(action.get("body_file") or "").strip()
-        cluster_id = _implementation_cluster_id(action, issue_target)
-        path = Path(raw) if raw else self.ctx.paths.runs / f"implementation-pr-{cluster_id}-body.md"
-        return path if path.is_absolute() else self.ctx.repo_root / path
+        return implementation_pr_body_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
 
     def _implementation_pr_title_file(self, action: Mapping[str, object], issue_target: str) -> Path:
-        raw = str(action.get("title_file") or "").strip()
-        cluster_id = _implementation_cluster_id(action, issue_target)
-        path = Path(raw) if raw else self.ctx.paths.runs / f"implementation-pr-{cluster_id}-title.txt"
-        return path if path.is_absolute() else self.ctx.repo_root / path
+        return implementation_pr_title_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
 
     def _implementation_pr_title(self, action: Mapping[str, object], issue_target: str) -> str:
         return self._implementation_pr_title_file(action, issue_target).read_text(encoding="utf-8", errors="replace").strip()
 
     def _implementation_pr_title_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
-        path = self._implementation_pr_title_file(action, issue_target)
-        if not self._repo_runs_file(path):
-            return "implementation PR title artifact outside runs"
-        if not path.is_file():
-            return "implementation PR title artifact missing"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return "implementation PR title artifact missing"
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if len(lines) != 1:
-            return "implementation PR title must be exactly one non-empty line"
-        title = lines[0]
-        title_bytes = title.encode("utf-8")
-        if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + issue_target.encode("ascii") or title.lower().startswith(f"implement issue #{issue_target}"):
-            return "implementation PR title is placeholder"
-        if "⟦AI:AUTO-LOOP⟧" in title or re.search(r"\bCloses\s+#", title, flags=re.IGNORECASE):
-            return "implementation PR title contains body-only content"
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_title_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
         return None
 
     def _implementation_pr_body_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
-        path = self._implementation_pr_body_file(action, issue_target)
-        if not self._repo_runs_file(path):
-            return "implementation PR body artifact outside runs"
-        if not path.is_file():
-            return "implementation PR body artifact missing"
-        try:
-            text = path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return "implementation PR body artifact missing"
-        try:
-            validate_self_contained_github_body(text)
-        except GitHubBodyError as exc:
-            return f"implementation PR body invalid: {exc}"
-        if text.rstrip("\n").splitlines()[-1] != "⟦AI:AUTO-LOOP⟧":
-            return "implementation PR body sentinel must be final standalone line"
-        closing = list(extract_closing_issue_numbers(text))
-        if closing != [int(issue_target)]:
-            return "implementation PR body must contain exactly one matching Closes link"
-        body_bytes = text.encode("utf-8")
-        for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
-            if section not in body_bytes:
-                return "implementation PR body missing required section"
-        placeholder_heading = re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % re.escape(issue_target).encode("ascii"), body_bytes)
-        if placeholder_heading:
-            return "implementation PR body is placeholder"
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_body_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
         return None
-
-    def _repo_runs_file(self, path: Path) -> bool:
-        try:
-            resolved = path.resolve()
-            resolved.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
-        except ValueError:
-            return False
-        return True
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -1448,7 +1396,23 @@ def _safe_branch_name(value: str) -> bool:
 
 
 def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
-    marker = str(action.get("source_marker") or "")
-    marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
-    candidate = marker_id.replace("_", "-").strip("-") or f"issue-{issue_target}"
-    return candidate if SAFE_WORKTREE_CLUSTER_RE.fullmatch(candidate) else f"issue-{issue_target}"
+    return implementation_cluster_id(action, issue_target)
+
+
+def _controller_implementation_pr_error(reason: str, detail: str = "") -> str:
+    messages = {
+        "implementation_pr_title_artifact_invalid_path": "implementation PR title artifact outside runs",
+        "implementation_pr_title_artifact_missing": "implementation PR title artifact missing",
+        "implementation_pr_title_artifact_invalid": "implementation PR title must be exactly one non-empty line",
+        "implementation_pr_title_placeholder": "implementation PR title is placeholder",
+        "implementation_pr_title_contains_body_content": "implementation PR title contains body-only content",
+        "implementation_pr_body_artifact_invalid_path": "implementation PR body artifact outside runs",
+        "implementation_pr_body_artifact_missing": "implementation PR body artifact missing",
+        "implementation_pr_body_sentinel_missing": "implementation PR body sentinel must be final standalone line",
+        "implementation_pr_body_closes_mismatch": "implementation PR body must contain exactly one matching Closes link",
+        "implementation_pr_body_required_section_missing": "implementation PR body missing required section",
+        "implementation_pr_body_placeholder": "implementation PR body is placeholder",
+        "implementation_pr_body_github_body_invalid": "implementation PR body invalid",
+    }
+    message = messages.get(reason, reason)
+    return f"{message}: {detail}" if detail else message

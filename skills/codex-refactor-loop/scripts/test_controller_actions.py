@@ -178,8 +178,8 @@ class ControllerActionsTests(unittest.TestCase):
             "def _recover_publish_implementation_base",
             '["fetch", "origin"]',
             '["merge", "--no-edit", f"origin/{integration}"]',
-            "def _implementation_pr_title_error",
-            "def _implementation_pr_body_error",
+            "from .implementation_pr_artifacts import",
+            "validate_implementation_pr_artifacts",
             "implementation PR title artifact missing",
             "implementation PR body artifact missing",
             "existing_pr = self._open_pr_for_head(head_ref)",
@@ -1212,6 +1212,69 @@ class ControllerActionsTests(unittest.TestCase):
                             self.assertEqual(2, self.actions.publish_implementation_output(action))
 
         self.assertEqual("", self.pending_events())
+
+    def test_publish_implementation_output_fails_closed_for_malformed_worker_pr_artifacts(self) -> None:
+        worktree = self.tmp / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True)
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="publish-implementation-output", lease_id="lease", expires_at="soon")
+        action = {
+            "source_marker": "IMPLEMENT_DONE:issue-77:ok",
+            "target_kind": "issue",
+            "target_number": 77,
+            "linked_issue": 77,
+            "head_ref": "refactor/iter77-issue-77",
+            "worktree": str(worktree),
+        }
+        title, body = self.write_implementation_pr_artifacts()
+        outside = self.tmp / "outside-title.txt"
+        outside.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        valid_title = title.read_text(encoding="utf-8")
+        valid_body = body.read_text(encoding="utf-8")
+        cases = (
+            ("outside-title-path", {"title_file": str(outside)}, None, "implementation PR title artifact outside runs"),
+            ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("english-placeholder-title", {}, lambda: title.write_text("implement issue #77\n", encoding="utf-8"), "implementation PR title is placeholder"),
+            ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "implementation PR title must be exactly one non-empty line"),
+            ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "implementation PR title contains body-only content"),
+            ("missing-sentinel", {}, lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
+            ("sentinel-not-final", {}, lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "implementation PR body sentinel must be final standalone line"),
+            ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "implementation PR body must contain exactly one matching Closes link"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## 测试结果", "## test result"), encoding="utf-8"), "implementation PR body missing required section"),
+            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation PR body is placeholder"),
+            ("local-path-authority", {}, lambda: body.write_text(valid_body.replace("## 修改文件", "授权: `.refactor-loop/runs/source.md`\n\n## 修改文件"), encoding="utf-8"), "implementation PR body invalid: local .refactor-loop artifact path cannot be the only authority source"),
+        )
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args == ["issue", "view", "77", "--json", "labels,body"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"labels": [{"name": labels.MANAGED}], "body": ""}), stderr="")
+            raise AssertionError(f"unexpected gh call: {args}")
+
+        def fake_run(args: list[str], **kwargs: object) -> mock.Mock:
+            if args == ["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"]:
+                return mock.Mock(returncode=0, stdout="refactor/iter77-issue-77\n", stderr="")
+            if args == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
+                return mock.Mock(returncode=0, stdout="", stderr="")
+            raise AssertionError(f"no publish side effect should run: {args!r}")
+
+        for name, overrides, mutate, expected in cases:
+            with self.subTest(name=name):
+                title.write_text(valid_title, encoding="utf-8")
+                body.write_text(valid_body, encoding="utf-8")
+                if mutate is not None:
+                    mutate()
+                current_action = dict(action)
+                current_action.update(overrides)
+                with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        with mock.patch("codex_refactor_loop.controller_actions.subprocess.run", side_effect=fake_run):
+                            with mock.patch.object(self.actions, "safe_push", side_effect=AssertionError("must not push")):
+                                with mock.patch.object(self.actions, "open_pr_with_label", side_effect=AssertionError("must not open PR")):
+                                    with mock.patch("sys.stderr", new_callable=io.StringIO) as stderr:
+                                        self.assertEqual(2, self.actions.publish_implementation_output(current_action))
+                self.assertIn(expected, stderr.getvalue())
+                self.assertEqual("", self.pending_events())
 
     def test_publish_implementation_output_commits_fully_staged_diff_before_fresh_base_merge(self) -> None:
         worktree = self.tmp / ".worktrees" / "iter77-issue-77"

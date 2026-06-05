@@ -1578,6 +1578,40 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             actions,
         )
 
+    def test_publish_implementation_output_blocks_before_helper_for_malformed_worker_pr_artifacts(self) -> None:
+        title = self.repo / ".refactor-loop" / "runs" / "implementation-pr-issue-77-title.txt"
+        body = self.repo / ".refactor-loop" / "runs" / "implementation-pr-issue-77-body.md"
+        valid_body = (
+            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_runner.py\n\n"
+            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_runner.py\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            "Closes #77\n\n"
+            "⟦AI:AUTO-LOOP⟧\n"
+        )
+        outside = self.repo / "outside-title.txt"
+        outside.write_text("完成 issue #77 的发布契约\n", encoding="utf-8")
+        cases = (
+            ("outside-title-path", {"title_file": str(outside)}, None, "publish_implementation_title_artifact_invalid_path"),
+            ("placeholder-title", {}, lambda: title.write_text("实现 issue #77\n", encoding="utf-8"), "publish_implementation_title_placeholder"),
+            ("multiline-title", {}, lambda: title.write_text("完成 issue #77\n第二行\n", encoding="utf-8"), "publish_implementation_title_artifact_invalid"),
+            ("body-content-title", {}, lambda: title.write_text("Closes #77\n", encoding="utf-8"), "publish_implementation_title_contains_body_content"),
+            ("missing-sentinel", {}, lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "publish_implementation_body_sentinel_missing"),
+            ("sentinel-not-final", {}, lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "publish_implementation_body_sentinel_missing"),
+            ("wrong-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #78"), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
+            ("multiple-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77", "Closes #77\nCloses #78"), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
+            ("missing-closes", {}, lambda: body.write_text(valid_body.replace("Closes #77\n\n", ""), encoding="utf-8"), "publish_implementation_body_closes_mismatch"),
+            ("missing-section", {}, lambda: body.write_text(valid_body.replace("## 修改文件", "## files"), encoding="utf-8"), "publish_implementation_body_required_section_missing"),
+            ("placeholder-body", {}, lambda: body.write_text("## issue #77 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #77\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "publish_implementation_body_placeholder"),
+        )
+        for name, overrides, mutate, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.implementation_output_action(action_id=f"publish-implementation:{name}", **overrides)
+                if mutate is not None:
+                    mutate()
+                results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
     def test_publish_implementation_output_allows_existing_open_pr_for_helper_reuse(self) -> None:
         actions = FakeActions()
         action = self.implementation_output_action(action_id="publish-implementation:existing-pr")

@@ -22,6 +22,7 @@ from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
+from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
@@ -78,13 +79,6 @@ SUPPORTED_CONTROLLER_ACTIONS = {
 SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
     {"spawn_codex_harness_background"}
 )
-IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES = (
-    b"## \xe4\xbf\xae\xe6\x94\xb9\xe6\x96\x87\xe4\xbb\xb6",
-    b"## \xe6\xb5\x8b\xe8\xaf\x95\xe7\xbb\x93\xe6\x9e\x9c",
-    b"## deviation \xe8\xae\xb0\xe5\xbd\x95",
-)
-PLACEHOLDER_IMPLEMENT_TITLE_BYTES = b"\xe5\xae\x9e\xe7\x8e\xb0 issue #"
-PLACEHOLDER_IMPLEMENT_HEADING_RE = rb"(?im)^##\s+issue\s+#%s\s+\xe5\xae\x9e\xe7\x8e\xb0\s*$"
 
 
 @dataclass(frozen=True)
@@ -540,52 +534,10 @@ class WakeupRunner:
         target = action.get("target_number")
         if not isinstance(target, int):
             return "publish_implementation_target_missing"
-        title_path = self._repo_runs_artifact_path(str(action.get("title_file") or ""))
-        body_path = self._repo_runs_artifact_path(str(action.get("body_file") or ""))
-        if title_path is None:
-            return "publish_implementation_title_artifact_invalid_path"
-        if body_path is None:
-            return "publish_implementation_body_artifact_invalid_path"
-        try:
-            title_text = title_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return "publish_implementation_title_artifact_missing"
-        title_lines = [line.strip() for line in title_text.splitlines() if line.strip()]
-        if len(title_lines) != 1:
-            return "publish_implementation_title_artifact_invalid"
-        title = title_lines[0]
-        title_bytes = title.encode("utf-8")
-        if title_bytes == PLACEHOLDER_IMPLEMENT_TITLE_BYTES + str(target).encode("ascii") or title.lower().startswith(f"implement issue #{target}"):
-            return "publish_implementation_title_placeholder"
-        if "⟦AI:AUTO-LOOP⟧" in title or re.search(r"\bCloses\s+#", title, flags=re.IGNORECASE):
-            return "publish_implementation_title_contains_body_content"
-        try:
-            body_text = body_path.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return "publish_implementation_body_artifact_missing"
-        if body_text.rstrip("\n").splitlines()[-1:] != ["⟦AI:AUTO-LOOP⟧"]:
-            return "publish_implementation_body_sentinel_missing"
-        closing = [int(match) for match in re.findall(r"(?im)\bCloses\s+#([1-9][0-9]*)\b", body_text)]
-        if closing != [target]:
-            return "publish_implementation_body_closes_mismatch"
-        body_bytes = body_text.encode("utf-8")
-        for section in IMPLEMENTATION_PR_REQUIRED_SECTION_BYTES:
-            if section not in body_bytes:
-                return "publish_implementation_body_required_section_missing"
-        if re.search(PLACEHOLDER_IMPLEMENT_HEADING_RE % str(target).encode("ascii"), body_bytes):
-            return "publish_implementation_body_placeholder"
-        return None
-
-    def _repo_runs_artifact_path(self, value: str) -> Path | None:
-        if not value:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, target)
+        if not validation.reason:
             return None
-        path = Path(value)
-        resolved = (path if path.is_absolute() else self.ctx.repo_root / path).resolve()
-        try:
-            resolved.relative_to((self.ctx.repo_root / ".refactor-loop" / "runs").resolve())
-        except ValueError:
-            return None
-        return resolved
+        return _publish_implementation_artifact_reason(validation.reason)
 
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
@@ -1154,6 +1106,14 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
 
 def _terminal_blocked_reason(reason: str) -> bool:
     return reason in {"target_not_open:CLOSED", "target_not_open:MERGED"}
+
+
+def _publish_implementation_artifact_reason(reason: str) -> str:
+    prefix = "implementation_pr_"
+    if not reason.startswith(prefix):
+        return reason
+    local = reason.removeprefix(prefix)
+    return "publish_implementation_" + local
 
 
 def _spawn_launch_failure(result: RunnerResult) -> bool:
