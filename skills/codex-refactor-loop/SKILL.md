@@ -45,7 +45,7 @@ Use intra-file anchors when a phase needs the detailed body, such as [host runti
 
 The default main path is open actionable catalog-managed GitHub issue/PR resolution. The controller dispatches the next-step actor for managed issues and PRs before starting any producer for new work.
 
-`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Legacy issue-entry labels are migration aliases only and must not be written as the active bundle.
+`issue-driven / Path A` is the main-path issue entry surface: create or reuse a concrete GitHub issue, apply the catalog-derived design issue label bundle (`crnd:lifecycle:managed`, `crnd:phase:design-solving`, and `crnd:human:auto`), then let the controller sweep dispatch Consensus-rnd Phase design-consensus directly. Historical non-`crnd:*` issue-entry labels are unmanaged residue and must not be written, queried, normalized, or cleaned up by the loop.
 
 `audit` remains a stable compatibility producer value and fallback issue producer. It runs only after no open actionable managed issue/PR, queued dispatch, clean marker route, CI/no-gap route, maintainer-comment route, or higher-priority wakeup route exists. Audit produces or updates issues that feed back into the main path; it is not a co-equal entry mode or a parallel R&D lane. Issue-driven work uses the router-injected GitHub issue source snapshot as the work-unit source when no local audit artifact is provided; `gh issue view <N>` is fallback-only when that snapshot is unavailable. Concrete plans still require Consensus-rnd Phase design-consensus solver consensus and meta-judge consensus before implementation.
 
@@ -359,11 +359,11 @@ Forbidden: no worker diff commit, issue/PR create/merge/close/edit, label mutati
 ## Named runtime exception — closed-label-reconciler(per #238)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#closed-label-reconciler-238`. This is the only closed managed item phase-label reconciliation carveout. Consensus marker: `META_JUDGE_DONE:consensus:closed-label-reconciler:option B named restart-managed closed-label-reconciler with crnd:phase:closed and gh-label-closed-reconcile authority`.
 
-Allowed: active-controller owner only; checked-in `closed-label-reconciler` command (`consensus-rnd-cli closed-label-reconciler`) may read CLOSED `crnd:lifecycle:managed` issue/PR labels through a bounded GitHub label/state driven dirty candidate projection whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate, and apply terminal phase-label reconciliation: remove phase labels, cleanup-only aliases, and `crnd:lifecycle:stuck`, then add exactly one terminal phase label, either `crnd:phase:merged` when merged evidence is present or `crnd:phase:closed` when evidence is insufficient. `crnd:phase:closed` is a protocol terminal state, not a product verdict.
+Allowed: active-controller owner only; checked-in `closed-label-reconciler` command (`consensus-rnd-cli closed-label-reconciler`) may read CLOSED `crnd:lifecycle:managed` issue/PR labels through a bounded GitHub label/state driven dirty candidate projection whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate, and apply terminal phase-label reconciliation: remove canonical phase labels and `crnd:lifecycle:stuck`, then add exactly one terminal phase label, either `crnd:phase:merged` when merged evidence is present or `crnd:phase:closed` when evidence is insufficient. `crnd:phase:closed` is a protocol terminal state, not a product verdict.
 
 Forbidden: no open item mutation, issue create/close/reopen/body/title edit, PR create/merge/close/body/title edit, human label mutation, triage label mutation, milestone label mutation, lifecycle label mutation beyond removing `crnd:lifecycle:stuck`, tag/release, generic `gh-label`, generic `gh-edit`, generic lifecycle actor, or controller close-path inline reconcile. Human-label exactness neither authorizes human-label mutation nor blocks phase/cleanup/stuck reconciliation; human labels are preserved as-is. `peek` may display the read-only projection but must not render remediation text or copyable edit commands.
 
-Fact source and verification: projection logic lives in `closed_phase_labels.py`, the daemon in `closed_label_reconciler.py`, and the only public command authority is `cli.py::COMMANDS["closed-label-reconciler"].authority == ("read-gh", "gh-label-closed-reconcile", "write-state")`; it does not grant generic `gh-label` or `gh-edit`. Candidate collection is GitHub label/state driven and managed-intersecting at query construction: missing terminal phase, residual nonterminal phase, cleanup-only alias, `crnd:lifecycle:stuck`, plus a small recent closed read-only managed window for search quirks or newly closed missing-terminal discovery. terminal-complete closed managed items are excluded from steady-state scans and must not receive steady-state per-item view or linked-merge probes; unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens. Behavior/source-regression coverage: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_gh_accounting.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, and `test_runtime_exception_authorization_sources.py`.
+Fact source and verification: projection logic lives in `closed_phase_labels.py`, the daemon in `closed_label_reconciler.py`, and the only public command authority is `cli.py::COMMANDS["closed-label-reconciler"].authority == ("read-gh", "gh-label-closed-reconcile", "write-state")`; it does not grant generic `gh-label` or `gh-edit`. Candidate collection is GitHub label/state driven and managed-intersecting at query construction: missing terminal phase, residual nonterminal phase, `crnd:lifecycle:stuck`, plus a small recent closed read-only managed window for search quirks or newly closed missing-terminal discovery. terminal-complete closed managed items are excluded from steady-state scans and must not receive steady-state per-item view or linked-merge probes; unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens. Behavior/source-regression coverage: `test_closed_label_reconciler.py`, `test_peek_status_lens.py`, `test_gh_accounting.py`, `test_cli_command_router.py`, `test_restart_daemons.py`, `test_label_taxonomy.py`, `test_label_contract_source.py`, and `test_runtime_exception_authorization_sources.py`.
 
 ## Named runtime exception — integration sync daemon(per #53)
 Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#integration-sync-daemon-53`. **Narrow allowlist**: daemon-owned autonomous integration-branch git apply in the dedicated integration worktree. The daemon may fetch refs, run `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, compare ref counts and ancestry, detect conflicts, dispatch resolver workers, append pending events, write integration sync operation artifacts, and execute only the #53 git allowlist: `git fetch`, `git ls-remote --exit-code --heads origin $INTEGRATION_BRANCH`, `rev-list`, `rev-parse`, `merge-base`, `reset --hard`, `rebase --rebase-merges`, `merge --ff-only|--no-ff`, `git push HEAD:$INTEGRATION_BRANCH`, and force-with-lease rollup adoption. **Forbidden**: no worker-diff commit, no PR create/merge/close/edit, no issue/PR/label lifecycle, no tag/release, no generic lifecycle actor, and no git commands outside that allowlist. Implement/fix workers still never commit, push, or open PRs.
@@ -643,8 +643,8 @@ The floor is local because it prevents loop stalls.
 - `AUDIT_DONE:none:0` still does not exempt the concurrency floor; when no real queued/actionable open work exists and no same-iteration audit is active, emit `RECOMMEND:audit` and the hard gate line `HARD_GATE:dispatch_required=N`.
 - Ordinary audit fallback has one same-iteration active slot. If that slot is occupied and no other legal work exists, expose the remaining capacity as `WAIT:single-active-audit` with `dispatch_required=0`, `reason=single_active_audit_in_flight`, and `blocked_deficit=N`; do not duplicate same-iteration audit; no duplicate same-iteration audit.
 - "派 audit 重 / daemon target stale / 等 cascade / 和已有工作冲突" 都不接受作为 defer 理由; the correct visible state for a positive deficit is hard-gate dispatch or the single active audit boundary WAIT, not low-floor exemption.
-- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
-- **Stale-issue revival(3h)**: Open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
+- **Existing-issue priority(strict)**: Before ordinary audit fallback, dispatch the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` and lacking in-flight codex coverage of its canonical phase label; when any such open item carries `crnd:milestone:current`, milestone-labeled next steps come before non-milestone existing-issue work and audit fallback. Concurrent audit against this rule must be killed (`pkill -f audit-iter-N`). Full route table per phase label + audit-fallback gate live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`.
+- **Stale-issue revival(3h)**: Open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` with `updatedAt` older than 3h UTC MUST be re-dispatched on next wakeup; each re-dispatch posts a banner with `stale_hours=N`. Unlabeled-default route + 3h cutoff details live in [concurrency floor details](#concurrency-floor-details). Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-stale-issue-3h-revival`.
 
 More detail is in [concurrency floor details](#concurrency-floor-details).
 
@@ -652,7 +652,7 @@ More detail is in [concurrency floor details](#concurrency-floor-details).
 
 Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-milestone-priority`.
 
-GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Legacy milestone labels are migration aliases only and must be normalized through `codex_refactor_loop.labels`.
+GitHub label `crnd:milestone:current` marks issue/PRs related to the current period's main task. It is orthogonal third axis beside phase labels and human labels: it changes dispatch priority, not phase semantics, human escalation semantics, marker semantics, or label exclusivity for those axes. Historical non-`crnd:*` milestone labels are unmanaged residue and must not be normalized through `codex_refactor_loop.labels`.
 
 GitHub label `crnd:milestone:release-target` marks open catalog-managed issue/PRs whose existence should surface release countdown status and has explicit-target precedence. It is a non-exclusive milestone fact and may coexist with `crnd:milestone:current`; `crnd:milestone:current` remains dispatch priority only and must not trigger explicit release-target mode by itself.
 
@@ -717,14 +717,16 @@ Loop-owned GitHub labels are protocol state. Canonical labels use
 do not maintain parallel label truth tables in SKILL.md or prompts.
 
 Managed issues/PRs must have exactly one canonical `crnd:phase:*` label and
-exactly one canonical `crnd:human:*` label after migration. GitHub
+exactly one canonical `crnd:human:*` label. GitHub
 `external_defaults` may remain for editorial use, but they never satisfy
-phase/human/lifecycle/triage/milestone routing semantics. Migration is
-controller-owned: add canonical labels first, re-read live labels, validate
-exactly-one phase/human, then remove aliases. Workers and daemons must not
-mutate labels except the #238 `closed-label-reconciler`, which may mutate only
-CLOSED `crnd:lifecycle:managed` item phase/cleanup/stuck labels into exactly
-one terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
+phase/human/lifecycle/triage/milestone routing semantics. Loop routing, writes,
+drift planning, phase/human projection, triage, closed reconciliation,
+wakeup/comment/concurrency/peek/release queries use canonical `crnd:*` labels
+only. Historical non-`crnd:*` labels are unmanaged residue and must not be
+queried, normalized, removed, or migrated by the loop. Workers and daemons must
+not mutate labels except the #238 `closed-label-reconciler`, which may mutate
+only CLOSED `crnd:lifecycle:managed` item phase/stuck labels into exactly one
+terminal phase, `crnd:phase:merged` or `crnd:phase:closed`.
 
 Label exclusivity is per `LabelSpec.exclusive_axis`, not per group. Phase and
 human labels remain exactly-one axes; non-exclusive catalog labels such as
@@ -753,8 +755,8 @@ Hard label rules:
 1. Label transition and banner post happen together.
 2. Same group only allows one active label.
 3. `crnd:human:maintainer-decision` is not a shortcut for controller uncertainty.
-4. Legacy human escalation aliases may be removed as cleanup targets only.
-5. PRs must carry `crnd:lifecycle:managed` or comment monitoring will miss them after migration.
+4. Historical non-`crnd:*` human escalation labels are unmanaged residue, not cleanup targets.
+5. PRs must carry `crnd:lifecycle:managed` or comment monitoring will miss them.
 6. Label protocol details live in [label bootstrap loops](#label-bootstrap-loops).
 
 ## Consensus-rnd Phase review-gate — Multi-Codex PR Review
@@ -939,7 +941,7 @@ State rules:
 3. For audit-backed work, keep `work_unit_id == id == cluster_id` during compatibility.
 4. For manual issue work, do not fabricate `cluster_id`; use `work_unit_id: issue-<N>`.
 5. Prompt dispatch may keep `WORK_UNIT_ID=$CLUSTER_ID` for current audit-backed units.
-6. Public operational names remain stable: `cluster`, `refactor`, `*_DONE`, branch prefixes, marker names, and catalog-owned canonical label names. Legacy label names remain migration aliases only.
+6. Public operational names remain stable: `cluster`, `refactor`, `*_DONE`, branch prefixes, marker names, and catalog-owned canonical label names. Historical non-`crnd:*` label names are unmanaged residue and are excluded from the stability and migration rule.
 7. Specialized artifact examples live in [specialized state artifacts](#specialized-state-artifacts).
 
 State write timing:
@@ -1541,7 +1543,7 @@ and controller helpers. Prose may name individual canonical labels when
 explaining a single guard, but active label bundles and transition tables must
 come from catalog-backed helpers instead of SKILL.md examples. The invariant is
 still exactly one canonical phase label and exactly one canonical human label
-for managed open items after migration. For loop-managed issue/PR routing, that
+for managed open items. For loop-managed issue/PR routing, that
 means exactly one loop-owned `crnd:phase:*` label and exactly one loop-owned
 `crnd:human:*` label. Host business labels may coexist, but they are not
 routing authority and must not replace the loop-owned phase/human axes.
@@ -2732,7 +2734,7 @@ Concretely, this means:
 
 ### Existing-issue priority route table(per 2026-05-28 maintainer-directive)
 
-Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR (`crnd:lifecycle:managed`, dual-read through catalog aliases during migration) that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
+Authorization: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#maintainer-directive-existing-issue-priority-over-audit`. Before ordinary audit fallback, controller MUST first dispatch the next-step actor for every open catalog-managed issue/PR carrying canonical `crnd:lifecycle:managed` that lacks an in-flight codex covering its current canonical phase label. If any such open item carries `crnd:milestone:current`, milestone-labeled issue/PRs dispatch before non-milestone existing-issue work:
 
 Managed work identity is projected through `codex_refactor_loop.work_items.ManagedWorkProjection`: an open managed PR body with exactly one durable `Closes #N` link represents that parent issue. The represented parent issue is visible as `crnd:phase:pr-open` and has expected workers 0; worker expectation and review/fix routing belong to the child PR. Missing, duplicate, or ambiguous `Closes #N` links are diagnostics, not guessed lifecycle authority.
 
@@ -3108,12 +3110,13 @@ This section is intentionally not a bootstrap loop. The catalog in
 `consensus-rnd-cli labels validate-catalog` for local validation and
 `consensus-rnd-cli labels check-github --plan` for a read-only GitHub drift
 plan. The plan preserves GitHub `external_defaults`, reports unknown
-`crnd:*` labels fail-closed, and lists legacy alias migrations.
+`crnd:*` labels fail-closed. Historical non-`crnd:*` labels are unmanaged
+residue and are not drift-planned as migrations or cleanup targets.
 
-Controller apply, when used, must add canonical labels first, re-read live
-labels, validate exactly one canonical phase and human label for managed
-items, and only then remove aliases. Do not add bootstrap shell loops, copied
-catalog tables, or alternate label grammars here.
+Controller apply uses canonical labels only and must validate exactly one
+canonical phase and human label for managed items. Do not add bootstrap shell
+loops, copied catalog tables, alias cleanup targets, or alternate label
+grammars here.
 
 <a id="codex-invocation-details"></a>
 ## Codex invocation details

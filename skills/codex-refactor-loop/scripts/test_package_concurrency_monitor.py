@@ -17,6 +17,7 @@ from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
+ORIGINAL_PATH = os.environ.get("PATH", "")
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
@@ -38,7 +39,7 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 "CODEX_FLOOR": "2",
                 "DEGRADATION_WATCH_INTERVAL_SECONDS": "0",
             },
-            clear=False,
+            clear=True,
         )
         self.env.start()
         concurrency._DEFAULT_MONITOR = None
@@ -81,9 +82,9 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
 
     def test_compute_expected_preserves_phase_and_human_label_semantics(self) -> None:
         items = [
-            {"number": 160, "kind": "issue", "phase": "🛠️ phase:implementing", "human": "🤖 human:auto-推进", "labels": ["auto-loop", "🛠️ phase:implementing", "🤖 human:auto-推进"]},
-            {"number": 161, "kind": "pr", "phase": "👀 phase:reviewing", "human": "🤖 human:codex", "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"]},
-            {"number": 162, "kind": "issue", "phase": "🔧 phase:fixing", "human": "👤 human:需-maintainer-决策", "labels": ["auto-loop", "🔧 phase:fixing", "👤 human:需-maintainer-决策"]},
+            {"number": 160, "kind": "issue", "phase": labels.PHASE_IMPLEMENTING, "human": labels.HUMAN_AUTO, "labels": [labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO]},
+            {"number": 161, "kind": "pr", "phase": labels.PHASE_REVIEWING, "human": labels.HUMAN_AUTO, "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO]},
+            {"number": 162, "kind": "issue", "phase": labels.PHASE_FIXING, "human": labels.HUMAN_MAINTAINER_DECISION, "labels": [labels.MANAGED, labels.PHASE_FIXING, labels.HUMAN_MAINTAINER_DECISION]},
             {"number": 163, "kind": "pr", "phase": "⚙️ phase:ci-running", "human": "🤖 human:auto-推进", "labels": ["auto-loop", "⚙️ phase:ci-running", "🤖 human:auto-推进"]},
         ]
 
@@ -166,7 +167,7 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
                 with mock.patch.object(
                     self.monitor,
                     "list_auto_loop_issues",
-                    return_value=[{"number": 160, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                    return_value=[{"number": 160, "kind": "pr", "phase": labels.PHASE_FIXING, "human": labels.HUMAN_AUTO}],
                 ):
                     self.monitor.tick()
 
@@ -221,9 +222,9 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
 
     def test_readonly_cli_flags_allow_git_root_fallback_but_daemon_fails_closed(self) -> None:
         real_subprocess.run(["git", "init", "-q"], cwd=str(self.repo), check=True)
-        env = {key: value for key, value in os.environ.items() if key != "REPO_ROOT"}
+        env = {key: value for key, value in os.environ.items() if key not in {"REPO_ROOT", "CONSENSUS_RND_HOST_ENV"}}
         env.pop("ALLOW_GIT_ROOT_FALLBACK", None)
-        env["PATH"] = os.environ.get("PATH", "")
+        env["PATH"] = ORIGINAL_PATH
         env["PYTHONPATH"] = str(SCRIPT_DIR)
 
         result = real_subprocess.run(

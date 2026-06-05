@@ -84,7 +84,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 pr="${PEEK_TEST_PR:-}"
                 if [[ "$1 $2" == "issue list" ]]; then
                   if [[ "${PEEK_TEST_CLOSED_LABEL_FIXTURES:-}" == "1" && "$args" == *"--state closed"* ]]; then
-                    if [[ "$args" != *"--label crnd:lifecycle:managed"* && "$args" != *"--label auto-loop"* ]]; then
+                    if [[ "$args" != *"--label crnd:lifecycle:managed"* ]]; then
                       printf 'dirty closed query must prove managed membership: %s\n' "$args" >&2
                       exit 45
                     fi
@@ -96,7 +96,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                       printf '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       if [[ "$args" != *"--limit 20"* ]]; then
                         printf 'closed managed query must use bounded recent window: %s\n' "$args" >&2
                         exit 44
@@ -108,7 +108,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_PR_OPEN_ISSUE:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       printf '[{"number":239,"title":"parent issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
@@ -116,7 +116,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_REPRESENTED_PARENT:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       printf '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
@@ -124,15 +124,15 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label 🎯 milestone"* ]]; then
-                      printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]}]\n'
+                    if [[ "$args" == *"--label crnd:milestone:current"* ]]; then
+                      printf '[{"number":20,"title":"milestone issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
                     if [[ "$args" == *"--jq"* ]]; then
-                      printf '  • #10 labels=[🔍 phase:design-solving] — ordinary issue\n'
+                      printf '  • #10 labels=[crnd:phase:design-solving] — ordinary issue\n'
                       exit 0
                     fi
-                    printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔍 phase:design-solving"}]}]\n'
+                    printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
                     exit 0
                   fi
                   printf '[]\\n'
@@ -148,7 +148,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$1 $2" == "pr list" ]]; then
                   if [[ "${PEEK_TEST_CLOSED_LABEL_FIXTURES:-}" == "1" && "$args" == *"--state closed"* ]]; then
-                    if [[ "$args" != *"--label crnd:lifecycle:managed"* && "$args" != *"--label auto-loop"* ]]; then
+                    if [[ "$args" != *"--label crnd:lifecycle:managed"* ]]; then
                       printf 'dirty closed query must prove managed membership: %s\n' "$args" >&2
                       exit 45
                     fi
@@ -160,7 +160,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                       printf '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       if [[ "$args" != *"--limit 20"* ]]; then
                         printf 'closed managed query must use bounded recent window: %s\n' "$args" >&2
                         exit 44
@@ -172,8 +172,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_MILESTONE_FIXTURES:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label 🎯 milestone"* ]]; then
-                      printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                    if [[ "$args" == *"--label crnd:milestone:current"* ]]; then
+                      printf '[{"number":30,"title":"milestone PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
                     if [[ "$args" == *"--state closed"* || "$args" == *"--state merged"* ]]; then
@@ -189,7 +189,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_REPRESENTED_PARENT:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       printf '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
@@ -197,7 +197,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_MISSING_LINK_PR:-}" == "1" ]]; then
-                    if [[ "$args" == *"--label crnd:lifecycle:managed"* || "$args" == *"--label auto-loop"* ]]; then
+                    if [[ "$args" == *"--label crnd:lifecycle:managed"* ]]; then
                       printf '[{"number":256,"title":"missing link PR","headRefName":"impl/missing","body":"","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       exit 0
                     fi
@@ -218,7 +218,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
                     exit 0
                   fi
                   if [[ "${PEEK_TEST_UNPUSHED:-}" == "1" ]]; then
-                    printf '[{"number":%s,"title":"stub PR","headRefName":"refactor/iter%s-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\\n' "$pr" "$pr"
+                    printf '[{"number":%s,"title":"stub PR","headRefName":"refactor/iter%s-worker","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\\n' "$pr" "$pr"
                     exit 0
                   fi
                   printf '[{"number":%s,"title":"stub PR","labels":[]}]\\n' "$pr"

@@ -37,7 +37,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                 "GH_REPO_SLUG": "owner/repo",
                 "CODEX_FLOOR": "4",
             },
-            clear=False,
+            clear=True,
         )
         self.env.start()
         os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
@@ -73,9 +73,9 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
     def fake_snapshot(self) -> ManagedWorkSnapshotResult:
         return ManagedWorkSnapshotResult(
             (
-                ManagedWorkSnapshotItem(kind="issue", number=51, labels=("auto-loop", "🛠️ phase:implementing", "🤖 human:codex")),
-                ManagedWorkSnapshotItem(kind="issue", number=52, labels=("auto-loop", "⏸️ phase:blocked", "👤 human:需-maintainer-决策")),
-                ManagedWorkSnapshotItem(kind="PR", number=9, labels=("auto-loop", "👀 phase:reviewing", "🤖 human:codex")),
+                ManagedWorkSnapshotItem(kind="issue", number=51, labels=(label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO)),
+                ManagedWorkSnapshotItem(kind="issue", number=52, labels=(label_catalog.MANAGED, label_catalog.PHASE_BLOCKED, label_catalog.HUMAN_MAINTAINER_DECISION)),
+                ManagedWorkSnapshotItem(kind="PR", number=9, labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO)),
             ),
             True,
             "cache:fresh",
@@ -137,9 +137,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
             [(item["kind"], item["number"], item["phase"]) for item in items],
             [
                 ("issue", 71, label_catalog.PHASE_IMPLEMENTING),
-                ("issue", 72, label_catalog.PHASE_FIXING),
                 ("pr", 73, label_catalog.PHASE_REVIEWING),
-                ("pr", 74, label_catalog.PHASE_DESIGN_SOLVING),
             ],
         )
 
@@ -248,9 +246,9 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
                             {
                                 "number": 59,
                                 "labels": [
-                                    {"name": "auto-loop"},
-                                    {"name": "👀 phase:reviewing"},
-                                    {"name": "🤖 human:codex"},
+                                    {"name": label_catalog.MANAGED},
+                                    {"name": label_catalog.PHASE_REVIEWING},
+                                    {"name": label_catalog.HUMAN_AUTO},
                                 ],
                             }
                         ]
@@ -265,7 +263,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
 
         non_p0_snapshot = ManagedWorkSnapshotResult(
             (
-                ManagedWorkSnapshotItem(kind="PR", number=59, labels=("auto-loop", "👀 phase:reviewing", "🤖 human:codex")),
+                ManagedWorkSnapshotItem(kind="PR", number=59, labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING, label_catalog.HUMAN_AUTO)),
             ),
             True,
             "cache:fresh",

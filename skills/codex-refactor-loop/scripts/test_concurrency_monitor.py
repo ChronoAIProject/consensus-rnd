@@ -19,13 +19,16 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         os.environ["REPO_ROOT"] = str(self.repo)
         os.environ["CODEX_FLOOR"] = "2"
         os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         from codex_refactor_loop.context import LoopContext
+        from codex_refactor_loop import labels as label_catalog
         from codex_refactor_loop.monitors import concurrency as concurrency_module
         from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
         self.module = concurrency_module
+        self.labels = label_catalog
         self.ctx = LoopContext.load(repo_root=self.repo, env=os.environ)
         self.monitor = ConcurrencyMonitor(self.ctx)
         self.refactor_loop = self.repo / ".refactor-loop"
@@ -480,7 +483,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 with mock.patch.object(
                     self.monitor,
                     "list_auto_loop_issues",
-                    return_value=[{"number": 57, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                    return_value=[{"number": 57, "kind": "pr", "phase": self.labels.PHASE_FIXING, "human": self.labels.HUMAN_AUTO}],
                 ):
                     self.monitor.tick()
 
@@ -518,7 +521,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                     with mock.patch.object(
                         self.monitor,
                         "list_auto_loop_issues",
-                        return_value=[{"number": 57, "kind": "pr", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}],
+                        return_value=[{"number": 57, "kind": "pr", "phase": self.labels.PHASE_FIXING, "human": self.labels.HUMAN_AUTO}],
                     ):
                         self.monitor.tick()
 
@@ -628,7 +631,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         for i in range(4):
             self.write_dispatch("p1", f"expected-task-{i}")
         active_items = [
-            {"number": i, "kind": "issue", "phase": "🔧 phase:fixing", "human": "🤖 human:auto-推进"}
+            {"number": i, "kind": "issue", "phase": self.labels.PHASE_FIXING, "human": self.labels.HUMAN_AUTO}
             for i in range(4)
         ]
         calls: list[list[str]] = []
@@ -872,6 +875,7 @@ class SnapshotDaemonHealthFieldTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         os.environ["REPO_ROOT"] = str(self.repo)
         os.environ["CODEX_FLOOR"] = "2"
         from codex_refactor_loop.context import LoopContext

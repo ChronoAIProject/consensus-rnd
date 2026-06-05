@@ -138,7 +138,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "## Milestone priority",
             "crnd:milestone:current",
             "orthogonal third axis",
-            "Legacy milestone labels are migration aliases only",
+            "Historical non-`crnd:*` milestone labels are unmanaged residue",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
             "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
