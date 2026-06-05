@@ -9,12 +9,15 @@ import re
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.phase9.router import (
     IssueSourceSnapshot,
     Marker,
@@ -31,6 +34,29 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PHASE9_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
 
 
+def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult:
+    items = []
+    for row in rows:
+        labels = [
+            label.get("name", "")
+            for label in row.get("labels", [])  # type: ignore[union-attr]
+            if isinstance(label, dict) and label.get("name")
+        ]
+        items.append(
+            ManagedWorkSnapshotItem(
+                kind="issue",
+                number=int(row.get("number", 0)),
+                title=str(row.get("title", "")),
+                labels=tuple(labels),
+            )
+        )
+    return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
+
+
+def unavailable_managed_snapshot(reason: str = "graphql-headroom-low", age_seconds: float | None = 950) -> ManagedWorkSnapshotResult:
+    return ManagedWorkSnapshotResult((), False, "unavailable", reason, age_seconds)
+
+
 class Phase9RouterDaemonTests(unittest.TestCase):
     TEST_GH_REPO_SLUG = "example/consensus-rnd"
 
@@ -38,6 +64,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.commands: list[dict[str, object]] = []
         self.source_issue_states: dict[str, str] = {}
         self.original_source_issue_reader = Phase9Router._read_source_issue_decision
@@ -55,6 +83,8 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.router._read_source_issue_decision = fake_source_issue_decision  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.old_env)
         self.tmp.cleanup()
 
     def loop_context(self) -> LoopContext:
@@ -497,10 +527,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             ],
         }
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
             self.router.tick()
 
@@ -536,6 +563,23 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertIn("Convergence marker: DesignConsensusIssueIntake", prompt)
         self.assertEqual(self.pending_events(), "")
 
+    def test_phase9_router_records_snapshot_unavailable_diagnostic(self) -> None:
+        output = StringIO()
+        with mock.patch(
+            "codex_refactor_loop.phase9.router.load_open_managed_work_snapshot",
+            return_value=unavailable_managed_snapshot("fetch-failed", 1200),
+        ):
+            with redirect_stdout(output):
+                self.router.tick()
+
+        self.assertEqual(self.commands, [])
+        self.assertEqual(self.pending_events(), "")
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=phase9-router.design-consensus-issue-intake reason=fetch-failed "
+            "source=unavailable age_seconds=1200 items=0 target=open-design-consensus-issues",
+            output.getvalue(),
+        )
+
     def test_phase9_router_design_issue_intake_suppresses_after_clean_consensus_judge_log(self) -> None:
         issue = {
             "number": 416,
@@ -548,10 +592,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         }
         self.write_log("phase9-issue416-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
             fresh_router = self.new_router()
             fresh_router._read_source_issue_decision = self.router._read_source_issue_decision  # type: ignore[method-assign]
@@ -588,11 +629,12 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         ps_output = f"/bin/sh /tmp/consensus-rnd-cli spawn-codex --cd {self.repo.resolve()} --log {delete_log} --stall 3600\n"
 
         def fake_run(command, **kwargs):
-            if command[:2] == ["gh", "issue"]:
-                return mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr="")
             return mock.Mock(returncode=0, stdout=ps_output, stderr="")
 
-        with mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run):
+        with (
+            mock.patch("codex_refactor_loop.phase9.router.subprocess.run", side_effect=fake_run),
+            mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])),
+        ):
             self.router.tick()
 
         self.assertEqual(self.commands, [])
@@ -611,10 +653,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         legacy_minimal = self.repo / ".refactor-loop" / "logs" / "solver-issue417-r1-minimal.log"
         legacy_minimal.write_text("legacy minimal already seeded\n", encoding="utf-8")
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps([issue]), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot([issue])):
             self.router.tick()
 
         self.assertEqual(
@@ -649,10 +688,7 @@ class Phase9RouterDaemonTests(unittest.TestCase):
             },
         ]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(self.commands, [])

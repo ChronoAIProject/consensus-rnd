@@ -20,6 +20,7 @@ from ..context import LoopContext, LoopContextError
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
 from ..update_check import parse_time
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
@@ -300,61 +301,40 @@ class ConcurrencyMonitor:
     def count_in_flight_codex(self) -> int:
         return len(self.list_in_flight_codex_lines())
 
-    def _gh_list_by_label(self, kind: str, query_label: str) -> list[dict]:
-        cmd = ["gh", kind, "list"]
-        if self.gh_repo_slug:
-            cmd.extend(["--repo", self.gh_repo_slug])
-        json_fields = "number,labels,body" if kind == "pr" else "number,labels"
-        cmd.extend([
-            "--label",
-            query_label,
-            "--state",
-            "open",
-            "--json",
-            json_fields,
-            "--limit",
-            "100",
-        ])
-        result = self.run(cmd)
-        if result.returncode != 0:
-            return []
-        try:
-            rows = json.loads(result.stdout)
-        except Exception:
-            return []
-        return rows if isinstance(rows, list) else []
-
     def list_auto_loop_issues(self) -> list[dict]:
         items: list[dict] = []
         seen: set[tuple[str, int]] = set()
-        for kind in ("issue", "pr"):
-            rows: list[dict] = []
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                rows.extend(self._gh_list_by_label(kind, query_label))
-            for entry in rows:
-                try:
-                    num = int(entry.get("number"))
-                except (TypeError, ValueError):
-                    continue
-                key = (kind, num)
-                if key in seen:
-                    continue
-                seen.add(key)
-                label_names = [label.get("name", "") for label in entry.get("labels", [])]
-                projection = label_catalog.normalize_label_set(label_names)
-                phase = projection.phase or ""
-                human = projection.human or ""
-                items.append(
-                    {
-                        "number": num,
-                        "kind": kind,
-                        "phase": phase,
-                        "human": human,
-                        "labels": label_names,
-                        "body": str(entry.get("body") or ""),
-                        "state": "open",
-                    }
-                )
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            print(
+                snapshot.unavailable_diagnostic("concurrency-monitor.list-auto-loop-issues", target_context="expected-worker-count"),
+                file=sys.stderr,
+                flush=True,
+            )
+            return items
+        for entry in snapshot.items:
+            num = entry.number
+            raw_kind = entry.kind
+            kind = "pr" if raw_kind == "PR" else "issue"
+            key = (kind, num)
+            if key in seen:
+                continue
+            seen.add(key)
+            label_names = [str(label) for label in entry.labels if str(label)]
+            projection = label_catalog.normalize_label_set(label_names)
+            phase = projection.phase or ""
+            human = projection.human or ""
+            items.append(
+                {
+                    "number": num,
+                    "kind": kind,
+                    "phase": phase,
+                    "human": human,
+                    "labels": label_names,
+                    "body": entry.body,
+                    "state": "open",
+                }
+            )
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:

@@ -60,6 +60,41 @@ class GraphqlBudgetGuardTests(unittest.TestCase):
         self.assertTrue(github_budget.graphql_headroom_ok(min_remaining=500, cache_ttl_seconds=25, runner=runner, now=120))
         self.assertEqual(len(calls), 1)
 
+    def test_cache_is_scoped_by_repo_context(self) -> None:
+        calls: list[list[str]] = []
+        first = Path(tempfile.mkdtemp(prefix="graphql-budget-first-"))
+        second = Path(tempfile.mkdtemp(prefix="graphql-budget-second-"))
+        try:
+            def runner(command):
+                calls.append(list(command))
+                remaining = 400 if len(calls) == 1 else 700
+                return subprocess.CompletedProcess(command, 0, json.dumps({"resources": {"graphql": {"remaining": remaining}}}), "")
+
+            self.assertFalse(
+                github_budget.graphql_headroom_ok(
+                    min_remaining=500,
+                    cache_ttl_seconds=25,
+                    cwd=first,
+                    env={"GH_REPO_SLUG": "owner/repo"},
+                    runner=runner,
+                    now=100,
+                )
+            )
+            self.assertTrue(
+                github_budget.graphql_headroom_ok(
+                    min_remaining=500,
+                    cache_ttl_seconds=25,
+                    cwd=second,
+                    env={"GH_REPO_SLUG": "owner/repo"},
+                    runner=runner,
+                    now=101,
+                )
+            )
+            self.assertEqual(len(calls), 2)
+        finally:
+            shutil.rmtree(first, ignore_errors=True)
+            shutil.rmtree(second, ignore_errors=True)
+
     def test_rate_limit_read_failure_fails_open(self) -> None:
         def runner(command):
             return subprocess.CompletedProcess(command, 1, "", "temporary failure")

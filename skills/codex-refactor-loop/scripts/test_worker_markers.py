@@ -110,7 +110,7 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertFalse(marker.found)
             self.assertEqual(marker.reason, "malformed_log_marker")
 
-    def test_duplicate_or_conflicting_artifact_evidence_fails_closed(self) -> None:
+    def test_identical_artifact_markers_are_valid_but_conflicts_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self.repo(tmp)
             duplicate = logs / "implement-issue-1.log"
@@ -126,10 +126,13 @@ class WorkerMarkerReaderTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            self.assertFalse(read_worker_terminal_marker(duplicate).found)
-            self.assertFalse(read_worker_terminal_marker(conflict).found)
+            duplicate_marker = read_worker_terminal_marker(duplicate)
+            self.assertTrue(duplicate_marker.found)
+            self.assertEqual(duplicate_marker.marker, "IMPLEMENT_DONE:issue-1:ok")
+            self.assertEqual(duplicate_marker.reason, "")
+            self.assertEqual(read_worker_terminal_marker(conflict).reason, "duplicate_or_conflicting_artifact_marker")
 
-    def test_duplicate_or_conflicting_log_evidence_fails_closed(self) -> None:
+    def test_identical_log_markers_are_valid_but_conflicts_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)
             duplicate = logs / "implement-issue-3.log"
@@ -148,8 +151,49 @@ class WorkerMarkerReaderTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            self.assertEqual(read_worker_terminal_marker(duplicate).reason, "duplicate_or_conflicting_log_marker")
+            duplicate_marker = read_worker_terminal_marker(duplicate)
+            self.assertTrue(duplicate_marker.found)
+            self.assertEqual(duplicate_marker.marker, "IMPLEMENT_DONE:issue-3:ok")
+            self.assertEqual(duplicate_marker.reason, "")
             self.assertEqual(read_worker_terminal_marker(conflict).reason, "duplicate_or_conflicting_log_marker")
+
+    def test_repeated_review_log_marker_copies_are_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "review-pr522-architect-r7.log"
+            log.write_text(
+                "summary: REVIEW_DONE:522:architect:approve\n"
+                "REVIEW_DONE:522:architect:approve\n"
+                "+REVIEW_DONE:522:architect:approve\n"
+                "REVIEW_DONE:522:architect:approve\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, "REVIEW_DONE:522:architect:approve")
+            self.assertEqual(marker.reason, "")
+
+    def test_repeated_review_artifact_marker_copies_are_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, runs = self.repo(tmp)
+            log = logs / "review-pr522-architect-r7.log"
+            log.write_text("review body\nEXIT=0\n", encoding="utf-8")
+            (runs / "review-pr522-architect-r7.md").write_text(
+                "---\nverdict: approve\n---\n"
+                "REVIEW_DONE:522:architect:approve\n"
+                "+REVIEW_DONE:522:architect:approve\n"
+                "REVIEW_DONE:522:architect:approve\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, "REVIEW_DONE:522:architect:approve")
+            self.assertEqual(marker.reason, "")
 
     def test_source_regression_consumers_import_shared_reader(self) -> None:
         for relative in (
@@ -179,8 +223,8 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             "REVIEW_DONE:",
             "duplicate_or_conflicting_log_marker",
             "duplicate_or_conflicting_artifact_marker",
-            "len(markers) == 1",
             "len(unique) == 1",
+            "len(all_unique) == 1",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, reader)

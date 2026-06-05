@@ -44,7 +44,7 @@ Categorize each demand into one of:
 
 For each fix:
 - Open the file fully (not just the hunk) to make a context-aware change.
-- Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}=self-doc-comment`, and keep those source comments English-only. When `${HOST_REFACTOR_COMMENT_POLICY}` is missing/empty/default/`none`, do not add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments; keep rationale in the fix report/external artifact and include `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`. If a reviewer demands those comments under `none`, classify it as a host-policy conflict/false-positive and record that evidence in the fix report. Any other policy value is invalid and fail-closed; do not guess.
+- Preserve/add refactor self-doc comments only when `${HOST_REFACTOR_COMMENT_POLICY}=self-doc-comment`, and keep those source comments English-only. When enabled, non-canonical marker identity is (A) fixable in-scope: normalize issue-only identities such as `Refactor (issue1525)` to `Refactor (iter${ITERATION}/${CLUSTER_ID})`. If `${CLUSTER_ID}` is missing, derive it from the PR branch, audit artifact, or implement summary; if still absent, use `cluster-issue${ISSUE_NUMBER}` and record the derivation in the fix report. Do not emit `FIX_BLOCKED:human-decision` for deterministic marker normalization. When `${HOST_REFACTOR_COMMENT_POLICY}` is missing/empty/default/`none`, do not add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments; keep rationale in the fix report/external artifact and include `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`. If a reviewer demands those comments under `none`, classify it as a host-policy conflict/false-positive and record that evidence in the fix report. Any other policy value is invalid and fail-closed; do not guess.
 - New test files: follow existing host test naming conventions, single behavior per test, no `sleep/delay`, no `[Skip]`, no mock-only assertions.
 - New non-test code stays minimal and reuses existing patterns.
 
@@ -60,7 +60,11 @@ cd $REPO_ROOT && \
 
 Pick the test projects whose code you changed; do NOT run the full solution test suite (too slow). If build fails → fix or `FIX_BLOCKED:build:<short>`.
 
-### Step 4 — Write fix artifact
+### Step 4 — Close review-thread completion evidence when seeded
+
+If `$REPO_ROOT/.refactor-loop/state/review-thread-completion/pr${PR_NUMBER}.json` exists with `review_thread_driven=true`, treat it as blocking completion evidence: reply to and resolve the seeded original PR review thread, then update the artifact to set `replied=true` and `resolved=true`. If `thread_id` is empty, GitHub closure fails, or escalation lacks an exact clean-exit `.refactor-loop/logs/*.log` `META_RESOLVED:escalate-human:<short>` source, record the reason in `${FIX_OUTPUT_PATH}` and emit `FIX_BLOCKED:${PR_NUMBER}:round-${FIX_ROUND}:other:review-thread-completion`.
+
+### Step 5 — Write fix artifact
 
 Write `${FIX_OUTPUT_PATH}` with this structure:
 
@@ -86,7 +90,7 @@ Write `${FIX_OUTPUT_PATH}` with this structure:
 - <if blocked, say "controller routes to reflector/meta-layer" + paste the FIX_BLOCKED line>
 ```
 
-### Step 5 — Emit marker
+### Step 6 — Emit marker
 
 End your output with EXACTLY one of:
 

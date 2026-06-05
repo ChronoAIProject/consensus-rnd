@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Mapping
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
@@ -30,6 +30,7 @@ from codex_refactor_loop.implementation_pr_artifacts import (
     implementation_cluster_id,
     validate_implementation_pr_artifacts,
 )
+from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
@@ -37,6 +38,10 @@ from codex_refactor_loop.transition_assessment import TransitionAssessmentReader
 from codex_refactor_loop.worker_markers import (
     log_has_clean_exit,
     read_worker_terminal_marker,
+)
+from codex_refactor_loop.review_fix_dispatch import (
+    ReviewThreadCompletionEvidence,
+    validate_review_thread_completion,
 )
 from codex_refactor_loop.work_items import ManagedWorkProjection, extract_closing_issue_numbers, open_actionable_managed_items
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -274,38 +279,78 @@ def harness_spawn_intent_actions(
             terminal_design_targets,
         ):
             continue
+        suppressed = _suppressed_consensus_implementation_spawn_intent(
+            intent,
+            repo_root,
+            gh_items if gh_items_loaded else None,
+            monitor,
+        )
+        if suppressed is not None:
+            actions.append(
+                _harness_spawn_intent_action(
+                    intent,
+                    intent_id,
+                    cd,
+                    prompt,
+                    log_path,
+                    line,
+                    status_only=True,
+                    suppressed_reason=suppressed,
+                )
+            )
+            continue
         actions.append(
-            {
-                "priority": 2,
-                "kind": "harness-spawn-intent",
-                "action_id": f"harness-spawn-intent:{intent_id}",
-                "item": intent.get("task_id"),
-                "phase": "work-intake",
-                "actor": "controller",
-                "route": intent.get("route"),
-                "intent_id": intent_id,
-                "source": intent.get("source"),
-                "command": "spawn-codex",
-                "controller_action": "spawn_codex_harness_background",
-                "cd": str(cd),
-                "prompt": str(prompt),
-                "log": str(log_path),
-                "stall": int(intent.get("stall", 5400)),
-                "run_in_background_required": True,
-                "no_lifecycle_authority": True,
-                "reason": intent.get("reason"),
-                "evidence": line,
-                "source_artifact": ".refactor-loop/.controller-pending-events.log",
-                "source_marker": line,
-                "target_kind": "codex",
-                "target_number": None,
-                "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent_id)},
-                "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
-            }
+            _harness_spawn_intent_action(intent, intent_id, cd, prompt, log_path, line)
         )
     return actions
+
+
+def _harness_spawn_intent_action(
+    intent: dict[str, Any],
+    intent_id: str,
+    cd: Path,
+    prompt: Path,
+    log_path: Path,
+    evidence: str,
+    *,
+    status_only: bool = False,
+    suppressed_reason: str | None = None,
+) -> dict[str, Any]:
+    action = {
+        "priority": 2,
+        "kind": "harness-spawn-intent",
+        "action_id": f"harness-spawn-intent:{intent_id}",
+        "item": intent.get("task_id"),
+        "phase": "work-intake",
+        "actor": "controller",
+        "route": intent.get("route"),
+        "intent_id": intent_id,
+        "source": intent.get("source"),
+        "command": "spawn-codex",
+        "controller_action": "spawn_codex_harness_background",
+        "cd": str(cd),
+        "prompt": str(prompt),
+        "log": str(log_path),
+        "stall": int(intent.get("stall", 5400)),
+        "run_in_background_required": True,
+        "no_lifecycle_authority": True,
+        "reason": intent.get("reason"),
+        "evidence": evidence,
+        "source_artifact": ".refactor-loop/.controller-pending-events.log",
+        "source_marker": evidence,
+        "target_kind": "codex",
+        "target_number": None,
+        "target": {"kind": "codex", "task_id": str(intent.get("task_id") or intent_id)},
+        "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+        "runner_authority": RUNNER_AUTHORITY,
+        "no_generic_command": True,
+    }
+    if status_only:
+        action["status_only"] = True
+        action["suppressed_reason"] = suppressed_reason
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+    return action
 
 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
@@ -513,6 +558,55 @@ def _suppress_harness_spawn_intent(
     ):
         return True
     return False
+
+
+def _suppressed_consensus_implementation_spawn_intent(
+    intent: dict[str, Any],
+    repo_root: Path,
+    gh_items: list[GhItem] | None,
+    monitor: Any | None,
+) -> str | None:
+    issue = _consensus_implementation_spawn_intent_issue(intent)
+    if issue is None:
+        return None
+    action = _consensus_implementation_action_for_intent(repo_root, issue)
+    if not action:
+        return "consensus_artifact_unavailable"
+    reason = consensus_implementation_suppressed_reason(
+        action,
+        repo_root,
+        gh_items,
+        monitor,
+        ignore_pending_implement_intent=True,
+    )
+    if reason in {"pending_implement_intent", None}:
+        return None
+    return reason
+
+
+def _consensus_implementation_spawn_intent_issue(intent: dict[str, Any]) -> int | None:
+    for field in ("intent_id", "action_id"):
+        value = intent.get(field)
+        if not isinstance(value, str):
+            continue
+        match = re.search(rf"(?:^|:){re.escape(IMPLEMENT_PENDING_INTENT_PREFIX)}([1-9][0-9]*)$", value)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _consensus_implementation_action_for_intent(repo_root: Path, issue: int) -> dict[str, Any]:
+    action = latest_consensus_implementation_for_issue(repo_root, issue)
+    if action:
+        action["target_kind"] = "issue"
+        action["target_number"] = issue
+        return action
+    return {
+        "target_kind": "issue",
+        "target_number": issue,
+        "iteration": str(issue),
+        "cluster_id": f"issue-{issue}",
+    }
 
 
 def _is_design_consensus_solver_dispatch_intent(intent: dict[str, Any]) -> bool:
@@ -750,13 +844,6 @@ def is_clean_exit(log_path: Path) -> bool:
     return log_has_clean_exit(log_path)
 
 
-def tail_lines(path: Path, count: int) -> list[str]:
-    try:
-        return path.read_text(encoding="utf-8", errors="ignore").splitlines()[-count:]
-    except OSError:
-        return []
-
-
 def marker_from_completed_log(log_path: Path) -> str | None:
     _shared_reader_uses_done_prefix_fullmatch = "DONE_PREFIX_RE.fullmatch"
     marker = read_worker_terminal_marker(log_path)
@@ -765,6 +852,7 @@ def marker_from_completed_log(log_path: Path) -> str | None:
 
 def completed_marker_actions(
     repo_root: Path,
+    ctx: LoopContext | None = None,
     open_targets: set[tuple[str, int]] | None = None,
     gh_items: list[GhItem] | None = None,
     monitor: Any | None = None,
@@ -772,6 +860,8 @@ def completed_marker_actions(
     logs_dir = repo_root / ".refactor-loop" / "logs"
     if not logs_dir.exists():
         return []
+    if ctx is None:
+        ctx = LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True)
     candidates: list[CompletedMarkerCandidate] = []
     for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
         marker = read_worker_terminal_marker(log_path).marker
@@ -833,6 +923,8 @@ def completed_marker_actions(
                 action["no_lifecycle_authority"] = True
                 action.pop("runner_authority", None)
                 action.pop("no_generic_command", None)
+        if marker.startswith("FIX_DONE"):
+            _apply_fix_done_review_thread_gate(repo_root, ctx, action)
         candidates.append(
             CompletedMarkerCandidate(
                 log_path=log_path,
@@ -842,6 +934,37 @@ def completed_marker_actions(
             )
         )
     return [candidate.action for candidate in _latest_completed_marker_candidates(candidates)]
+
+
+def _repo_local_context_env(repo_root: Path, env: Mapping[str, str]) -> dict[str, str]:
+    context_env = dict(env)
+    raw = context_env.get("CONSENSUS_RND_HOST_ENV")
+    if raw is None:
+        return context_env
+    root = repo_root.resolve()
+    if _host_env_path_is_repo_local(root, raw):
+        return context_env
+    local_default = root / ".config" / "consensus-rnd" / "host.env"
+    if local_default.is_file():
+        context_env["CONSENSUS_RND_HOST_ENV"] = ".config/consensus-rnd/host.env"
+    else:
+        context_env.pop("CONSENSUS_RND_HOST_ENV", None)
+    return context_env
+
+
+def _host_env_path_is_repo_local(repo_root: Path, raw_value: str) -> bool:
+    raw = raw_value.strip()
+    if not raw:
+        return False
+    candidate = Path(raw).expanduser()
+    if any(part == ".." for part in candidate.parts):
+        return False
+    path = (candidate if candidate.is_absolute() else repo_root / candidate).resolve()
+    try:
+        path.relative_to(repo_root)
+    except ValueError:
+        return False
+    return path.is_file()
 
 
 def _marker_mtime(log_path: Path) -> float:
@@ -930,6 +1053,140 @@ def _attach_implementation_pr_artifacts(repo_root: Path, action: dict[str, Any])
     body = repo_root / ".refactor-loop" / "runs" / f"implementation-pr-{cluster_id}-body.md"
     action["title_file"] = title.relative_to(repo_root).as_posix()
     action["body_file"] = body.relative_to(repo_root).as_posix()
+
+
+def _apply_fix_done_review_thread_gate(repo_root: Path, ctx: LoopContext, action: dict[str, Any]) -> None:
+    pr_number = action.get("target_number")
+    if action.get("target_kind") != "PR" or not isinstance(pr_number, int):
+        return
+    evidence = _review_thread_completion_evidence(repo_root, ctx, pr_number)
+    try:
+        validate_review_thread_completion(evidence)
+    except ValueError as exc:
+        action["status_only"] = True
+        action["no_lifecycle_authority"] = True
+        action["route"] = "review-thread-completion-gate"
+        action["blocked_reason"] = f"review_thread_completion_incomplete:{exc}"
+        action["preconditions"] = [
+            *action.get("preconditions", []),
+            "review_thread_completion_evidence",
+        ]
+        action.pop("runner_authority", None)
+        action.pop("no_generic_command", None)
+        action.pop("controller_action", None)
+    else:
+        action["preconditions"] = [
+            *action.get("preconditions", []),
+            "review_thread_completion_evidence",
+        ]
+
+
+def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_number: int) -> ReviewThreadCompletionEvidence:
+    artifact = repo_root / ".refactor-loop" / "state" / "review-thread-completion" / f"pr{pr_number}.json"
+    data: dict[str, Any] = {}
+    if artifact.is_file():
+        try:
+            loaded = json.loads(artifact.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            loaded = {}
+        if isinstance(loaded, dict):
+            data = loaded
+    review_thread_driven = bool(data.get("review_thread_driven"))
+    thread_id = str(data.get("thread_id") or "")
+    raw_escalation_evidence = str(data.get("escalation_evidence") or "")
+    escalation_evidence = (
+        raw_escalation_evidence
+        if _has_clean_escalation_marker_source(repo_root, raw_escalation_evidence)
+        else ""
+    )
+    live_original_thread_resolved = True
+    if review_thread_driven and not escalation_evidence.strip():
+        live_original_thread_resolved = _original_review_thread_is_resolved(ctx, pr_number, thread_id)
+    return ReviewThreadCompletionEvidence(
+        review_thread_driven=review_thread_driven,
+        thread_id=thread_id,
+        replied=bool(data.get("replied")),
+        resolved=bool(data.get("resolved")) and live_original_thread_resolved,
+        escalation_evidence=escalation_evidence,
+    )
+
+
+def _has_clean_escalation_marker_source(repo_root: Path, escalation_evidence: str) -> bool:
+    marker = escalation_evidence.strip()
+    if not marker.startswith("META_RESOLVED:escalate-human:"):
+        return False
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    if not logs_dir.exists():
+        return False
+    for log_path in sorted(logs_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        if marker_from_completed_log(log_path) == marker:
+            return True
+    return False
+
+
+def _original_review_thread_is_resolved(ctx: LoopContext, pr_number: int, thread_id: str) -> bool:
+    if not thread_id.strip():
+        return False
+    slug = str(ctx.host_env.get("GH_REPO_SLUG") or "").strip()
+    owner, _, repo = slug.partition("/")
+    if not owner or not repo:
+        return False
+    query = (
+        "query($owner:String!,$repo:String!,$number:Int!,$after:String){ "
+        "repository(owner:$owner,name:$repo){ pullRequest(number:$number){ "
+        "reviewThreads(first:100, after:$after){ "
+        "nodes{ id isResolved } pageInfo{ hasNextPage endCursor } "
+        "} } } }"
+    )
+    after = ""
+    while True:
+        cmd = [
+            "gh",
+            "api",
+            "graphql",
+            "-f",
+            f"owner={owner}",
+            "-f",
+            f"repo={repo}",
+            "-F",
+            f"number={pr_number}",
+            "-f",
+            f"query={query}",
+        ]
+        if after:
+            cmd.extend(["-f", f"after={after}"])
+        payload = run_json(cmd, cwd=ctx.repo_root)
+        repository = ((payload or {}).get("data") or {}).get("repository")
+        if not isinstance(repository, dict):
+            return False
+        pull_request = repository.get("pullRequest")
+        if not isinstance(pull_request, dict):
+            return False
+        review_threads = pull_request.get("reviewThreads")
+        if not isinstance(review_threads, dict):
+            return False
+        nodes = review_threads.get("nodes")
+        if not isinstance(nodes, list):
+            return False
+        for node in nodes:
+            if not isinstance(node, dict):
+                return False
+            if node.get("id") != thread_id:
+                continue
+            is_resolved = node.get("isResolved")
+            return is_resolved if isinstance(is_resolved, bool) else False
+        page_info = review_threads.get("pageInfo")
+        if not isinstance(page_info, dict):
+            return False
+        has_next_page = page_info.get("hasNextPage")
+        if not isinstance(has_next_page, bool):
+            return False
+        if not has_next_page:
+            return False
+        end_cursor = page_info.get("endCursor")
+        if not isinstance(end_cursor, str) or not end_cursor:
+            return False
+        after = end_cursor
 
 
 def consensus_implementation_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
@@ -1108,7 +1365,7 @@ def _reviewed_head_sha_from_file(path: Path) -> str:
 
 
 def _review_done_action_head_sha(repo_root: Path, log_path: Path, marker: str, gh_items: list[GhItem] | None) -> str:
-    match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)$", marker)
+    match = re.match(r"^REVIEW_DONE:([1-9][0-9]*):([A-Za-z][A-Za-z0-9_-]*):(approve|comment|reject)(?::real)?$", marker)
     if match is None:
         return _reviewed_head_sha_from_log(log_path)
     pr_number = int(match.group(1))
@@ -1133,13 +1390,20 @@ def _gh_item_head_sha(gh_items: list[GhItem] | None, pr_number: int) -> str:
 
 
 def _reviewer_log_has_exit_zero(path: Path) -> bool:
-    return log_has_clean_exit(path)
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return any(line.strip() == "EXIT=0" for line in lines)
 
 
 def _reviewer_log_has_valid_marker(path: Path, pr_number: int, role: str) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
     prefix = f"REVIEW_DONE:{pr_number}:{role}:"
-    marker = read_worker_terminal_marker(path).marker
-    return marker.startswith(prefix)
+    return sum(1 for line in lines if line.strip().startswith(prefix)) == 1
 
 
 def latest_reviewer_heads(repo_root: Path, pr_number: int) -> dict[str, str]:
@@ -1449,46 +1713,33 @@ def load_github_items(repo_root: Path) -> list[GhItem]:
 
 
 def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
-    slug = github_repo_slug()
+    ctx = LoopContext.load(repo_root=repo_root, env=os.environ, cwd=repo_root, read_only=True)
+    snapshot = load_open_managed_work_snapshot(ctx)
     items: list[GhItem] = []
-    loaded_ok = True
-    for kind, gh_kind in (("issue", "issue"), ("PR", "pr")):
-        rows: list[dict[str, Any]] = []
-        json_fields = "number,title,labels,headRefName,headRefOid,body,updatedAt" if kind == "PR" else "number,title,labels,updatedAt"
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            command = ["gh", gh_kind, "list", *gh_args(slug), "--label", query_label, "--state", "open", "--json", json_fields]
-            data = run_json(command, cwd=repo_root)
-            if isinstance(data, list):
-                rows.extend(item for item in data if isinstance(item, dict))
-            else:
-                loaded_ok = False
-        seen: set[int] = set()
-        for raw in rows:
-            try:
-                number = int(raw["number"])
-            except (KeyError, TypeError, ValueError):
-                continue
-            if number in seen:
-                continue
-            seen.add(number)
-            labels = tuple(
-                label.get("name", "")
-                for label in raw.get("labels", [])
-                if isinstance(label, dict) and label.get("name")
+    if not snapshot.loaded_ok:
+        print(
+            snapshot.unavailable_diagnostic("wakeup-plan.load-github-items", target_context="projection-open-managed"),
+            file=sys.stderr,
+            flush=True,
+        )
+        return items, False
+    for raw in snapshot.items:
+        number = raw.number
+        labels = tuple(str(label) for label in raw.labels if str(label))
+        kind = raw.kind
+        items.append(
+            GhItem(
+                kind=kind,
+                number=number,
+                title=raw.title,
+                labels=labels,
+                head_ref=raw.head_ref if kind == "PR" else None,
+                head_sha=raw.head_sha if kind == "PR" else "",
+                body=raw.body if kind == "PR" else "",
+                updated_at=raw.updated_at,
             )
-            items.append(
-                GhItem(
-                    kind=kind,
-                    number=number,
-                    title=str(raw.get("title") or ""),
-                    labels=labels,
-                    head_ref=(str(raw.get("headRefName") or "") or None) if kind == "PR" else None,
-                    head_sha=str(raw.get("headRefOid") or "") if kind == "PR" else "",
-                    body=str(raw.get("body") or "") if kind == "PR" else "",
-                    updated_at=str(raw.get("updatedAt") or ""),
-                )
-            )
-    return items, loaded_ok
+        )
+    return items, True
 
 
 def git_text(cmd: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -1966,6 +2217,8 @@ def consensus_implementation_suppressed_reason(
     repo_root: Path,
     gh_items: list[GhItem] | None = None,
     monitor: Any | None = None,
+    *,
+    ignore_pending_implement_intent: bool = False,
 ) -> str | None:
     target_kind = action.get("target_kind")
     target_number = action.get("target_number")
@@ -1988,9 +2241,9 @@ def consensus_implementation_suppressed_reason(
     )
     if lifecycle.in_flight:
         return "in_flight_implement"
-    if lifecycle.publish_ready:
+    if lifecycle.publish_ready or lifecycle.refresh_needed:
         return "implementation_ready_to_publish"
-    if _pending_implement_intent_exists(repo_root, target_number, action):
+    if not ignore_pending_implement_intent and _pending_implement_intent_exists(repo_root, target_number, action):
         return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"
@@ -2402,7 +2655,7 @@ def suppress_stale_unexecutable_actions(
             continue
         if action.get("controller_action") == "publish_implementation_output" and worktrees is None:
             worktrees = _worktrees_by_branch(repo_root)
-        reason = _stale_unexecutable_reason(action, repo_root, open_targets, worktrees or {})
+        reason = _stale_unexecutable_reason(action, repo_root, open_targets, worktrees or {}, gh_items)
         if not reason:
             continue
         action["status_only"] = True
@@ -2417,10 +2670,11 @@ def _stale_unexecutable_reason(
     repo_root: Path,
     open_targets: set[tuple[str, int]],
     worktrees: dict[str, Path],
+    gh_items: list[GhItem],
 ) -> str | None:
     controller_action = action.get("controller_action")
     if controller_action == "publish_implementation_output":
-        return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees)
+        return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees, gh_items)
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
         if target is not None and target in open_targets:
@@ -2433,16 +2687,17 @@ def _stale_publish_implementation_reason(
     repo_root: Path,
     open_targets: set[tuple[str, int]],
     worktrees: dict[str, Path],
+    gh_items: list[GhItem],
 ) -> str | None:
     target = _action_target_key(action)
     if target is not None and target not in open_targets:
         return "target_not_open"
     head_ref = _implementation_head_ref(action, target)
     if not head_ref:
-        return "verified_pr_head_unavailable"
+        return "early_pr_missing"
     worktree = worktrees.get(head_ref)
     if worktree is None:
-        return "verified_pr_head_unavailable"
+        return "early_pr_missing"
     state = classify_implement_attempt(
         repo_root=repo_root,
         action=action,
@@ -2466,6 +2721,9 @@ def _stale_publish_implementation_reason(
     artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
     if artifact_reason:
         return artifact_reason
+    match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref, worktree=worktree)
+    if match_error:
+        return match_error
     action["head_ref"] = head_ref
     action["worktree"] = str(worktree)
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
@@ -2474,7 +2732,7 @@ def _stale_publish_implementation_reason(
         "fresh_integration_base",
         "single_linked_managed_issue",
         "worker_authored_pr_artifacts",
-        "no_duplicate_open_pr",
+        "exactly_one_matching_open_pr",
         "host_checks_green",
         "clean_scoped_diff",
     ):
@@ -2484,6 +2742,36 @@ def _stale_publish_implementation_reason(
         preconditions.remove("verified_pr_head")
     action["preconditions"] = preconditions
     return None
+
+
+def _matching_open_pr_error(
+    action: dict[str, Any],
+    target: tuple[str, int] | None,
+    *,
+    gh_items: list[GhItem],
+    head_ref: str,
+    worktree: Path,
+) -> str | None:
+    if target is None or target[0] != "issue":
+        return "single_linked_managed_issue_missing"
+    matches = [item for item in gh_items if item.kind == "PR" and item.head_ref == head_ref]
+    if not matches:
+        return "early_pr_missing"
+    if len(matches) > 1:
+        return "multiple_matching_open_pr"
+    pr = matches[0]
+    normalized = label_catalog.normalize_label_set(pr.labels).canonical
+    if label_catalog.MANAGED not in normalized:
+        return "matching_pr_not_managed"
+    if _single_linked_issue_from_body(pr.body) != target[1]:
+        return "matching_pr_issue_mismatch"
+    action["target_pr_number"] = pr.number
+    return None
+
+
+def _single_linked_issue_from_body(body: str) -> int | None:
+    numbers = extract_closing_issue_numbers(body)
+    return numbers[0] if len(numbers) == 1 else None
 
 
 def _worktree_has_non_empty_diff(worktree: Path) -> bool:
@@ -2645,7 +2933,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(review_evidence_redispatch_actions(repo_root, gh_items if gh_items_loaded else []))
     completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
-    actions.extend(completed_marker_actions(repo_root, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
+    actions.extend(completed_marker_actions(repo_root, ctx, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))

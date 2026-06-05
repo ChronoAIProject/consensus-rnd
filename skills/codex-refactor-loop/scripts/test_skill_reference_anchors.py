@@ -875,7 +875,12 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
         self.assertIn("existing evidence/log/in-flight for one solver role suppresses only that role", self.skill)
         self.assertNotIn("with no r1 solver evidence", self.skill)
-        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", self.skill)
+        self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
+        self.assertIn("`.refactor-loop/state/managed-work-snapshot.json`", self.skill)
+        self.assertIn("`.refactor-loop/locks/managed-work-snapshot.lock`", self.skill)
+        self.assertIn("`MANAGED_WORK_SNAPSHOT_TTL_SECONDS=300`", self.skill)
+        self.assertIn("`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`", self.skill)
+        self.assertIn("not GitHub live state fact source, not host production SSOT", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
         self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
@@ -1573,6 +1578,10 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
             "exactly one matching `Closes #N`",
             "non-placeholder title/body",
+            "empty reservation commit",
+            "`early_pr_missing`",
+            "exactly one matching open managed PR",
+            "`implementation_refresh_needed:stale_base`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):

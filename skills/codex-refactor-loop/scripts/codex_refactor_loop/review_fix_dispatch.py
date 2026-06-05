@@ -1,4 +1,4 @@
-"""Review-fix prompt render boundary helpers."""
+"""Review-fix prompt render and completion boundary helpers."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Mapping
 
 _POSITIVE_INT_RE = re.compile(r"^[1-9][0-9]*$")
 _FIX_OUTPUT_RE = re.compile(r"^\.refactor-loop/runs/fix-pr[1-9][0-9]*-round-[1-9][0-9]*-report\.md$")
+_ESCALATION_EVIDENCE_RE = re.compile(r"^META_RESOLVED:escalate-human:[A-Za-z0-9._-]+$")
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,39 @@ class ReviewFixDispatchSpec:
                 "FIX_OUTPUT_PATH must match .refactor-loop/runs/fix-pr<N>-round-<R>-report.md"
             )
         return value
+
+
+@dataclass(frozen=True)
+class ReviewThreadCompletionEvidence:
+    """Evidence required before a review-thread-driven fix is complete."""
+
+    review_thread_driven: bool
+    thread_id: str = ""
+    replied: bool = False
+    resolved: bool = False
+    escalation_evidence: str = ""
+
+
+class ReviewThreadCompletionError(ValueError):
+    """Raised when review-thread completion evidence is missing or incomplete."""
+
+
+def validate_review_thread_completion(evidence: ReviewThreadCompletionEvidence) -> None:
+    """Fail closed unless original review-thread completion evidence is present."""
+
+    if not evidence.review_thread_driven:
+        return
+    escalation_evidence = evidence.escalation_evidence.strip()
+    if escalation_evidence:
+        if not _ESCALATION_EVIDENCE_RE.fullmatch(escalation_evidence):
+            raise ReviewThreadCompletionError("review-thread escalation evidence must be META_RESOLVED:escalate-human:<short>")
+        return
+    if not evidence.thread_id.strip():
+        raise ReviewThreadCompletionError("review-thread-driven fix requires original thread_id evidence")
+    if not evidence.replied:
+        raise ReviewThreadCompletionError("review-thread-driven fix requires reply evidence on the original thread")
+    if not evidence.resolved:
+        raise ReviewThreadCompletionError("review-thread-driven fix requires resolved evidence on the original thread")
 
 
 def _validate_positive_int(value: int, label: str) -> str:
