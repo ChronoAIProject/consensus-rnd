@@ -91,6 +91,8 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_pr_rebase_resolve",
+    "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
@@ -111,6 +113,7 @@ def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "repository-stalled-meta-reflector",
+    "stale-base-conflicting-pr",
     "unpushed-worker-output",
     "completed-marker",
     "release-rollup-needed",
@@ -134,6 +137,10 @@ DESIGN_CONSENSUS_TERMINAL_PHASES = frozenset(
 REVIEW_HEAD_RE = re.compile(r"(?im)^(?:reviewed[-_ ]?head[-_ ]?sha|head[-_ ]?sha|headRefOid|REVIEW_HEAD_SHA)\s*[:=]\s*([0-9a-f]{7,64})\s*$")
 REVIEW_ARTIFACT_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
 REVIEW_LOG_RE = re.compile(r"^review-pr([1-9][0-9]*)-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
+REBASE_RESOLVE_LOG_RE = re.compile(r"^rebase-resolve-pr([1-9][0-9]*)-r([1-9][0-9]*)\.log$")
+REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):[^\s`]+$")
+REBASE_RESOLVE_BLOCKED_RE = re.compile(r"^REBASE_RESOLVE_BLOCKED:([1-9][0-9]*):(conflict|human-decision|build-broken|other):[^\n]+$")
+MANAGED_PR_HEAD_PATTERN = re.compile("^" + "refactor/" + r"iter[1-9][0-9]*-[A-Za-z0-9._-]+$")
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
@@ -150,6 +157,8 @@ class GhItem:
     labels: tuple[str, ...]
     head_ref: str | None = None
     head_sha: str = ""
+    mergeable: str = ""
+    merge_state_status: str = ""
     body: str = ""
     updated_at: str = ""
 
@@ -936,6 +945,78 @@ def completed_marker_actions(
     return [candidate.action for candidate in _latest_completed_marker_candidates(candidates)]
 
 
+def rebase_resolve_completed_marker_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
+    logs_dir = repo_root / ".refactor-loop" / "logs"
+    if not logs_dir.exists():
+        return []
+    open_prs = {item.number: item for item in gh_items if item.kind == "PR"}
+    actions: list[dict[str, Any]] = []
+    for log_path in sorted(logs_dir.glob("rebase-resolve-pr*-r*.log"), key=lambda p: p.stat().st_mtime, reverse=True):
+        identity = REBASE_RESOLVE_LOG_RE.fullmatch(log_path.name)
+        if identity is None:
+            continue
+        marker = _rebase_resolve_marker_from_log(log_path)
+        if not marker:
+            continue
+        marker_match = REBASE_RESOLVE_DONE_RE.fullmatch(marker) or REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker)
+        if marker_match is None:
+            continue
+        pr_number = int(marker_match.group(1))
+        item = open_prs.get(pr_number)
+        if item is None:
+            continue
+        head_ref = safe_head_ref(item.head_ref)
+        if not head_ref:
+            continue
+        worktree = _worktree_for_head_ref(repo_root, head_ref)
+        action = {
+            "priority": 2,
+            "kind": "completed-marker",
+            "action_id": f"completed-marker:{log_path.name}:{marker}",
+            "item": item.item,
+            "phase": "publish",
+            "actor": "controller",
+            "route": "commit-push-resolved-pr-rebase",
+            "marker": marker,
+            "evidence": str(log_path.relative_to(repo_root)),
+            "source_artifact": str(log_path.relative_to(repo_root)),
+            "source_marker": marker,
+            "target_kind": "PR",
+            "target_number": pr_number,
+            "target": {"kind": "PR", "number": pr_number},
+            "head_ref": head_ref,
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            "controller_action": "commit_push_resolved_pr_rebase",
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
+        }
+        if worktree is not None:
+            action["worktree"] = str(worktree)
+        if not _worktree_merge_in_progress_resolved(repo_root, worktree):
+            action["status_only"] = True
+            action["no_lifecycle_authority"] = True
+            action["reason"] = "rebase_resolve_done_without_resolved_merge"
+            action.pop("controller_action", None)
+            action.pop("runner_authority", None)
+            action.pop("no_generic_command", None)
+        actions.append(action)
+    return actions
+
+
+def _rebase_resolve_marker_from_log(log_path: Path) -> str:
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if not any(line.strip() == "EXIT=0" for line in lines[-30:]):
+        return ""
+    for line in reversed(lines[-30:]):
+        stripped = line.strip().strip("`")
+        if REBASE_RESOLVE_DONE_RE.fullmatch(stripped) or REBASE_RESOLVE_BLOCKED_RE.fullmatch(stripped):
+            return stripped
+    return ""
+
+
 def _repo_local_context_env(repo_root: Path, env: Mapping[str, str]) -> dict[str, str]:
     context_env = dict(env)
     raw = context_env.get("CONSENSUS_RND_HOST_ENV")
@@ -1479,6 +1560,8 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem]) 
     for item in gh_items:
         if item.kind != "PR":
             continue
+        if not item.mergeable and not item.merge_state_status:
+            item = _with_live_mergeability(repo_root, item)
         projection = label_catalog.normalize_label_set(item.labels)
         if projection.phase not in {label_catalog.PHASE_REVIEWING, label_catalog.PHASE_PR_OPEN}:
             continue
@@ -1510,7 +1593,26 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem]) 
     return actions
 
 
+def _with_live_mergeability(repo_root: Path, item: GhItem) -> GhItem:
+    result = run_json(
+        ["gh", "pr", "view", str(item.number), "--json", "mergeable,mergeStateStatus,headRefOid"],
+        cwd=repo_root,
+    )
+    if not isinstance(result, dict):
+        return item
+    return replace(
+        item,
+        mergeable=str(result.get("mergeable") or item.mergeable),
+        merge_state_status=str(result.get("mergeStateStatus") or item.merge_state_status),
+        head_sha=str(result.get("headRefOid") or item.head_sha),
+    )
+
+
 def phase_from_marker(marker: str) -> str:
+    if marker.startswith("REBASE_RESOLVE_DONE"):
+        return "publish"
+    if marker.startswith("REBASE_RESOLVE_BLOCKED"):
+        return "review-gate"
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish"
     if marker.startswith("REVIEW_DONE"):
@@ -1529,6 +1631,8 @@ def phase_from_marker(marker: str) -> str:
 
 
 def route_from_marker(marker: str) -> str | None:
+    if marker.startswith("REBASE_RESOLVE"):
+        return "commit-push-resolved-pr-rebase"
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish-or-review-gate"
     if not marker.startswith(
@@ -1549,6 +1653,8 @@ def route_from_marker(marker: str) -> str | None:
 
 
 def actor_from_marker(marker: str) -> str:
+    if marker.startswith("REBASE_RESOLVE"):
+        return "controller"
     if marker.startswith("IMPLEMENT_DONE"):
         return "controller"
     if marker.startswith("REVIEW_DONE"):
@@ -1760,12 +1866,189 @@ def parse_worktree_branches(porcelain: str) -> dict[str, Path]:
     return worktrees
 
 
+def _worktree_for_head_ref(repo_root: Path, head_ref: str) -> Path | None:
+    listed = git_text(["git", "-C", str(repo_root), "worktree", "list", "--porcelain"], cwd=repo_root)
+    if listed.returncode != 0:
+        return None
+    worktree = parse_worktree_branches(listed.stdout).get(head_ref)
+    if worktree is None:
+        return None
+    try:
+        worktree.resolve().relative_to((repo_root / ".worktrees").resolve())
+    except ValueError:
+        return None
+    return worktree
+
+
+def _worktree_merge_in_progress_resolved(repo_root: Path, worktree: Path | None) -> bool:
+    if worktree is None:
+        return False
+    try:
+        worktree.resolve().relative_to((repo_root / ".worktrees").resolve())
+    except ValueError:
+        return False
+    git_dir_result = git_text(["git", "-C", str(worktree), "rev-parse", "--git-dir"], cwd=repo_root)
+    if git_dir_result.returncode != 0 or not git_dir_result.stdout.strip():
+        return False
+    git_dir = Path(git_dir_result.stdout.strip())
+    if not git_dir.is_absolute():
+        git_dir = worktree / git_dir
+    if not (git_dir / "MERGE_HEAD").exists():
+        return False
+    unmerged = git_text(["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"], cwd=repo_root)
+    if unmerged.returncode != 0:
+        return False
+    return not any(line.strip() for line in unmerged.stdout.splitlines())
+
+
 def safe_head_ref(value: str | None) -> str | None:
     if not value or value.startswith("-"):
         return None
     if any(ch.isspace() or ord(ch) < 32 for ch in value):
         return None
     return value
+
+
+def rebase_resolve_actions(
+    repo_root: Path,
+    ctx: LoopContext,
+    gh_items: list[GhItem],
+    monitor: Any | None = None,
+) -> list[dict[str, Any]]:
+    actions: list[dict[str, Any]] = []
+    integration_branch = str(ctx.host_env.get("INTEGRATION_BRANCH") or os.environ.get("INTEGRATION_BRANCH") or "").strip()
+    if not integration_branch:
+        return []
+    for item in gh_items:
+        if item.kind != "PR":
+            continue
+        projection = label_catalog.normalize_label_set(item.labels)
+        if projection.phase not in {
+            label_catalog.PHASE_REVIEWING,
+            label_catalog.PHASE_PR_OPEN,
+            label_catalog.PHASE_CI_RUNNING,
+        }:
+            continue
+        if not item.mergeable and not item.merge_state_status:
+            item = _with_live_mergeability(repo_root, item)
+        mergeable = item.mergeable.upper()
+        merge_state = item.merge_state_status.upper()
+        if mergeable != "CONFLICTING" and merge_state != "DIRTY":
+            continue
+        head_ref = safe_head_ref(item.head_ref)
+        if not head_ref or MANAGED_PR_HEAD_PATTERN.fullmatch(head_ref) is None:
+            continue
+        if _rebase_resolve_in_flight(repo_root, item.number, monitor):
+            actions.append(_rebase_resolve_status(item, "rebase_resolve_in_flight"))
+            continue
+        if _rebase_resolve_pending_done(repo_root, item.number, head_ref):
+            actions.append(_rebase_resolve_status(item, "rebase_resolve_done_pending_commit"))
+            continue
+        base_status = _pr_branch_base_ahead_status(repo_root, head_ref, integration_branch)
+        if base_status is False:
+            actions.append(_rebase_resolve_status(item, "branch_already_contains_base"))
+            continue
+        if base_status is None:
+            actions.append(_rebase_resolve_status(item, "base_ahead_unavailable"))
+            continue
+        actions.append(
+            {
+                "priority": 2,
+                "kind": "stale-base-conflicting-pr",
+                "action_id": f"dispatch-pr-rebase-resolve:{item.number}:{item.head_sha or head_ref}",
+                "item": item.item,
+                "phase": "review-gate",
+                "actor": "controller",
+                "route": "dispatch-pr-rebase-resolve",
+                "controller_action": "dispatch_pr_rebase_resolve",
+                "target_kind": "PR",
+                "target_number": item.number,
+                "target": {"kind": "PR", "number": item.number},
+                "head_ref": head_ref,
+                "head_sha": item.head_sha,
+                "mergeable": item.mergeable,
+                "mergeStateStatus": item.merge_state_status,
+                "source_artifact": "github-managed-pr-mergeability",
+                "source_marker": f"CONFLICTING_PR_STALE_BASE:{item.number}:{item.head_sha or head_ref}",
+                "preconditions": [
+                    "active_controller_owner",
+                    "live_open_target_if_present",
+                    "live_managed_target",
+                    "conflicting_or_dirty_mergeability",
+                    "base_ahead_pr_branch",
+                ],
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+            }
+        )
+    return actions
+
+
+def _rebase_resolve_status(item: GhItem, reason: str) -> dict[str, Any]:
+    return {
+        "priority": 2,
+        "kind": "stale-base-conflicting-pr",
+        "item": item.item,
+        "phase": "review-gate",
+        "actor": "controller",
+        "route": "dispatch-pr-rebase-resolve",
+        "reason": reason,
+        "target_kind": "PR",
+        "target_number": item.number,
+        "target": {"kind": "PR", "number": item.number},
+        "status_only": True,
+        "no_lifecycle_authority": True,
+    }
+
+
+def _rebase_resolve_in_flight(repo_root: Path, pr_number: int, monitor: Any | None) -> bool:
+    for log in (repo_root / ".refactor-loop" / "logs").glob(f"rebase-resolve-pr{pr_number}-r*.log"):
+        if _rebase_resolve_marker_from_log(log):
+            continue
+        if _harness_spawn_intent_log_suppresses_retry(log) or _canonical_in_flight_for_log(log, monitor):
+            return True
+    pending = repo_root / ".refactor-loop" / ".controller-pending-events.log"
+    try:
+        lines = pending.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    prefix = f"dispatch-pr-rebase-resolve:{pr_number}:"
+    for line in lines:
+        if " HARNESS_SPAWN_INTENT " not in line:
+            continue
+        try:
+            intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(intent, dict) and str(intent.get("intent_id") or "").startswith(prefix):
+            return True
+    return False
+
+
+def _rebase_resolve_pending_done(repo_root: Path, pr_number: int, head_ref: str) -> bool:
+    worktree: Path | None = None
+    for log in (repo_root / ".refactor-loop" / "logs").glob(f"rebase-resolve-pr{pr_number}-r*.log"):
+        marker = _rebase_resolve_marker_from_log(log)
+        if REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker):
+            return True
+        if REBASE_RESOLVE_DONE_RE.fullmatch(marker):
+            if worktree is None:
+                worktree = _worktree_for_head_ref(repo_root, head_ref)
+            if _worktree_merge_in_progress_resolved(repo_root, worktree):
+                return True
+    return False
+
+
+def _pr_branch_base_ahead_status(repo_root: Path, head_ref: str, integration_branch: str) -> bool | None:
+    fetch = git_text(["git", "-C", str(repo_root), "fetch", "origin", "--quiet"], cwd=repo_root)
+    if fetch.returncode != 0:
+        return None
+    head = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", f"origin/{head_ref}"], cwd=repo_root)
+    base = git_text(["git", "-C", str(repo_root), "rev-parse", "--verify", f"origin/{integration_branch}"], cwd=repo_root)
+    merge_base = git_text(["git", "-C", str(repo_root), "merge-base", f"origin/{head_ref}", f"origin/{integration_branch}"], cwd=repo_root)
+    if head.returncode != 0 or base.returncode != 0 or merge_base.returncode != 0:
+        return None
+    return merge_base.stdout.strip() != base.stdout.strip()
 
 
 def unpushed_worker_output_actions(repo_root: Path, gh_items: list[GhItem]) -> list[dict[str, Any]]:
@@ -2544,6 +2827,8 @@ def action_priority_class(action: dict[str, Any]) -> int:
 
 
 def controller_action_from_marker(marker: str) -> str:
+    if marker.startswith("REBASE_RESOLVE"):
+        return "commit_push_resolved_pr_rebase"
     if marker.startswith("IMPLEMENT_DONE"):
         return "publish_implementation_output"
     if marker.startswith("REVIEW_DONE"):
@@ -2935,8 +3220,10 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(maintainer_comment_actions(repo_root, gh_items))
     actions.extend(unpushed_worker_output_actions(repo_root, gh_items))
     actions.extend(review_evidence_redispatch_actions(repo_root, gh_items if gh_items_loaded else []))
+    actions.extend(rebase_resolve_actions(repo_root, ctx, gh_items if gh_items_loaded else [], monitor))
     completed_marker_open_targets = _open_managed_targets(gh_items) if gh_items_loaded else None
     actions.extend(completed_marker_actions(repo_root, ctx, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
+    actions.extend(rebase_resolve_completed_marker_actions(repo_root, gh_items if gh_items_loaded else []))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items))
     actions.extend(no_gap_actions(repo_root))

@@ -94,6 +94,8 @@ class DesignIdentifierBoundaryTests(unittest.TestCase):
         allowed_lines = version_bump_allowed_lines()
         offenders: list[str] = []
         for path in git_tracked_paths():
+            if not path.exists():
+                continue
             if not is_source_path(path):
                 continue
             relative = repo_relative(path)

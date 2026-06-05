@@ -111,6 +111,14 @@ class FakeActions:
         self.calls.append(("dispatch_reviewers", dict(action)))
         return 0
 
+    def dispatch_pr_rebase_resolve(self, action: dict) -> int:
+        self.calls.append(("dispatch_pr_rebase_resolve", dict(action)))
+        return 0
+
+    def commit_push_resolved_pr_rebase(self, action: dict) -> int:
+        self.calls.append(("commit_push_resolved_pr_rebase", dict(action)))
+        return 0
+
     def open_release_rollup_pr_from_action(self, action: dict) -> int:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
@@ -456,6 +464,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         action.update(overrides)
         return action
 
+    def review_gate_snapshot(self, **overrides) -> dict:
+        snapshot = {
+            "invalid": [],
+            "all_present": True,
+            "approve": 1,
+            "reject": 0,
+            "comment": 0,
+            "live_head_sha": "a" * 40,
+        }
+        snapshot.update(overrides)
+        return snapshot
+
     def close_action(self, **overrides) -> dict:
         marker = "META_RESOLVED:drop:no-action"
         pending = self.repo / ".refactor-loop/.controller-pending-events.log"
@@ -471,6 +491,54 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "target_number": 53,
             "target": {"kind": "issue", "number": 53},
             "controller_action": "close_managed_item_from_drop_marker",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
+    def rebase_dispatch_action(self, **overrides) -> dict:
+        action = {
+            "kind": "stale-base-conflicting-pr",
+            "action_id": "dispatch-pr-rebase-resolve:77:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "live_open_target_if_present",
+                "live_managed_target",
+                "conflicting_or_dirty_mergeability",
+                "base_ahead_pr_branch",
+            ],
+            "source_artifact": "github-managed-pr-mergeability",
+            "source_marker": "CONFLICTING_PR_STALE_BASE:77:abc123",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "head_ref": "refactor/iter77-worker",
+            "controller_action": "dispatch_pr_rebase_resolve",
+            "no_generic_command": True,
+        }
+        action.update(overrides)
+        return action
+
+    def rebase_commit_action(self, **overrides) -> dict:
+        log = self.repo / ".refactor-loop/logs/rebase-resolve-pr77-r1.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-worker"
+        worktree.mkdir(parents=True, exist_ok=True)
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:rebase-resolve-pr77-r1.log:REBASE_RESOLVE_DONE:77:ok",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": ["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            "source_artifact": ".refactor-loop/logs/rebase-resolve-pr77-r1.log",
+            "source_marker": "REBASE_RESOLVE_DONE:77:ok",
+            "target_kind": "PR",
+            "target_number": 77,
+            "target": {"kind": "PR", "number": 77},
+            "head_ref": "refactor/iter77-worker",
+            "worktree": str(worktree),
+            "controller_action": "commit_push_resolved_pr_rebase",
             "no_generic_command": True,
         }
         action.update(overrides)
@@ -818,6 +886,20 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([result.status for result in results], ["applied"])
         self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
 
+    def test_wakeup_runner_routes_dispatch_pr_rebase_resolve_action(self) -> None:
+        action = self.rebase_dispatch_action()
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["dispatch_pr_rebase_resolve"])
+
+    def test_wakeup_runner_routes_commit_push_resolved_pr_rebase_action(self) -> None:
+        action = self.rebase_commit_action()
+        actions = FakeActions()
+        results = self.run_result(self.base_plan(action), gh_state="OPEN", actions=actions)
+        self.assertEqual([result.status for result in results], ["applied"])
+        self.assertEqual([call[0] for call in actions.calls], ["commit_push_resolved_pr_rebase"])
+
     def test_wakeup_runner_blocked_lifecycle_action_does_not_dead_stop_later_spawn_batch(self) -> None:
         blocked = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-spawn",
@@ -1029,6 +1111,75 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(launch.call_count, 2)
         self.assertEqual(actions.calls, [("merge_pr", "77")])
+
+    def test_review_gate_reject_routes_to_fix_even_when_ci_is_red(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(reject=1, approve=0)) as gate,
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "FIX")
+        self.assertEqual(decision["reason"], "")
+        gate.assert_called_once_with(77)
+        ci_error.assert_not_called()
+        mergeability_error.assert_not_called()
+
+    def test_review_gate_approval_still_waits_when_ci_is_red(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(approve=1, reject=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "ci_failed")
+        ci_error.assert_called_once_with(77, "a" * 40)
+        mergeability_error.assert_not_called()
+
+    def test_review_gate_approval_merges_when_ci_green_and_mergeable(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action()
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(approve=1, reject=0, comment=0)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value=None) as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="a" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "MERGE")
+        self.assertEqual(decision["reason"], "")
+        ci_error.assert_called_once_with(77, "a" * 40)
+        mergeability_error.assert_called_once_with(77)
+
+    def test_review_gate_reject_with_mismatched_head_still_waits(self) -> None:
+        runner = WakeupRunner(self.ctx)
+        action = self.review_gate_action(head_sha="a" * 40)
+
+        with (
+            mock.patch.object(runner, "_review_gate", return_value=self.review_gate_snapshot(reject=1, approve=0, live_head_sha="b" * 40)),
+            mock.patch.object(runner, "_review_gate_ci_error", return_value="ci_failed") as ci_error,
+            mock.patch.object(runner, "_review_gate_mergeability_error", return_value=None) as mergeability_error,
+            mock.patch.object(runner, "_pr_head_sha", return_value="b" * 40),
+        ):
+            decision = runner._review_gate_decision(action)
+
+        self.assertEqual(decision["decision"], "WAIT_OR_REDISPATCH")
+        self.assertEqual(decision["reason"], "action_head_mismatch")
+        ci_error.assert_not_called()
+        mergeability_error.assert_not_called()
 
     def test_wakeup_runner_headless_review_fix_dispatch_uses_fully_rendered_prompt(self) -> None:
         worktree = self.repo / ".worktrees" / "iter77-worker"

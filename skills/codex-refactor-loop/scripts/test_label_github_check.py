@@ -53,15 +53,14 @@ class LabelGithubCheckTests(unittest.TestCase):
 
         self.assertEqual(plan.unknown_crnd, ("crnd:phase:not-registered",))
 
-    def test_legacy_aliases_are_reported_as_migrations(self) -> None:
+    def test_historical_non_crnd_labels_are_unmanaged_residue_not_migrations(self) -> None:
         plan = labels.migration_plan(self.live_catalog() + [{"name": "auto-loop"}, {"name": "phase9-auto-solve"}])
 
-        migrations = {step.live_label: step.add_labels for step in plan.alias_migrations}
-        self.assertEqual(migrations["auto-loop"], (labels.MANAGED,))
-        self.assertEqual(
-            set(migrations["phase9-auto-solve"]),
-            {labels.MANAGED, labels.PHASE_DESIGN_SOLVING, labels.HUMAN_AUTO},
-        )
+        payload = plan.as_dict()
+        self.assertEqual(set(payload), {"create", "update", "unknown_crnd", "external_defaults"})
+        self.assertEqual(plan.create, ())
+        self.assertEqual(plan.update, ())
+        self.assertEqual(plan.unknown_crnd, ())
 
     def run_main_with_live_labels(self, argv: list[str], live: list[dict[str, str]]) -> tuple[int, dict[str, object]]:
         with mock.patch("codex_refactor_loop.labels._load_gh_labels", return_value=live) as load:

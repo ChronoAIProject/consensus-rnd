@@ -138,7 +138,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "## Milestone priority",
             "crnd:milestone:current",
             "orthogonal third axis",
-            "Legacy milestone labels are migration aliases only",
+            "Historical non-`crnd:*` milestone labels are unmanaged residue",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
             "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
@@ -544,7 +544,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "git branch -D",
         )
         allowed_history = "must not run `gh pr create`"
-        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        runtime_retention = section_between(
+            self.skill,
+            r"^## Named runtime exception - RuntimeRetention\(per #437\)$",
+            r"^## Large issue decomposition",
+        )
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "").replace(runtime_retention, "")
+        skill_without_forbidden_history = re.sub(
+            r"(?m)^.*(?:RuntimeRetention|runtime-retention).*\n?",
+            "",
+            skill_without_forbidden_history,
+        )
         for needle in forbidden:
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, skill_without_forbidden_history)

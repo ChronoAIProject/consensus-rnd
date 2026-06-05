@@ -322,6 +322,8 @@ class ConcurrencyMonitor:
             seen.add(key)
             label_names = [str(label) for label in entry.labels if str(label)]
             projection = label_catalog.normalize_label_set(label_names)
+            if label_catalog.MANAGED not in projection.canonical:
+                continue
             phase = projection.phase or ""
             human = projection.human or ""
             items.append(

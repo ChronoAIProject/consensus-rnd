@@ -40,6 +40,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     marker_from_completed_log,
     meta_escalation_stuck_seconds,
     repository_stalled_meta_reflector_actions,
+    rebase_resolve_actions,
+    rebase_resolve_completed_marker_actions,
     release_countdown_actions,
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
@@ -73,7 +75,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.fakebin.mkdir()
         (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
-            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nINTEGRATION_BRANCH=auto-refact-dev\n",
             encoding="utf-8",
         )
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -93,6 +95,215 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_rebase_resolve_actions_project_conflicting_managed_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_rebase_resolve_actions_fetch_live_mergeability_for_snapshot_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="",
+            merge_state_status="",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with (
+            mock.patch(
+                "codex_refactor_loop.wakeup_plan.run_json",
+                return_value={
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "headRefOid": "abc123",
+                },
+            ) as run_json_mock,
+            mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock,
+        ):
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        run_json_mock.assert_called_once_with(
+            ["gh", "pr", "view", "77", "--json", "mergeable,mergeStateStatus,headRefOid"],
+            cwd=self.repo,
+        )
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("abc123", action["head_sha"])
+
+    def test_rebase_resolve_actions_suppress_in_flight_resolve(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        (self.logs / "rebase-resolve-pr77-r1.log").write_text("worker running\n", encoding="utf-8")
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        self.assertEqual("rebase_resolve_in_flight", actions[0]["reason"])
+        self.assertTrue(actions[0]["status_only"])
+
+    def test_rebase_resolve_completed_marker_projects_commit_push_action(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        git_dir = self.repo / ".git" / "worktrees" / "iter77-stale"
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(git_dir) + "\n", stderr="")
+            if command == ["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+        action = actions[0]
+        self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual(str(worktree), action["worktree"])
+
+    def test_wakeup_plan_projects_conflicting_stale_base_pr_dispatch_as_executable(self) -> None:
+        plan = self.run_plan(fixture="stale_base_conflicting_pr")
+
+        action = next(item for item in plan["actions"] if item.get("controller_action") == "dispatch_pr_rebase_resolve")
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("stale-head-sha", action["head_sha"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_stale_rebase_done_clean_worktree_projects_fresh_dispatch(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=False)
+
+        plan = self.run_plan(fixture="stale_base_done_clean")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_pr_rebase_resolve"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+
+    def test_wakeup_plan_projects_rebase_done_only_for_resolved_in_progress_merge(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=())
+
+        plan = self.run_plan(fixture="stale_base_done_resolved_merge")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("completed-marker", action["kind"])
+        self.assertEqual("REBASE_RESOLVE_DONE:177:ok", action["source_marker"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_rebase_done_with_unmerged_paths_never_projects_commit_push(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=("skills/example.py",))
+
+        plan = self.run_plan(fixture="stale_base_done_unmerged")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+
+    def test_wakeup_plan_keeps_branch_current_rebase_resolve_status_only(self) -> None:
+        plan = self.run_plan(fixture="stale_base_branch_current")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("kind") == "stale-base-conflicting-pr" and item.get("reason") == "branch_already_contains_base"
+        )
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
     def write_fake_gh(self) -> None:
         gh = self.fakebin / "gh"
         gh.write_text(
@@ -103,6 +314,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 args="$*"
                 cmd1="$1"
                 cmd2="$2"
+                cmd3="$3"
                 api_path="$2"
                 api_flag1="$3"
                 api_flag2="$4"
@@ -216,49 +428,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    managed_dual_read)
-                      case "$label" in
-                        crnd:lifecycle:managed)
-                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        auto-loop)
-                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"legacy issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"🤖 human:codex"}]}]\n'
-                          ;;
-                        phase9-auto-solve|refactor-design-needed)
-                          printf '[]\n'
-                          ;;
-                        *)
-                          printf '[]\n'
-                          ;;
-                      esac
+                    managed_canonical)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"second canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     milestone)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"milestone issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     existing)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     transition_sort)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":60,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":61,"title":"positive issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":62,"title":"classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":60,"title":"unknown issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":61,"title":"positive issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":62,"title":"classifier issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     many_active)
-                      if [[ "$label" == "auto-loop" ]]; then
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '['
                         for i in 1 2 3 4 5 6; do
                           [[ "$i" != "1" ]] && printf ','
-                          printf '{"number":%s,"title":"active issue %s","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
+                          printf '{"number":%s,"title":"active issue %s","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}' "$i" "$i"
                         done
                         printf ']\n'
                       else
@@ -280,8 +483,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       fi
                       ;;
                     non_action_statuses)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":40,"title":"blocked issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:blocked"},{"name":"crnd:human:auto"}]},{"number":41,"title":"merged issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:merged"},{"name":"crnd:human:auto"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -318,63 +521,51 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     gh_failure)
                       exit 42
                       ;;
-                    managed_dual_read)
-                      case "$label" in
-                        crnd:lifecycle:managed)
-                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        auto-loop)
-                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        phase9-auto-solve)
-                          printf '[]\n'
-                          ;;
-                        refactor-design-needed)
-                          printf '[{"number":92,"title":"legacy PR","headRefName":"impl/legacy","labels":[{"name":"refactor-design-needed"},{"name":"🔍 phase:design-solving"},{"name":"🤖 human:auto-推进"}]}]\n'
-                          ;;
-                        *)
-                          printf '[]\n'
-                          ;;
-                      esac
+                    managed_canonical)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":92,"title":"second canonical PR","headRefName":"impl/second","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_dash)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_space)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_control)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     ci_red)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     ci_red_issue20)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -382,6 +573,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     open_pr_123)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":123,"title":"open PR target","headRefName":"impl/pr123","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    stale_base_conflicting_pr|stale_base_branch_current|stale_base_done_clean|stale_base_done_resolved_merge|stale_base_done_unmerged)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":177,"title":"stale-base PR","headRefName":"refactor/iter177-stale","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -425,15 +623,15 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       printf '[]\n'
                       ;;
                     milestone)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":30,"title":"milestone PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     non_action_statuses)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]},{"number":43,"title":"merged PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:merged"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -529,6 +727,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   printf '{"head":{"sha":"empty-sha"}}\n'
                   exit 0
                 fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
+                  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
                   printf '{"comments":[]}\n'
                   exit 0
@@ -590,6 +792,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         managed = label_catalog.MANAGED
         auto = label_catalog.HUMAN_AUTO
+        fixing = label_catalog.PHASE_FIXING
+        reviewing = label_catalog.PHASE_REVIEWING
+        ci_running = label_catalog.PHASE_CI_RUNNING
         issue_rows: dict[str, list[dict[str, object]]] = {
             "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
@@ -609,28 +814,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
             "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "consensus_issue_330": [issue(330, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
-            "managed_dual_read": [
+            "managed_canonical": [
                 issue(81, "canonical issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
-                issue(82, "legacy issue", ["auto-loop", "🔧 phase:fixing", "🤖 human:codex"]),
+                issue(82, "second canonical issue", [managed, fixing, auto]),
             ],
             "milestone": [
-                issue(20, "milestone issue", ["auto-loop", "🎯 milestone", "🔍 phase:design-solving"]),
-                issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(20, "milestone issue", [managed, label_catalog.MILESTONE_CURRENT, label_catalog.PHASE_DESIGN_SOLVING, auto]),
+                issue(10, "ordinary issue", [managed, fixing, auto]),
             ],
-            "existing": [issue(10, "ordinary issue", ["auto-loop", "🔧 phase:fixing"])],
+            "existing": [issue(10, "ordinary issue", [managed, fixing, auto])],
             "transition_sort": [
-                issue(60, "unknown issue", ["auto-loop", "🔧 phase:fixing"]),
-                issue(61, "positive issue", ["auto-loop", "🔧 phase:fixing"]),
-                issue(62, "classifier issue", ["auto-loop", "🔧 phase:fixing"]),
-                issue(63, "confident classifier issue", ["auto-loop", "🔧 phase:fixing"]),
+                issue(60, "unknown issue", [managed, fixing, auto]),
+                issue(61, "positive issue", [managed, fixing, auto]),
+                issue(62, "classifier issue", [managed, fixing, auto]),
+                issue(63, "confident classifier issue", [managed, fixing, auto]),
             ],
-            "many_active": [issue(number, f"active issue {number}", ["auto-loop", "🔧 phase:fixing"]) for number in range(1, 7)],
+            "many_active": [issue(number, f"active issue {number}", [managed, fixing, auto]) for number in range(1, 7)],
             "represented_parent": [issue(239, "represented parent", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "pr_open_parent": [issue(239, "parent issue with open PR", [managed, label_catalog.PHASE_PR_OPEN, auto])],
             "non_action_statuses": [
-                issue(40, "blocked issue", ["auto-loop", "⏸️ phase:blocked"]),
-                issue(41, "merged issue", ["auto-loop", "🎉 phase:merged"]),
-                issue(44, "parent issue with child PR", ["auto-loop", "crnd:phase:pr-open"]),
+                issue(40, "blocked issue", [managed, label_catalog.PHASE_BLOCKED, auto]),
+                issue(41, "merged issue", [managed, label_catalog.PHASE_MERGED, auto]),
+                issue(44, "parent issue with child PR", [managed, label_catalog.PHASE_PR_OPEN, auto]),
             ],
             "repository_stalled": [
                 issue(506, "old design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2026-05-01T00:00:00Z"),
@@ -655,21 +860,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "local_iter_branch_issue20": [
                 pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
             ],
-            "managed_dual_read": [
-                pr(91, "canonical PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/canonical"),
-                pr(92, "legacy PR", ["refactor-design-needed", "🔍 phase:design-solving", "🤖 human:auto-推进"], head_ref="impl/legacy"),
+            "managed_canonical": [
+                pr(91, "canonical PR", [managed, reviewing, auto], head_ref="impl/canonical"),
+                pr(92, "second canonical PR", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], head_ref="impl/second"),
             ],
-            "unpushed": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
-            "unpushed_fetch_fail": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
-            "unpushed_no_ahead": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
-            "unpushed_no_remote": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
-            "unpushed_no_worktree": [pr(77, "worker output PR", ["auto-loop", "👀 phase:reviewing"], head_ref="refactor/iter77-worker")],
-            "unpushed_head_dash": [pr(78, "unsafe dash head", ["auto-loop", "👀 phase:reviewing"], head_ref="-bad")],
-            "unpushed_head_space": [pr(79, "unsafe space head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad ref")],
-            "unpushed_head_control": [pr(80, "unsafe control head", ["auto-loop", "👀 phase:reviewing"], head_ref="bad\u0001ref")],
-            "ci_red": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
-            "ci_red_issue20": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
+            "unpushed": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_fetch_fail": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_ahead": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_remote": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_worktree": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_head_dash": [pr(78, "unsafe dash head", [managed, reviewing, auto], head_ref="-bad")],
+            "unpushed_head_space": [pr(79, "unsafe space head", [managed, reviewing, auto], head_ref="bad ref")],
+            "unpushed_head_control": [pr(80, "unsafe control head", [managed, reviewing, auto], head_ref="bad\u0001ref")],
+            "ci_red": [pr(31, "red PR", [managed, ci_running, auto], head_sha="ci-red-sha")],
+            "ci_red_issue20": [pr(31, "red PR", [managed, ci_running, auto], head_sha="ci-red-sha")],
             "open_pr_123": [pr(123, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr123")],
+            "stale_base_conflicting_pr": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_clean": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_resolved_merge": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_unmerged": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_branch_current": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
             "open_pr_480": [
                 pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             ],
@@ -689,10 +909,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
             ],
             "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
-            "milestone": [pr(30, "milestone PR", ["auto-loop", "🎯 milestone", "👀 phase:reviewing"])],
+            "milestone": [pr(30, "milestone PR", [managed, label_catalog.MILESTONE_CURRENT, reviewing, auto])],
             "non_action_statuses": [
-                pr(42, "non-red CI PR", ["auto-loop", "⚙️ phase:ci-running"]),
-                pr(43, "merged PR", ["auto-loop", "🎉 phase:merged"]),
+                pr(42, "non-red CI PR", [managed, ci_running, auto]),
+                pr(43, "merged PR", [managed, label_catalog.PHASE_MERGED, auto]),
             ],
             "repository_stalled": [
                 pr(
@@ -726,6 +946,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
+                  if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'worktree %s/.worktrees/iter177-stale\nbranch refs/heads/refactor/iter177-stale\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/refactor/iter77-worker\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                   exit 0
                 fi
@@ -745,6 +969,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
+                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]] && printf 'stale-head-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
+                fi
+                if [[ "$*" == *"merge-base origin/refactor/iter177-stale origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'old-base-sha\n'
+                    exit 0
+                  fi
+                  if [[ "$fixture" == "stale_base_branch_current" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"rev-parse --git-dir"* ]]; then
+                  printf '%s/.git/worktrees/iter177-stale\n' "$WAKEUP_PLAN_REPO_ROOT"
+                  exit 0
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"diff --name-only --diff-filter=U"* ]]; then
+                  if [[ -f "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt" ]]; then
+                    cat "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt"
+                  fi
+                  exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
                   exit 1
@@ -971,6 +1226,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         path = self.logs / name
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
         return path
+
+    def write_rebase_resolve_worktree_state(self, *, merge_head: bool, unmerged_paths: tuple[str, ...] = ()) -> None:
+        worktree = self.repo / ".worktrees" / "iter177-stale"
+        worktree.mkdir(parents=True, exist_ok=True)
+        git_dir = self.repo / ".git" / "worktrees" / "iter177-stale"
+        git_dir.mkdir(parents=True, exist_ok=True)
+        if merge_head:
+            (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+        else:
+            (git_dir / "MERGE_HEAD").unlink(missing_ok=True)
+        unmerged = self.repo / ".refactor-loop" / "state" / "rebase-unmerged-paths.txt"
+        unmerged.parent.mkdir(parents=True, exist_ok=True)
+        unmerged.write_text("".join(f"{path}\n" for path in unmerged_paths), encoding="utf-8")
 
     def write_run_artifact(self, stem: str, *lines: str) -> Path:
         path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
@@ -3968,8 +4236,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ["issue #61", "issue #63", "issue #62", "issue #60"],
         )
 
-    def test_load_github_items_queries_canonical_and_legacy_managed_labels_once(self) -> None:
-        plan = self.run_plan(fixture="managed_dual_read")
+    def test_load_github_items_queries_canonical_managed_label_once(self) -> None:
+        plan = self.run_plan(fixture="managed_canonical")
 
         existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
         self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
@@ -3977,6 +4245,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(query_log, ["api milestones"])
         snapshot = json.loads((self.repo / ".refactor-loop/state/managed-work-snapshot.json").read_text(encoding="utf-8"))
         self.assertEqual(len(snapshot["items"]), 4)
+
+    def test_positive_open_managed_snapshot_fixtures_use_only_canonical_loop_labels(self) -> None:
+        positive_fixtures = (
+            "managed_canonical",
+            "milestone",
+            "existing",
+            "transition_sort",
+            "many_active",
+            "non_action_statuses",
+            "unpushed",
+            "unpushed_fetch_fail",
+            "unpushed_no_ahead",
+            "unpushed_no_remote",
+            "unpushed_no_worktree",
+            "unpushed_head_dash",
+            "unpushed_head_space",
+            "unpushed_head_control",
+            "ci_red",
+            "ci_red_issue20",
+        )
+
+        for fixture in positive_fixtures:
+            with self.subTest(fixture=fixture):
+                rows = self.managed_work_snapshot_items(fixture)
+                self.assertGreater(len(rows), 0)
+                for row in rows:
+                    labels = tuple(str(label) for label in row["labels"])
+                    residue = [label for label in labels if not label_catalog.is_loop_owned(label)]
+                    self.assertEqual(residue, [], f"{fixture} uses historical residue labels in a positive open-managed fixture")
+                    self.assertIn(label_catalog.MANAGED, labels)
+                    valid, errors = label_catalog.validate_exactly_one_phase_human(labels)
+                    self.assertTrue(valid, f"{fixture} has invalid canonical labels for {row['kind']} #{row['number']}: {errors}")
 
     def test_load_github_items_logs_unavailable_managed_work_snapshot(self) -> None:
         snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)

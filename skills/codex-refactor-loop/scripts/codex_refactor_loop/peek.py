@@ -335,7 +335,7 @@ class PeekStatusLens:
 
     def _visible_loop_labels(self, labels: list[str]) -> list[str]:
         projection = label_catalog.normalize_label_set(labels)
-        return sorted(projection.canonical | projection.cleanup_only)
+        return sorted(projection.canonical)
 
     def _list_by_any_label(
         self,

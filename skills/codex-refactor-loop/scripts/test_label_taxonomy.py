@@ -57,10 +57,10 @@ class LabelTaxonomyTests(unittest.TestCase):
             frozenset({labels.MILESTONE_CURRENT, labels.MILESTONE_RELEASE_TARGET}),
         )
 
-    def test_managed_query_labels_include_canonical_and_legacy_aliases(self) -> None:
+    def test_managed_query_labels_are_canonical_only(self) -> None:
         self.assertEqual(
             labels.query_labels_for(labels.MANAGED),
-            (labels.MANAGED, "auto-loop", "phase9-auto-solve", "refactor-design-needed"),
+            (labels.MANAGED,),
         )
 
     def test_exactly_one_phase_and_human_invariant(self) -> None:

@@ -196,7 +196,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
-            "Legacy issue-entry labels are migration aliases only",
+            "Historical non-`crnd:*` issue-entry labels are unmanaged residue",
             "`audit` remains a stable compatibility producer value and fallback issue producer",
             "no open actionable managed issue/PR",
             "Audit produces or updates issues that feed back into the main path",
@@ -312,6 +312,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
+
+    def test_runtime_retention_anchor_documents_canonical_owner_and_alias(self) -> None:
+        section = section_after_anchor(self.skill, "named-runtime-exception--runtime-retentionper-437")
+        for needle in (
+            "RuntimeRetention(per #437)",
+            "runtime-retention-437",
+            "`consensus-rnd-cli runtime-retention` is the canonical command",
+            "$RUNTIME_RETENTION_ENABLE=true",
+            "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "same inode",
+            ".controller-pending-events.log",
+            ".refactor-loop/state/runtime-retention-plan.json",
+            "git worktree remove <path>",
+            "git worktree prune",
+            "no `git fetch`",
+            "no GitHub write or lifecycle authority",
+            "test_runtime_retention.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
     def test_task_spawn_claim_documents_spawn_boundary_not_distributed_authority(self) -> None:
         section = section_after_anchor(self.skill, "task-spawn-claim-490")
@@ -1012,7 +1032,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate",
             "missing terminal phase",
             "residual nonterminal phase",
-            "cleanup-only alias",
             "`crnd:lifecycle:stuck`",
             "managed-intersecting at query construction",
             "small recent closed read-only managed window",

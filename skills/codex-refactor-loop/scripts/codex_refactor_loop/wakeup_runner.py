@@ -68,6 +68,8 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_pr_rebase_resolve",
+    "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
@@ -314,6 +316,10 @@ class WakeupRunner:
             and action.get("controller_action") != "publish_release_candidate"
         ):
             path = self.ctx.repo_root / source_artifact
+            if action.get("controller_action") == "commit_push_resolved_pr_rebase":
+                if _source_log_has_clean_rebase_resolve_marker(path, source_marker):
+                    return None
+                return "clean_exit_marker_missing"
             if not _source_log_has_clean_marker(path, source_marker):
                 return "clean_exit_marker_missing"
             return None
@@ -375,6 +381,10 @@ class WakeupRunner:
             return self._validate_publish_implementation(action)
         if controller_action == "dispatch_reviewers":
             return self._validate_dispatch_reviewers(action)
+        if controller_action == "dispatch_pr_rebase_resolve":
+            return self._validate_dispatch_pr_rebase_resolve(action)
+        if controller_action == "commit_push_resolved_pr_rebase":
+            return self._validate_commit_push_resolved_pr_rebase(action)
         if controller_action == "open_release_rollup_pr_from_action":
             return self._validate_release_rollup(action)
         if controller_action == "close_managed_item_from_drop_marker":
@@ -545,6 +555,52 @@ class WakeupRunner:
             return "dispatch_reviewers_target_missing"
         return None
 
+    def _validate_dispatch_pr_rebase_resolve(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "dispatch_pr_rebase_resolve_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "dispatch_pr_rebase_resolve_missing_preconditions"
+        for required in ("active_controller_owner", "live_managed_target", "base_ahead_pr_branch"):
+            if required not in preconditions:
+                return f"dispatch_pr_rebase_resolve_missing_precondition:{required}"
+        target = int(action["target_number"])
+        if not self._live_target_has_managed_label("pr", target):
+            return "dispatch_pr_rebase_resolve_target_not_managed"
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _managed_pr_head_ref(head_ref):
+            return "dispatch_pr_rebase_resolve_invalid_head_ref"
+        live_head = self._pr_head_ref(target)
+        if live_head != head_ref:
+            return f"dispatch_pr_rebase_resolve_stale_head:{live_head or 'unknown'}"
+        return None
+
+    def _validate_commit_push_resolved_pr_rebase(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "commit_push_resolved_pr_rebase_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "commit_push_resolved_pr_rebase_missing_preconditions"
+        for required in ("active_controller_owner", "clean_exit_source_marker"):
+            if required not in preconditions:
+                return f"commit_push_resolved_pr_rebase_missing_precondition:{required}"
+        marker = str(action.get("source_marker") or "")
+        if not (
+            re.fullmatch(r"REBASE_RESOLVE_DONE:[1-9][0-9]*:[^\s`]+", marker)
+            or re.fullmatch(r"REBASE_RESOLVE_BLOCKED:[1-9][0-9]*:(?:conflict|human-decision|build-broken|other):[^\n]+", marker)
+        ):
+            return "commit_push_resolved_pr_rebase_invalid_marker"
+        target = int(action["target_number"])
+        if not self._live_target_has_managed_label("pr", target):
+            return "commit_push_resolved_pr_rebase_target_not_managed"
+        head_ref = str(action.get("head_ref") or "").strip()
+        if not _managed_pr_head_ref(head_ref):
+            return "commit_push_resolved_pr_rebase_invalid_head_ref"
+        live_head = self._pr_head_ref(target)
+        if live_head != head_ref:
+            return f"commit_push_resolved_pr_rebase_stale_head:{live_head or 'unknown'}"
+        return None
+
     def _validate_release_rollup(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")
         if not isinstance(preconditions, list) or "release_rollup_event" not in preconditions:
@@ -652,6 +708,10 @@ class WakeupRunner:
                 if fix_publish_rc != 0:
                     return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
+        if controller_action == "dispatch_pr_rebase_resolve":
+            return self.actions.dispatch_pr_rebase_resolve(dict(action))
+        if controller_action == "commit_push_resolved_pr_rebase":
+            return self.actions.commit_push_resolved_pr_rebase(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
@@ -820,14 +880,14 @@ class WakeupRunner:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "missing_live_head_sha", "gate": gate}
         if action_head != live_head:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": "action_head_mismatch", "gate": gate}
+        if gate["reject"] > 0:
+            return {"decision": "FIX", "reason": "", "gate": gate}
         ci_error = self._review_gate_ci_error(target, live_head)
         if ci_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": ci_error, "gate": gate}
         mergeability_error = self._review_gate_mergeability_error(target)
         if mergeability_error:
             return {"decision": "WAIT_OR_REDISPATCH", "reason": mergeability_error, "gate": gate}
-        if gate["reject"] > 0:
-            return {"decision": "FIX", "reason": "", "gate": gate}
         if gate["approve"] < 1:
             return {"decision": "WAIT_EXPLICIT_APPROVAL", "reason": "no_approval", "gate": gate}
         decision = "MERGE" if gate["comment"] == 0 else "MERGE_WITH_COMMENTS"
@@ -1104,6 +1164,18 @@ def _spawn_log_suppresses_retry(path: Path) -> bool:
     return True
 
 
+def _source_log_has_clean_rebase_resolve_marker(path: Path, marker: str) -> bool:
+    if not marker.startswith(("REBASE_RESOLVE_DONE:", "REBASE_RESOLVE_BLOCKED:")):
+        return False
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    if not any(line.strip() == "EXIT=0" for line in lines[-30:]):
+        return False
+    return any(line.strip().strip("`") == marker for line in lines[-30:])
+
+
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
 
@@ -1132,6 +1204,10 @@ def _target_from_text(text: str) -> tuple[str, int] | None:
         if match:
             return kind, int(match.group(1))
     return None
+
+
+def _managed_pr_head_ref(value: str) -> bool:
+    return bool(re.fullmatch(r"refactor/iter[1-9][0-9]*-[A-Za-z0-9._-]+", value))
 
 
 def _terminal_blocked_reason(reason: str) -> bool:

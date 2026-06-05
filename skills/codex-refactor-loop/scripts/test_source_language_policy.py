@@ -51,8 +51,6 @@ ALLOWLIST: tuple[AllowlistEntry, ...] = (
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/github_body.py", "render_github_body", "self-contained GitHub body text is intentionally Chinese user-facing output"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/github_body.py", "validate_self_contained_github_body", "validator error references intentional Chinese debug heading"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/github_body.py", "_kind_label", "GitHub body kind labels are intentionally Chinese user-facing output"),
-    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/labels.py", "CLEANUP_ONLY_ALIASES", "GitHub label names include legacy Chinese catalog entries"),
-    AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/labels.py", "LABEL_SPECS", "GitHub label names include legacy Chinese catalog entries"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/comment.py", "CommentMonitor.post_banner.banner_body", "maintainer-facing GitHub notification text is intentionally Chinese"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/progress.py", "ProgressReporter.build_body", "progress comments are intentionally Chinese user-facing output"),
     AllowlistEntry("skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py", "PeekStatusLens.render", "status lens renders existing Chinese labels and user-facing state"),
