@@ -120,7 +120,6 @@ class ReleasePublisher:
         )
 
     def _inspect_publication_state(self, result: PublishPreflightResult) -> ReleasePublicationState:
-        # refactor helper, no behavior change outside the private reentry classification
         version = result.version
         tag = f"v{version}" if version else ""
         if result.allowed:

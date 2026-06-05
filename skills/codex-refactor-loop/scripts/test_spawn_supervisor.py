@@ -9,7 +9,6 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -124,13 +123,14 @@ class SpawnSupervisorTests(unittest.TestCase):
         fake_proc.wait.assert_not_called()
         fake_proc.poll.assert_not_called()
 
+    def test_spawn_supervisor_source_preserves_claim_before_process_supervision(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "spawn.py").read_text(encoding="utf-8")
+        self.assertIn("TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)", source)
+        self.assertIn("SPAWN_CLAIM_HELD:task=", source)
+        self.assertLess(source.index("TaskSpawnClaimStore(repo_root).acquire"), source.index("ProcessSupervisor().supervise"))
+
     def assert_process_dead(self, pid: int) -> None:
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            if not self.pid_alive(pid):
-                return
-            time.sleep(0.05)
-        self.fail(f"process still alive after process-group kill: {pid}")
+        self.assertFalse(self.pid_alive(pid), f"process still alive after process-group kill: {pid}")
 
     @staticmethod
     def pid_alive(pid: int) -> bool:
