@@ -1746,6 +1746,9 @@ class ControllerActionsTests(unittest.TestCase):
                         f"2026-06-01T00:00:00Z HARNESS_SPAWN_INTENT {json.dumps(pending)}\n",
                         encoding="utf-8",
                     )
+                    # A pending intent suppresses dispatch only while its canonical worktree exists;
+                    # a stale intent without that worktree intentionally allows fresh re-dispatch.
+                    (self.tmp / ".worktrees" / "iter413-issue-413-pending_implement_intent").mkdir(parents=True)
                 pending_before = self.pending_events()
                 with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
                     with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git_text):

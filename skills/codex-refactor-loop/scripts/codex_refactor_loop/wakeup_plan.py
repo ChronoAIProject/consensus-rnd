@@ -2242,7 +2242,12 @@ def consensus_implementation_suppressed_reason(
         return "in_flight_implement"
     if lifecycle.publish_ready or lifecycle.refresh_needed:
         return "implementation_ready_to_publish"
-    if not ignore_pending_implement_intent and _pending_implement_intent_exists(repo_root, target_number, action):
+    if (
+        not ignore_pending_implement_intent
+        and _pending_implement_intent_exists(repo_root, target_number, action)
+        # Stale queued intents can point at deleted worktrees; allow fresh dispatch to recreate them.
+        and _canonical_consensus_worktree_exists(repo_root, action)
+    ):
         return "pending_implement_intent"
     if _in_flight_implement_exists(repo_root, action, monitor):
         return "in_flight_implement"

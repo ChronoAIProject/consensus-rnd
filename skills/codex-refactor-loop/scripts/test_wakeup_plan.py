@@ -2975,6 +2975,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("status_only", action)
         self.assertTrue(action["consensus_implementation_ready"])
 
+    def test_consensus_implementation_readiness_does_not_suppress_stale_pending_intent(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertIsNone(reason)
+
+    def test_consensus_implementation_readiness_suppresses_pending_intent_with_worktree(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertEqual("pending_implement_intent", reason)
+
     def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
         cases = (
             ("pending", "pending_implement_intent"),
@@ -2992,6 +3029,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 elif name == "log":
                     (self.logs / "implement-issue-20.log").write_text("", encoding="utf-8")
                 elif name == "pending":
+                    (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
                     self.append_harness_spawn_intent(
                         intent_id="dispatch-consensus-implementation:20",
                         task_id="implement-issue-20",
