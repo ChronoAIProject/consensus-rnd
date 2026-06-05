@@ -51,6 +51,7 @@ def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult
 
 class Phase9RouterPackageTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_host_env_locator = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
@@ -66,6 +67,10 @@ class Phase9RouterPackageTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self.old_env)
         self.tmp.cleanup()
+        if self.original_host_env_locator is None:
+            os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
+        else:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self.original_host_env_locator
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name

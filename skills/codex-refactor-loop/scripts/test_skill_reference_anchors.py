@@ -1571,9 +1571,16 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "不得接受 argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
             "不得把 `.refactor-loop/host.env` 当 host production SSOT",
             "允许动作仅限 spawn codex",
+            "allowlisted release-rollup body generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
+            "then named helper `open_release_rollup_pr_from_action` after the body exists",
             "named helper `open_release_rollup_pr_from_action`",
+            "router guard adjudication",
+            "generic codex fallback",
+            "prompt-body decision",
+            "command fields",
+            "new lifecycle authority",
             "publish release through #322",
         ):
             with self.subTest(needle=needle):
@@ -1690,10 +1697,16 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "release-rollup freshness may use read-only local `refs/remotes/origin/<review_base>..refs/remotes/origin/<integration>` evidence",
             "local ref probe failure fails open",
             "does not weaken #396 revalidation or create standalone authorization",
+            "allowlisted `release-rollup-body` generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`",
+            "router guard adjudication",
+            "generic codex fallback",
+            "new lifecycle authority",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, wakeup_runner)
         for token in (
+            "RELEASE_ROLLUP_BODY_FILE",
+            "release-rollup-body",
             "latest_by_integration_sha",
             "_release_rollup_event_is_fresh",
             "refs/remotes/origin/{review_base_branch}",

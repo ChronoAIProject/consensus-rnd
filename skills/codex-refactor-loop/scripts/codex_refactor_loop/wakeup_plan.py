@@ -66,11 +66,14 @@ HARNESS_SPAWN_INTENT_FORBIDDEN_FIELDS = {
     "args",
     "shell",
     "cmd",
+    "command_line",
     "commands",
     "env",
     "git",
     "gh",
     "executor",
+    "lifecycle_authority",
+    "lifecycle_owner",
     "target_ref",
 }
 HARNESS_SPAWN_TARGET_TEXT_PATTERNS = (
@@ -98,6 +101,9 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "review_gate",
     "publish_release_candidate",
 }
+RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
+RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
+RELEASE_ROLLUP_BODY_LOG = ".refactor-loop/logs/release-rollup-body.log"
 
 
 def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
@@ -2182,6 +2188,45 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
     for integration_sha, (event, event_json, line) in latest_by_integration_sha.items():
         if not _release_rollup_event_is_fresh(repo_root, event, integration_sha):
             continue
+        body_file = RELEASE_ROLLUP_BODY_FILE
+        if not (repo_root / body_file).is_file():
+            actions.append(
+                {
+                    "priority": 3,
+                    "kind": "release-rollup-needed",
+                    "action_id": f"release-rollup-body:{integration_sha}",
+                    "item": "release rollup body",
+                    "phase": "publish",
+                    "actor": "release-rollup-body",
+                    "route": "release-rollup-body",
+                    "event": event,
+                    "event_json": event_json,
+                    "body_file": body_file,
+                    "output_path": body_file,
+                    "source_artifact": ".refactor-loop/.controller-pending-events.log",
+                    "source_marker": line,
+                    "target_kind": "codex",
+                    "target_number": None,
+                    "target": {"kind": "codex", "task_id": "release-rollup-body"},
+                    "preconditions": [
+                        "active_controller_owner",
+                        "source_artifact_contains_evidence",
+                        "release_rollup_event",
+                        "target_log_absent",
+                        "target_body_absent",
+                    ],
+                    "controller_action": "spawn_codex_harness_background",
+                    "capability": "release-rollup-body",
+                    "cd": str(repo_root.resolve()),
+                    "prompt": str((repo_root / RELEASE_ROLLUP_BODY_PROMPT).resolve()),
+                    "log": str((repo_root / RELEASE_ROLLUP_BODY_LOG).resolve()),
+                    "stall": 1800,
+                    "runner_authority": RUNNER_AUTHORITY,
+                    "no_generic_command": True,
+                    "no_lifecycle_authority": True,
+                }
+            )
+            continue
         actions.append(
             {
                 "priority": 3,
@@ -2193,7 +2238,7 @@ def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
                 "route": "release-rollup",
                 "event": event,
                 "event_json": event_json,
-                "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+                "body_file": body_file,
                 "title": "Release rollup",
                 "source_artifact": ".refactor-loop/.controller-pending-events.log",
                 "source_marker": line,
