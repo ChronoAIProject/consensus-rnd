@@ -113,6 +113,7 @@ def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
 EXECUTABLE_ACTION_KINDS = {
     "harness-spawn-intent",
     "repository-stalled-meta-reflector",
+    "stale-base-conflicting-pr",
     "unpushed-worker-output",
     "completed-marker",
     "release-rollup-needed",

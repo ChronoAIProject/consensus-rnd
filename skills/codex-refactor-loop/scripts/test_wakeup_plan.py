@@ -75,7 +75,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.fakebin.mkdir()
         (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
-            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nINTEGRATION_BRANCH=auto-refact-dev\n",
             encoding="utf-8",
         )
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -202,6 +202,50 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
         self.assertEqual(str(worktree), action["worktree"])
 
+    def test_wakeup_plan_projects_conflicting_stale_base_pr_dispatch_as_executable(self) -> None:
+        plan = self.run_plan(fixture="stale_base_conflicting_pr")
+
+        action = next(item for item in plan["actions"] if item.get("controller_action") == "dispatch_pr_rebase_resolve")
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("stale-head-sha", action["head_sha"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_projects_rebase_resolve_done_marker_as_executable_commit_push(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = next(item for item in plan["actions"] if item.get("controller_action") == "commit_push_resolved_pr_rebase")
+        self.assertEqual("completed-marker", action["kind"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_keeps_branch_current_rebase_resolve_status_only(self) -> None:
+        plan = self.run_plan(fixture="stale_base_branch_current")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("kind") == "stale-base-conflicting-pr" and item.get("reason") == "branch_already_contains_base"
+        )
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
     def write_fake_gh(self) -> None:
         gh = self.fakebin / "gh"
         gh.write_text(
@@ -212,6 +256,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 args="$*"
                 cmd1="$1"
                 cmd2="$2"
+                cmd3="$3"
                 api_path="$2"
                 api_flag1="$3"
                 api_flag2="$4"
@@ -495,6 +540,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    stale_base_conflicting_pr|stale_base_branch_current)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":177,"title":"stale-base PR","headRefName":"refactor/iter177-stale","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_pr_480)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":480,"title":"wedged review PR","headRefName":"impl/pr480","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
@@ -638,6 +690,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   printf '{"head":{"sha":"empty-sha"}}\n'
                   exit 0
                 fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
+                  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
                   printf '{"comments":[]}\n'
                   exit 0
@@ -779,6 +835,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "ci_red": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
             "ci_red_issue20": [pr(31, "red PR", ["auto-loop", "⚙️ phase:ci-running"], head_sha="ci-red-sha")],
             "open_pr_123": [pr(123, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr123")],
+            "stale_base_conflicting_pr": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_branch_current": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
             "open_pr_480": [
                 pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             ],
@@ -853,6 +915,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
+                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" ]] && printf 'stale-head-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
+                fi
+                if [[ "$*" == *"merge-base origin/refactor/iter177-stale origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" ]]; then
+                    printf 'old-base-sha\n'
+                    exit 0
+                  fi
+                  if [[ "$fixture" == "stale_base_branch_current" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
