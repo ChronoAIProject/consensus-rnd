@@ -1934,7 +1934,7 @@ class ControllerActionsTests(unittest.TestCase):
                                 "target_kind": "PR",
                                 "target_number": 77,
                                 "stale_review_roles": ["architect", "tests"],
-                                "head_sha": "a" * 40,
+                                "head_sha": "b" * 40,
                             }
                         ),
                     )
@@ -1994,7 +1994,7 @@ class ControllerActionsTests(unittest.TestCase):
                                 "target_kind": "PR",
                                 "target_number": 77,
                                 "stale_review_roles": ["architect", "tests"],
-                                "head_sha": "a" * 40,
+                                "head_sha": "b" * 40,
                             }
                         ),
                     )
@@ -2035,8 +2035,10 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_dispatch_reviewers_source_requires_controller_head_oid_binding(self) -> None:
         source = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        method = source[source.index("    def dispatch_reviewers") : source.index("    def _next_review_round")]
         self.assertIn('"title,baseRefName,headRefName,headRefOid"', source)
         self.assertIn('"HEAD_SHA": head_sha', source)
+        self.assertNotIn('action.get("head_sha"', method)
         self.assertIn("def _next_review_round(", source)
         self.assertIn("round_number = self._next_review_round(pr_target, role)", source)
         self.assertIn("intent_id=f\"dispatch-reviewers:{pr_target}:{role}:r{round_number}\"", source)
