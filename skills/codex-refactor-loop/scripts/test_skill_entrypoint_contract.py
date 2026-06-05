@@ -609,6 +609,32 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Host command strings must be executed via bash -lc, not as bare lines",
         )
 
+    def test_implement_and_verify_prompts_lock_touched_module_test_ratchet(self) -> None:
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        verify = read(SKILL_ROOT / "prompts" / "verify.md")
+        combined = "\n".join((self.skill, implement, verify))
+
+        for needle in (
+            "Touched-module test ratchet",
+            "测试 ratchet",
+            "fast / hermetic / behavior-first",
+            "owner-local fact source",
+            "mock/fake/stub",
+            "behavior",
+            "contract",
+            "sleep/delay",
+            "suite-level host-wide process-table guard",
+            "ps -eo pid=,command=",
+            "daemon leak / duplicate",
+            "helper-local fact source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_daemon_leak_suite_guard_no_longer_scans_host_process_table(self) -> None:
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
+
     def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
         host_config = section_between(
             self.skill,

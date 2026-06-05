@@ -19,7 +19,7 @@ from . import labels
 from .context import LoopContext
 from .controller_actions import ControllerActions, PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 from .gh_invoke import build_gh_argv
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .pr_checks import PrChecksProjection
@@ -196,7 +196,6 @@ class WakeupRunner:
 
     def run_once(self) -> list[RunnerResult]:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("wakeup-runner")
             return [RunnerResult("", "skipped", "graphql-backoff")]
         owner = require_active_controller(self.ctx, "wakeup-runner")
         write_active_controller_status(self.ctx, owner)
@@ -609,6 +608,10 @@ class WakeupRunner:
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
         if controller_action == "dispatch_reviewers":
+            if str(action.get("source_marker") or "").startswith("FIX_DONE"):
+                fix_publish_rc = self._commit_and_push_review_fix_output(action)
+                if fix_publish_rc != 0:
+                    return fix_publish_rc
             return self.actions.dispatch_reviewers(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
@@ -636,7 +639,7 @@ class WakeupRunner:
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self._append_pending_event(f"WAKEUP_RUNNER_SPAWN_BACKOFF:{action.get('action_id', '')}:graphql-headroom-low")
-            log_graphql_backoff("wakeup-runner")
+            _log_tick_status("wakeup-runner", "skip:graphql-backoff remaining=unknown")
             return 3
         cd = Path(str(action.get("cd") or self.ctx.repo_root))
         prompt = Path(str(action.get("prompt") or ""))
@@ -707,6 +710,40 @@ class WakeupRunner:
             return ""
         value = payload.get("headRefName") if isinstance(payload, dict) else None
         return value.strip() if isinstance(value, str) else ""
+
+    def _commit_and_push_review_fix_output(self, action: Mapping[str, Any]) -> int:
+        """Commit and push uncommitted review-fix output before re-review.
+
+        Headless gap: a fix codex emits FIX_DONE but workers never commit, so the
+        fix sits uncommitted in the PR worktree and dispatch_reviewers would re-review
+        the stale head forever. Mirror the interactive controller, which commits and
+        pushes the fix codex's changes to the PR head before re-dispatching reviewers.
+        A clean worktree (already committed or no changes) is a no-op.
+        """
+        target = action.get("target_number")
+        if not isinstance(target, int) or target <= 0:
+            return 2
+        worktree = self._review_fix_worktree(target)
+        if worktree is None:
+            return 3
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_STATUS_FAILED:{target}")
+            return 2
+        if not status.stdout.strip():
+            return 0
+        if self.command_runner(["git", "-C", str(worktree), "add", "-A"]).returncode != 0:
+            return 2
+        commit = self.command_runner(
+            ["git", "-C", str(worktree), "commit", "-m", f"PR #{target} review-fix output"]
+        )
+        if commit.returncode != 0:
+            self._append_pending_event(f"WAKEUP_RUNNER_REVIEW_FIX_COMMIT_FAILED:{target}")
+            return 2
+        head_ref = self._pr_head_ref_from_json(target)
+        if not head_ref:
+            return 3
+        return self.actions.safe_push(branch=head_ref, worktree=worktree)
 
     def _worktree_for_branch(self, branch: str) -> Path | None:
         result = self.command_runner(["git", "-C", str(self.ctx.repo_root), "worktree", "list", "--porcelain"])
@@ -1216,7 +1253,7 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
     if first.status == "applied":
         return f"dispatched {first.action_id or 'action'}{_notable_suffix()} [{counts}]"
     if first.status == "skipped" and first.reason == "graphql-backoff":
-        return f"skip:graphql-backoff [{counts}]"
+        return f"skip:graphql-backoff remaining=unknown [{counts}]"
     if first.status == "noop":
         return f"noop:{first.reason or 'idle'}{_notable_suffix()} [{counts}]"
     if first.status == "blocked":

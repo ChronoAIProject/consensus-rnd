@@ -17,7 +17,7 @@ from typing import Any, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
 from ..state import read_json, write_json
@@ -47,7 +47,7 @@ _DEFAULT_MONITOR: ConcurrencyMonitor | None = None
 
 @dataclass(frozen=True)
 class Boundary:
-    """refactor helper, no behavior change"""
+    """Active audit task boundary used to avoid duplicate fallback dispatch."""
 
     task_id: str
     evidence: str
@@ -508,7 +508,7 @@ class ConcurrencyMonitor:
             return actual
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.write_pending_event("DISPATCH_BACKOFF:graphql-headroom-low")
-            log_graphql_backoff("concurrency-monitor")
+            log_tick_status("skip:graphql-backoff remaining=unknown")
             return actual
         max_dispatches = floor - actual
         dispatched = 0

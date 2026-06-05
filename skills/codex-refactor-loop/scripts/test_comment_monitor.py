@@ -20,6 +20,12 @@ sys.path.insert(0, str(SCRIPT_DIR))
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
+from test_support.authorization_projection import project_python
+
+
+def comment_monitor_projection():
+    text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+    return project_python(text)
 
 
 class CommentMonitorTests(unittest.TestCase):
@@ -325,37 +331,32 @@ class CommentMonitorTests(unittest.TestCase):
 
 class CommentMonitorSourceRegressionTests(unittest.TestCase):
     def test_forbidden_lifecycle_tokens_are_absent(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
+        projection = comment_monitor_projection()
         for token in ("pr merge", "issue close", "git push", "git commit", "create release"):
             with self.subTest(token=token):
-                self.assertNotIn(token, text)
+                self.assertNotIn(token, projection.string_literals)
 
     def test_updated_at_comment_query_throttle_is_locked(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        self.assertIn("last_updated_at", text)
-        self.assertIn("updated_at > previous", text)
-        self.assertIn("/comments?per_page=20", text)
-        self.assertNotIn("def _gh_graphql", text)
-        self.assertNotIn('"graphql"', text.lower())
+        projection = comment_monitor_projection()
+        self.assertIn("_last_updated_at", projection.function_names)
+        self.assertIn("_should_fetch_comments", projection.function_names)
+        self.assertTrue(any(value.endswith("/comments?per_page=20") for value in projection.string_literals))
+        self.assertNotIn("_gh_graphql", projection.function_names)
+        self.assertNotIn("graphql", {value.lower() for value in projection.string_literals})
 
     def test_comment_monitor_lookback_surface_is_locked(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        self.assertIn('os.environ.get("COMMENT_MONITOR_LOOKBACK", "")', text)
-        self.assertIn('raw.startswith("updated:")', text)
-        self.assertIn('return f"updated:>={raw}"', text)
-        self.assertIn("def _lookback_minimum_updated_at", text)
+        projection = comment_monitor_projection()
+        self.assertIn("COMMENT_MONITOR_LOOKBACK", projection.env_get_names)
+        self.assertIn("updated:", projection.string_literals)
+        self.assertIn("updated:>=", projection.string_literals)
+        self.assertIn("_lookback_minimum_updated_at", projection.function_names)
 
     def test_generic_env_override_surfaces_are_not_consumed(self) -> None:
-        text = (SCRIPT_DIR / "codex_refactor_loop" / "monitors" / "comment.py").read_text(encoding="utf-8")
-        executable = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
-        for token in (
-            'os.environ.get("STATE_FILE"',
-            'os.environ.get("INTERVAL"',
-            "PROGRESS_REPORTER_INTERVAL",
-        ):
-            with self.subTest(token=token):
-                self.assertNotIn(token, executable)
-        self.assertIn('os.environ.get("COMMENT_MONITOR_INTERVAL")', executable)
+        projection = comment_monitor_projection()
+        for env_name in ("STATE_FILE", "INTERVAL", "PROGRESS_REPORTER_INTERVAL"):
+            with self.subTest(env_name=env_name):
+                self.assertNotIn(env_name, projection.env_get_names)
+        self.assertIn("COMMENT_MONITOR_INTERVAL", projection.env_get_names)
 
 
 if __name__ == "__main__":
