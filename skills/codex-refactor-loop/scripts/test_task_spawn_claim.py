@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -27,6 +28,28 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         shutil.rmtree(self.repo, ignore_errors=True)
 
+    def _write_claim_lock(self, task_id: str, *, pid: int, log_path: Path | None = None) -> Path:
+        safe_task_id = safe_task_id_from_task(task_id)
+        lock_path = self.repo / ".refactor-loop" / "locks" / "spawn-tasks" / f"{safe_task_id}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        metadata = {
+            "task_id": safe_task_id,
+            "log_path": str((log_path or self.log).resolve()),
+            "pid": pid,
+            "acquired_at": "2026-06-06T00:00:00Z",
+        }
+        lock_path.write_text(json.dumps(metadata, sort_keys=True) + "\n", encoding="utf-8")
+        return lock_path
+
+    def _dead_pid(self) -> int:
+        pid = os.fork()
+        if pid == 0:
+            os._exit(0)
+        os.waitpid(pid, 0)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        return pid
+
     def test_acquire_creates_exclusive_lock_metadata(self) -> None:
         claim = self.store.acquire("implement-issue490", log_path=self.log)
 
@@ -45,6 +68,30 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
         self.assertFalse(second.acquired)
         self.assertEqual(first.lock_path, second.lock_path)
 
+    def test_dead_holder_with_missing_log_recycles_existing_claim(self) -> None:
+        task_id = "implement-issue490"
+        lock_path = self._write_claim_lock(task_id, pid=self._dead_pid())
+        self.assertFalse(self.log.exists())
+
+        claim = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertTrue(claim.acquired)
+        self.assertEqual(lock_path, claim.lock_path)
+        metadata = json.loads(lock_path.read_text(encoding="utf-8"))
+        self.assertEqual(os.getpid(), metadata["pid"])
+
+    def test_live_holder_with_missing_log_stays_held(self) -> None:
+        task_id = "implement-issue490"
+        lock_path = self._write_claim_lock(task_id, pid=os.getpid())
+        self.assertFalse(self.log.exists())
+
+        claim = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertFalse(claim.acquired)
+        self.assertEqual(lock_path, claim.lock_path)
+        metadata = json.loads(lock_path.read_text(encoding="utf-8"))
+        self.assertEqual(os.getpid(), metadata["pid"])
+
     def test_completed_log_recycles_existing_claim_deterministically(self) -> None:
         first = self.store.acquire("fix-pr490-round-1", log_path=self.log)
         self.log.write_text("DONE\nEXIT=0\n", encoding="utf-8")
@@ -56,6 +103,16 @@ class TaskSpawnClaimStoreTests(unittest.TestCase):
         self.assertTrue(first.lock_path.is_file())
         metadata = json.loads(first.lock_path.read_text(encoding="utf-8"))
         self.assertEqual("fix-pr490-round-1", metadata["task_id"])
+
+    def test_exit_marker_recycles_existing_claim_even_with_live_holder_pid(self) -> None:
+        task_id = "fix-pr490-round-1"
+        lock_path = self._write_claim_lock(task_id, pid=os.getpid())
+        self.log.write_text("DONE\nEXIT=1\n", encoding="utf-8")
+
+        claim = self.store.acquire(task_id, log_path=self.log)
+
+        self.assertTrue(claim.acquired)
+        self.assertEqual(lock_path, claim.lock_path)
 
     def test_deleted_completed_log_recycles_from_durable_artifact(self) -> None:
         task_id = "implement-issue490"
