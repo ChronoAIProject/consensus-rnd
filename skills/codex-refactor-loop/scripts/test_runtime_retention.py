@@ -30,7 +30,10 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         for rel in ("logs", "prompts", "runs", "state"):
             (self.refactor_loop / rel).mkdir(parents=True)
         (self.repo / ".worktrees").mkdir(parents=True)
-        (self.refactor_loop / "host.env").write_text(
+        self.host_env_rel = Path(".config/consensus-rnd/host.env")
+        self.host_env = self.repo / self.host_env_rel
+        self.host_env.parent.mkdir(parents=True)
+        self.host_env.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport RUNTIME_RETENTION_ENABLE="true"\n',
             encoding="utf-8",
         )
@@ -50,14 +53,18 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(CLI), command],
             cwd=self.repo,
-            env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                "CONSENSUS_RND_HOST_ENV": self.host_env_rel.as_posix(),
+            },
             capture_output=True,
             text=True,
             check=False,
         )
 
     def test_default_disabled_noops_even_when_old_files_exist(self) -> None:
-        (self.refactor_loop / "host.env").write_text(
+        self.host_env.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport RUNTIME_RETENTION_ENABLE="false"\n',
             encoding="utf-8",
         )

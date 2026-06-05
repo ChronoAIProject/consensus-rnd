@@ -22,6 +22,7 @@ from codex_refactor_loop.cli import COMMANDS, RuntimeCommandRouter
 CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 ALL_AUTHORITY_TOKENS = {
+    "delete-log",
     "delete-runtime",
     "gh-close",
     "gh-close-linked",
