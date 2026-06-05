@@ -25,7 +25,7 @@ from .prompt_contracts import inline_prompt_contracts
 from .release.publisher import ReleasePublishResult, ReleasePublisher
 from .review_fix_dispatch import ReviewFixDispatchSpec
 from .git import Git
-from .triage import apply_decision, load_triage_apply_config
+from .triage import TriageApplyConfig, apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
 from .wakeup_plan import consensus_implementation_suppressed_reason
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
@@ -571,7 +571,7 @@ class ControllerActions:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
         issue, verdict, rel_path = match.groups()
-        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
+        config = TriageApplyConfig(context=self.ctx)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
