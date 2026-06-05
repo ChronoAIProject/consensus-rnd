@@ -11,6 +11,8 @@ import tempfile
 import textwrap
 import time
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +23,7 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
@@ -33,13 +36,33 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     consensus_implementation_suppressed_reason,
     existing_issue_actions,
     has_dispatchable_action,
+    load_github_items_with_status,
     marker_from_completed_log,
+    meta_escalation_stuck_seconds,
+    repository_stalled_meta_reflector_actions,
+    rebase_resolve_actions,
+    rebase_resolve_completed_marker_actions,
     release_countdown_actions,
     release_rollup_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
     stale_revival_seconds,
+    suppress_stale_unexecutable_actions,
 )
+from test_support.authorization_projection import project_python  # noqa: E402
+
+
+def wakeup_plan_projection():
+    source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+    return project_python(source)
+
+
+def completed_marker_action(plan: dict, prefix: str) -> dict:
+    return next(
+        item
+        for item in plan["actions"]
+        if str(item.get("action_id") or "").startswith(prefix)
+    )
 
 
 class WakeupPlanBehaviorTests(unittest.TestCase):
@@ -52,7 +75,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.fakebin.mkdir()
         (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
-            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\n",
+            f"REPO_ROOT={self.repo}\nGH_REPO_SLUG=owner/repo\nCODEX_FLOOR=5\nINTEGRATION_BRANCH=auto-refact-dev\n",
             encoding="utf-8",
         )
         (self.repo / ".refactor-loop" / ".controller-pending-events.log").write_text("", encoding="utf-8")
@@ -72,6 +95,215 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_rebase_resolve_actions_project_conflicting_managed_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock:
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(77, action["target_number"])
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_rebase_resolve_actions_fetch_live_mergeability_for_snapshot_pr(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="",
+            merge_state_status="",
+        )
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        with (
+            mock.patch(
+                "codex_refactor_loop.wakeup_plan.run_json",
+                return_value={
+                    "mergeable": "CONFLICTING",
+                    "mergeStateStatus": "DIRTY",
+                    "headRefOid": "abc123",
+                },
+            ) as run_json_mock,
+            mock.patch("codex_refactor_loop.wakeup_plan.git_text") as git_text_mock,
+        ):
+            git_text_mock.side_effect = [
+                subprocess.CompletedProcess([], 0, stdout="", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="head\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="base\n", stderr=""),
+                subprocess.CompletedProcess([], 0, stdout="oldbase\n", stderr=""),
+            ]
+            actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        run_json_mock.assert_called_once_with(
+            ["gh", "pr", "view", "77", "--json", "mergeable,mergeStateStatus,headRefOid"],
+            cwd=self.repo,
+        )
+        action = actions[0]
+        self.assertEqual("dispatch_pr_rebase_resolve", action["controller_action"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("abc123", action["head_sha"])
+
+    def test_rebase_resolve_actions_suppress_in_flight_resolve(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+            mergeable="CONFLICTING",
+        )
+        (self.logs / "rebase-resolve-pr77-r1.log").write_text("worker running\n", encoding="utf-8")
+        ctx = mock.Mock(host_env={"INTEGRATION_BRANCH": "auto-refact-dev"})
+        actions = rebase_resolve_actions(self.repo, ctx, [item], monitor=None)
+        self.assertEqual("rebase_resolve_in_flight", actions[0]["reason"])
+        self.assertTrue(actions[0]["status_only"])
+
+    def test_rebase_resolve_completed_marker_projects_commit_push_action(self) -> None:
+        log = self.logs / "rebase-resolve-pr77-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:77:ok\nEXIT=0\n", encoding="utf-8")
+        worktree = self.repo / ".worktrees" / "iter77-stale"
+        worktree.mkdir(parents=True)
+        porcelain = f"worktree {worktree}\nbranch refs/heads/refactor/iter77-stale\n"
+        item = GhItem(
+            kind="PR",
+            number=77,
+            title="stale",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="refactor/iter77-stale",
+            head_sha="abc123",
+        )
+        git_dir = self.repo / ".git" / "worktrees" / "iter77-stale"
+        git_dir.mkdir(parents=True)
+        (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+
+        def fake_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+            if command == ["git", "-C", str(self.repo), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, stdout=porcelain, stderr="")
+            if command == ["git", "-C", str(worktree), "rev-parse", "--git-dir"]:
+                return subprocess.CompletedProcess(command, 0, stdout=str(git_dir) + "\n", stderr="")
+            if command == ["git", "-C", str(worktree), "diff", "--name-only", "--diff-filter=U"]:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="unexpected")
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
+            actions = rebase_resolve_completed_marker_actions(self.repo, [item])
+        action = actions[0]
+        self.assertEqual("commit_push_resolved_pr_rebase", action["controller_action"])
+        self.assertEqual("REBASE_RESOLVE_DONE:77:ok", action["source_marker"])
+        self.assertEqual(str(worktree), action["worktree"])
+
+    def test_wakeup_plan_projects_conflicting_stale_base_pr_dispatch_as_executable(self) -> None:
+        plan = self.run_plan(fixture="stale_base_conflicting_pr")
+
+        action = next(item for item in plan["actions"] if item.get("controller_action") == "dispatch_pr_rebase_resolve")
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+        self.assertEqual("DIRTY", action["mergeStateStatus"])
+        self.assertEqual("stale-head-sha", action["head_sha"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_stale_rebase_done_clean_worktree_projects_fresh_dispatch(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=False)
+
+        plan = self.run_plan(fixture="stale_base_done_clean")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "dispatch_pr_rebase_resolve"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("stale-base-conflicting-pr", action["kind"])
+        self.assertEqual("CONFLICTING", action["mergeable"])
+
+    def test_wakeup_plan_projects_rebase_done_only_for_resolved_in_progress_merge(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=())
+
+        plan = self.run_plan(fixture="stale_base_done_resolved_merge")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        )
+        self.assertEqual("completed-marker", action["kind"])
+        self.assertEqual("REBASE_RESOLVE_DONE:177:ok", action["source_marker"])
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertEqual("wakeup-runner-396", action["runner_authority"])
+        self.assertTrue(action["no_generic_command"])
+
+    def test_wakeup_plan_rebase_done_with_unmerged_paths_never_projects_commit_push(self) -> None:
+        log = self.logs / "rebase-resolve-pr177-r1.log"
+        log.write_text("resolved\nREBASE_RESOLVE_DONE:177:ok\nEXIT=0\n", encoding="utf-8")
+        self.write_rebase_resolve_worktree_state(merge_head=True, unmerged_paths=("skills/example.py",))
+
+        plan = self.run_plan(fixture="stale_base_done_unmerged")
+
+        commit_pushes = [
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "commit_push_resolved_pr_rebase"
+            and item.get("target_number") == 177
+            and not item.get("status_only", False)
+        ]
+        self.assertEqual([], commit_pushes)
+
+    def test_wakeup_plan_keeps_branch_current_rebase_resolve_status_only(self) -> None:
+        plan = self.run_plan(fixture="stale_base_branch_current")
+
+        action = next(
+            item
+            for item in plan["actions"]
+            if item.get("kind") == "stale-base-conflicting-pr" and item.get("reason") == "branch_already_contains_base"
+        )
+        self.assertEqual("PR", action["target_kind"])
+        self.assertEqual(177, action["target_number"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
     def write_fake_gh(self) -> None:
         gh = self.fakebin / "gh"
         gh.write_text(
@@ -82,6 +314,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 args="$*"
                 cmd1="$1"
                 cmd2="$2"
+                cmd3="$3"
                 api_path="$2"
                 api_flag1="$3"
                 api_flag2="$4"
@@ -195,49 +428,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    managed_dual_read)
-                      case "$label" in
-                        crnd:lifecycle:managed)
-                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        auto-loop)
-                          printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"legacy issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"},{"name":"🤖 human:codex"}]}]\n'
-                          ;;
-                        phase9-auto-solve|refactor-design-needed)
-                          printf '[]\n'
-                          ;;
-                        *)
-                          printf '[]\n'
-                          ;;
-                      esac
+                    managed_canonical)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":81,"title":"canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]},{"number":82,"title":"second canonical issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     milestone)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":20,"title":"milestone issue","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"🔍 phase:design-solving"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":20,"title":"milestone issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]},{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     existing)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     transition_sort)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":60,"title":"unknown issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":61,"title":"positive issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":62,"title":"classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":60,"title":"unknown issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":61,"title":"positive issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":62,"title":"classifier issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":63,"title":"confident classifier issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     many_active)
-                      if [[ "$label" == "auto-loop" ]]; then
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '['
                         for i in 1 2 3 4 5 6; do
                           [[ "$i" != "1" ]] && printf ','
-                          printf '{"number":%s,"title":"active issue %s","labels":[{"name":"auto-loop"},{"name":"🔧 phase:fixing"}]}' "$i" "$i"
+                          printf '{"number":%s,"title":"active issue %s","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}' "$i" "$i"
                         done
                         printf ']\n'
                       else
@@ -259,8 +483,29 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       fi
                       ;;
                     non_action_statuses)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":40,"title":"blocked issue","labels":[{"name":"auto-loop"},{"name":"⏸️ phase:blocked"}]},{"number":41,"title":"merged issue","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"auto-loop"},{"name":"crnd:phase:pr-open"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":40,"title":"blocked issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:blocked"},{"name":"crnd:human:auto"}]},{"number":41,"title":"merged issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:merged"},{"name":"crnd:human:auto"}]},{"number":44,"title":"parent issue with child PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"old design issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]},{"number":507,"title":"old implementation issue","updatedAt":"2026-05-02T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_fresh)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"fresh design issue","updatedAt":"2099-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_human_decision)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":506,"title":"human decision issue","updatedAt":"2026-05-01T00:00:00Z","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:maintainer-decision"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -276,63 +521,51 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     gh_failure)
                       exit 42
                       ;;
-                    managed_dual_read)
-                      case "$label" in
-                        crnd:lifecycle:managed)
-                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        auto-loop)
-                          printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
-                          ;;
-                        phase9-auto-solve)
-                          printf '[]\n'
-                          ;;
-                        refactor-design-needed)
-                          printf '[{"number":92,"title":"legacy PR","headRefName":"impl/legacy","labels":[{"name":"refactor-design-needed"},{"name":"🔍 phase:design-solving"},{"name":"🤖 human:auto-推进"}]}]\n'
-                          ;;
-                        *)
-                          printf '[]\n'
-                          ;;
-                      esac
+                    managed_canonical)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":91,"title":"canonical PR","headRefName":"impl/canonical","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":92,"title":"second canonical PR","headRefName":"impl/second","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
                       ;;
                     unpushed|unpushed_fetch_fail|unpushed_no_ahead|unpushed_no_remote|unpushed_no_worktree)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":77,"title":"worker output PR","headRefName":"refactor/iter77-worker","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_dash)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":78,"title":"unsafe dash head","headRefName":"-bad","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_space)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":79,"title":"unsafe space head","headRefName":"bad ref","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     unpushed_head_control)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"auto-loop"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":80,"title":"unsafe control head","headRefName":"bad\\u0001ref","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     ci_red)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     ci_red_issue20)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":31,"title":"red PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":31,"title":"red PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -344,6 +577,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    stale_base_conflicting_pr|stale_base_branch_current|stale_base_done_clean|stale_base_done_resolved_merge|stale_base_done_unmerged)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":177,"title":"stale-base PR","headRefName":"refactor/iter177-stale","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     open_pr_480)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":480,"title":"wedged review PR","headRefName":"impl/pr480","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
@@ -351,7 +591,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    open_pr_77)
+                    open_pr_77|review_thread_unresolved|review_thread_unresolved_unrelated|review_thread_unresolved_outdated|review_thread_resolved|review_thread_paginated_unresolved|review_thread_graphql_failure|review_thread_malformed|review_thread_pull_request_null|review_thread_page_info_null|review_thread_node_malformed)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":77,"title":"open PR target","headRefName":"impl/pr77","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -361,6 +601,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     closing_pr_issue20)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":320,"title":"closing PR","headRefName":"refactor/iter20-issue-20","body":"Closes #20","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    early_pr_issue20|local_iter_branch_issue20|local_iter_branch_issue20_stale_base)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":320,"title":"early PR","headRefName":"refactor/iter20-issue-20","headRefOid":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","body":"Closes #20","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -376,15 +623,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                       printf '[]\n'
                       ;;
                     milestone)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":30,"title":"milestone PR","labels":[{"name":"auto-loop"},{"name":"🎯 milestone"},{"name":"👀 phase:reviewing"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":30,"title":"milestone PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
                       ;;
                     non_action_statuses)
-                      if [[ "$label" == "auto-loop" ]]; then
-                        printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"auto-loop"},{"name":"⚙️ phase:ci-running"}]},{"number":43,"title":"merged PR","labels":[{"name":"auto-loop"},{"name":"🎉 phase:merged"}]}]\n'
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":42,"title":"non-red CI PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:ci-running"},{"name":"crnd:human:auto"}]},{"number":43,"title":"merged PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:merged"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":536,"title":"old review PR","updatedAt":"2026-05-03T00:00:00Z","headRefName":"refactor/iter506-issue-506","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
                         printf '[]\n'
                       fi
@@ -413,6 +667,51 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     esac
                     exit 0
                   fi
+                  if [[ "$api_path" == "graphql" ]]; then
+                    if [[ -n "${WAKEUP_PLAN_GH_QUERY_LOG:-}" ]]; then
+                      printf 'api graphql %s\n' "$args" >> "$WAKEUP_PLAN_GH_QUERY_LOG"
+                    fi
+                    case "$fixture" in
+                      review_thread_unresolved)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_unresolved_unrelated)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_unresolved_outdated)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":true}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_resolved)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_paginated_unresolved)
+                        if [[ "$args" == *"after=cursor1"* ]]; then
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOExample","isResolved":false,"isOutdated":false}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        else
+                          printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"id":"PRRT_kwDOOther","isResolved":true,"isOutdated":false}],"pageInfo":{"hasNextPage":true,"endCursor":"cursor1"}}}}}}\n'
+                        fi
+                        ;;
+                      review_thread_graphql_failure)
+                        exit 42
+                        ;;
+                      review_thread_malformed)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":null,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      review_thread_pull_request_null)
+                        printf '{"data":{"repository":{"pullRequest":null}}}\n'
+                        ;;
+                      review_thread_page_info_null)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":null}}}}}\n'
+                        ;;
+                      review_thread_node_malformed)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[null],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                      *)
+                        printf '{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}\n'
+                        ;;
+                    esac
+                    exit 0
+                  fi
                   if [[ "$api_flag1" == "--paginate" && "$api_flag2" == "--slurp" ]]; then
                     if [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
                       printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://checks/unit"},{"name":"lint","status":"completed","conclusion":"success","html_url":"https://checks/lint"}]}]\n'
@@ -428,6 +727,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   printf '{"head":{"sha":"empty-sha"}}\n'
                   exit 0
                 fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
+                  printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
                   printf '{"comments":[]}\n'
                   exit 0
@@ -439,6 +742,189 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh.chmod(0o755)
+
+    def write_managed_work_snapshot_fixture(self, fixture: str) -> None:
+        path = self.repo / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if fixture == "gh_failure":
+            path.unlink(missing_ok=True)
+            return
+        path.write_text(
+            json.dumps(
+                {
+                    "schema": "managed-work-snapshot",
+                    "fetched_at_epoch": time.time(),
+                    "items": self.managed_work_snapshot_items(fixture),
+                    "not_live_state_fact_source": True,
+                    "not_host_production_ssot": True,
+                    "no_lifecycle_authority": True,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def managed_work_snapshot_items(self, fixture: str) -> list[dict[str, object]]:
+        def issue(number: int, title: str, labels: list[str], *, updated_at: str = "2026-06-05T00:00:00Z") -> dict[str, object]:
+            return {"kind": "issue", "number": number, "title": title, "labels": labels, "state": "open", "updated_at": updated_at}
+
+        def pr(
+            number: int,
+            title: str,
+            labels: list[str],
+            *,
+            head_ref: str = "",
+            head_sha: str = "",
+            body: str = "",
+            updated_at: str = "2026-06-05T00:00:00Z",
+        ) -> dict[str, object]:
+            return {
+                "kind": "PR",
+                "number": number,
+                "title": title,
+                "labels": labels,
+                "head_ref": head_ref or None,
+                "head_sha": head_sha,
+                "body": body,
+                "state": "open",
+                "updated_at": updated_at,
+            }
+
+        managed = label_catalog.MANAGED
+        auto = label_catalog.HUMAN_AUTO
+        fixing = label_catalog.PHASE_FIXING
+        reviewing = label_catalog.PHASE_REVIEWING
+        ci_running = label_catalog.PHASE_CI_RUNNING
+        issue_rows: dict[str, list[dict[str, object]]] = {
+            "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue20_stale_base": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto, label_catalog.MILESTONE_CURRENT])],
+            "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "remote_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issue_331": [issue(331, "different open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "open_issues_330_331_332": [
+                issue(330, "first target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(331, "overlap target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(332, "disjoint target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+            ],
+            "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "consensus_issue_330": [issue(330, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
+            "managed_canonical": [
+                issue(81, "canonical issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                issue(82, "second canonical issue", [managed, fixing, auto]),
+            ],
+            "milestone": [
+                issue(20, "milestone issue", [managed, label_catalog.MILESTONE_CURRENT, label_catalog.PHASE_DESIGN_SOLVING, auto]),
+                issue(10, "ordinary issue", [managed, fixing, auto]),
+            ],
+            "existing": [issue(10, "ordinary issue", [managed, fixing, auto])],
+            "transition_sort": [
+                issue(60, "unknown issue", [managed, fixing, auto]),
+                issue(61, "positive issue", [managed, fixing, auto]),
+                issue(62, "classifier issue", [managed, fixing, auto]),
+                issue(63, "confident classifier issue", [managed, fixing, auto]),
+            ],
+            "many_active": [issue(number, f"active issue {number}", [managed, fixing, auto]) for number in range(1, 7)],
+            "represented_parent": [issue(239, "represented parent", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "pr_open_parent": [issue(239, "parent issue with open PR", [managed, label_catalog.PHASE_PR_OPEN, auto])],
+            "non_action_statuses": [
+                issue(40, "blocked issue", [managed, label_catalog.PHASE_BLOCKED, auto]),
+                issue(41, "merged issue", [managed, label_catalog.PHASE_MERGED, auto]),
+                issue(44, "parent issue with child PR", [managed, label_catalog.PHASE_PR_OPEN, auto]),
+            ],
+            "repository_stalled": [
+                issue(506, "old design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2026-05-01T00:00:00Z"),
+                issue(507, "old implementation issue", [managed, label_catalog.PHASE_IMPLEMENTING, auto], updated_at="2026-05-02T00:00:00Z"),
+            ],
+            "repository_fresh": [
+                issue(506, "fresh design issue", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], updated_at="2099-05-01T00:00:00Z"),
+            ],
+            "repository_human_decision": [
+                issue(
+                    506,
+                    "human decision issue",
+                    [managed, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_MAINTAINER_DECISION],
+                    updated_at="2026-05-01T00:00:00Z",
+                ),
+            ],
+        }
+        pr_rows: dict[str, list[dict[str, object]]] = {
+            "local_iter_branch_issue20_stale_base": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "local_iter_branch_issue20": [
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "managed_canonical": [
+                pr(91, "canonical PR", [managed, reviewing, auto], head_ref="impl/canonical"),
+                pr(92, "second canonical PR", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto], head_ref="impl/second"),
+            ],
+            "unpushed": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_fetch_fail": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_ahead": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_remote": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_no_worktree": [pr(77, "worker output PR", [managed, reviewing, auto], head_ref="refactor/iter77-worker")],
+            "unpushed_head_dash": [pr(78, "unsafe dash head", [managed, reviewing, auto], head_ref="-bad")],
+            "unpushed_head_space": [pr(79, "unsafe space head", [managed, reviewing, auto], head_ref="bad ref")],
+            "unpushed_head_control": [pr(80, "unsafe control head", [managed, reviewing, auto], head_ref="bad\u0001ref")],
+            "ci_red": [pr(31, "red PR", [managed, ci_running, auto], head_sha="ci-red-sha")],
+            "ci_red_issue20": [pr(31, "red PR", [managed, ci_running, auto], head_sha="ci-red-sha")],
+            "open_pr_123": [pr(123, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr123")],
+            "stale_base_conflicting_pr": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_clean": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_resolved_merge": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_done_unmerged": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "stale_base_branch_current": [
+                pr(177, "stale-base PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter177-stale")
+            ],
+            "open_pr_480": [
+                pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            ],
+            "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_unrelated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_unresolved_outdated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_resolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_paginated_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_graphql_failure": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_pull_request_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_page_info_null": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "review_thread_node_malformed": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "closing_pr_issue20": [
+                issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto]),
+                pr(320, "closing PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="refactor/iter20-issue-20", body="Closes #20"),
+            ],
+            "represented_parent": [pr(255, "child PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/issue239", body="Closes #239")],
+            "milestone": [pr(30, "milestone PR", [managed, label_catalog.MILESTONE_CURRENT, reviewing, auto])],
+            "non_action_statuses": [
+                pr(42, "non-red CI PR", [managed, ci_running, auto]),
+                pr(43, "merged PR", [managed, label_catalog.PHASE_MERGED, auto]),
+            ],
+            "repository_stalled": [
+                pr(
+                    536,
+                    "old review PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="refactor/iter506-issue-506",
+                    updated_at="2026-05-03T00:00:00Z",
+                ),
+            ],
+        }
+        return [*issue_rows.get(fixture, []), *pr_rows.get(fixture, [])]
 
     def write_fake_git(self) -> None:
         git = self.fakebin / "git"
@@ -460,6 +946,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
+                  if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'worktree %s/.worktrees/iter177-stale\nbranch refs/heads/refactor/iter177-stale\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/refactor/iter77-worker\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                   exit 0
                 fi
@@ -479,6 +969,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
+                  [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]] && printf 'stale-head-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_branch_current" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
+                fi
+                if [[ "$*" == *"merge-base origin/refactor/iter177-stale origin/auto-refact-dev"* ]]; then
+                  if [[ "$fixture" == "stale_base_conflicting_pr" || "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
+                    printf 'old-base-sha\n'
+                    exit 0
+                  fi
+                  if [[ "$fixture" == "stale_base_branch_current" ]]; then
+                    printf 'base-sha\n'
+                    exit 0
+                  fi
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"rev-parse --git-dir"* ]]; then
+                  printf '%s/.git/worktrees/iter177-stale\n' "$WAKEUP_PLAN_REPO_ROOT"
+                  exit 0
+                fi
+                if [[ "$*" == *".worktrees/iter177-stale"* && "$*" == *"diff --name-only --diff-filter=U"* ]]; then
+                  if [[ -f "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt" ]]; then
+                    cat "$WAKEUP_PLAN_REPO_ROOT/.refactor-loop/state/rebase-unmerged-paths.txt"
+                  fi
+                  exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter"* ]]; then
                   exit 1
@@ -601,6 +1122,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -640,6 +1162,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         ps_count: int = 5,
         active_audit: bool = False,
     ) -> tuple[dict, str]:
+        self.write_managed_work_snapshot_fixture(fixture)
         env = os.environ.copy()
         env.update(
             {
@@ -704,11 +1227,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
         return path
 
+    def write_rebase_resolve_worktree_state(self, *, merge_head: bool, unmerged_paths: tuple[str, ...] = ()) -> None:
+        worktree = self.repo / ".worktrees" / "iter177-stale"
+        worktree.mkdir(parents=True, exist_ok=True)
+        git_dir = self.repo / ".git" / "worktrees" / "iter177-stale"
+        git_dir.mkdir(parents=True, exist_ok=True)
+        if merge_head:
+            (git_dir / "MERGE_HEAD").write_text("base\n", encoding="utf-8")
+        else:
+            (git_dir / "MERGE_HEAD").unlink(missing_ok=True)
+        unmerged = self.repo / ".refactor-loop" / "state" / "rebase-unmerged-paths.txt"
+        unmerged.parent.mkdir(parents=True, exist_ok=True)
+        unmerged.write_text("".join(f"{path}\n" for path in unmerged_paths), encoding="utf-8")
+
     def write_run_artifact(self, stem: str, *lines: str) -> Path:
         path = self.repo / ".refactor-loop" / "runs" / f"{stem}.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("\n".join([*lines, ""]), encoding="utf-8")
         return path
+
+    def write_implementation_pr_artifacts(self, issue: int = 20, cluster: str = "issue-20") -> tuple[Path, Path]:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        title = runs / f"implementation-pr-{cluster}-title.txt"
+        body = runs / f"implementation-pr-{cluster}-body.md"
+        title.write_text(f"完成 issue #{issue} 的发布契约\n", encoding="utf-8")
+        body.write_text(
+            "## 修改文件\n\n- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py\n\n"
+            "## 测试结果\n\n- python3 skills/codex-refactor-loop/scripts/test_wakeup_plan.py\n\n"
+            "## deviation 记录\n\n- none\n\n"
+            f"Closes #{issue}\n\n"
+            "⟦AI:AUTO-LOOP⟧\n",
+            encoding="utf-8",
+        )
+        return title, body
 
     def set_log_mtime(self, name: str, mtime: float) -> None:
         os.utime(self.logs / name, (mtime, mtime))
@@ -831,12 +1383,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def harness_spawn_actions(self, plan: dict) -> list[dict]:
         return [action for action in plan["actions"] if action["kind"] == "harness-spawn-intent"]
 
+    def action_index(self, plan: dict, predicate: object) -> int:
+        for index, action in enumerate(plan["actions"]):
+            if predicate(action):
+                return index
+        self.fail(f"missing action in plan: {json.dumps(plan['actions'], sort_keys=True)}")
+
+    def assert_before_all_new_work_spawns(self, plan: dict, action_index: int) -> None:
+        spawn_indexes = [
+            index
+            for index, action in enumerate(plan["actions"])
+            if action.get("controller_action") == "spawn_codex_harness_background"
+            and action.get("kind") == "harness-spawn-intent"
+        ]
+        self.assertGreaterEqual(len(spawn_indexes), 1)
+        self.assertLess(action_index, min(spawn_indexes))
+
     def test_harness_spawn_intent_accepts_only_spawn_codex_string_command(self) -> None:
         self.append_harness_spawn_intent()
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["command"], "spawn-codex")
         self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
@@ -848,12 +1416,111 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("argv", action)
         self.assertNotIn("shell", action)
 
+    def test_review_gate_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        self.write_completed_log("review-pr123-architect-r1.log", "REVIEW_DONE:123:architect:reject")
+
+        plan = self.run_plan(fixture="open_pr_123", ps_count=0)
+
+        review_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "review_gate"
+            and action.get("target_kind") == "PR"
+            and action.get("target_number") == 123
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, review_index)
+
+    def test_publish_implementation_completed_marker_routes_before_new_work_spawn_intents(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="new-work-331",
+            task_id="new-work-331",
+            prompt=".refactor-loop/prompts/new-work-331.md",
+            log=".refactor-loop/logs/new-work-331.log",
+        )
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=20, cluster="issue-20")
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("target_kind") == "issue"
+            and action.get("target_number") == 20
+            and not action.get("status_only"),
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
+    def test_wakeup_plan_priority_order_keeps_existing_front_of_queue_routes(self) -> None:
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("2026-05-31T00:00:00Z maintainer comment on PR #31\n", encoding="utf-8")
+        self.append_harness_spawn_intent(
+            intent_id="new-work-ci",
+            task_id="new-work-ci",
+            prompt=".refactor-loop/prompts/new-work-ci.md",
+            log=".refactor-loop/logs/new-work-ci.log",
+        )
+        (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
+            "[2026-05-29T00:00:00Z] P0 no-gap-violation: fixture\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="ci_red", ps_count=0)
+
+        kinds = [action["kind"] for action in plan["actions"]]
+        self.assertLess(kinds.index("maintainer-comment"), kinds.index("ci-red"))
+        self.assertLess(kinds.index("ci-red"), kinds.index("no-gap-violation"))
+        self.assertLess(kinds.index("no-gap-violation"), kinds.index("harness-spawn-intent"))
+        ci_action = next(action for action in plan["actions"] if action["kind"] == "ci-red")
+        self.assertTrue(ci_action["status_only"])
+
+    def test_status_only_completed_marker_keeps_completed_marker_priority_class(self) -> None:
+        self.append_harness_spawn_intent(
+            intent_id="new-work-330",
+            task_id="new-work-330",
+            prompt=".refactor-loop/prompts/new-work-330.md",
+            log=".refactor-loop/logs/new-work-330.log",
+        )
+        self.write_completed_log("implement-issue330.log", "IMPLEMENT_DONE:issue-330:ok")
+
+        plan = self.run_plan(fixture="open_issue_330", ps_count=0)
+
+        publish_index = self.action_index(
+            plan,
+            lambda action: action.get("controller_action") == "publish_implementation_output"
+            and action.get("status_only")
+            and action.get("target_number") == 330,
+        )
+        self.assert_before_all_new_work_spawns(plan, publish_index)
+
     def test_harness_spawn_intent_accepts_absolute_repo_contained_cd(self) -> None:
         self.append_harness_spawn_intent(cd=str(self.repo.resolve()))
 
         plan = self.run_plan(fixture="open_issue_330")
 
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         self.assertEqual(action["cd"], str(self.repo.resolve()))
 
@@ -898,7 +1565,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan = self.run_plan()
 
-                action = plan["actions"][0]
+                action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent-invalid")
                 self.assertEqual(action["kind"], "harness-spawn-intent-invalid")
                 self.assertEqual(action["reason"], f"forbidden-fields:{field}")
 
@@ -1035,6 +1702,45 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(self.harness_spawn_actions(plan), [])
 
+    def test_harness_spawn_intent_suppresses_consensus_implementation_with_open_closing_pr(self) -> None:
+        self.write_consensus_artifact()
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="closing_pr_issue20")
+
+        actions = self.harness_spawn_actions(plan)
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertTrue(action["status_only"])
+        self.assertEqual("open_closing_pr", action["suppressed_reason"])
+        self.assertEqual("spawn_codex_harness_background", action["controller_action"])
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_harness_spawn_intent_keeps_open_consensus_implementation_dispatchable(self) -> None:
+        self.write_consensus_artifact()
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="open_issue_20")
+
+        actions = self.harness_spawn_actions(plan)
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertNotIn("status_only", action)
+        self.assertNotIn("suppressed_reason", action)
+        self.assertEqual("spawn_codex_harness_background", action["controller_action"])
+        self.assertEqual("dispatch-consensus-implementation:20", action["intent_id"])
+
     def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
         self.append_harness_spawn_intent(
             intent_id="empty-read-model-target",
@@ -1077,13 +1783,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["unresolved-target"])
 
     def test_wakeup_plan_uses_concurrency_monitor_for_spawn_intent_in_flight_detection(self) -> None:
-        wakeup_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
-        self.assertIn("monitor.list_in_flight_codex_lines()", wakeup_source)
-        self.assertIn("if monitor is None:\n        return False", wakeup_source)
-        self.assertNotIn('["ps", "-eo", "command"]', wakeup_source)
-        self.assertNotIn('["ps", "-eo", "command="]', wakeup_source)
-        self.assertNotIn("def _spawn_codex_in_flight_for_log", wakeup_source)
+        self.assertIn("_canonical_in_flight_for_log", projection.function_names)
+        self.assertIn("list_in_flight_codex_lines", projection.attribute_names)
+        self.assertNotIn("ps", projection.string_literals)
+        self.assertNotIn("_spawn_codex_in_flight_for_log", projection.function_names)
 
     def test_harness_spawn_intent_target_extraction_owner_contract_is_anchored(self) -> None:
         skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
@@ -1210,7 +1915,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_77")
 
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 77)
@@ -1254,25 +1959,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         recovered = [a for a in actions if str(a.get("marker", "")).startswith("IMPLEMENT_DONE")]
         self.assertEqual(recovered, [], "scoped fallback must not fire for non-implement or unclean logs")
 
-    def test_markerless_clean_implement_with_diff_projects_synthetic_publish_marker(self) -> None:
-        log = self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 1, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
+    def test_markerless_clean_implement_without_artifact_does_not_project_publish(self) -> None:
+        self.write_markerless_clean_log("implement-issue-421.log")
         gh_items = [
             GhItem(
                 "issue",
@@ -1281,48 +1969,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
             )
         ]
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
-
-        pub = [a for a in actions if a.get("controller_action") == "publish_implementation_output"]
-        self.assertEqual(1, len(pub))
-        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["marker"])
-        self.assertEqual("IMPLEMENT_DONE:issue-421:ok", pub[0]["source_marker"])
-        self.assertEqual("issue", pub[0]["target_kind"])
-        self.assertEqual(421, pub[0]["target_number"])
-        self.assertEqual(str(log.relative_to(self.repo)), pub[0]["source_artifact"])
-
-    def test_markerless_clean_implement_without_diff_does_not_project_publish(self) -> None:
-        self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 0, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "0\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
-        gh_items = [
-            GhItem(
-                "issue",
-                421,
-                "empty markerless implement",
-                (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-            )
-        ]
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 421)}, gh_items=gh_items)
 
         self.assertFalse([a for a in actions if a.get("controller_action") == "publish_implementation_output"])
 
@@ -1330,6 +1977,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.write_completed_log("implement-issue-422.log", "IMPLEMENT_DONE:issue-422:ok")
         self.write_markerless_clean_log("implement-issue-423.log")
         self.write_run_artifact("implement-issue-423", "IMPLEMENT_DONE:issue-423:ok")
+        self.write_implementation_pr_artifacts(issue=422, cluster="issue-422")
+        self.write_implementation_pr_artifacts(issue=423, cluster="issue-423")
 
         actions = completed_marker_actions(
             self.repo,
@@ -1354,66 +2003,44 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("IMPLEMENT_DONE:issue-422:ok:real", markers)
         self.assertIn("IMPLEMENT_DONE:issue-423:ok", markers)
 
-    def test_markerless_clean_implement_requires_open_managed_implementable_issue(self) -> None:
+    def test_markerless_clean_implement_with_artifact_still_requires_open_target(self) -> None:
         self.write_markerless_clean_log("implement-issue-421.log")
-        worktree = (self.repo / ".worktrees" / "iter421-issue-421").resolve()
-        worktree.mkdir(parents=True)
-
-        def fake_git(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-            if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
-                return subprocess.CompletedProcess(command, 1, "", "")
-            if command == [
-                "git",
-                "-C",
-                str(worktree),
-                "rev-list",
-                "--count",
-                "origin/auto-refact-dev..HEAD",
-            ]:
-                return subprocess.CompletedProcess(command, 0, "1\n", "")
-            return subprocess.CompletedProcess(command, 2, "", f"unexpected command: {command!r}")
-
-        with mock.patch.dict(os.environ, {"INTEGRATION_BRANCH": "auto-refact-dev"}):
-            with mock.patch("codex_refactor_loop.wakeup_plan.git_text", side_effect=fake_git):
-                not_open_actions = completed_marker_actions(
-                    self.repo,
-                    open_targets=set(),
-                    gh_items=[
-                        GhItem(
-                            "issue",
-                            421,
-                            "closed markerless implement",
-                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-                        )
-                    ],
+        self.write_run_artifact("implement-issue-421", "IMPLEMENT_DONE:issue-421:ok")
+        not_open_actions = completed_marker_actions(
+            self.repo,
+            open_targets=set(),
+            gh_items=[
+                GhItem(
+                    "issue",
+                    421,
+                    "closed markerless implement",
+                    (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
                 )
-                not_managed_actions = completed_marker_actions(
-                    self.repo,
-                    open_targets={("issue", 421)},
-                    gh_items=[
-                        GhItem(
-                            "issue",
-                            421,
-                            "unmanaged markerless implement",
-                            (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
-                        )
-                    ],
+            ],
+        )
+        not_managed_actions = completed_marker_actions(
+            self.repo,
+            open_targets=set(),
+            gh_items=[
+                GhItem(
+                    "issue",
+                    421,
+                    "unmanaged markerless implement",
+                    (label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
                 )
+            ],
+        )
 
         self.assertFalse([a for a in not_open_actions if a.get("controller_action") == "publish_implementation_output"])
         self.assertFalse([a for a in not_managed_actions if a.get("controller_action") == "publish_implementation_output"])
 
-    def test_wakeup_plan_source_regression_has_markerless_implement_publish_fallback(self) -> None:
+    def test_wakeup_plan_source_regression_has_shared_reader_only_implement_marker_detection(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn("_synthetic_markerless_implement_marker", source)
-        self.assertIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
-        self.assertIn('f"iter{issue}-issue-{issue}"', source)
-        self.assertIn('safe_head_ref("refactor/" + f"iter{issue}-issue-{issue}")', source)
-        self.assertIn('"diff", "HEAD", "--quiet"', source)
-        self.assertIn('"rev-list", "--count"', source)
-        self.assertIn("label_catalog.PHASE_IMPLEMENTING", source)
-        self.assertIn("label_catalog.PHASE_CONSENSUS_REACHED", source)
+        self.assertIn("read_worker_terminal_marker(log_path).marker", source)
+        self.assertNotIn("_synthetic_markerless_implement_marker", source)
+        self.assertNotIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
+        self.assertNotIn("_canonical_markerless_implement_has_output", source)
 
     def test_solver_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
         log = self.write_markerless_clean_log("phase9-issue505-r1-minimal.log")
@@ -1439,6 +2066,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(recovered, "expected completed-marker action recovered from judge run artifact")
         self.assertEqual(recovered[0]["phase"], "design-consensus")
 
+    def test_review_done_recovered_from_run_artifact_when_log_markerless(self) -> None:
+        log = self.write_markerless_clean_log("review-pr480-quality-r3.log")
+        self.write_run_artifact(
+            "review-pr480-quality-r3",
+            "---",
+            "verdict: approve",
+            "---",
+            "head_sha: " + "a" * 40,
+            "REVIEW_DONE:480:quality:approve",
+        )
+
+        self.assertIsNone(marker_from_completed_log(log))
+        actions = completed_marker_actions(
+            self.repo,
+            open_targets={("PR", 480)},
+            gh_items=[
+                GhItem(
+                    kind="PR",
+                    number=480,
+                    title="open PR",
+                    labels=("crnd:lifecycle:managed", "crnd:phase:reviewing", "crnd:human:auto"),
+                    head_ref="impl/pr480",
+                    head_sha="a" * 40,
+                )
+            ],
+        )
+        recovered = [a for a in actions if a.get("marker") == "REVIEW_DONE:480:quality:approve"]
+
+        self.assertTrue(recovered, "expected completed-marker action recovered from review run artifact")
+        self.assertEqual(recovered[0]["controller_action"], "review_gate")
+        self.assertEqual(recovered[0]["head_sha"], "a" * 40)
+
     def test_solver_judge_artifact_fallback_requires_clean_exit_and_artifact_marker(self) -> None:
         runs = self.repo / ".refactor-loop" / "runs"
         runs.mkdir(parents=True, exist_ok=True)
@@ -1456,35 +2115,35 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("SOLVER_DONE:minimal:artifact:summary", markers)
         self.assertNotIn("META_JUDGE_DONE:converge:round-2:artifact", markers)
 
-    def test_wakeup_plan_source_regression_has_solver_judge_artifact_marker_fallback(self) -> None:
+    def test_wakeup_plan_source_regression_uses_shared_worker_marker_reader(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
         for required in (
-            "def _completed_artifact_marker_fallback",
-            'name.startswith("implement-issue-")',
-            "SOLVER_DONE:",
-            "META_JUDGE_DONE:",
-            'repo_root / ".refactor-loop" / "runs" / f"{name[: -len(\'.log\')]}.md"',
-            "is_clean_exit(log_path)",
-            "_extract_completed_marker_line(line.strip())",
+            "from codex_refactor_loop.worker_markers import",
+            "read_worker_terminal_marker(log_path)",
+            "marker.source == \"log\"",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, source)
 
     def test_stale_publish_implementation_marker_is_status_only_without_canonical_worktree(self) -> None:
-        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:issue-20:ok")
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
 
         plan = self.run_plan(fixture="open_issue_20")
 
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
         self.assertEqual(action["controller_action"], "publish_implementation_output")
         self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(action["suppressed_reason"], "implementation_worktree_missing")
         self.assertNotIn("runner_authority", action)
         self.assertNotIn("no_generic_command", action)
 
     def test_publish_implementation_marker_with_verified_local_head_remains_executable(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         (self.logs / "implement-issue20.log").write_text(
             "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
             encoding="utf-8",
@@ -1498,13 +2157,149 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(action["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertEqual(action["title_file"], ".refactor-loop/runs/implementation-pr-issue-20-title.txt")
+        self.assertEqual(action["body_file"], ".refactor-loop/runs/implementation-pr-issue-20-body.md")
         self.assertIn("canonical_implementation_identity", action["preconditions"])
         self.assertIn("fresh_integration_base", action["preconditions"])
+        self.assertIn("worker_authored_pr_artifacts", action["preconditions"])
+        self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
+        self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_publish_implementation_marker_without_pr_artifacts_is_status_only(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_pr_title_artifact_missing")
+        self.assertNotIn("runner_authority", action)
+
+    def test_publish_implementation_marker_with_malformed_pr_artifacts_is_status_only(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        title, body = self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        valid_body = body.read_text(encoding="utf-8")
+        cases = (
+            ("placeholder-title", lambda: title.write_text("实现 issue #20\n", encoding="utf-8"), "implementation_pr_title_placeholder"),
+            ("multiline-title", lambda: title.write_text("完成 issue #20\n第二行\n", encoding="utf-8"), "implementation_pr_title_artifact_invalid"),
+            ("body-content-title", lambda: title.write_text("Closes #20\n", encoding="utf-8"), "implementation_pr_title_contains_body_content"),
+            ("sentinel-title", lambda: title.write_text("⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_title_contains_body_content"),
+            ("missing-sentinel", lambda: body.write_text(valid_body.replace("\n⟦AI:AUTO-LOOP⟧\n", "\n"), encoding="utf-8"), "implementation_pr_body_sentinel_missing"),
+            ("sentinel-not-final", lambda: body.write_text(valid_body + "extra\n", encoding="utf-8"), "implementation_pr_body_sentinel_missing"),
+            ("wrong-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
+            ("multiple-closes", lambda: body.write_text(valid_body.replace("Closes #20", "Closes #20\nCloses #21"), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
+            ("missing-closes", lambda: body.write_text(valid_body.replace("Closes #20\n\n", ""), encoding="utf-8"), "implementation_pr_body_closes_mismatch"),
+            ("missing-section", lambda: body.write_text(valid_body.replace("## deviation 记录", "## deviation"), encoding="utf-8"), "implementation_pr_body_required_section_missing"),
+            ("placeholder-body", lambda: body.write_text("## issue #20 实现\n\n## 修改文件\n\n- x\n\n## 测试结果\n\n- true\n\n## deviation 记录\n\n- none\n\nCloses #20\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8"), "implementation_pr_body_placeholder"),
+        )
+        for name, mutate, reason in cases:
+            with self.subTest(name=name):
+                self.write_implementation_pr_artifacts()
+                mutate()
+                plan = self.run_plan(fixture="local_iter_branch_issue20")
+                action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+                self.assertTrue(action["status_only"])
+                self.assertEqual(action["suppressed_reason"], reason)
+                self.assertNotIn("runner_authority", action)
+
+    def test_publish_implementation_projection_suppresses_outside_pr_artifact_path(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        title, body = self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        outside = self.repo / "outside-title.txt"
+        outside.write_text(title.read_text(encoding="utf-8"), encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+            "title_file": str(outside),
+            "body_file": body.relative_to(self.repo).as_posix(),
+        }
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                suppress_stale_unexecutable_actions(
+                    [action],
+                    repo_root=self.repo,
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            20,
+                            "open target",
+                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                    gh_items_loaded=True,
+                )
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_pr_title_artifact_invalid_path")
+
+    def test_publish_implementation_projection_suppresses_outside_pr_body_artifact_path(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter20-issue-20"
+        worktree.mkdir(parents=True)
+        title, body = self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        outside = self.repo / "outside-body.md"
+        outside.write_text(body.read_text(encoding="utf-8"), encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:implement-issue20.log:IMPLEMENT_DONE:issue-20:ok",
+            "controller_action": "publish_implementation_output",
+            "target_kind": "issue",
+            "target_number": 20,
+            "source_artifact": ".refactor-loop/logs/implement-issue20.log",
+            "source_marker": "IMPLEMENT_DONE:issue-20:ok",
+            "head_ref": "refactor/iter20-issue-20",
+            "title_file": title.relative_to(self.repo).as_posix(),
+            "body_file": str(outside),
+        }
+
+        with mock.patch("codex_refactor_loop.wakeup_plan._worktrees_by_branch", return_value={"refactor/iter20-issue-20": worktree}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.classify_implement_attempt", return_value=mock.Mock(redispatch=False, in_flight=False)):
+                suppress_stale_unexecutable_actions(
+                    [action],
+                    repo_root=self.repo,
+                    gh_items=[
+                        GhItem(
+                            "issue",
+                            20,
+                            "open target",
+                            (label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO),
+                        )
+                    ],
+                    gh_items_loaded=True,
+                )
+
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_pr_body_artifact_invalid_path")
 
     def test_clean_implementation_marker_with_stale_base_stays_publishable_without_redispatch_churn(self) -> None:
         self.write_consensus_artifact()
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
         log = self.logs / "implement-issue20.log"
         log.write_text("IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n", encoding="utf-8")
 
@@ -1515,6 +2310,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(publish["controller_action"], "publish_implementation_output")
         self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
         self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertEqual(publish["runner_authority"], "wakeup-runner-396")
+        self.assertIn("no_conflicting_open_implementation_pr", publish["preconditions"])
+        self.assertEqual(publish["target_pr_number"], 320)
         self.assertTrue(log.exists())
         self.assertFalse(
             any(
@@ -1535,7 +2333,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIsNone(action["target_kind"])
         self.assertIsNone(action["target_number"])
         self.assertTrue(action["status_only"])
-        self.assertEqual(action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(action["suppressed_reason"], "implementation_head_ref_missing")
         self.assertNotIn("runner_authority", action)
 
     def test_completed_marker_keeps_legacy_projection_without_open_managed_read_model(self) -> None:
@@ -1548,6 +2346,25 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 467)
         self.assertFalse(action.get("status_only"))
 
+    def test_completed_marker_uses_repo_local_host_env_when_outer_locator_points_elsewhere(self) -> None:
+        self.write_completed_log("review-pr468-architect-r1.log", "REVIEW_DONE:468:architect:approve")
+        with tempfile.TemporaryDirectory(prefix="outer-host-env-") as other_raw:
+            other = Path(other_raw)
+            (other / ".config" / "consensus-rnd").mkdir(parents=True)
+            outer_host_env = other / ".config" / "consensus-rnd" / "host.env"
+            outer_host_env.write_text(
+                f"REPO_ROOT={other}\nGH_REPO_SLUG=outer/repo\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": str(outer_host_env)}):
+                actions = completed_marker_actions(self.repo)
+
+        action = next(item for item in actions if item["action_id"].startswith("completed-marker:review-pr468"))
+        self.assertEqual(action["target_kind"], "PR")
+        self.assertEqual(action["target_number"], 468)
+        self.assertFalse(action.get("status_only"))
+
     def test_completed_marker_keeps_latest_non_design_target_marker_only(self) -> None:
         self.write_completed_log("fix-pr77-r2.log", "FIX_DONE")
         self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
@@ -1558,7 +2375,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         rendered = json.dumps(plan, sort_keys=True)
         self.assertNotIn("completed-marker:fix-pr77-r2.log", rendered)
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 77)
@@ -1871,7 +2688,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan = self.run_plan(fixture="open_pr_77")
 
-        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:fix-pr77-r3"))
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
@@ -1881,6 +2698,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_number"], 77)
         self.assertEqual(action["target"], {"kind": "PR", "number": 77})
         self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
@@ -1902,7 +2720,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 480)
-        self.assertEqual(action["head_sha"], "a" * 40)
+        self.assertNotIn("head_sha", action)
+        self.assertEqual(action["action_id"], "review-evidence-redispatch:480:" + "a" * 40)
         self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
         self.assertIn("missing_or_stale_reviewer_head_evidence", action["preconditions"])
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
@@ -1926,6 +2745,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["target_number"], 480)
+        self.assertNotIn("head_sha", action)
         self.assertEqual(action["stale_review_roles"], ["architect"])
         self.assertNotIn("status_only", action)
 
@@ -2016,6 +2836,254 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["head_sha"], "a" * 40)
         self.assertNotIn("review-evidence-redispatch", json.dumps(plan, sort_keys=True))
 
+    def test_fix_done_without_review_thread_artifact_ignores_unrelated_unresolved_threads(self) -> None:
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_with_unresolved_original_review_thread_blocks_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertIn("review_thread_completion_incomplete", action["blocked_reason"])
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
+        self.assertNotIn("controller_action", action)
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+
+    def test_fix_done_review_thread_completion_artifact_allows_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_resolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertIn("review_thread_completion_evidence", action["preconditions"])
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_review_thread_completion_artifact_does_not_bypass_live_unresolved_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_explicit_escalation_allows_unresolved_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (self.logs / "judge-pr77-r1.log").write_text(
+            "META_RESOLVED:escalate-human:conflicting-review-thread\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": False,
+                    "resolved": False,
+                    "escalation_evidence": "META_RESOLVED:escalate-human:conflicting-review-thread",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_local_escalation_without_clean_marker_source_blocks_unresolved_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": False,
+                    "resolved": False,
+                    "escalation_evidence": "META_RESOLVED:escalate-human:conflicting-review-thread",
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_blocks_when_original_review_thread_live_state_is_unknown(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        for fixture in (
+            "review_thread_graphql_failure",
+            "review_thread_malformed",
+            "review_thread_pull_request_null",
+            "review_thread_page_info_null",
+            "review_thread_node_malformed",
+        ):
+            with self.subTest(fixture=fixture):
+                self.logs.joinpath("fix-pr77-r3.log").unlink(missing_ok=True)
+                (completion_dir / "pr77.json").write_text(
+                    json.dumps(
+                        {
+                            "review_thread_driven": True,
+                            "thread_id": "PRRT_kwDOExample",
+                            "replied": True,
+                            "resolved": True,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+                plan = self.run_plan(fixture=fixture)
+
+                action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+                self.assertEqual(action["route"], "review-thread-completion-gate")
+                self.assertTrue(action["status_only"])
+                self.assertNotIn("controller_action", action)
+
+    def test_fix_done_blocks_unresolved_outdated_original_review_thread(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_unresolved_outdated")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
+    def test_fix_done_checks_paginated_original_review_thread_before_dispatch_reviewers(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan(fixture="review_thread_paginated_unresolved")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+        query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8")
+        self.assertIn("api graphql", query_log)
+        self.assertIn("after=cursor1", query_log)
+
+    def test_fix_done_blocks_when_original_review_thread_repo_slug_is_missing(self) -> None:
+        completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
+        completion_dir.mkdir(parents=True)
+        (completion_dir / "pr77.json").write_text(
+            json.dumps(
+                {
+                    "review_thread_driven": True,
+                    "thread_id": "PRRT_kwDOExample",
+                    "replied": True,
+                    "resolved": True,
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f"REPO_ROOT={self.repo}\nCODEX_FLOOR=5\n",
+            encoding="utf-8",
+        )
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE")
+
+        plan = self.run_plan_with_env({"GH_REPO_SLUG": ""}, fixture="review_thread_unresolved")[0]
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["route"], "review-thread-completion-gate")
+        self.assertTrue(action["status_only"])
+        self.assertNotIn("controller_action", action)
+
     def test_runner_named_helper_projection_remains_executable(self) -> None:
         plan = self.run_plan(fixture="unpushed")
 
@@ -2029,7 +3097,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_named_g1_g3_helpers_remain_executable_without_generic_command_fields(self) -> None:
         artifact = self.write_consensus_artifact()
         self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
-        self.write_completed_log("implement-issue20.log", "IMPLEMENT_DONE:ok")
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
         (self.repo / ".refactor-loop/runs").mkdir(parents=True, exist_ok=True)
         (self.repo / ".refactor-loop/runs/release-rollup-pr-body.md").write_text(
             "## rollup\n\nbody\n\n⟦AI:AUTO-LOOP⟧\n",
@@ -2068,7 +3139,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             if action.get("controller_action") == "publish_implementation_output"
         )
         self.assertTrue(publish_action["status_only"])
-        self.assertEqual(publish_action["suppressed_reason"], "verified_pr_head_unavailable")
+        self.assertEqual(publish_action["suppressed_reason"], "implementation_worktree_missing")
         self.assertNotIn("runner_authority", publish_action)
         consensus_action = executable["dispatch_consensus_implementation"]
         self.assertEqual(consensus_action["consensus_artifact"], artifact.relative_to(self.repo).as_posix())
@@ -2206,6 +3277,43 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("status_only", action)
         self.assertTrue(action["consensus_implementation_ready"])
 
+    def test_consensus_implementation_readiness_does_not_suppress_stale_pending_intent(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertIsNone(reason)
+
+    def test_consensus_implementation_readiness_suppresses_pending_intent_with_worktree(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 20,
+            "iteration": "20",
+            "cluster_id": "issue-20",
+        }
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertEqual("pending_implement_intent", reason)
+
     def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
         cases = (
             ("pending", "pending_implement_intent"),
@@ -2223,6 +3331,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 elif name == "log":
                     (self.logs / "implement-issue-20.log").write_text("", encoding="utf-8")
                 elif name == "pending":
+                    (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
                     self.append_harness_spawn_intent(
                         intent_id="dispatch-consensus-implementation:20",
                         task_id="implement-issue-20",
@@ -2445,101 +3554,109 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual([], projected)
 
     def test_wakeup_plan_source_locks_consensus_projection_to_judge_artifact_only(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for required in (
-            "CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)",
-            "CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)",
+            "CONSENSUS_JUDGE_LOG_RE",
+            "CONSENSUS_JUDGE_ARTIFACT_RE",
             "_frontmatter_is_consensus",
             "_extract_implementation_owner",
             "_extract_structured_consensus_field",
             "_consensus_projection_from_artifact",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, source)
-        self.assertNotIn("_extract_solver_scope_paths", source)
-        self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", source)
+                self.assertIn(required, projection.assigned_names | projection.function_names)
+        self.assertNotIn("_extract_solver_scope_paths", projection.function_names)
+        self.assertNotIn("phase9-issue{issue_match.group(1)}-r{issue_match.group(2)}-{role}.md", projection.string_literals)
 
     def test_wakeup_plan_source_locks_consensus_implementation_scope_conflict_serialization(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for required in (
-            "serialize_conflicting_consensus_implementation_actions(actions)",
+            "serialize_conflicting_consensus_implementation_actions",
             "_normalized_consensus_scope_paths",
             "_scope_paths_overlap",
-            "scope_conflict_waiting",
         ):
             with self.subTest(required=required):
-                self.assertIn(required, source)
+                self.assertIn(required, projection.function_names)
+        self.assertIn("scope_conflict_waiting", projection.string_literals)
 
     def test_wakeup_plan_source_locks_named_g1_g3_helper_allowlist(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        for helper in (
-            "dispatch_consensus_implementation",
-            "publish_implementation_output",
-            "dispatch_reviewers",
-            "open_release_rollup_pr_from_action",
-        ):
-            with self.subTest(helper=helper):
-                self.assertIn(helper, source)
-        self.assertNotIn("HeadlessLifecycleAction", source)
-        self.assertNotIn("headless_actions", source)
+        projection = wakeup_plan_projection()
+        self.assertGreaterEqual(
+            projection.set_members["RUNNER_NAMED_HELPER_ACTIONS"],
+            {
+                "dispatch_consensus_implementation",
+                "publish_implementation_output",
+                "dispatch_reviewers",
+                "open_release_rollup_pr_from_action",
+            },
+        )
+        self.assertNotIn("HeadlessLifecycleAction", projection.class_names)
+        self.assertNotIn("headless_actions", projection.assigned_names | projection.function_names)
 
     def test_wakeup_plan_source_locks_reviewer_head_redispatch_contract(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        for token in (
-            "headRefName,headRefOid,body",
-            "def review_evidence_redispatch_actions(",
-            "latest_reviewer_heads(repo_root, item.number)",
-            "by_role: dict[str, tuple[int, str]]",
-            "pending_review_spawn_exists(repo_root, item.number)",
-            '"controller_action": "dispatch_reviewers"',
-            '"missing_or_stale_reviewer_head_evidence"',
-            '"review-evidence-redispatch"',
-        ):
+        projection = wakeup_plan_projection()
+        for token in ("dispatch_reviewers", "missing_or_stale_reviewer_head_evidence", "review-evidence-redispatch"):
             with self.subTest(token=token):
-                self.assertIn(token, source)
-        constants = source[source.index("EXECUTABLE_ACTION_KINDS = {") : source.index("NON_ACTION_PHASE_LABELS = {")]
-        self.assertIn('"review-evidence-redispatch"', constants)
+                self.assertIn(token, projection.string_literals)
+        snapshot_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "managed_work_snapshot.py").read_text(encoding="utf-8")
+        for token in ("gh\",", "api\",", "graphql", "body", "headRefName", "headRefOid"):
+            with self.subTest(snapshot_token=token):
+                self.assertIn(token, snapshot_source)
+        caller_source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        self.assertNotIn("issue list", caller_source)
+        self.assertNotIn("pr list", caller_source)
+        self.assertIn("review_evidence_redispatch_actions", projection.function_names)
+        self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        function_source = source[
+            source.index("def review_evidence_redispatch_actions") : source.index("\ndef phase_from_marker", source.index("def review_evidence_redispatch_actions"))
+        ]
+        self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', function_source)
+        self.assertNotIn('"head_sha"', function_source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
         for token in (
-            "suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)",
-            "def suppress_stale_unexecutable_actions(",
-            'controller_action == "publish_implementation_output"',
-            'controller_action == "close_managed_item_from_drop_marker"',
-            '"verified_pr_head_unavailable"',
-            'action["status_only"] = True',
+            "publish_implementation_output",
+            "close_managed_item_from_drop_marker",
+            "implementation_worktree_missing",
+            "implementation_head_ref_missing",
+            "no_conflicting_open_implementation_pr",
+            "status_only",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, source)
+                self.assertIn(token, projection.string_literals)
+        self.assertIn("suppress_stale_unexecutable_actions", projection.function_names)
 
     def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        self.assertIn("clean :ok stale-base belongs to publish recovery, not redispatch", source)
-        self.assertIn("def _publish_recoverable_stale_base_implement", source)
-        self.assertIn('getattr(state, "reason", "") == "stale_base"', source)
-        self.assertIn('replace(state, status="publish_ready")', source)
+        projection = wakeup_plan_projection()
+        self.assertIn("_publish_recoverable_stale_base_implement", projection.function_names)
+        self.assertIn("stale_base", projection.string_literals)
+        self.assertIn("publish_ready", projection.string_literals)
 
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
         for token in (
-            "DESIGN_CONSENSUS_TERMINAL_PHASES",
             "PHASE_CONSENSUS_REACHED",
             "PHASE_IMPLEMENTING",
             "PHASE_MERGED",
             "PHASE_CLOSED",
-            "_terminal_design_consensus_targets",
-            "_is_design_consensus_solver_dispatch_intent",
-            "source_marker = str(closed.get(\"source_marker\") or \"\")",
-            "_design_consensus_marker_is_router_owned(source_marker)",
-            "\"status_only\"",
         ):
             with self.subTest(token=token):
-                self.assertIn(token, source)
+                self.assertIn(token, projection.attribute_names)
+        for token in (
+            "DESIGN_CONSENSUS_TERMINAL_PHASES",
+            "_terminal_design_consensus_targets",
+            "_is_design_consensus_solver_dispatch_intent",
+            "_design_consensus_marker_is_router_owned",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, projection.assigned_names | projection.function_names | projection.string_literals)
+        self.assertIn("status_only", projection.string_literals)
         for forbidden in ("gh issue edit", "gh issue close", "gh pr merge", "git push", "git commit"):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, source)
+                self.assertNotIn(forbidden, projection.string_literals)
 
     def test_unpushed_worker_output_fetch_failure_fails_closed(self) -> None:
         plan = self.run_plan(fixture="unpushed_fetch_fail")
@@ -2610,9 +3727,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan = self.run_plan(fixture="ci_red")
 
         self.assertEqual(plan["actions"][0]["kind"], "ci-red")
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
-        self.assertIn("PrChecksProjection", source)
-        self.assertNotIn('"pr", "checks"', source)
+        projection = wakeup_plan_projection()
+        self.assertIn("PrChecksProjection", projection.imported_names)
+        self.assertNotIn("pr", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
+        self.assertNotIn("checks", projection.set_members.get("LEGACY_PR_CHECKS_COMMAND", frozenset()))
 
     def test_no_gap_routes_before_milestone(self) -> None:
         (self.repo / ".refactor-loop" / ".concurrency-alert.log").write_text(
@@ -2698,10 +3816,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(hard_gate["dispatch_required"], 0)
 
     def test_wakeup_plan_source_does_not_make_dispatch_next_step_worker_executable(self) -> None:
-        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        projection = wakeup_plan_projection()
 
-        self.assertNotIn('"no-gap-violation",\n    "existing-issue"', source)
-        self.assertNotIn('closed.setdefault("controller_action", "dispatch_next_step_worker")', source)
+        self.assertNotIn("no-gap-violation", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        self.assertNotIn("existing-issue", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        self.assertNotIn("dispatch_next_step_worker", projection.set_members["RUNNER_NAMED_HELPER_ACTIONS"])
 
     def test_milestone_labeled_items_route_before_ordinary_existing_issue(self) -> None:
         plan = self.run_plan(fixture="milestone")
@@ -2885,6 +4004,22 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["blocked_reasons"], [])
         self.assertIn("api milestones", (self.repo / "gh-query-labels.log").read_text(encoding="utf-8"))
 
+    def test_release_countdown_fail_soft_when_version_manifest_is_absent_with_open_milestone(self) -> None:
+        (self.repo / ".version-bump.json").unlink()
+
+        plan = self.run_plan(fixture="default_milestones")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "release-countdown"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["activation"], "default-goal")
+        self.assertEqual(action["goal"]["milestone"], {"number": 1, "title": "Soon", "due_on": "2026-06-15T00:00:00Z"})
+        self.assertIsNone(action["goal"]["release"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertFalse((self.repo / ".refactor-loop/state/release-decision.json").exists())
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+
     def test_release_countdown_fail_soft_when_mapped_manifest_versions_are_not_synchronized(self) -> None:
         (self.repo / ".version-bump.json").write_text(
             json.dumps(
@@ -3030,6 +4165,75 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
         self.assertIn("RECOMMEND:audit", stdout)
 
+    def test_repository_stalled_meta_reflector_projects_single_spawn_only_action(self) -> None:
+        plan = self.run_plan(fixture="repository_stalled")
+
+        actions = [action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"]
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(action["source_artifact"], "github-open-managed-items")
+        self.assertEqual(action["source_marker"], "meta-escalation-long-stuck:24")
+        self.assertEqual(action["threshold_hours"], "24")
+        self.assertEqual(action["stale_revival_hours"], "3")
+        self.assertTrue(action["run_in_background_required"])
+        self.assertEqual(Path(action["prompt"]).name, "meta-reflector-repository-stalled.md")
+        self.assertEqual(Path(action["log"]).name, "meta-reflector-repository-stalled.log")
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "meta-reflector-repository-stalled"})
+        self.assertEqual(action["preconditions"], ["active_controller_owner", "live_open_targets", "long_stuck_threshold_exceeded", "recommendation_only"])
+        self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507, 536])
+        pr_item = action["stalled_items"][2]
+        self.assertEqual(pr_item["kind"], "PR")
+        self.assertEqual(pr_item["number"], 536)
+        self.assertEqual(pr_item["title"], "old review PR")
+        self.assertEqual(pr_item["phase"], "review-gate")
+        rendered = json.dumps(action, sort_keys=True)
+        for forbidden in (
+            "IssueDecompositionPlan",
+            "apply_issue_decomposition_plan",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rendered)
+        for forbidden_key in (
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "argv",
+            "shell",
+            "commands",
+            "executor",
+            "gh",
+            "git",
+        ):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        for forbidden_key in ("cmd", "env"):
+            with self.subTest(forbidden_key=forbidden_key):
+                self.assertNotIn(f'"{forbidden_key}"', rendered)
+        self.assertTrue(has_dispatchable_action([action]))
+
+    def test_repository_stalled_meta_reflector_suppresses_fresh_human_and_duplicate_pending(self) -> None:
+        fresh = self.run_plan(fixture="repository_fresh")
+        self.assertEqual([action for action in fresh["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        human = self.run_plan(fixture="repository_human_decision")
+        self.assertEqual([action for action in human["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        pending.write_text("repository-stalled-meta-reflector already queued\n", encoding="utf-8")
+        duplicate = self.run_plan(fixture="repository_stalled")
+        self.assertEqual([action for action in duplicate["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+
+    def test_repository_stalled_meta_reflector_waits_for_specific_executable_action(self) -> None:
+        self.append_harness_spawn_intent(intent_id="specific-work", task_id="issue #506")
+
+        plan = self.run_plan(fixture="repository_stalled")
+
+        self.assertEqual([action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
+        self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["specific-work"])
+
     def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
         path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3066,19 +4270,63 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ["issue #61", "issue #63", "issue #62", "issue #60"],
         )
 
-    def test_load_github_items_queries_canonical_and_legacy_managed_labels_once(self) -> None:
-        plan = self.run_plan(fixture="managed_dual_read")
+    def test_load_github_items_queries_canonical_managed_label_once(self) -> None:
+        plan = self.run_plan(fixture="managed_canonical")
 
         existing_items = [action["item"] for action in plan["actions"] if action["kind"] == "existing-issue"]
         self.assertEqual(existing_items, ["issue #81", "issue #82", "PR #91", "PR #92"])
         query_log = (self.repo / "gh-query-labels.log").read_text(encoding="utf-8").splitlines()
-        expected = [
-            f"{kind} {label}"
-            for kind in ("issue", "pr")
-            for label in label_catalog.query_labels_for(label_catalog.MANAGED)
-        ]
-        expected.append("api milestones")
-        self.assertEqual(query_log, expected)
+        self.assertEqual(query_log, ["api milestones"])
+        snapshot = json.loads((self.repo / ".refactor-loop/state/managed-work-snapshot.json").read_text(encoding="utf-8"))
+        self.assertEqual(len(snapshot["items"]), 4)
+
+    def test_positive_open_managed_snapshot_fixtures_use_only_canonical_loop_labels(self) -> None:
+        positive_fixtures = (
+            "managed_canonical",
+            "milestone",
+            "existing",
+            "transition_sort",
+            "many_active",
+            "non_action_statuses",
+            "unpushed",
+            "unpushed_fetch_fail",
+            "unpushed_no_ahead",
+            "unpushed_no_remote",
+            "unpushed_no_worktree",
+            "unpushed_head_dash",
+            "unpushed_head_space",
+            "unpushed_head_control",
+            "ci_red",
+            "ci_red_issue20",
+        )
+
+        for fixture in positive_fixtures:
+            with self.subTest(fixture=fixture):
+                rows = self.managed_work_snapshot_items(fixture)
+                self.assertGreater(len(rows), 0)
+                for row in rows:
+                    labels = tuple(str(label) for label in row["labels"])
+                    residue = [label for label in labels if not label_catalog.is_loop_owned(label)]
+                    self.assertEqual(residue, [], f"{fixture} uses historical residue labels in a positive open-managed fixture")
+                    self.assertIn(label_catalog.MANAGED, labels)
+                    valid, errors = label_catalog.validate_exactly_one_phase_human(labels)
+                    self.assertTrue(valid, f"{fixture} has invalid canonical labels for {row['kind']} #{row['number']}: {errors}")
+
+    def test_load_github_items_logs_unavailable_managed_work_snapshot(self) -> None:
+        snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)
+        output = StringIO()
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.load_open_managed_work_snapshot", return_value=snapshot):
+                with redirect_stderr(output):
+                    items, loaded_ok = load_github_items_with_status(self.repo)
+
+        self.assertEqual(items, [])
+        self.assertFalse(loaded_ok)
+        self.assertIn(
+            "managed-work-snapshot-unavailable caller=wakeup-plan.load-github-items reason=graphql-headroom-low "
+            "source=unavailable age_seconds=901 items=0 target=projection-open-managed",
+            output.getvalue(),
+        )
 
     def test_existing_issue_skips_non_action_statuses_but_preserves_red_ci(self) -> None:
         plan = self.run_plan(fixture="non_action_statuses")
@@ -3114,7 +4362,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_github_action_queries_only_open_auto_loop_items(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn('"--state", "open"', source)
+        self.assertIn("load_open_managed_work_snapshot(ctx)", source)
         self.assertNotIn('"--state", "closed"', source)
         self.assertNotIn('"--state", "merged"', source)
 
@@ -3269,7 +4517,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan, stdout = self.run_plan_with_stdout(fixture="open_issue_330", ps_count=0, active_audit=True)
 
-        self.assertEqual(plan["actions"][0]["kind"], "harness-spawn-intent")
+        self.assertTrue(any(action["kind"] == "harness-spawn-intent" for action in plan["actions"]))
         self.assertTrue(has_dispatchable_action(plan["actions"]))
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 4)
@@ -3399,7 +4647,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "closed-action-projection")
         self.assertTrue(plan["no_lifecycle_authority"])
         self.assertEqual(plan["apply_authority"], "wakeup-runner-396-only")
-        action = plan["actions"][0]
+        action = next(item for item in plan["actions"] if item["kind"] == "harness-spawn-intent")
         self.assertEqual(action["kind"], "harness-spawn-intent")
         for field in (
             "action_id",
@@ -3466,6 +4714,33 @@ class StaleRevivalTests(unittest.TestCase):
                 os.environ.pop("STALE_REVIVAL_HOURS", None)
             else:
                 os.environ["STALE_REVIVAL_HOURS"] = prev
+
+    def test_meta_escalation_threshold_defaults_and_normalizes_above_stale_revival(self) -> None:
+        prev_meta = os.environ.get("META_ESCALATION_STUCK_HOURS")
+        prev_stale = os.environ.get("STALE_REVIVAL_HOURS")
+        try:
+            os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            os.environ.pop("STALE_REVIVAL_HOURS", None)
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "bad"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "0"
+            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+
+            os.environ["META_ESCALATION_STUCK_HOURS"] = "2"
+            os.environ["STALE_REVIVAL_HOURS"] = "5"
+            self.assertEqual(5 * 3600.0, meta_escalation_stuck_seconds())
+        finally:
+            if prev_meta is None:
+                os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
+            else:
+                os.environ["META_ESCALATION_STUCK_HOURS"] = prev_meta
+            if prev_stale is None:
+                os.environ.pop("STALE_REVIVAL_HOURS", None)
+            else:
+                os.environ["STALE_REVIVAL_HOURS"] = prev_stale
 
     def test_stale_partial_implement_log_is_revived(self) -> None:
         log = self._write_partial(421)

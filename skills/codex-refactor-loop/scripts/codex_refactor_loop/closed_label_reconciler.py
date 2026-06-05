@@ -12,9 +12,15 @@ from typing import Callable, Mapping, Sequence
 
 from . import labels as label_catalog
 from .active_controller import require_active_controller, write_active_controller_status
-from .closed_phase_labels import ClosedPhaseLabelPlan, plan_from_gh_item
+from .closed_phase_labels import (
+    ClosedPhaseLabelPlan,
+    closed_reconcile_candidate_queries,
+    item_matches_closed_reconcile_query,
+    plan_closed_reconcile_candidate,
+    plan_from_gh_item,
+)
 from .context import LoopContext, LoopContextError
-from .github_budget import graphql_headroom_ok, log_graphql_backoff
+from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 
 
@@ -37,7 +43,6 @@ class ClosedLabelReconciler:
     # New principle: renew during the tick and isolate each item so closed-only phase reconciliation continues.
     def run_once(self, beat: Callable[[], None] | None = None) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("closed-label-reconciler")
             _log_tick_status("closed-label-reconciler", "skip:graphql-backoff remaining=unknown")
             return 0
         decision = require_active_controller(self.ctx, "closed-label-reconciler")
@@ -86,33 +91,20 @@ class ClosedLabelReconciler:
         plans: list[ClosedPhaseLabelPlan] = []
         seen: set[tuple[str, int]] = set()
         for kind, state in (("issue", "closed"), ("pr", "closed"), ("pr", "merged")):
-            for item in self._list_managed(kind, state):
-                plan = plan_from_gh_item(kind, item)
+            for item in self._list_candidates(kind, state):
+                plan = plan_closed_reconcile_candidate(kind, item)
                 if plan is None:
                     continue
                 key = (plan.kind, plan.number)
                 if key in seen:
                     continue
                 seen.add(key)
-                if self._has_human_label_drift(item, plan):
-                    continue
                 if kind == "issue":
-                    plan = plan_from_gh_item(kind, item, linked_merged=self._issue_has_merged_pr(item))
+                    plan = plan_closed_reconcile_candidate(kind, item, linked_merged=self._issue_has_merged_pr(item))
                     if plan is None:
                         continue
                 plans.append(plan)
         return tuple(plans)
-
-    def _has_human_label_drift(self, item: Mapping[str, object], plan: ClosedPhaseLabelPlan) -> bool:
-        projection = label_catalog.normalize_label_set(_label_names(item))
-        humans = projection.labels_for_group("human")
-        if len(humans) == 1:
-            return False
-        print(
-            f"closed-label-reconciler warn: {plan.kind} #{plan.number} "
-            f"expected exactly one canonical human label, got {len(humans)}; skipping phase reconciliation"
-        )
-        return True
 
     def apply_plan(self, plan: ClosedPhaseLabelPlan) -> ClosedPhaseLabelPlan | None:
         live_plan = self._live_plan(plan)
@@ -163,9 +155,6 @@ class ClosedLabelReconciler:
         host_labels = self._host_labels()
         if canonical_label in host_labels:
             return canonical_label
-        for alias in label_catalog.aliases_for(canonical_label):
-            if alias in host_labels:
-                return alias
         return None
 
     def _host_labels(self) -> frozenset[str]:
@@ -198,18 +187,22 @@ class ClosedLabelReconciler:
         item = self._view_item(plan.kind, plan.number)
         return plan_from_gh_item(plan.kind, item, linked_merged=self._issue_has_merged_pr(item) if plan.kind == "issue" else False)
 
-    def _list_managed(self, kind: str, state: str) -> list[dict[str, object]]:
+    def _list_candidates(self, kind: str, state: str) -> list[dict[str, object]]:
         rows: list[dict[str, object]] = []
         seen: set[int] = set()
         fields = "number,state,labels,title"
         if kind == "pr":
             fields += ",mergedAt"
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            data = self._gh_json([kind, "list", "--label", query_label, "--state", state, "--limit", "100", "--json", fields], [])
+        for query in closed_reconcile_candidate_queries(kind, state):
+            data = self._gh_json(query.gh_args(fields), [])
             if not isinstance(data, list):
                 continue
             for item in data:
                 if not isinstance(item, dict):
+                    continue
+                if not item_matches_closed_reconcile_query(kind, item, query):
+                    continue
+                if plan_closed_reconcile_candidate(kind, item) is None:
                     continue
                 try:
                     number = int(item.get("number"))

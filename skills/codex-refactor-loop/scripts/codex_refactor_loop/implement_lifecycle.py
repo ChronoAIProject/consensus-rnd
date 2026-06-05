@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Mapping, Sequence
 
+from .worker_markers import read_worker_terminal_marker
 
 IMPLEMENT_DONE_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:ok$")
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?P<cluster>[A-Za-z0-9._-]+)\.log$")
@@ -36,6 +37,10 @@ class ImplementAttemptState:
     def redispatch(self) -> bool:
         return self.status == "redispatch"
 
+    @property
+    def refresh_needed(self) -> bool:
+        return self.status == "refresh_needed"
+
 
 def classify_implement_attempt(
     *,
@@ -53,18 +58,19 @@ def classify_implement_attempt(
         return ImplementAttemptState("in_flight", "non_implement_log_exists")
     if not log_path.exists():
         return ImplementAttemptState("redispatch", "log_absent")
-    try:
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
+    marker_read = read_worker_terminal_marker(log_path)
+    if marker_read.reason == "log_unreadable":
         return ImplementAttemptState("in_flight", "log_unreadable")
-    exit_line = terminal_exit_line(lines)
-    if exit_line is None:
-        return ImplementAttemptState("in_flight", "no_terminal_exit")
-    if exit_line != "EXIT=0":
+    if marker_read.reason == "missing_exit_zero":
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return ImplementAttemptState("in_flight", "log_unreadable")
+        exit_line = terminal_exit_line(lines)
+        if exit_line is None:
+            return ImplementAttemptState("in_flight", "no_terminal_exit")
         return ImplementAttemptState("redispatch", "nonzero_exit")
-    marker = clean_implement_done_marker(lines)
-    if not marker:
-        marker = _implement_run_artifact_done_marker(log_path)
+    marker = marker_read.marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker_read.marker) else ""
     if not marker:
         return ImplementAttemptState("redispatch", "markerless")
     identity = canonical_implementation_identity(repo_root, action, marker)
@@ -83,7 +89,7 @@ def classify_implement_attempt(
         if merge_base.returncode != 0 or current.returncode != 0:
             return ImplementAttemptState("redispatch", "base_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
         if merge_base.stdout.strip() != current.stdout.strip():
-            return ImplementAttemptState("redispatch", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
+            return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
     diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
     if diff.returncode == 0:
         return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
@@ -102,22 +108,8 @@ def is_implement_log(path: Path) -> bool:
 
 
 def _implement_run_artifact_done_marker(log_path: Path) -> str:
-    """Recover IMPLEMENT_DONE:<id>:ok from the run artifact when a clean-exit
-    implement worker emitted it only into runs/implement-<cluster>.md instead of
-    the log tail. Mirrors the detection (wakeup_plan) and revalidation
-    (wakeup_runner) artifact fallbacks so the success-aware lifecycle predicate
-    does not re-dispatch and overwrite an already-complete implement merely
-    because its marker went to the artifact (the root cause of readiness churn,
-    e.g. an :ok implement being re-implemented into :partial). Only :ok markers
-    are accepted, so partial/failed attempts still re-dispatch for recovery."""
-    match = IMPLEMENT_LOG_RE.fullmatch(log_path.name)
-    if not match:
-        return ""
-    artifact = log_path.parent.parent / "runs" / f"implement-{match.group('cluster')}.md"
-    try:
-        return clean_implement_done_marker(artifact.read_text(encoding="utf-8", errors="replace").splitlines())
-    except OSError:
-        return ""
+    marker = read_worker_terminal_marker(log_path).marker
+    return marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker) else ""
 
 
 def terminal_exit_line(lines: list[str]) -> str | None:

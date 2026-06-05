@@ -196,7 +196,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "crnd:lifecycle:managed",
             "crnd:phase:design-solving",
             "crnd:human:auto",
-            "Legacy issue-entry labels are migration aliases only",
+            "Historical non-`crnd:*` issue-entry labels are unmanaged residue",
             "`audit` remains a stable compatibility producer value and fallback issue producer",
             "no open actionable managed issue/PR",
             "Audit produces or updates issues that feed back into the main path",
@@ -247,6 +247,40 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("Refactoring, issue-solving, and repository R&D are different entry surfaces", self.readme)
         self.assertIn("## Main path and fallback producer", self.skill)
 
+    def test_project_rules_document_repo_python_code_policy(self) -> None:
+        claude = read(REPO_ROOT / "CLAUDE.md")
+        python_policy = section_after_heading(claude, "Python 代码规范")
+
+        for needle in (
+            "只约束本仓库内 Python skill scripts 和测试代码",
+            "不是 host 项目规范",
+            "公共函数和方法必须有类型注解",
+            "`dataclass`、`TypedDict` 或明确投影类型",
+            "`Mapping[str, Any]`、`dict[str, Any]` 一类宽边界只用于外部 JSON adapter 层",
+            "I/O、GitHub/git 副作用、环境读取、文件系统写入与决策逻辑分层",
+            "纯函数优先",
+            "过长函数/文件和高复杂度分支不得在新增或触碰时继续膨胀",
+            "具体后续重构计划",
+            "fail-closed 路径必须抛出具体、可诊断的异常或返回明确错误原因",
+            "禁止裸 `except`、吞错、静默 fallback",
+            "命名表达职责边界",
+            "不把 runtime、issue 编号或临时实现泄露进稳定接口",
+            "哲学文档仍不写 schema/identifier 版本后缀",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, python_policy)
+
+        forbidden = (
+            "PythonStructureGuard",
+            "legacy debt allowlist",
+            "legacy debt whitelist",
+            "ruff",
+            "flake8",
+        )
+        for needle in forbidden:
+            with self.subTest(forbidden=needle):
+                self.assertNotIn(needle, python_policy)
+
     def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
         section = section_after_anchor(self.skill, "large-issue-decomposition")
         for needle in (
@@ -278,6 +312,86 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, section)
+
+    def test_runtime_retention_anchor_documents_canonical_owner_and_alias(self) -> None:
+        section = section_after_anchor(self.skill, "named-runtime-exception--runtime-retentionper-437")
+        for needle in (
+            "RuntimeRetention(per #437)",
+            "runtime-retention-437",
+            "`consensus-rnd-cli runtime-retention` is the canonical command",
+            "$RUNTIME_RETENTION_ENABLE=true",
+            "$REPO_ROOT/.refactor-loop/{logs,prompts,runs}",
+            "same inode",
+            ".controller-pending-events.log",
+            ".refactor-loop/state/runtime-retention-plan.json",
+            "git worktree remove <path>",
+            "git worktree prune",
+            "no `git fetch`",
+            "no GitHub write or lifecycle authority",
+            "test_runtime_retention.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_task_spawn_claim_documents_spawn_boundary_not_distributed_authority(self) -> None:
+        section = section_after_anchor(self.skill, "task-spawn-claim-490")
+        spawn_pattern = self.skill
+
+        for needle in (
+            "consensus-rnd-cli spawn-codex",
+            "spawn.py",
+            "same-device per-codex-task atomic spawn-claim enforcement point",
+            "TaskSpawnClaimStore.acquire(...)",
+            ".refactor-loop/locks/spawn-tasks/<safe-task-id>.lock",
+            "O_CREAT|O_EXCL",
+            "ProcessSupervisor.supervise(...)",
+            "SPAWN_CLAIM_HELD:task=<task_id> lock=<lock_path>",
+            "exits 0 as skip/noop",
+            "fail closed nonzero before supervisor launch",
+            "log has an `EXIT=` marker",
+            "not #191 `ActiveControllerLease`",
+            "not a cross-device per-work claim",
+            "not lifecycle authority",
+            "not host production SSOT",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+        self.assertIn("[Task spawn claim](#task-spawn-claim-490)", spawn_pattern)
+        self.assertIn("Callers may use logs, readiness, pending intents, or process counts for planning", spawn_pattern)
+        self.assertIn("not the enforcement point", spawn_pattern)
+
+    def test_issue_504_global_dashboard_status_card_anchor_and_boundaries(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception - global-dashboard-status-card(per #504)")
+
+        for needle in (
+            "HolisticStatusProjection",
+            "single shared read-only algorithm",
+            "`consensus-rnd-cli holistic-status` renders the full local card",
+            "`peek` may only reuse `render_peek_summary(...)`",
+            "progress-reporter",
+            "$HOST_HOLISTIC_STATUS_ENABLE=true",
+            "$HOST_HOLISTIC_STATUS_ISSUE_NUMBER",
+            "$HOST_HOLISTIC_STATUS_COMMENT_ID",
+            "PATCH exactly one host-configured issue comment id",
+            "no new daemon",
+            "no public writer CLI",
+            "no create comment",
+            "no issue body edit",
+            "no PR body/title edit",
+            "no Discussions",
+            "no labels",
+            "no create/close/reopen/merge",
+            "no tag/release",
+            "no git",
+            "no generic GitHub writer",
+            "no prompt-body/prose decision reads",
+            "no multi-carrier grammar",
+            "no standalone dashboard truth source",
+            "no standalone dependency truth source",
+            "test_holistic_status.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
@@ -580,6 +694,29 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(stale=stale):
                 self.assertNotIn(stale, combined)
 
+    def test_skill_degradation_documents_private_419_host_fixture_smoke_boundary(self) -> None:
+        source_repo_validation = section_after_heading(self.skill, "Skill degradation source-repo validation")
+        details = section_after_anchor_until_heading(self.skill, "skill-degradation-source-repo-validation-details", 3)
+        combined = "\n".join((source_repo_validation, details))
+        for needle in (
+            "source-repo CI/release validation covering static contract checks plus one bounded temporary host-fixture smoke for the #419 profile",
+            "no `.version-bump.json`",
+            "fake/read-only open milestone",
+            "RELEASE_AUTO_ENABLE=false",
+            "runs only through existing `consensus-rnd-cli check-degradation --static`",
+            "writes only a temporary host fixture with host-owned `.config/consensus-rnd/host.env`",
+            "reports failures as `host-fixture-smoke` findings in the existing `skill-degradation` check-run",
+            "no public clean-room command",
+            "no clean-room artifact",
+            "no ninth internal release signal",
+            "no workflow job",
+            "no real GitHub repo lifecycle",
+            "no downstream runtime watch",
+            "no `.refactor-loop/host.env` production SSOT",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
     def test_skill_documents_update_check_notify_only_contract(self) -> None:
         section = section_after_heading(self.skill, "Notify-only update check(per #231)")
         for needle in (
@@ -758,7 +895,12 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         self.assertIn("queues each r1 solver role (`minimal`, `structural`, `delete`) whose role-specific ledger key, r1 evidence/log, and in-flight target are absent as that role's r1 `HARNESS_SPAWN_INTENT`", self.skill)
         self.assertIn("existing evidence/log/in-flight for one solver role suppresses only that role", self.skill)
         self.assertNotIn("with no r1 solver evidence", self.skill)
-        self.assertIn("`gh issue list --repo <owner/repo> --state open --label crnd:lifecycle:managed --json number,title,labels`", self.skill)
+        self.assertIn("`ManagedWorkSnapshot` 发现 open managed `crnd:phase:design-solving` issue", self.skill)
+        self.assertIn("`.refactor-loop/state/managed-work-snapshot.json`", self.skill)
+        self.assertIn("`.refactor-loop/locks/managed-work-snapshot.lock`", self.skill)
+        self.assertIn("`MANAGED_WORK_SNAPSHOT_TTL_SECONDS=300`", self.skill)
+        self.assertIn("`MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS=900`", self.skill)
+        self.assertIn("not GitHub live state fact source, not host production SSOT", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>`", self.skill)
         self.assertIn("`gh api repos/<slug>/issues/<N>/comments?per_page=20`", self.skill)
         self.assertIn("The router-injected issue source snapshots are router-local prompt context, not durable schema, host production SSOT, or lifecycle authority", self.skill)
@@ -847,6 +989,26 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
+    def test_closed_label_reconciler_documents_bounded_candidate_projection(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — closed-label-reconciler(per #238)")
+        for token in (
+            "bounded GitHub label/state driven dirty candidate projection",
+            "whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate",
+            "missing terminal phase",
+            "residual nonterminal phase",
+            "`crnd:lifecycle:stuck`",
+            "managed-intersecting at query construction",
+            "small recent closed read-only managed window",
+            "terminal-complete closed managed items are excluded from steady-state scans",
+            "must not receive steady-state per-item view or linked-merge probes",
+            "unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens",
+            "Human-label exactness neither authorizes human-label mutation nor blocks phase/cleanup/stuck reconciliation",
+            "human labels are preserved as-is",
+            "test_gh_accounting.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
         # multi-device controller writes were described as local daemon facts.
@@ -885,6 +1047,17 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "`require_active_controller(...)` gate on issue/PR target writes",
+            "`GitHubAuthenticatedActor` may read the current authenticated GitHub API caller/token login",
+            "repo permission",
+            "branch protection/ruleset/CODEOWNERS/required-review results",
+            "only after the #191 owner gate and before the first GitHub API mutation",
+            "fail-closed admission checks",
+            "not per-work owner",
+            "daemon owner",
+            "takeover permit",
+            "action-specific lifecycle authorization",
+            "generic lifecycle actor",
+            "bypass for #191/#238/#322/#396/#403",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -1426,6 +1599,15 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "`in_flight_implement`",
             "`scope_conflict_waiting`",
             "overlapping normalized `scope_paths`",
+            "PR title/body are worker-authored GitHub-facing artifacts",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`",
+            "`.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`",
+            "exactly one matching `Closes #N`",
+            "non-placeholder title/body",
+            "empty reservation commit",
+            "`early_pr_missing`",
+            "exactly one matching open managed PR",
+            "`implementation_refresh_needed:stale_base`",
             "named helper `dispatch_consensus_implementation`",
         ):
             with self.subTest(needle=needle):
@@ -1451,6 +1633,61 @@ class WakeupRunnerContractTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, batching)
+
+    def test_touched_module_test_ratchet_is_skill_and_prompt_contract(self) -> None:
+        hard_rules = section_after_heading(self.skill, "Hard rules (controller-level, propagated into every codex prompt)")
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        verify = read(SKILL_ROOT / "prompts" / "verify.md")
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        combined = "\n".join((hard_rules, implement, verify))
+
+        for needle in (
+            "Touched-module test ratchet",
+            "fast / hermetic / behavior-first",
+            "owner-local fact source",
+            "observable behavior or contracts",
+            "No suite-level host-wide process-table daemon guard",
+            "daemon leak / duplicate coverage belongs in the responsible helper's local fact source",
+            "must not scan the current machine with `ps -eo pid=,command=`",
+            "不得新增 suite-level host-wide process-table guard",
+            "不得新增或保留 suite-level host-wide process-table guard",
+            "helper-local fact source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+        self.assertFalse(guard.exists())
+
+    def test_implement_prompt_pr_artifact_writes_are_allowed_by_red_line(self) -> None:
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        flow = implement[implement.index("## 流程") : implement.index("## Marker emission allowlist")]
+        red_line = implement[implement.index("## 红线") : implement.index("## 附录")]
+        for artifact in (
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
+        ):
+            with self.subTest(artifact=artifact):
+                self.assertIn(artifact, flow)
+                self.assertIn(artifact, red_line)
+
+    def test_headless_dogfood_e2e_anchors_router_plan_runner_without_real_external_dependencies(self) -> None:
+        source = read(SKILL_ROOT / "scripts" / "test_headless_dogfood_e2e.py")
+        for needle in (
+            "class HeadlessDogfoodFixture",
+            "Phase9Router",
+            "build_plan",
+            "WakeupRunner",
+            "FakeControllerActions",
+            "dispatch_consensus_implementation",
+            "merge_pr",
+            "mock.patch(\"codex_refactor_loop.phase9.router.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_plan.subprocess.run\"",
+            "mock.patch(\"codex_refactor_loop.wakeup_runner.PrChecksProjection\"",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, source)
+        self.assertNotIn("time.sleep", source)
+        self.assertNotIn("gh issue close", source)
+        self.assertNotIn("gh pr merge", source)
 
     def test_wakeup_plan_release_rollup_freshness_prunes_superseded_local_evidence(self) -> None:
         wakeup_runner = section_after_heading(self.skill, "Named runtime exception - wakeup-runner(per #396)")

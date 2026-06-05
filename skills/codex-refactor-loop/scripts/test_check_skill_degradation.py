@@ -27,6 +27,15 @@ def load_checker_module():
     return degradation
 
 
+def load_host_fixture_smoke_module():
+    scripts_dir = str(SCRIPT_PATH.parent)
+    if sys.path[0] != scripts_dir:
+        sys.path.insert(0, scripts_dir)
+    importlib.invalidate_caches()
+    from codex_refactor_loop.checks import host_fixture_smoke
+    return host_fixture_smoke
+
+
 def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
     tmp = tempfile.TemporaryDirectory()
     repo = Path(tmp.name) / "repo"
@@ -39,6 +48,7 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/gate.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/release/required_checks.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/degradation.py",
+        "skills/codex-refactor-loop/scripts/codex_refactor_loop/checks/host_fixture_smoke.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/monitors/concurrency.py",
         "skills/codex-refactor-loop/scripts/codex_refactor_loop/peek.py",
     ]
@@ -47,12 +57,19 @@ def copy_minimal_repo() -> tempfile.TemporaryDirectory[str]:
         target = repo / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+    shutil.copytree(
+        REPO_ROOT / "skills/codex-refactor-loop/scripts/codex_refactor_loop",
+        repo / "skills/codex-refactor-loop/scripts/codex_refactor_loop",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     return tmp
 
 
 class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.checker_module = load_checker_module()
+        self.smoke_module = load_host_fixture_smoke_module()
 
     # Refactor (iter259/issue-259):
     #   Old pattern: check-degradation --static 把 downstream/plugin host root 当 source tree 扫描,吐 skills/codex-refactor-loop/... required-file false-positive(每 tick rc=1)
@@ -116,6 +133,67 @@ class SkillDegradationCheckerBehaviorTests(unittest.TestCase):
             findings = self.checker_module.SkillDriftChecker(host).run_static()
 
         self.assertEqual(findings, [])
+
+    def test_not_source_repo_does_not_run_host_fixture_smoke(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            host = Path(tmp) / "host"
+            host.mkdir()
+            original = self.checker_module.run_no_manifest_open_milestone_smoke
+            calls = []
+
+            def fail_if_called(_: Path):
+                calls.append(True)
+                raise AssertionError("host fixture smoke should not run for non-source roots")
+
+            self.checker_module.run_no_manifest_open_milestone_smoke = fail_if_called
+            try:
+                findings = self.checker_module.SkillDriftChecker(host).run_static()
+            finally:
+                self.checker_module.run_no_manifest_open_milestone_smoke = original
+
+        self.assertEqual(findings, [])
+        self.assertEqual(calls, [])
+
+    def test_source_repo_static_check_merges_host_fixture_smoke_findings(self) -> None:
+        with copy_minimal_repo() as tmp:
+            repo = Path(tmp) / "repo"
+            original = self.checker_module.run_no_manifest_open_milestone_smoke
+
+            def fixture_smoke(_: Path):
+                return [
+                    self.smoke_module.HostFixtureSmokeFinding(
+                        "host-fixture-smoke",
+                        ".",
+                        "fixture failed",
+                    )
+                ]
+
+            self.checker_module.run_no_manifest_open_milestone_smoke = fixture_smoke
+            try:
+                findings = self.checker_module.SkillDriftChecker(repo).run_static()
+            finally:
+                self.checker_module.run_no_manifest_open_milestone_smoke = original
+
+        self.assertTrue(any(f.check == "host-fixture-smoke" and f.message == "fixture failed" for f in findings))
+
+    def test_host_fixture_smoke_passes_no_manifest_open_milestone_profile(self) -> None:
+        findings = self.smoke_module.run_no_manifest_open_milestone_smoke(REPO_ROOT)
+
+        self.assertEqual([finding.__dict__ for finding in findings], [])
+
+    def test_host_fixture_smoke_timeout_returns_finding_without_waiting(self) -> None:
+        original = self.smoke_module._run_wakeup_plan
+
+        def timed_out(*args, **kwargs):
+            return TimeoutError("wakeup-plan timed out after 20 seconds")
+
+        self.smoke_module._run_wakeup_plan = timed_out
+        try:
+            findings = self.smoke_module.run_no_manifest_open_milestone_smoke(REPO_ROOT)
+        finally:
+            self.smoke_module._run_wakeup_plan = original
+
+        self.assertTrue(any(f.check == "host-fixture-smoke" and "timed out" in f.message for f in findings))
 
     def test_static_checker_fails_closed_for_damaged_source_repo_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -19,6 +19,7 @@ DEFAULT_GRAPHQL_BUDGET_CACHE_TTL_SECONDS = 25.0
 class _BudgetCache:
     checked_at: float = 0.0
     remaining: int | None = None
+    cache_key: str = ""
 
 
 _CACHE = _BudgetCache()
@@ -28,6 +29,7 @@ def reset_graphql_budget_cache() -> None:
     """Clear the process-local graphql budget cache for tests."""
     _CACHE.checked_at = 0.0
     _CACHE.remaining = None
+    _CACHE.cache_key = ""
 
 
 def graphql_headroom_ok(
@@ -54,7 +56,8 @@ def graphql_headroom_ok(
     current = time.time() if now is None else float(now)
     if runner is None and cwd is not None and not _looks_like_git_checkout(cwd):
         return True
-    if _CACHE.remaining is not None and current - _CACHE.checked_at < max(0.0, ttl):
+    cache_key = _cache_key(cwd=cwd, env=env, threshold=threshold)
+    if _CACHE.remaining is not None and _CACHE.cache_key == cache_key and current - _CACHE.checked_at < max(0.0, ttl):
         return _CACHE.remaining >= threshold
 
     remaining = _read_graphql_remaining(cwd=cwd, env=env, runner=runner)
@@ -62,11 +65,8 @@ def graphql_headroom_ok(
         return True
     _CACHE.checked_at = current
     _CACHE.remaining = remaining
+    _CACHE.cache_key = cache_key
     return remaining >= threshold
-
-
-def log_graphql_backoff(daemon: str) -> None:
-    print(f"graphql-backoff: skipping {daemon} tick (remaining<threshold)", flush=True)
 
 
 def _read_graphql_remaining(
@@ -106,6 +106,14 @@ def _read_graphql_remaining(
 
 def _looks_like_git_checkout(cwd: Path) -> bool:
     return (cwd / ".git").exists()
+
+
+def _cache_key(*, cwd: Path | None, env: dict[str, str] | None, threshold: int) -> str:
+    repo_hint = ""
+    if env:
+        repo_hint = env.get("GH_REPO_SLUG") or env.get("GH_REPO") or ""
+    cwd_hint = str(cwd.resolve()) if cwd is not None else ""
+    return f"{cwd_hint}|{repo_hint}|{threshold}"
 
 
 def _int_env(name: str, default: int) -> int:

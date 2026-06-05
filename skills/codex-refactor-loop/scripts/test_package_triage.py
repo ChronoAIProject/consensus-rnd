@@ -134,7 +134,7 @@ class PackageTriageDecisionTests(unittest.TestCase):
         self.assertEqual(applied["reason"], "accept")
         self.assertFalse((self.repo / ".refactor-loop" / ".controller-pending-events.log").exists())
 
-    def test_accept_dual_reads_and_removes_legacy_triage_label(self) -> None:
+    def test_accept_reads_and_removes_only_canonical_triage_label(self) -> None:
         self.write_decision(verdict="accept", body_artifact_path=".refactor-loop/runs/body.md", add_labels=ACCEPT_LABELS)
         (self.repo / ".refactor-loop" / "runs" / "comment.md").write_text(self.self_contained_triage_body, encoding="utf-8")
         (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(self.self_contained_triage_body, encoding="utf-8")
@@ -144,14 +144,14 @@ class PackageTriageDecisionTests(unittest.TestCase):
             calls.append(args)
             return subprocess.CompletedProcess(["gh", *args], 0, "", "")
 
-        with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING, "auto-loop-triage"]):
             with patch("codex_refactor_loop.triage.run_gh", fake_gh):
                 self.assertEqual(apply_decision(self.config, self.decision_path, issue_number=53, verdict="accept"), 0)
 
         edit = calls[1]
         self.assertIn("--remove-label", edit)
-        self.assertIn("auto-loop-triage", edit)
-        self.assertNotIn(labels.TRIAGE_PENDING, edit[: edit.index("--add-label")])
+        self.assertIn(labels.TRIAGE_PENDING, edit)
+        self.assertNotIn("auto-loop-triage", edit)
 
     def test_rejects_missing_current_label_issue_mismatch_and_fixed_label_drift(self) -> None:
         with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: []):
@@ -199,7 +199,7 @@ class PackageTriageDecisionTests(unittest.TestCase):
         (self.repo / ".refactor-loop" / "runs" / "body.md").write_text(path_only, encoding="utf-8")
         mock_gh = Mock(return_value=subprocess.CompletedProcess(["gh"], 0, "", ""))
 
-        with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: ["auto-loop-triage"]):
+        with patch("codex_refactor_loop.triage.current_labels", lambda _config, _issue: [labels.TRIAGE_PENDING]):
             with patch("codex_refactor_loop.triage.run_gh", mock_gh):
                 self.assertEqual(apply_decision(self.config, self.decision_path, issue_number=53, verdict="accept"), 2)
 

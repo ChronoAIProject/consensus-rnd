@@ -12,13 +12,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
-from urllib.parse import quote
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_actor import GitHubAuthenticatedActor
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
-from .. import labels as label_catalog
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -71,51 +71,55 @@ class CommentMonitor:
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("comment-monitor")
+            self._log_tick_status("skip:graphql-backoff remaining=unknown")
             return
-        self._poll_once()
+        summary = self._poll_once()
+        self._log_tick_status(
+            "noop:poll-complete "
+            f"targets={summary['targets']} fetched={summary['fetched']} comments={summary['comments']}"
+        )
 
-    def _poll_once(self) -> None:
+    def _poll_once(self) -> dict[str, int]:
+        summary = {"targets": 0, "fetched": 0, "comments": 0}
         for number, updated_at in self._search_active().items():
+            summary["targets"] += 1
             if not self._should_fetch_comments(number, updated_at):
                 continue
             ok, comments = self._comments_with_status(number)
+            summary["fetched"] += 1
+            summary["comments"] += len(comments)
             for comment in comments:
                 self.handle_comment(number, comment)
             if ok:
                 self.mark_item_updated(number, updated_at)
+        return summary
 
     def _search_active(self) -> dict[str, str]:
         active: dict[str, str] = {}
         lookback = _lookback_minimum_updated_at()
-        for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-            endpoint = f"repos/{self.repo}/issues?state=open&labels={quote(query_label, safe='')}&per_page=100"
-            rows = self._gh_api_json(endpoint)
-            if not isinstance(rows, list):
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            print(snapshot.unavailable_diagnostic("comment-monitor.search-active", target_context="active-comments"), flush=True)
+            return active
+        for row in snapshot.items:
+            number = str(row.number)
+            updated_at = row.updated_at
+            if not number or not updated_at:
                 continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                number = str(row.get("number") or "")
-                updated_at = str(row.get("updated_at") or "")
-                if not number or not updated_at:
-                    continue
-                if lookback and updated_at < lookback:
-                    continue
-                if number not in active or updated_at > active[number]:
-                    active[number] = updated_at
+            if lookback and updated_at < lookback:
+                continue
+            if number not in active or updated_at > active[number]:
+                active[number] = updated_at
         return dict(sorted(active.items(), key=lambda item: int(item[0]) if item[0].isdigit() else item[0]))
 
     def targets(self) -> list[str]:
         numbers: set[str] = set()
-        for kind in ("issue", "pr"):
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                result = self.gh(
-                    [kind, "list", "--state", "open", "--label", query_label, "--json", "number", "-q", ".[].number"],
-                    check=False,
-                )
-                if result.returncode == 0:
-                    numbers.update(line.strip() for line in result.stdout.splitlines() if line.strip())
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            print(snapshot.unavailable_diagnostic("comment-monitor.targets", target_context="all-open-managed"), flush=True)
+            return []
+        for item in snapshot.items:
+            numbers.add(str(item.number))
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:
@@ -158,6 +162,14 @@ class CommentMonitor:
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             print(f"active_controller=noop:not-owner comment-monitor {number} {comment_id} owner={decision.owner_device}", flush=True)
+            return
+        try:
+            GitHubAuthenticatedActor(
+                self.ctx,
+                runner=lambda cmd, cwd: _run(list(cmd), cwd, check=False),
+            ).require_admission("comment-monitor-write")
+        except RuntimeError as exc:
+            print(str(exc), flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:
@@ -253,6 +265,11 @@ class CommentMonitor:
             return json.loads(result.stdout)
         except json.JSONDecodeError:
             return None
+
+    @staticmethod
+    def _log_tick_status(action: str) -> None:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"[{ts}] comment-monitor: tick {action}", flush=True)
 
 
 def is_controller_post(first_line: str, body: str) -> bool:

@@ -15,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
@@ -29,12 +30,33 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
 
 
+def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult:
+    items = []
+    for row in rows:
+        labels = [
+            label.get("name", "")
+            for label in row.get("labels", [])  # type: ignore[union-attr]
+            if isinstance(label, dict) and label.get("name")
+        ]
+        items.append(
+            ManagedWorkSnapshotItem(
+                kind="issue",
+                number=int(row.get("number", 0)),
+                title=str(row.get("title", "")),
+                labels=tuple(labels),
+            )
+        )
+    return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
+
+
 class Phase9RouterPackageTests(unittest.TestCase):
     def setUp(self) -> None:
         self.original_host_env_locator = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.commands: list[dict[str, object]] = []
         self.ctx = LoopContext.load(repo_root=self.repo, env={})
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
@@ -42,6 +64,8 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.old_env)
         self.tmp.cleanup()
         if self.original_host_env_locator is None:
             os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
@@ -146,10 +170,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
@@ -189,10 +210,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)

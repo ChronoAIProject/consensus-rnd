@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import github_body, project_rules, spawn, statusline
+from . import github_body, holistic_status, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -24,7 +24,7 @@ from .pr_checks import main as pr_checks_main
 from .release.gate import main as release_gate_main
 from .release.required_checks import main as release_required_checks_main
 from .restart import main as restart_main
-from .retention import main as retention_main
+from .runtime_retention import main as runtime_retention_main
 from .sync.dev import main as dev_sync_main
 from .phase9.router import main as phase9_router_main
 from .update_check import main as update_check_main
@@ -52,6 +52,11 @@ class CommandSpec:
 COMMANDS: dict[str, CommandSpec] = {
     "spawn-codex": CommandSpec(spawn.main, "run the Python codex spawn supervisor", ("spawn", "write-log")),
     "peek": CommandSpec(peek_main, "run the Python read-only state sweep", ("read-state", "read-gh")),
+    "holistic-status": CommandSpec(
+        holistic_status.main,
+        "render the shared read-only holistic status card",
+        ("read-state", "read-process", "read-gh"),
+    ),
     "gh-stats": CommandSpec(gh_stats_main, "read local gh usage accounting", ("read-state",)),
     "wakeup-plan": CommandSpec(wakeup_plan_main, "emit the read-only prioritized wakeup plan", ("read-state", "read-gh")),
     "revive-implements": CommandSpec(revive_implements_main, "manual trigger: re-trigger stuck implement workers now (no age wait)", ("delete-log",)),
@@ -83,7 +88,7 @@ COMMANDS: dict[str, CommandSpec] = {
     "restart-daemons": CommandSpec(
         restart_main,
         "run the Python daemon restart helper",
-        ("spawn-daemon", "write-state", "delete-log"),
+        ("spawn-daemon", "write-state", "delete-runtime"),
     ),
     "daemon-status": CommandSpec(
         daemon_status_main,
@@ -169,7 +174,11 @@ COMMANDS: dict[str, CommandSpec] = {
         ("read-source", "read-state"),
     ),
     "check-manifest": CommandSpec(manifest_main, "run manifest version sync check", ("read-source",)),
-    "log-retention": CommandSpec(retention_main, "run daemonless log retention", ("delete-log",)),
+    "runtime-retention": CommandSpec(
+        runtime_retention_main,
+        "run canonical RuntimeRetention for skill-private generated artifacts",
+        ("delete-runtime", "git-worktree"),
+    ),
     "check-project-rules": CommandSpec(
         project_rules.main,
         "check host project rules fixed points and write patch artifact when needed",

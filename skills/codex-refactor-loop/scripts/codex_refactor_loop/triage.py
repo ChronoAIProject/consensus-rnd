@@ -253,7 +253,6 @@ def apply_decision(config: TriageApplyConfig, decision_path: Path, *, issue_numb
         triage_remove_labels = [label for label in TRIAGE_READ_LABELS if label in live_labels]
         if not triage_remove_labels:
             raise ManualIssueTriageDecisionError("crnd:triage:pending label missing")
-
         comment_file = path_under_repo(config.repo, decision.comment_artifact_path)
         if not _artifact_has_final_sentinel(comment_file):
             raise ManualIssueTriageDecisionError("comment artifact missing final sentinel")
