@@ -1506,22 +1506,19 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
     if not snapshot.loaded_ok:
         return items, False
     for raw in snapshot.items:
-        try:
-            number = int(raw["number"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        labels = tuple(str(label) for label in raw.get("labels", ()) if str(label))
-        kind = str(raw.get("kind") or "issue")
+        number = raw.number
+        labels = tuple(str(label) for label in raw.labels if str(label))
+        kind = raw.kind
         items.append(
             GhItem(
                 kind=kind,
                 number=number,
-                title=str(raw.get("title") or ""),
+                title=raw.title,
                 labels=labels,
-                head_ref=(str(raw.get("head_ref") or "") or None) if kind == "PR" else None,
-                head_sha=str(raw.get("head_sha") or "") if kind == "PR" else "",
-                body=str(raw.get("body") or "") if kind == "PR" else "",
-                updated_at=str(raw.get("updated_at") or ""),
+                head_ref=raw.head_ref if kind == "PR" else None,
+                head_sha=raw.head_sha if kind == "PR" else "",
+                body=raw.body if kind == "PR" else "",
+                updated_at=raw.updated_at,
             )
         )
     return items, True

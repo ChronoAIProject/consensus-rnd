@@ -20,7 +20,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels as label_catalog
-from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 
 
 class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
@@ -71,24 +71,9 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
     def fake_snapshot(self) -> ManagedWorkSnapshotResult:
         return ManagedWorkSnapshotResult(
             (
-                {
-                    "kind": "issue",
-                    "number": 51,
-                    "labels": ["auto-loop", "🛠️ phase:implementing", "🤖 human:codex"],
-                    "body": "",
-                },
-                {
-                    "kind": "issue",
-                    "number": 52,
-                    "labels": ["auto-loop", "⏸️ phase:blocked", "👤 human:需-maintainer-决策"],
-                    "body": "",
-                },
-                {
-                    "kind": "PR",
-                    "number": 9,
-                    "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"],
-                    "body": "",
-                },
+                ManagedWorkSnapshotItem(kind="issue", number=51, labels=("auto-loop", "🛠️ phase:implementing", "🤖 human:codex")),
+                ManagedWorkSnapshotItem(kind="issue", number=52, labels=("auto-loop", "⏸️ phase:blocked", "👤 human:需-maintainer-决策")),
+                ManagedWorkSnapshotItem(kind="PR", number=9, labels=("auto-loop", "👀 phase:reviewing", "🤖 human:codex")),
             ),
             True,
             "cache:fresh",
@@ -102,44 +87,42 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
     def test_list_auto_loop_issues_uses_managed_work_snapshot(self) -> None:
         snapshot = ManagedWorkSnapshotResult(
             (
-                {
-                    "kind": "issue",
-                    "number": 71,
-                    "labels": [
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=71,
+                    labels=(
                         label_catalog.MANAGED,
                         label_catalog.PHASE_IMPLEMENTING,
                         label_catalog.HUMAN_AUTO,
-                    ],
-                },
-                {
-                    "kind": "issue",
-                    "number": 72,
-                    "labels": [
+                    ),
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=72,
+                    labels=(
                         "auto-loop",
                         "🔧 phase:fixing",
                         "🤖 human:codex",
-                    ],
-                },
-                {
-                    "kind": "PR",
-                    "number": 73,
-                    "body": "",
-                    "labels": [
+                    ),
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="PR",
+                    number=73,
+                    labels=(
                         label_catalog.MANAGED,
                         label_catalog.PHASE_REVIEWING,
                         label_catalog.HUMAN_AUTO,
-                    ],
-                },
-                {
-                    "kind": "PR",
-                    "number": 74,
-                    "body": "",
-                    "labels": [
+                    ),
+                ),
+                ManagedWorkSnapshotItem(
+                    kind="PR",
+                    number=74,
+                    labels=(
                         "refactor-design-needed",
                         "🔍 phase:design-solving",
                         "🤖 human:auto-推进",
-                    ],
-                },
+                    ),
+                ),
             ),
             True,
             "cache:fresh",
@@ -266,7 +249,7 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
 
         non_p0_snapshot = ManagedWorkSnapshotResult(
             (
-                {"kind": "PR", "number": 59, "labels": ["auto-loop", "👀 phase:reviewing", "🤖 human:codex"], "body": ""},
+                ManagedWorkSnapshotItem(kind="PR", number=59, labels=("auto-loop", "👀 phase:reviewing", "🤖 human:codex")),
             ),
             True,
             "cache:fresh",

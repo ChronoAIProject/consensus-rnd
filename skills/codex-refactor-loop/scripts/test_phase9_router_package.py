@@ -15,7 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
@@ -39,13 +39,12 @@ def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult
             if isinstance(label, dict) and label.get("name")
         ]
         items.append(
-            {
-                "kind": "issue",
-                "number": row.get("number"),
-                "title": row.get("title", ""),
-                "labels": labels,
-                "state": "open",
-            }
+            ManagedWorkSnapshotItem(
+                kind="issue",
+                number=int(row.get("number", 0)),
+                title=str(row.get("title", "")),
+                labels=tuple(labels),
+            )
         )
     return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
 

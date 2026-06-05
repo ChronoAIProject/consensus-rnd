@@ -21,6 +21,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.managed_work_snapshot import (
     LOCK_RELATIVE_PATH,
     STATE_RELATIVE_PATH,
+    ManagedWorkSnapshotItem,
     ManagedWorkSnapshot,
 )
 
@@ -98,7 +99,7 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertEqual("live", result.source)
         self.assertEqual((self.tmp / STATE_RELATIVE_PATH).resolve(), snapshot.state_path.resolve())
         self.assertEqual((self.tmp / LOCK_RELATIVE_PATH).resolve(), snapshot.lock_path.resolve())
-        self.assertEqual([("issue", 516), ("PR", 12)], [(item["kind"], item["number"]) for item in result.items])
+        self.assertEqual([("issue", 516), ("PR", 12)], [(item.kind, item.number) for item in result.items])
         self.assertGreaterEqual(len(calls), 1)
         for command in calls:
             self.assertEqual(["gh", "api", "graphql"], command[:3])
@@ -106,9 +107,9 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
             self.assertNotIn("issue list", " ".join(command))
             self.assertNotIn("pr list", " ".join(command))
             self.assertNotIn("pr view", " ".join(command))
-        pr = next(item for item in result.items if item["kind"] == "PR")
-        self.assertEqual("refactor/iter516-issue-516", pr["head_ref"])
-        self.assertEqual("Closes #516", pr["body"])
+        pr = next(item for item in result.items if item.kind == "PR")
+        self.assertEqual("refactor/iter516-issue-516", pr.head_ref)
+        self.assertEqual("Closes #516", pr.body)
         written = json.loads(snapshot.state_path.read_text(encoding="utf-8"))
         self.assertTrue(written["not_live_state_fact_source"])
         self.assertTrue(written["not_host_production_ssot"])
@@ -138,6 +139,52 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertTrue(result.loaded_ok)
         self.assertEqual("cache:fresh", result.source)
         self.assertEqual(100, result.age_seconds)
+
+    def test_ttl_values_are_loaded_from_loop_context_host_env_only(self) -> None:
+        path = self.tmp / STATE_RELATIVE_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "fetched_at_epoch": 1000,
+                    "items": [{"kind": "issue", "number": 11, "labels": [label_catalog.MANAGED]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\n'
+            'export GH_REPO_SLUG="owner/repo"\n'
+            'export MANAGED_WORK_SNAPSHOT_TTL_SECONDS="75"\n'
+            'export MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS="150"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+
+        with mock.patch.dict(
+            "os.environ",
+            {
+                "MANAGED_WORK_SNAPSHOT_TTL_SECONDS": "900",
+                "MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS": "900",
+            },
+        ):
+            fresh = ManagedWorkSnapshot(
+                ctx,
+                runner=lambda command: self.fail(f"unexpected GitHub read: {command}"),
+                now=lambda: 1074,
+            ).load()
+            too_old = ManagedWorkSnapshot(
+                ctx,
+                runner=lambda command: subprocess.CompletedProcess(command, 1, "", "gh unavailable"),
+                now=lambda: 1151,
+            )
+            with mock.patch("codex_refactor_loop.managed_work_snapshot.graphql_headroom_ok", return_value=False):
+                unavailable = too_old.load()
+
+        self.assertTrue(fresh.loaded_ok)
+        self.assertEqual("cache:fresh", fresh.source)
+        self.assertFalse(unavailable.loaded_ok)
+        self.assertEqual("graphql-headroom-low", unavailable.reason)
 
     def test_low_headroom_uses_stale_cache_before_unavailable(self) -> None:
         path = self.tmp / STATE_RELATIVE_PATH
@@ -192,7 +239,10 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertTrue(result.loaded_ok)
         self.assertEqual("cache:stale", result.source)
         self.assertEqual(600, result.age_seconds)
-        self.assertEqual(({"kind": "issue", "number": 3, "labels": [label_catalog.MANAGED]},), result.items)
+        self.assertEqual(
+            (ManagedWorkSnapshotItem(kind="issue", number=3, labels=(label_catalog.MANAGED,)),),
+            result.items,
+        )
         self.assertEqual(2, len(calls))
         self.assertEqual(["gh", "api", "graphql"], calls[0][:3])
         self.assertEqual(["gh", "api"], calls[1][:2])
@@ -241,7 +291,7 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
 
         self.assertTrue(result.loaded_ok)
         self.assertEqual("live", result.source)
-        self.assertEqual([("PR", 12)], [(item["kind"], item["number"]) for item in result.items])
+        self.assertEqual([("PR", 12)], [(item.kind, item.number) for item in result.items])
         self.assertTrue(any(command[:3] == ["gh", "api", "graphql"] for command in calls))
         self.assertTrue(any(command[:2] == ["gh", "api"] and "issues?state=open" in command[2] for command in calls))
         self.assertTrue(any(command[:3] == ["gh", "pr", "view"] for command in calls))

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop import labels as label_catalog
-from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.phase9.router import Phase9Router
 
 
@@ -96,12 +96,12 @@ class Phase9RouterOpenStateGateTests(unittest.TestCase):
         ]
         snapshot = ManagedWorkSnapshotResult(
             (
-                {
-                    "kind": "issue",
-                    "number": 416,
-                    "title": "design issue",
-                    "labels": [label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO],
-                },
+                ManagedWorkSnapshotItem(
+                    kind="issue",
+                    number=416,
+                    title="design issue",
+                    labels=(label_catalog.MANAGED, label_catalog.PHASE_DESIGN_SOLVING, label_catalog.HUMAN_AUTO),
+                ),
             ),
             True,
             "cache:fresh",

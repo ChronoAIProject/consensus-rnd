@@ -558,7 +558,7 @@ def _resolve_daemon_command_part(ctx: LoopContext, part: str) -> str:
 
 
 def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
-    raw = ctx.env_for_subprocess().get(env_name, default)
+    raw = ctx.host_env.get(env_name) or ctx.env_for_subprocess().get(env_name, default)
     try:
         parsed = int(str(raw))
     except ValueError:

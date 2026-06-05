@@ -629,15 +629,10 @@ class Phase9Router:
             return []
         issues: list[DesignConsensusIssue] = []
         for row in snapshot.items:
-            if not isinstance(row, dict):
+            number = str(row.number)
+            if row.kind != "issue":
                 continue
-            try:
-                number = str(int(row["number"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-            if str(row.get("kind") or "issue") != "issue":
-                continue
-            labels = tuple(str(label) for label in row.get("labels", []) if str(label))
+            labels = tuple(str(label) for label in row.labels if str(label))
             normalized = label_catalog.normalize_label_set(labels)
             if label_catalog.MANAGED not in normalized.canonical:
                 continue
@@ -645,7 +640,7 @@ class Phase9Router:
                 continue
             if label_catalog.HUMAN_MAINTAINER_DECISION in normalized.canonical:
                 continue
-            issues.append(DesignConsensusIssue(number=number, title=str(row.get("title") or ""), labels=labels))
+            issues.append(DesignConsensusIssue(number=number, title=row.title, labels=labels))
         return issues
 
     def _solver_intake_suppressed(self, issue: str, round_no: int, role: str, log_path: Path) -> bool:

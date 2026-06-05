@@ -101,8 +101,8 @@ class CommentMonitor:
         if not snapshot.loaded_ok:
             return active
         for row in snapshot.items:
-            number = str(row.get("number") or "")
-            updated_at = str(row.get("updated_at") or "")
+            number = str(row.number)
+            updated_at = row.updated_at
             if not number or not updated_at:
                 continue
             if lookback and updated_at < lookback:
@@ -117,9 +117,7 @@ class CommentMonitor:
         if not snapshot.loaded_ok:
             return []
         for item in snapshot.items:
-            number = str(item.get("number") or "")
-            if number:
-                numbers.add(number)
+            numbers.add(str(item.number))
         return sorted(numbers, key=lambda item: int(item) if item.isdigit() else item)
 
     def comments(self, number: str) -> Iterable[dict[str, object]]:

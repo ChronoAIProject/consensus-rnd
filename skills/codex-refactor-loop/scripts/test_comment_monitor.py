@@ -19,7 +19,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop import labels as label_catalog
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.comment import CommentMonitor, is_controller_post
 from test_support.authorization_projection import project_python
 
@@ -93,9 +93,9 @@ class CommentMonitorTests(unittest.TestCase):
         monitor = CommentMonitor(self.ctx, interval=1)
         snapshot = ManagedWorkSnapshotResult(
             (
-                {"kind": "issue", "number": 8, "updated_at": "2026-06-05T00:00:00Z"},
-                {"kind": "PR", "number": 3, "updated_at": "2026-06-05T00:01:00Z"},
-                {"kind": "issue", "number": 11, "updated_at": "2026-06-05T00:02:00Z"},
+                ManagedWorkSnapshotItem(kind="issue", number=8, updated_at="2026-06-05T00:00:00Z"),
+                ManagedWorkSnapshotItem(kind="PR", number=3, updated_at="2026-06-05T00:01:00Z"),
+                ManagedWorkSnapshotItem(kind="issue", number=11, updated_at="2026-06-05T00:02:00Z"),
             ),
             True,
             "cache:fresh",
@@ -110,15 +110,15 @@ class CommentMonitorTests(unittest.TestCase):
             self.assertEqual(monitor.targets(), [])
 
     def active_snapshot(self, number: str = "42", updated_at: str = "2026-05-30T00:00:00Z") -> ManagedWorkSnapshotResult:
-        return ManagedWorkSnapshotResult(({"kind": "issue", "number": int(number), "updated_at": updated_at},), True, "cache:fresh")
+        return ManagedWorkSnapshotResult((ManagedWorkSnapshotItem(kind="issue", number=int(number), updated_at=updated_at),), True, "cache:fresh")
 
     def test_search_active_uses_snapshot_updated_at_projection(self) -> None:
         monitor = CommentMonitor(self.ctx, interval=1)
         snapshot = ManagedWorkSnapshotResult(
             (
-                {"kind": "issue", "number": 8, "updated_at": "2026-06-05T00:00:00Z"},
-                {"kind": "PR", "number": 8, "updated_at": "2026-06-05T00:01:00Z"},
-                {"kind": "issue", "number": 3, "updated_at": "2026-06-05T00:02:00Z"},
+                ManagedWorkSnapshotItem(kind="issue", number=8, updated_at="2026-06-05T00:00:00Z"),
+                ManagedWorkSnapshotItem(kind="PR", number=8, updated_at="2026-06-05T00:01:00Z"),
+                ManagedWorkSnapshotItem(kind="issue", number=3, updated_at="2026-06-05T00:02:00Z"),
             ),
             True,
             "cache:fresh",

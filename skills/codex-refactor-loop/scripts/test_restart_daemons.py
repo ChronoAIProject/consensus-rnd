@@ -127,13 +127,14 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         (self.repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
         (self.skill / "scripts").mkdir(parents=True)
         (self.skill / "scripts" / "consensus-rnd-cli").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
-        (self.repo / ".config" / "consensus-rnd" / "host.env").write_text(
+        self.host_env_path = self.repo / ".config" / "consensus-rnd" / "host.env"
+        self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\nexport GH_REPO_SLUG="example/repo"\nexport MAINTAINER_WHITELIST="maintainer"\n',
             encoding="utf-8",
         )
         self.env_patch = mock.patch.dict(
             os.environ,
-            {"CONSENSUS_RND_HOST_ENV": str(self.repo / ".config" / "consensus-rnd" / "host.env")},
+            {"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
         )
         self.env_patch.start()
         self.ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
@@ -227,7 +228,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual("120", default_phase9.command[-1])
         self.assertEqual("120", default_wakeup.command[-1])
 
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\n'
             'export GH_REPO_SLUG="example/repo"\n'
             'export MAINTAINER_WHITELIST="maintainer"\n'
@@ -235,7 +236,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             'export WAKEUP_RUNNER_INTERVAL_SECONDS="75"\n',
             encoding="utf-8",
         )
-        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
+        ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+        )
         host_phase9 = restart.daemon_target(ctx, "phase9_router_daemon", phase9_template)
         host_wakeup = restart.daemon_target(ctx, "wakeup_runner_daemon", wakeup_template)
 
@@ -248,7 +253,7 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertEqual("45", runtime.launch_envs["phase9_router_daemon"]["PHASE9_ROUTER_INTERVAL_SECONDS"])
         self.assertEqual("75", runtime.launch_envs["wakeup_runner_daemon"]["WAKEUP_RUNNER_INTERVAL_SECONDS"])
 
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        self.host_env_path.write_text(
             f'export REPO_ROOT="{self.repo}"\n'
             'export GH_REPO_SLUG="example/repo"\n'
             'export MAINTAINER_WHITELIST="maintainer"\n'
@@ -256,7 +261,11 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
             'export WAKEUP_RUNNER_INTERVAL_SECONDS="not-an-int"\n',
             encoding="utf-8",
         )
-        invalid_ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill)
+        invalid_ctx = LoopContext.load(
+            repo_root=self.repo,
+            skill_root=self.skill,
+            env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)},
+        )
         invalid_phase9 = restart.daemon_target(invalid_ctx, "phase9_router_daemon", phase9_template)
         invalid_wakeup = restart.daemon_target(invalid_ctx, "wakeup_runner_daemon", wakeup_template)
 

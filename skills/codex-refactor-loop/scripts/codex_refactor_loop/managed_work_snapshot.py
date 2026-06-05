@@ -10,7 +10,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 from urllib.parse import quote
 
 from . import labels as label_catalog
@@ -57,8 +57,59 @@ query($searchQuery: String!, $perPage: Int!) {
 
 
 @dataclass(frozen=True)
+class ManagedWorkSnapshotItem:
+    kind: str
+    number: int
+    title: str = ""
+    labels: tuple[str, ...] = ()
+    head_ref: str | None = None
+    head_sha: str = ""
+    body: str = ""
+    state: str = "open"
+    updated_at: str = ""
+    snapshot_source: str = ""
+
+    @classmethod
+    def from_json(cls, row: Mapping[str, Any]) -> "ManagedWorkSnapshotItem | None":
+        try:
+            number = int(row["number"])
+        except (KeyError, TypeError, ValueError):
+            return None
+        raw_kind = str(row.get("kind") or "issue")
+        kind = "PR" if raw_kind == "PR" else "issue"
+        raw_labels = row.get("labels")
+        labels = tuple(str(label) for label in raw_labels if str(label)) if isinstance(raw_labels, list) else ()
+        return cls(
+            kind=kind,
+            number=number,
+            title=str(row.get("title") or ""),
+            labels=labels,
+            head_ref=(str(row.get("head_ref") or "") or None) if kind == "PR" else None,
+            head_sha=str(row.get("head_sha") or "") if kind == "PR" else "",
+            body=str(row.get("body") or "") if kind == "PR" else "",
+            state=str(row.get("state") or "open"),
+            updated_at=str(row.get("updated_at") or ""),
+            snapshot_source=str(row.get("snapshot_source") or ""),
+        )
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "number": self.number,
+            "title": self.title,
+            "labels": list(self.labels),
+            "head_ref": self.head_ref,
+            "head_sha": self.head_sha,
+            "body": self.body,
+            "state": self.state,
+            "updated_at": self.updated_at,
+            "snapshot_source": self.snapshot_source,
+        }
+
+
+@dataclass(frozen=True)
 class ManagedWorkSnapshotResult:
-    items: tuple[dict[str, Any], ...]
+    items: tuple[ManagedWorkSnapshotItem, ...]
     loaded_ok: bool
     source: str
     reason: str | None = None
@@ -79,10 +130,13 @@ class ManagedWorkSnapshot:
         self.repo_root = ctx.repo_root
         self.state_path = self.repo_root / STATE_RELATIVE_PATH
         self.lock_path = self.repo_root / LOCK_RELATIVE_PATH
-        self.ttl_seconds = _positive_int(ttl_seconds, _env_int("MANAGED_WORK_SNAPSHOT_TTL_SECONDS", DEFAULT_TTL_SECONDS))
+        self.ttl_seconds = _positive_int(
+            ttl_seconds,
+            _ctx_host_env_int(ctx, "MANAGED_WORK_SNAPSHOT_TTL_SECONDS", DEFAULT_TTL_SECONDS),
+        )
         self.stale_max_seconds = _positive_int(
             stale_max_seconds,
-            _env_int("MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS", DEFAULT_STALE_MAX_SECONDS),
+            _ctx_host_env_int(ctx, "MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS", DEFAULT_STALE_MAX_SECONDS),
         )
         self.runner = runner
         self.now = now or time.time
@@ -111,13 +165,13 @@ class ManagedWorkSnapshot:
             self._write_cache(items)
             return ManagedWorkSnapshotResult(tuple(items), True, "live", None, 0.0)
 
-    def _fetch_open_managed_items(self) -> list[dict[str, Any]] | None:
+    def _fetch_open_managed_items(self) -> list[ManagedWorkSnapshotItem] | None:
         if not self.ctx.gh_repo_slug:
             return None
         rows = self._open_managed_rows()
         if rows is None:
             return None
-        items: list[dict[str, Any]] = []
+        items: list[ManagedWorkSnapshotItem] = []
         seen: set[tuple[str, int]] = set()
         for row in rows:
             if not isinstance(row, dict):
@@ -141,20 +195,20 @@ class ManagedWorkSnapshot:
             if label_catalog.MANAGED not in normalized.canonical:
                 continue
             items.append(
-                {
-                    "kind": kind,
-                    "number": number,
-                    "title": str(row.get("title") or ""),
-                    "labels": list(labels),
-                    "head_ref": (str(row.get("headRefName") or "") or None) if kind == "PR" else None,
-                    "head_sha": str(row.get("headRefOid") or "") if kind == "PR" else "",
-                    "body": str(row.get("body") or "") if kind == "PR" else "",
-                    "state": "open",
-                    "updated_at": str(row.get("updatedAt") or ""),
-                    "snapshot_source": "github-open-managed-items",
-                }
+                ManagedWorkSnapshotItem(
+                    kind=kind,
+                    number=number,
+                    title=str(row.get("title") or ""),
+                    labels=labels,
+                    head_ref=(str(row.get("headRefName") or "") or None) if kind == "PR" else None,
+                    head_sha=str(row.get("headRefOid") or "") if kind == "PR" else "",
+                    body=str(row.get("body") or "") if kind == "PR" else "",
+                    state="open",
+                    updated_at=str(row.get("updatedAt") or ""),
+                    snapshot_source="github-open-managed-items",
+                )
             )
-        return sorted(items, key=lambda item: (0 if item["kind"] == "issue" else 1, int(item["number"])))
+        return sorted(items, key=lambda item: (0 if item.kind == "issue" else 1, item.number))
 
     def _open_managed_rows(self) -> list[dict[str, Any]] | None:
         rows_by_key: dict[tuple[str, int], dict[str, Any]] = {}
@@ -299,15 +353,19 @@ class ManagedWorkSnapshot:
         items = data.get("items")
         if not isinstance(items, list):
             return None
-        normalized = tuple(item for item in items if isinstance(item, dict))
+        normalized = tuple(
+            item
+            for item in (ManagedWorkSnapshotItem.from_json(row) for row in items if isinstance(row, dict))
+            if item is not None
+        )
         return ManagedWorkSnapshotResult(normalized, True, source, None, age)
 
-    def _write_cache(self, items: list[dict[str, Any]]) -> None:
+    def _write_cache(self, items: Sequence[ManagedWorkSnapshotItem]) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema": "managed-work-snapshot",
             "fetched_at_epoch": self.now(),
-            "items": items,
+            "items": [item.to_json() for item in items],
             "not_live_state_fact_source": True,
             "not_host_production_ssot": True,
             "no_lifecycle_authority": True,
@@ -328,9 +386,9 @@ def load_open_managed_work_snapshot(ctx: LoopContext) -> ManagedWorkSnapshotResu
     return ManagedWorkSnapshot(ctx).load()
 
 
-def _env_int(name: str, default: int) -> int:
+def _ctx_host_env_int(ctx: LoopContext, name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, str(default)))
+        return int(ctx.host_env.get(name, str(default)))
     except ValueError:
         return default
 

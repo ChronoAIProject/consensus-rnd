@@ -308,17 +308,14 @@ class ConcurrencyMonitor:
         if not snapshot.loaded_ok:
             return items
         for entry in snapshot.items:
-            try:
-                num = int(entry.get("number"))
-            except (TypeError, ValueError):
-                continue
-            raw_kind = str(entry.get("kind") or "issue")
+            num = entry.number
+            raw_kind = entry.kind
             kind = "pr" if raw_kind == "PR" else "issue"
             key = (kind, num)
             if key in seen:
                 continue
             seen.add(key)
-            label_names = [str(label) for label in entry.get("labels", []) if str(label)]
+            label_names = [str(label) for label in entry.labels if str(label)]
             projection = label_catalog.normalize_label_set(label_names)
             phase = projection.phase or ""
             human = projection.human or ""
@@ -329,7 +326,7 @@ class ConcurrencyMonitor:
                     "phase": phase,
                     "human": human,
                     "labels": label_names,
-                    "body": str(entry.get("body") or ""),
+                    "body": entry.body,
                     "state": "open",
                 }
             )
