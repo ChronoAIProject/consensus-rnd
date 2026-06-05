@@ -1966,7 +1966,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             action_id="review-evidence-redispatch:77:" + "a" * 40,
             source_artifact="wakeup-plan",
             source_marker="review-evidence-redispatch",
-            head_sha="a" * 40,
+            head_sha="b" * 40,
             stale_review_roles=["architect", "tests"],
             preconditions=[
                 "active_controller_owner",

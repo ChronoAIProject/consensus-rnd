@@ -2438,7 +2438,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["target_kind"], "PR")
         self.assertEqual(action["target_number"], 480)
-        self.assertEqual(action["head_sha"], "a" * 40)
+        self.assertNotIn("head_sha", action)
+        self.assertEqual(action["action_id"], "review-evidence-redispatch:480:" + "a" * 40)
         self.assertEqual(action["stale_review_roles"], ["architect", "tests", "quality"])
         self.assertIn("missing_or_stale_reviewer_head_evidence", action["preconditions"])
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
@@ -2462,6 +2463,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         action = next(item for item in plan["actions"] if item["kind"] == "review-evidence-redispatch")
         self.assertEqual(action["target_number"], 480)
+        self.assertNotIn("head_sha", action)
         self.assertEqual(action["stale_review_roles"], ["architect"])
         self.assertNotIn("status_only", action)
 
@@ -3265,6 +3267,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("pr list", caller_source)
         self.assertIn("review_evidence_redispatch_actions", projection.function_names)
         self.assertIn("review-evidence-redispatch", projection.set_members["EXECUTABLE_ACTION_KINDS"])
+        source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
+        function_source = source[
+            source.index("def review_evidence_redispatch_actions") : source.index("\ndef phase_from_marker", source.index("def review_evidence_redispatch_actions"))
+        ]
+        self.assertIn('"action_id": f"review-evidence-redispatch:{item.number}:{item.head_sha}"', function_source)
+        self.assertNotIn('"head_sha"', function_source)
 
     def test_wakeup_plan_source_locks_stale_unexecutable_status_only_suppression(self) -> None:
         projection = wakeup_plan_projection()
@@ -3935,9 +3943,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_load_github_items_logs_unavailable_managed_work_snapshot(self) -> None:
         snapshot = ManagedWorkSnapshotResult((), False, "unavailable", "graphql-headroom-low", 901)
         output = StringIO()
-        with mock.patch("codex_refactor_loop.wakeup_plan.load_open_managed_work_snapshot", return_value=snapshot):
-            with redirect_stderr(output):
-                items, loaded_ok = load_github_items_with_status(self.repo)
+        with mock.patch.dict(os.environ, {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}):
+            with mock.patch("codex_refactor_loop.wakeup_plan.load_open_managed_work_snapshot", return_value=snapshot):
+                with redirect_stderr(output):
+                    items, loaded_ok = load_github_items_with_status(self.repo)
 
         self.assertEqual(items, [])
         self.assertFalse(loaded_ok)

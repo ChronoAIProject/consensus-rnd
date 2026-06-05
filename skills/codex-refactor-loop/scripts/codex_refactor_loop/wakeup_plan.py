@@ -1501,7 +1501,6 @@ def review_evidence_redispatch_actions(repo_root: Path, gh_items: list[GhItem]) 
                 "target_kind": "PR",
                 "target_number": item.number,
                 "target": {"kind": "PR", "number": item.number},
-                "head_sha": item.head_sha,
                 "stale_review_roles": stale_roles,
                 "preconditions": ["active_controller_owner", "live_open_target_if_present", "missing_or_stale_reviewer_head_evidence"],
                 "runner_authority": RUNNER_AUTHORITY,
