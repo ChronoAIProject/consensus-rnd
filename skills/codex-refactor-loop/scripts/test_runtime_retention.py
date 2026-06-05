@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import shutil
 import subprocess
@@ -11,8 +12,10 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from typing import Callable, Sequence
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -20,7 +23,8 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.runtime_retention import RETENTION_TTL_HOURS, retain_runtime
+from codex_refactor_loop.active_controller import LeaseDecision
+from codex_refactor_loop.runtime_retention import RETENTION_TTL_HOURS, main as runtime_retention_main, retain_runtime
 
 
 class RuntimeRetentionBehaviorTests(unittest.TestCase):
@@ -105,8 +109,7 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         prune_stderr: str = "",
     ) -> Callable[[Sequence[str]], subprocess.CompletedProcess[str]]:
         def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
-            command_tuple = tuple(command)
-            commands.append(command_tuple)
+            commands.append(tuple(command))
             if tuple(command[3:5]) == ("status", "--porcelain"):
                 return subprocess.CompletedProcess(command, status_returncode, status_stdout, status_stderr)
             if tuple(command[3:6]) == ("rev-list", "--count", "@{upstream}..HEAD"):
@@ -131,6 +134,33 @@ class RuntimeRetentionBehaviorTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("runtime_retention: enabled=false", result.stdout)
         self.assertTrue(old_log.exists())
+
+    def test_non_owner_noops_without_file_delete_or_worktree_remove(self) -> None:
+        old_log = self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
+        stale = self.write_stale_worktree_plan()
+        decision = LeaseDecision(False, "not-owner", "runtime-retention", "other-device")
+        output = io.StringIO()
+
+        with (
+            mock.patch("codex_refactor_loop.runtime_retention.os.getcwd", return_value=str(self.repo)),
+            mock.patch.dict(
+                os.environ,
+                {"CONSENSUS_RND_HOST_ENV": self.host_env_rel.as_posix()},
+                clear=False,
+            ),
+            mock.patch("codex_refactor_loop.runtime_retention.require_active_controller", return_value=decision),
+            mock.patch(
+                "codex_refactor_loop.runtime_retention._run_git",
+                side_effect=AssertionError("non-owner must not run git worktree commands"),
+            ),
+            redirect_stdout(output),
+        ):
+            returncode = runtime_retention_main([])
+
+        self.assertEqual(0, returncode)
+        self.assertIn("runtime_retention: enabled=false active_controller=noop:not-owner owner=other-device", output.getvalue())
+        self.assertTrue(old_log.exists())
+        self.assertTrue(stale.exists())
 
     def test_deletes_only_host_opt_in_generated_regular_files_older_than_24h(self) -> None:
         old_log = self.write_file(".refactor-loop/logs/old.log", "done\nEXIT=0\n", 25)
