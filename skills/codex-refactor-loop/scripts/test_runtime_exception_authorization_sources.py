@@ -560,8 +560,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "protocol terminal state",
             "gh-label-closed-reconcile",
             "closed_phase_labels.py",
+            "bounded GitHub label/state driven dirty candidate projection",
+            "whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate",
+            "managed-intersecting at query construction",
+            "terminal-complete closed managed items are excluded from steady-state scans",
+            "unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens",
+            "Human-label exactness neither authorizes human-label mutation nor blocks phase/cleanup/stuck reconciliation",
+            "human labels are preserved as-is",
             "test_closed_label_reconciler.py",
             "test_peek_status_lens.py",
+            "test_gh_accounting.py",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)

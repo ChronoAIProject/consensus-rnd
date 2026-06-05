@@ -941,6 +941,27 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
+    def test_closed_label_reconciler_documents_bounded_candidate_projection(self) -> None:
+        section = section_after_heading(self.skill, "Named runtime exception — closed-label-reconciler(per #238)")
+        for token in (
+            "bounded GitHub label/state driven dirty candidate projection",
+            "whose every GitHub list query uses a managed-label predicate before any dirty-label search predicate",
+            "missing terminal phase",
+            "residual nonterminal phase",
+            "cleanup-only alias",
+            "`crnd:lifecycle:stuck`",
+            "managed-intersecting at query construction",
+            "small recent closed read-only managed window",
+            "terminal-complete closed managed items are excluded from steady-state scans",
+            "must not receive steady-state per-item view or linked-merge probes",
+            "unmanaged CLOSED search noise must not be returned to the reconciler or `peek` lens",
+            "Human-label exactness neither authorizes human-label mutation nor blocks phase/cleanup/stuck reconciliation",
+            "human labels are preserved as-is",
+            "test_gh_accounting.py",
+        ):
+            with self.subTest(token=token):
+                self.assertIn(token, section)
+
     def test_skill_documents_single_active_controller_lease_boundary(self) -> None:
         # Refactor (impl/issue191-single-active-controller): Old pattern:
         # multi-device controller writes were described as local daemon facts.
