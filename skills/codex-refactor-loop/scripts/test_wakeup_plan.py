@@ -418,6 +418,13 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    repository_stalled)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":536,"title":"old review PR","updatedAt":"2026-05-03T00:00:00Z","headRefName":"refactor/iter506-issue-506","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
@@ -3108,7 +3115,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(Path(action["log"]).name, "meta-reflector-repository-stalled.log")
         self.assertEqual(action["target"], {"kind": "codex", "task_id": "meta-reflector-repository-stalled"})
         self.assertEqual(action["preconditions"], ["active_controller_owner", "live_open_targets", "long_stuck_threshold_exceeded", "recommendation_only"])
-        self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507])
+        self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507, 536])
+        pr_item = action["stalled_items"][2]
+        self.assertEqual(pr_item["kind"], "PR")
+        self.assertEqual(pr_item["number"], 536)
+        self.assertEqual(pr_item["title"], "old review PR")
+        self.assertEqual(pr_item["phase"], "review-gate")
         rendered = json.dumps(action, sort_keys=True)
         for forbidden in (
             "IssueDecompositionPlan",

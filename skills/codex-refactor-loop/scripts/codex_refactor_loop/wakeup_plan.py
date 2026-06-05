@@ -41,20 +41,6 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 STALE_SECONDS = 90
 META_ESCALATION_DEFAULT_HOURS = 24.0
-MARKER_TAIL_LINES = 30
-DONE_PREFIXES = (
-    "AUDIT_DONE",
-    "SOLVER_DONE",
-    "META_JUDGE_DONE",
-    "META_RESOLVED",
-    "IMPLEMENT_DONE",
-    "VERIFY_DONE",
-    "REVIEW_DONE",
-    "FIX_DONE",
-    "TEST_ADD_DONE",
-    "TRIAGE_DECISION_DONE",
-)
-DONE_PREFIX_RE = re.compile(r"^(?:" + "|".join(re.escape(prefix) for prefix in DONE_PREFIXES) + r")(?::[^\s`]+)*$")
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
