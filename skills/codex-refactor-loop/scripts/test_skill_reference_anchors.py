@@ -979,6 +979,17 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "`require_active_controller(...)` gate on issue/PR target writes",
+            "`GitHubAuthenticatedActor` may read the current authenticated GitHub API caller/token login",
+            "repo permission",
+            "branch protection/ruleset/CODEOWNERS/required-review results",
+            "only after the #191 owner gate and before the first GitHub API mutation",
+            "fail-closed admission checks",
+            "not per-work owner",
+            "daemon owner",
+            "takeover permit",
+            "action-specific lifecycle authorization",
+            "generic lifecycle actor",
+            "bypass for #191/#238/#322/#396/#403",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)

@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
+from ..github_actor import GitHubAuthenticatedActor
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
@@ -167,6 +168,14 @@ class CommentMonitor:
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             print(f"active_controller=noop:not-owner comment-monitor {number} {comment_id} owner={decision.owner_device}", flush=True)
+            return
+        try:
+            GitHubAuthenticatedActor(
+                self.ctx,
+                runner=lambda cmd, cwd: _run(list(cmd), cwd, check=False),
+            ).require_admission("comment-monitor-write")
+        except RuntimeError as exc:
+            print(str(exc), flush=True)
             return
         react = self.gh_api([f"repos/{self.repo}/issues/comments/{comment_id}/reactions", "-X", "POST", "-f", "content=eyes"], check=False)
         if react.returncode == 0:

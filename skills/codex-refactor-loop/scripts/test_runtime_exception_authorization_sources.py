@@ -1027,6 +1027,17 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "claim/lease scope",
             "stale takeover permit",
             "#191 `ActiveControllerLease` / `require_active_controller(...)` gate",
+            "`GitHubAuthenticatedActor` may read the current authenticated GitHub API caller/token login",
+            "repo permission",
+            "branch protection/ruleset/CODEOWNERS/required-review results",
+            "only after the #191 owner gate and before the first GitHub API mutation",
+            "fail-closed admission checks",
+            "not per-work owner",
+            "daemon owner",
+            "takeover permit",
+            "action-specific lifecycle authorization",
+            "generic lifecycle actor",
+            "bypass for #191/#238/#322/#396/#403",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
@@ -1087,12 +1098,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in ("main", "load_optional_context", "post_status_banner"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, banners_projection.function_names | banners_projection.imported_names)
-        for required in (
-            "post_status_banner",
-            "_normalize_lifecycle_target_or_raise",
-        ):
-            with self.subTest(required=required):
-                self.assertIn(required, actions_projection.function_names)
+        self.assertIn("post_status_banner", actions_projection.function_names)
+        self.assertIn("_normalize_lifecycle_target_or_raise", actions_projection.function_names)
         self.assertIn("post-banner", actions_projection.string_literals)
         self.assertIn("gh_comment_command", actions_projection.imported_names)
         for required in (
@@ -1117,15 +1124,18 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "min(dispatch_required, deficit)",
             "return action.get(\"controller_action\") in SPAWN_BATCH_CONTROLLER_ACTIONS",
             "budget = WakeupApplyBudget.from_plan(plan)",
+            "consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)",
             "result = self.apply_action(action)",
             "if result.status in {\"blocked\", \"skipped\"} and not consumes_spawn_budget:",
             "if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:",
             "if result.status == \"blocked\" and consumes_spawn_budget and not _spawn_launch_failure(result):",
             "is_spawn_action = budget.is_spawn_action(action)",
+            "def _uses_spawn_budget(self, action: Mapping[str, Any]) -> bool:",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, runner)
         self.assertIn("applied_spawns += 1", run_once)
+        self.assertIn("continue", run_once)
         self.assertIn("def _spawn_launch_failure(result: RunnerResult) -> bool:", runner)
         for forbidden in (
             "for action in plan.get(\"actions\", [])[:",

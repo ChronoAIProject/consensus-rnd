@@ -36,6 +36,32 @@ from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
 
 
+class AllowingGitHubActor:
+    def __init__(self) -> None:
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> None:
+        self.actions.append(action)
+
+
+class SequencedGitHubActor:
+    def __init__(self, sequence: list[str]) -> None:
+        self.sequence = sequence
+
+    def require_admission(self, action: str) -> None:
+        self.sequence.append(f"actor:{action}")
+
+
+class RejectingGitHubActor:
+    def __init__(self, reason: str = "github actor denied") -> None:
+        self.reason = reason
+        self.actions: list[str] = []
+
+    def require_admission(self, action: str) -> None:
+        self.actions.append(action)
+        raise RuntimeError(f"{self.reason}: action={action}")
+
+
 class ControllerActionsTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp(prefix="controller-actions-test-"))
@@ -50,7 +76,11 @@ class ControllerActionsTests(unittest.TestCase):
             'export HOST_REFACTOR_COMMENT_POLICY="none"\n',
             encoding="utf-8",
         )
-        self.actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}))
+        self.actor = AllowingGitHubActor()
+        self.actions = ControllerActions(
+            LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}),
+            github_actor=self.actor,
+        )
         self.pr_body = self.tmp / "pr-body.md"
         self.pr_body.write_text("## 🤖 PR ready\n\nSelf-contained body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
 
@@ -73,7 +103,10 @@ class ControllerActionsTests(unittest.TestCase):
 
     def test_branch_configuration_ignores_legacy_alias_env(self) -> None:
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
@@ -97,7 +130,10 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
 
         self.assertEqual("canonical-integration", actions.integration_branch)
         self.assertEqual("canonical-review", actions.review_base_branch)
@@ -132,7 +168,10 @@ class ControllerActionsTests(unittest.TestCase):
         body = self.tmp / "body.md"
         body.write_text("PR body.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
         with mock.patch.dict(os.environ, {"INTEGRATION": "legacy-integration", "REVIEW_BASE": "legacy-review"}, clear=True):
-            actions = ControllerActions(LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp))
+            actions = ControllerActions(
+                LoopContext.load(repo_root=self.tmp, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}, cwd=self.tmp),
+                github_actor=AllowingGitHubActor(),
+            )
         gh_calls: list[list[str]] = []
         git_calls: list[list[str]] = []
 
@@ -209,6 +248,58 @@ class ControllerActionsTests(unittest.TestCase):
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("owner", status["active_controller"])
         self.assertEqual("post-banner", status["action"])
+        self.assertEqual(self.actor.actions, ["post-banner"])
+
+    def test_post_status_banner_runs_github_actor_admission_after_owner_gate_before_mutation(self) -> None:
+        sequence: list[str] = []
+        actions = ControllerActions(self.actions.ctx, github_actor=SequencedGitHubActor(sequence))
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            sequence.append(f"gh:{args[0]}:{args[1]}")
+            return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/pull/77#issuecomment-1\n", stderr="")
+
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        def fake_owner(ctx: LoopContext, action: str) -> mock.Mock:
+            self.assertEqual(self.actions.ctx, ctx)
+            sequence.append(f"owner:{action}")
+            return decision
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", side_effect=fake_owner):
+            with mock.patch.object(actions, "gh", side_effect=fake_gh):
+                actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(sequence, ["owner:post-banner", "actor:post-banner", "gh:pr:comment"])
+
+    def test_post_status_banner_actor_denial_blocks_tempfile_and_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="post-banner",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch(
+                "codex_refactor_loop.controller_actions.tempfile.NamedTemporaryFile",
+                side_effect=AssertionError("tempfile should not be created"),
+            ):
+                with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                    with self.assertRaisesRegex(RuntimeError, "github actor denied: action=post-banner"):
+                        actions.post_status_banner(self.banner_request())
+
+        self.assertEqual(actor.actions, ["post-banner"])
 
     def test_post_status_banner_gh_failure_reports_output_and_removes_tempfile(self) -> None:
         cases = (
@@ -260,6 +351,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner action=post-banner"):
                         self.actions.post_status_banner(self.banner_request())
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
         self.assertFalse((self.tmp / ".refactor-loop" / ".controller-pending-events.log").exists())
@@ -302,6 +394,28 @@ class ControllerActionsTests(unittest.TestCase):
             "CONTROLLER_ACTION_BLOCKED:invalid-github-target:apply-human-label:pr:argument",
             self.pending_events(),
         )
+
+    def test_apply_human_label_actor_denial_returns_three_before_gh_mutation(self) -> None:
+        actor = RejectingGitHubActor()
+        actions = ControllerActions(self.actions.ctx, github_actor=actor)
+        decision = mock.Mock(
+            allowed=True,
+            owner_device="device-a",
+            status="owner",
+            action="controller-label",
+            lease_id="lease-1",
+            expires_at="2026-06-01T00:00:00Z",
+        )
+        stderr = io.StringIO()
+
+        with mock.patch("codex_refactor_loop.controller_actions.require_active_controller", return_value=decision):
+            with mock.patch.object(actions, "gh", side_effect=AssertionError("gh should not be called")):
+                with mock.patch("sys.stderr", stderr):
+                    result = actions.apply_human_label_or_skip("77", "META_RESOLVED:escalate-human:reason")
+
+        self.assertEqual(3, result)
+        self.assertEqual(actor.actions, ["controller-label"])
+        self.assertIn("github actor denied: action=controller-label", stderr.getvalue())
 
     def test_merge_pr_rejects_invalid_linked_issue_before_gh_or_git(self) -> None:
         with mock.patch.object(self.actions, "gh", side_effect=AssertionError("gh should not be called")):
@@ -594,6 +708,7 @@ class ControllerActionsTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, "active_controller=noop:not-owner"):
                         self.actions.publish_release_candidate(target_ref="abc")
 
+        self.assertEqual(self.actor.actions, [])
         status = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
         self.assertEqual("noop:not-owner", status["active_controller"])
 
@@ -2363,6 +2478,7 @@ class ControllerActionsTests(unittest.TestCase):
                 actual = self.actions.publish_release_candidate()
 
         self.assertIs(actual, result)
+        self.assertIn("publish-release", self.actor.actions)
         publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
         publisher.publish.assert_called_once_with(
             candidate_path=".refactor-loop/state/release-candidate.json",
@@ -2390,11 +2506,23 @@ class ControllerActionsTests(unittest.TestCase):
                 )
 
         self.assertIs(actual, result)
+        self.assertIn("publish-release", self.actor.actions)
         publisher_type.assert_called_once_with(self.actions.ctx.repo_root)
         publisher.publish.assert_called_once_with(
             candidate_path=".refactor-loop/state/custom-candidate.json",
             target_ref="explicit-ref",
         )
+
+    def test_publish_release_candidate_actor_denial_blocks_before_publisher(self) -> None:
+        class DenyingGitHubActor:
+            def require_admission(self, action: str) -> None:
+                raise RuntimeError(f"github-authenticated-actor:{action}: denied")
+
+        actions = ControllerActions(self.actions.ctx, github_actor=DenyingGitHubActor())
+
+        with mock.patch("codex_refactor_loop.controller_actions.ReleasePublisher", side_effect=AssertionError("publisher should not be constructed")):
+            with self.assertRaisesRegex(RuntimeError, "github-authenticated-actor:publish-release: denied"):
+                actions.publish_release_candidate(target_ref="abc123")
 
     def write_host_workflow_spec(self, data: dict) -> ControllerActions:
         (self.tmp / "workflow.json").write_text(json.dumps(data), encoding="utf-8")
@@ -2402,7 +2530,7 @@ class ControllerActionsTests(unittest.TestCase):
             repo_root=self.tmp,
             env={"REPO_ROOT": str(self.tmp), "GH_REPO_SLUG": "owner/repo", "HOST_WORKFLOW_SPEC": "workflow.json"},
         )
-        return ControllerActions(ctx)
+        return ControllerActions(ctx, github_actor=AllowingGitHubActor())
 
     def valid_host_prompt_spec(self) -> dict:
         (self.tmp / "prompts").mkdir(exist_ok=True)
@@ -2485,6 +2613,7 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             "def post_status_banner(self, request: BannerRequest) -> str:",
             'self._require_owner_or_raise("post-banner")',
             "_normalize_lifecycle_target_or_raise(",
+            'self._require_github_actor_or_raise("post-banner")',
             "build_status_banner(normalized)",
             "tempfile.NamedTemporaryFile",
             "gh_comment_command(normalized, Path(tmp))",
@@ -2493,8 +2622,76 @@ class ControllerActionsSourceRegressionTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, text)
         self.assertLess(method.index('self._require_owner_or_raise("post-banner")'), method.index("_normalize_lifecycle_target_or_raise("))
-        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index("tempfile.NamedTemporaryFile"))
+        self.assertLess(method.index("_normalize_lifecycle_target_or_raise("), method.index('self._require_github_actor_or_raise("post-banner")'))
+        self.assertLess(method.index('self._require_github_actor_or_raise("post-banner")'), method.index("tempfile.NamedTemporaryFile"))
+        self.assertNotIn("_github_actor_admission_required", text)
         self.assertLess(method.index("tempfile.NamedTemporaryFile"), method.index("self.gh("))
+
+    def test_github_actor_admission_stays_after_active_controller_gate(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        checks = {
+            "apply_human_label_or_skip": (
+                'self._require_owner_or_return("controller-label", code=3)',
+                'self._require_github_actor_or_return("controller-label", code=3)',
+                'self.gh(["pr", "edit", pr_target',
+            ),
+            "publish_release_candidate": (
+                'self._require_owner_or_raise("publish-release")',
+                'self._require_github_actor_or_raise("publish-release")',
+                "publisher.publish(",
+            ),
+            "post_status_banner": (
+                'self._require_owner_or_raise("post-banner")',
+                'self._require_github_actor_or_raise("post-banner")',
+                "tempfile.NamedTemporaryFile",
+            ),
+            "merge_pr": (
+                'self._require_owner_or_return("merge-pr", code=3)',
+                'self._require_github_actor_or_return("merge-pr", code=3)',
+                'ready = self._ensure_pr_ready_for_merge(pr_target)',
+            ),
+            "open_pr_with_label": (
+                'self._require_owner_or_raise("open-pr")',
+                'self._require_github_actor_or_raise("open-pr")',
+                'self.gh(["pr", "create"',
+            ),
+            "open_design_issue_with_labels": (
+                'self._require_owner_or_raise("open-design-issue")',
+                'self._require_github_actor_or_raise("open-design-issue")',
+                'self.gh(',
+            ),
+            "apply_issue_decomposition_plan": (
+                'self._require_owner_or_raise("apply-issue-decomposition-plan")',
+                'self._require_github_actor_or_raise("apply-issue-decomposition-plan")',
+                "for child in plan.children:",
+            ),
+            "apply_triage_decision_marker": (
+                'self._require_owner_or_return("apply-triage", code=3)',
+                'self._require_github_actor_or_return("apply-triage", code=3)',
+                "return apply_decision(",
+            ),
+            "close_managed_item_from_drop_marker": (
+                'self._require_owner_or_return("close-managed-drop", code=3)',
+                'self._require_github_actor_or_return("close-managed-drop", code=3)',
+                'self.gh(["',
+            ),
+        }
+        for method_name, (owner_gate, actor_gate, first_mutation) in checks.items():
+            with self.subTest(method=method_name):
+                method = text[text.index(f"    def {method_name}") :]
+                next_method = re.search(r"(?m)^    def [a-zA-Z0-9_]+", method[len(f"    def {method_name}") :])
+                if next_method:
+                    method = method[: len(f"    def {method_name}") + next_method.start()]
+                self.assertIn(owner_gate, method)
+                self.assertIn(actor_gate, method)
+                self.assertIn(first_mutation, method)
+                self.assertLess(method.index(owner_gate), method.index(actor_gate))
+                self.assertLess(method.index(actor_gate), method.index(first_mutation))
+
+    def test_source_comments_do_not_use_refactor_history_when_policy_none(self) -> None:
+        text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
+        self.assertNotIn("refactor helper", text)
+        self.assertNotIn("no behavior change", text)
 
     def test_no_legacy_branch_alias_reads(self) -> None:
         text = (SCRIPT_DIR / "codex_refactor_loop" / "controller_actions.py").read_text(encoding="utf-8")
