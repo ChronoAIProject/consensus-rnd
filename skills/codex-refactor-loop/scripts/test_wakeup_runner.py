@@ -1295,6 +1295,56 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_missing_precondition:canonical_implementation_identity",
         )
 
+    def test_wakeup_runner_hard_gate_scans_past_noop_prefix_to_spawn_batch(self) -> None:
+        status_only_prefix = [
+            {
+                "kind": "completed-marker",
+                "action_id": f"completed-marker:old-{index}",
+                "status_only": True,
+                "no_lifecycle_authority": True,
+            }
+            for index in range(20)
+        ]
+        duplicate = self.reviewer_dispatch_action(action_id="completed-marker:duplicate-review")
+        applied_lifecycle = self.implementation_output_action(action_id="completed-marker:implement-issue77-before-spawn")
+        spawn_batch = [
+            self.design_consensus_spawn_action(
+                action_id=f"harness-spawn-intent:phase9-router:{issue}:2:minimal",
+                target={"kind": "codex", "task_id": f"phase9-issue{issue}-r2-minimal"},
+                prompt=str(self.repo / ".refactor-loop/prompts/phase9/phase9-issue104-r2-judge.md"),
+                log=str(self.repo / f".refactor-loop/logs/phase9-issue{issue}-r2-minimal.log"),
+            )
+            for issue in (582, 583, 584)
+        ]
+        actions = FakeActions()
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": duplicate["action_id"], "status": "applied", "reason": "", "kind": "completed-marker"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.batch_plan([*status_only_prefix, duplicate, applied_lifecycle, *spawn_batch], dispatch_required=3, deficit=3),
+                actions=actions,
+                duplicate_prs=[],
+                git_diff_code=1,
+            )
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("completed-marker:duplicate-review", "skipped", "duplicate"),
+                ("completed-marker:implement-issue77-before-spawn", "applied", ""),
+                (spawn_batch[0]["action_id"], "applied", ""),
+                (spawn_batch[1]["action_id"], "applied", ""),
+                (spawn_batch[2]["action_id"], "applied", ""),
+            ],
+        )
+        self.assertEqual([call[0] for call in actions.calls], ["publish_implementation_output"])
+        self.assertEqual(launch.call_count, 3)
+
     def test_wakeup_runner_rejects_design_consensus_redispatch_actions(self) -> None:
         issue = 496
         (self.repo / f".refactor-loop/logs/phase9-issue{issue}-r1-delete.log").write_text(
