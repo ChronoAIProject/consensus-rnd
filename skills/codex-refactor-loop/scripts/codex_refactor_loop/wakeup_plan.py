@@ -34,7 +34,6 @@ from codex_refactor_loop.implementation_pr_artifacts import (
 from codex_refactor_loop.issue_decomposition import (
     IssueDecompositionError,
     issue_decomposition_plan_file_digest,
-    load_issue_decomposition_plan,
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
@@ -1146,6 +1145,7 @@ def completed_marker_actions(
                     "active_controller_owner",
                     "clean_exit_source_marker",
                     "durable_consensus_artifact",
+                    "plan_level_design_consensus_judge_artifact",
                     "issue_decomposition_plan_digest_match",
                     "live_parent_open_tracking",
                     "github_sentinel_idempotency_owner",
@@ -1184,7 +1184,6 @@ def completed_marker_actions(
                 mtime=_marker_mtime(log_path),
             )
         )
-        candidates.extend(issue_decomposition_apply_candidates_from_implement_result(repo_root, ctx, log_path, marker, action))
     return [candidate.action for candidate in _latest_completed_marker_candidates(candidates)]
 
 
@@ -1647,6 +1646,7 @@ def _extract_structured_consensus_field(section: str, field: str) -> str:
         "issue_decomposition_plan_path",
         "issue_decomposition_plan_digest",
         "issue_decomposition_proof",
+        "plan_level_design_consensus_judge_artifact",
     }
     lines = section.splitlines()
     start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
@@ -1731,7 +1731,11 @@ def _issue_decomposition_apply_projection_from_artifact(
     plan_path = _extract_structured_consensus_field(section, "issue_decomposition_plan_path")
     plan_digest = _extract_structured_consensus_field(section, "issue_decomposition_plan_digest")
     proof = _extract_structured_consensus_field(section, "issue_decomposition_proof")
-    if not plan_path or not plan_digest or not proof:
+    plan_level_artifact = _extract_structured_consensus_field(section, "plan_level_design_consensus_judge_artifact")
+    rel = artifact.relative_to(repo_root).as_posix()
+    if not plan_path or not plan_digest or not proof or not plan_level_artifact:
+        return {}
+    if plan_level_artifact.strip() != rel:
         return {}
     try:
         digest = issue_decomposition_plan_file_digest(
@@ -1742,7 +1746,6 @@ def _issue_decomposition_apply_projection_from_artifact(
         return {}
     if digest != plan_digest.strip():
         return {}
-    rel = artifact.relative_to(repo_root).as_posix()
     return {
         "route": "apply-issue-decomposition-plan",
         "controller_action": "apply_issue_decomposition_plan",
@@ -1756,98 +1759,7 @@ def _issue_decomposition_apply_projection_from_artifact(
         "issue_decomposition_plan_path": plan_path,
         "issue_decomposition_plan_digest": plan_digest.strip(),
         "issue_decomposition_proof": proof,
-    }
-
-
-def issue_decomposition_apply_candidates_from_implement_result(
-    repo_root: Path,
-    ctx: LoopContext,
-    log_path: Path,
-    marker: str,
-    source_action: Mapping[str, Any],
-) -> list[CompletedMarkerCandidate]:
-    if not marker.startswith("IMPLEMENT_DONE:") or not marker.endswith((":partial", ":blocked")):
-        return []
-    target = _action_target_key(dict(source_action))
-    if target is None or target[0] != "issue":
-        return []
-    issue = target[1]
-    projection = _issue_decomposition_apply_projection_from_valid_plan_artifact(repo_root, ctx, issue)
-    if not projection:
-        return []
-    action = {
-        "priority": 3,
-        "kind": "completed-marker",
-        "action_id": f"completed-marker:{log_path.name}:{marker}:apply_issue_decomposition_plan",
-        "item": f"issue #{issue}",
-        "phase": "design-consensus",
-        "actor": "controller",
-        "marker": marker,
-        "evidence": str(log_path.relative_to(repo_root)),
-        "source_artifact": str(log_path.relative_to(repo_root)),
-        "source_marker": marker,
-        "preconditions": [
-            "active_controller_owner",
-            "clean_exit_source_marker",
-            "durable_consensus_artifact",
-            "issue_decomposition_plan_digest_match",
-            "live_parent_open_tracking",
-            "github_sentinel_idempotency_owner",
-        ],
-        "runner_authority": RUNNER_AUTHORITY,
-        "no_generic_command": True,
-        **projection,
-    }
-    return [
-        CompletedMarkerCandidate(
-            log_path=log_path,
-            marker=marker,
-            action=action,
-            mtime=_marker_mtime(log_path),
-        )
-    ]
-
-
-def _issue_decomposition_apply_projection_from_valid_plan_artifact(
-    repo_root: Path,
-    ctx: LoopContext,
-    issue: int,
-) -> dict[str, Any]:
-    plan_path = f".refactor-loop/runs/issue-{issue}-decomposition/plan.json"
-    try:
-        plan = load_issue_decomposition_plan(ctx, plan_path)
-        digest = issue_decomposition_plan_file_digest(ctx, plan_path)
-    except (IssueDecompositionError, OSError, RuntimeError, ValueError):
-        return {}
-    if plan.parent_issue != issue:
-        return {}
-    consensus_artifact = repo_root / plan.source_consensus_artifact
-    match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(consensus_artifact.name)
-    if match is None:
-        return {}
-    consensus_issue, round_no = (int(match.group(1)), int(match.group(2)))
-    if consensus_issue != issue:
-        return {}
-    try:
-        consensus_artifact.resolve().relative_to((repo_root / ".refactor-loop" / "runs").resolve())
-    except ValueError:
-        return {}
-    if not consensus_artifact.is_file() or not _consensus_artifact_has_marker(consensus_artifact):
-        return {}
-    proof = f"validated plan {plan_path} digest {digest} reached consensus for parent issue #{issue}"
-    return {
-        "route": "apply-issue-decomposition-plan",
-        "controller_action": "apply_issue_decomposition_plan",
-        "target_kind": "issue",
-        "target_number": issue,
-        "target": {"kind": "issue", "number": issue},
-        "consensus_artifact": plan.source_consensus_artifact,
-        "design_decision_path": plan.source_consensus_artifact,
-        "consensus_issue": issue,
-        "consensus_round": round_no,
-        "issue_decomposition_plan_path": plan_path,
-        "issue_decomposition_plan_digest": digest,
-        "issue_decomposition_proof": proof,
+        "plan_level_design_consensus_judge_artifact": plan_level_artifact.strip(),
     }
 
 

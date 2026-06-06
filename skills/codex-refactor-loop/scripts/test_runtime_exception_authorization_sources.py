@@ -260,10 +260,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "IssueDecompositionPlan",
             "children:[{slug,title,scope,non_goals,body_artifact_path}]",
             "parent_update:{comment_artifact_path}",
+            "clean plan-level judge source marker",
+            "plan_level_design_consensus_judge_artifact",
             "catalog design issue label bundle",
-            "phase9-router fallback pending events",
-            "generic completed-marker projection",
-            "read-only `peek` pending-events tail",
             "no daemon/worker issue creation",
             "no public issue factory",
             "no public command bus",
@@ -277,6 +276,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, entry)
+        for forbidden_source in (
+            "first `META_JUDGE_DONE:consensus:decompose`",
+            "solver artifacts",
+            "prompt-body free text",
+            "validator output",
+            "worker output",
+            "`.refactor-loop/host.env`",
+        ):
+            with self.subTest(forbidden_source=forbidden_source):
+                self.assertIn(forbidden_source, entry)
         for needle in (
             "#403 是唯一大 issue 分解 carveout",
             "checked-in apply helper",

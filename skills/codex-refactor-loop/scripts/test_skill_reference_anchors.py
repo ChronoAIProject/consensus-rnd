@@ -282,7 +282,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=needle):
                 self.assertNotIn(needle, python_policy)
 
-    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+    def test_issue_decomposition_discoverability_requires_plan_level_judge_fields(self) -> None:
         section = section_after_anchor(self.skill, "large-issue-decomposition")
         for needle in (
             "IssueDecompositionPlan",
@@ -298,9 +298,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "phase9-router-fallback",
             "completed_marker_actions()",
             "kind: completed-marker",
+            "first `consensus:decompose`, solver artifacts, prompt body, validator result, worker output, and `.refactor-loop/host.env` are not apply authorization",
             "exact named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "plan_level_design_consensus_judge_artifact",
             "plan path, digest, and proof",
-            "wakeup_runner.py` then revalidates clean source marker",
+            "wakeup_runner.py` then revalidates clean plan-level judge source marker",
             "live parent open/tracking",
             "sentinel idempotency",
             "wakeup_plan.py` is not the #403 read-model/status/authorization owner",
