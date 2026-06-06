@@ -152,10 +152,17 @@ def _reflector_final_marker_tolerates_context_markers(log_name: str, final_marke
         return False
     if not final_marker.startswith("META_RESOLVED:"):
         return False
-    if not markers or markers[-1] != final_marker:
+    if not markers:
         return False
     earlier_markers = markers[:-1]
-    return all(marker.startswith(REFLECTOR_CONTEXT_MARKER_PREFIXES) for marker in earlier_markers)
+    if markers[-1] != final_marker:
+        return False
+    if any(marker.startswith("META_RESOLVED:") and marker != final_marker for marker in earlier_markers):
+        return False
+    return all(
+        marker == final_marker or marker.startswith(REFLECTOR_CONTEXT_MARKER_PREFIXES)
+        for marker in earlier_markers
+    )
 
 
 def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:
