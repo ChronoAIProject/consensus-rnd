@@ -40,7 +40,11 @@ from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
-from .wakeup_plan import build_plan, consensus_implementation_suppressed_reason
+from .wakeup_plan import (
+    build_plan,
+    consensus_implementation_suppressed_reason,
+    release_candidate_target_ref_invalid,
+)
 from .worker_markers import read_worker_terminal_marker
 
 
@@ -588,7 +592,11 @@ class WakeupRunner:
             return "release_auto_opt_in_missing"
         candidate = self.ctx.paths.state / "release-candidate.json"
         if candidate.exists():
-            return "release_candidate_already_exists"
+            if (
+                "release_candidate_target_ref_invalid" not in preconditions
+                or not release_candidate_target_ref_invalid(read_json(candidate, {}))
+            ):
+                return "release_candidate_already_exists"
         if not str(action.get("from_version") or "").strip() or not str(action.get("to_version") or "").strip():
             return "release_dispatch_version_missing"
         return None

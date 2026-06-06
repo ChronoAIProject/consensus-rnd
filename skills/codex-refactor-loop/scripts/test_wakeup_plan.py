@@ -5308,6 +5308,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(actions, [])
 
+    def test_release_gate_dispatch_recovers_ready_gate_when_candidate_target_ref_is_empty(self) -> None:
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "dispatch_release_candidate")
+        self.assertEqual(action["action_id"], "release-gate-dispatch:1.2.3-beta.4->1.2.3-beta.5")
+        self.assertIn("release_candidate_target_ref_invalid", action["preconditions"])
+        self.assertNotIn("target_ref", action)
+        self.assertFalse(action.get("status_only", False))
+        self.assertTrue(has_dispatchable_action(actions))
+        self.assertEqual(release_publish_actions(self.repo), [])
+
     def test_release_gate_dispatch_requires_host_opt_in(self) -> None:
         actions = release_gate_dispatch_actions(
             self.repo,
@@ -5344,6 +5374,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("release_publish_preflight", action["preconditions"])
         self.assertFalse(action.get("status_only", False))
         self.assertTrue(has_dispatchable_action(actions))
+
+    def test_release_publish_remains_projected_for_valid_target_ref_candidate(self) -> None:
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "origin/dev/auto-refact-dev", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        actions = release_publish_actions(self.repo)
+
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(actions[0]["controller_action"], "publish_release_candidate")
+        self.assertEqual(actions[0]["target_ref"], "origin/dev/auto-refact-dev")
+        self.assertEqual(actions[0]["source_marker"], "1.2.3-beta.5")
+        self.assertFalse(actions[0].get("status_only", False))
 
     def test_release_publish_skips_candidate_without_target_ref(self) -> None:
         (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
