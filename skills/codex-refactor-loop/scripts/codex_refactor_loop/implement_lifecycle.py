@@ -231,7 +231,7 @@ def clear_redispatchable_implement_log(
         command_runner=command_runner,
     )
     target = log_path or canonical_implement_log_path(repo_root, action or {})
-    if state.redispatch and target.exists():
+    if state.redispatch and not implement_attempt_is_terminal_or_noop_completion(state) and target.exists():
         target.unlink(missing_ok=True)
         return True
     return False
