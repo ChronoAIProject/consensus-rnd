@@ -1773,7 +1773,8 @@ class ControllerActions:
             return 2
         if not self._require_github_actor_or_return("close-managed-drop", code=3):
             return 3
-        comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
+        drop_reason = marker.removeprefix("META_RESOLVED:drop:").strip() or "drop"
+        comment = f"Closed from drop marker.\n\nDrop reason: {drop_reason}\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
             result = self.gh(["pr", "close", pr_target, "--comment", comment], check=False)

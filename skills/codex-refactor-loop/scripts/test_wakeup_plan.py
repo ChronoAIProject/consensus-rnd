@@ -816,6 +816,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_554": [issue(554, "reflector drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
             "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "consensus_issue_330": [issue(330, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
@@ -2612,7 +2613,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("review-gate-readiness", action)
         self.assertNotIn("review_gate_actions", action)
 
-    def test_meta_resolved_drop_completed_marker_for_open_target_is_status_only(self) -> None:
+    def test_meta_resolved_drop_completed_marker_for_open_target_projects_close_helper(self) -> None:
         (self.logs / "issue53-judge-drop.log").write_text(
             "raw prose is diagnostic only\n"
             "META_RESOLVED:drop:no-action\n"
@@ -2625,19 +2626,55 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = plan["actions"][0]
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
-        self.assertTrue(action["status_only"])
-        self.assertTrue(action["no_lifecycle_authority"])
-        self.assertEqual(action["suppressed_reason"], "live_open_target")
-        self.assertNotIn("runner_authority", action)
-        self.assertNotIn("no_generic_command", action)
-        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        )
         self.assertEqual(action["source_artifact"], ".refactor-loop/logs/issue53-judge-drop.log")
         self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 53)
         self.assertEqual(action["target"], {"kind": "issue", "number": 53})
+        self.assertNotIn("status_only", action)
 
-    def test_meta_resolved_drop_completed_marker_for_closed_target_projects_close_helper(self) -> None:
+    def test_phase9_reflector_meta_resolved_drop_projects_close_helper_for_latest_issue_round(self) -> None:
+        (self.logs / "phase9-issue554-r3-judge.log").write_text(
+            "META_JUDGE_DONE:converge:round-3\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.logs / "phase9-issue554-r4-reflector.log").write_text(
+            "raw prose is diagnostic only\n"
+            "META_RESOLVED:drop:no-actionable-framing-after-4-rounds\n"
+            "EXIT=0\n"
+            "DONE_AT=2026-06-06T02:33:09Z\n",
+            encoding="utf-8",
+        )
+        (self.logs / "phase9-issue554-r3-judge.log").touch()
+        (self.logs / "phase9-issue554-r4-reflector.log").touch()
+
+        plan = self.run_plan(fixture="open_issue_554")
+
+        actions = [item for item in plan["actions"] if str(item.get("action_id") or "").startswith("completed-marker:phase9-issue554")]
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        )
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue554-r4-reflector.log")
+        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-actionable-framing-after-4-rounds")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 554)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 554})
+        self.assertNotIn("status_only", action)
+
+    def test_meta_resolved_drop_completed_marker_for_closed_target_is_status_only(self) -> None:
         (self.logs / "issue53-judge-drop.log").write_text(
             "raw prose is diagnostic only\n"
             "META_RESOLVED:drop:no-action\n"
@@ -2650,15 +2687,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:issue53-judge-drop"))
         self.assertEqual(action["kind"], "completed-marker")
         self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
-        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
-        self.assertTrue(action["no_generic_command"])
-        self.assertIn("clean_exit_source_marker", action["preconditions"])
+        self.assertTrue(action["status_only"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(action["suppressed_reason"], "target_not_open")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        )
         self.assertEqual(action["source_artifact"], ".refactor-loop/logs/issue53-judge-drop.log")
         self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-action")
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 53)
         self.assertEqual(action["target"], {"kind": "issue", "number": 53})
-        self.assertNotIn("status_only", action)
 
     def test_non_drop_meta_resolved_is_status_only_for_phase9_router(self) -> None:
         self.write_completed_log("judge-issue54.log", "META_RESOLVED:continue")

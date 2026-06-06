@@ -159,7 +159,7 @@ MANAGED_PR_HEAD_PATTERN = re.compile("^" + "refactor/" + r"iter[1-9][0-9]*-[A-Za
 REQUIRED_REVIEW_ROLES = ("architect", "tests", "quality")
 CONSENSUS_JUDGE_ARTIFACT_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.md$")
 CONSENSUS_JUDGE_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-judge\.log$")
-DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge)\.log$")
+DESIGN_CONSENSUS_LOG_RE = re.compile(r"^phase9-issue([1-9][0-9]*)-r([1-9][0-9]*)-(minimal|structural|delete|judge|reflector)\.log$")
 IMPLEMENT_PENDING_INTENT_PREFIX = "dispatch-consensus-implementation:"
 IMPLEMENT_TASK_PREFIX = "implement-"
 
@@ -917,6 +917,8 @@ def completed_marker_actions(
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
         }
+        if action["controller_action"] == "close_managed_item_from_drop_marker":
+            action["preconditions"] = ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"]
         if action["controller_action"] == "publish_implementation_output":
             _attach_implementation_pr_artifacts(repo_root, action)
         target = _action_target_key(action)
@@ -3213,8 +3215,8 @@ def _stale_unexecutable_reason(
         return _stale_publish_implementation_reason(action, repo_root, open_targets, worktrees, gh_items)
     if controller_action == "close_managed_item_from_drop_marker":
         target = _action_target_key(action)
-        if target is not None and target in open_targets:
-            return "live_open_target"
+        if target is not None and target not in open_targets:
+            return "target_not_open"
     return None
 
 

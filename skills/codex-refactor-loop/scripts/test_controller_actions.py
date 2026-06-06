@@ -2652,9 +2652,11 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual(calls[0], ["issue", "view", "53", "--json", "labels,body"])
         self.assertEqual(calls[1][:3], ["issue", "close", "53"])
         self.assertIn("--reason", calls[1])
+        self.assertIn("Drop reason: no-action", calls[1][calls[1].index("--comment") + 1])
         self.assertEqual(calls[2], ["pr", "view", "77", "--json", "labels,body"])
         self.assertEqual(calls[3][:3], ["pr", "close", "77"])
         self.assertIn("--comment", calls[3])
+        self.assertIn("Drop reason: no-action", calls[3][calls[3].index("--comment") + 1])
 
     def test_close_managed_item_from_drop_marker_blocks_non_managed_live_target_before_close(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
