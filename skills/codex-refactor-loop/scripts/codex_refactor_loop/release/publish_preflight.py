@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..state import read_json
+from .coordinates import validate_coordinate_policy
 from .gate import isoformat, load_host_env, parse_time, resolve_field
 from .required_checks import required_release_checks
-from .versions import compare_semver, validate_release_version_coordinate
+from .versions import compare_semver
 
 
 REQUIRED_CANDIDATE_SCHEMA = "decision-artifact-only/v2"
@@ -148,6 +149,13 @@ class ReleasePublishPreflight:
             reasons.append("candidate_decision_version_mismatch")
         if decision and candidate.get("from_version") != decision.get("from_version"):
             reasons.append("candidate_decision_from_version_mismatch")
+        if (
+            decision
+            and candidate.get("coordinate_policy") is not None
+            and decision.get("coordinate_policy") is not None
+            and candidate.get("coordinate_policy") != decision.get("coordinate_policy")
+        ):
+            reasons.append("candidate_decision_coordinate_policy_mismatch")
 
     def _validate_host_opt_in(self, reasons: list[str]) -> None:
         host_env = load_host_env(self.repo_root)
@@ -203,7 +211,13 @@ class ReleasePublishPreflight:
             reasons.append("manifest_version_mismatch")
         if decision and decision.get("to_version") != to_version:
             reasons.append("decision_version_mismatch")
-        coordinate_reason = validate_release_version_coordinate(from_version, to_version, candidate.get("bump_type"))
+        coordinate_reason = validate_coordinate_policy(
+            from_version,
+            to_version,
+            candidate.get("bump_type"),
+            candidate.get("coordinate_policy"),
+            decision.get("coordinate_policy") if decision else None,
+        )
         if coordinate_reason is not None:
             reasons.append(coordinate_reason)
 
