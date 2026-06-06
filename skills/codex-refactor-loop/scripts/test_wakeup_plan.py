@@ -4767,10 +4767,33 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
         self.assertEqual(plan["concurrency"]["deficit"], 5)
-        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertIsNone(plan["recommendation"])
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        action = next(action for action in plan["actions"] if action["action_id"] == "audit-fallback:audit-iter-9")
+        self.assertEqual(action["controller_action"], "spawn_codex_harness_background")
+        self.assertEqual(action.get("command"), "spawn-codex")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertTrue(action["no_lifecycle_authority"])
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+        )
+        self.assertEqual(action["cd"], str(self.repo.resolve()))
+        self.assertEqual(action["prompt"], str((self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md").resolve()))
+        self.assertEqual(action["log"], str((self.repo / ".refactor-loop" / "logs" / "audit-iter-9.log").resolve()))
+        self.assertEqual(action["target"], {"kind": "codex", "task_id": "audit-iter-9"})
+        self.assertEqual(action["source_artifact"], ".refactor-loop/.controller-pending-events.log")
+        self.assertIn("HARD_GATE:dispatch_required=5:audit_fallback=audit-iter-9", action["source_marker"])
+        pending = (self.repo / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(action["source_marker"], pending)
+        rendered = (self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md").read_text(encoding="utf-8")
+        self.assertIn("audit-iter-9", rendered)
+        self.assertNotIn("${ITERATION}", rendered)
+        for runtime_placeholder in ("$REPO_ROOT", "$SOURCE_GLOBS"):
+            self.assertIn(runtime_placeholder, rendered)
 
     def test_single_active_audit_boundary_reports_wait_not_positive_hard_gate(self) -> None:
         plan, stdout = self.run_plan_with_stdout(ps_count=0, active_audit=True)
@@ -4784,6 +4807,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["blocked_deficit"], 4)
         self.assertEqual(plan["hard_gate"]["boundary_task_id"], "audit-iter-8")
         self.assertNotIn("HARD_GATE:dispatch_required=4", stdout)
+        self.assertFalse(any(action.get("action_id") == "audit-fallback:audit-iter-9" for action in plan["actions"]))
 
     def test_no_active_audit_after_audit_done_none_still_recommends_audit(self) -> None:
         (self.logs / "audit-iter-8.log").write_text(
@@ -4793,11 +4817,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
-        self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
+        self.assertIsNone(plan["recommendation"])
         self.assertTrue(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
         self.assertEqual(plan["hard_gate"]["reason"], None)
         self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertTrue(any(action.get("action_id") == "audit-fallback:audit-iter-9" for action in plan["actions"]))
 
     def test_open_or_queued_work_bypasses_single_audit_wait(self) -> None:
         plan, stdout = self.run_plan_with_stdout(fixture="existing", ps_count=0, active_audit=True)
