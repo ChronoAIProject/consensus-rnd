@@ -57,6 +57,16 @@ class PatrolAuthorityTests(unittest.TestCase):
         state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
         self.assertEqual("disabled", state["status"])
 
+    def test_empty_host_value_is_noop_before_owner_gate(self) -> None:
+        ctx = self.context("")
+        with mock.patch("codex_refactor_loop.patrol.require_active_controller") as owner:
+            result = PatrolInspector(ctx, publisher=FailingPublisher()).run_once()
+
+        self.assertEqual(0, result)
+        owner.assert_not_called()
+        state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
+        self.assertEqual("disabled", state["status"])
+
     def test_non_owner_writes_noop_state_and_does_not_publish(self) -> None:
         ctx = self.context("true")
         decision = mock.Mock(allowed=False, owner_device="other", status="not-owner", action="patrol-inspector", lease_id="", expires_at="")

@@ -2632,6 +2632,29 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/release-rollup-pr-body.md", body)
         self.assertIn("Do not run `gh`.", body)
 
+    def test_render_implementation_pr_artifact_repair_prompt_binds_evidence_and_output_paths(self) -> None:
+        prompt = self.actions.render_implementation_pr_artifact_repair_prompt(
+            {
+                "issue_number": 77,
+                "cluster_id": "issue-77",
+                "implementation_log": ".refactor-loop/logs/implement-issue77.log",
+                "implementation_summary": ".refactor-loop/runs/implement-issue77.md",
+                "worktree": str(self.tmp / ".worktrees/iter77-issue-77"),
+                "head_ref": "refactor/iter77-issue-77",
+                "title_file": ".refactor-loop/runs/implementation-pr-issue-77-title.txt",
+                "body_file": ".refactor-loop/runs/implementation-pr-issue-77-body.md",
+                "suppressed_reason": "implementation_pr_title_artifact_missing",
+            }
+        )
+
+        self.assertEqual(prompt.resolve(), (self.tmp / ".refactor-loop/prompts/implementation-pr-artifacts-issue-77.md").resolve())
+        body = prompt.read_text(encoding="utf-8")
+        self.assertIn("managed issue #77", body)
+        self.assertIn(".refactor-loop/logs/implement-issue77.log", body)
+        self.assertIn(".refactor-loop/runs/implementation-pr-issue-77-title.txt", body)
+        self.assertIn(".refactor-loop/runs/implementation-pr-issue-77-body.md", body)
+        self.assertIn("Do not run `gh`.", body)
+
     def test_close_managed_item_from_drop_marker_closes_issue_and_pr_with_drop_marker(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
         calls: list[list[str]] = []
@@ -3000,6 +3023,23 @@ class ControllerActionsTests(unittest.TestCase):
         consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
         (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
         (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+        stale_snapshot = self.tmp / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+        stale_snapshot.write_text(
+            json.dumps(
+                {
+                    "schema": "managed-work-snapshot",
+                    "fetched_at_epoch": 1000,
+                    "items": [
+                        {
+                            "kind": "issue",
+                            "number": 537,
+                            "labels": [labels.MANAGED, labels.PHASE_DESIGN_SOLVING, labels.HUMAN_AUTO],
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
 
         def write_child(name: str, scope: str, non_goals: str) -> str:
             path = f".refactor-loop/runs/{name}.md"
@@ -3074,6 +3114,7 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn("Parent issue: #403", comment_texts[-1])
         self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
         self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
+        self.assertFalse(stale_snapshot.exists(), "child issue creation must invalidate stale open managed work snapshot")
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
 
@@ -3217,6 +3258,16 @@ class ControllerActionsTests(unittest.TestCase):
             ("multiple", [{"body": f"IssueDecompositionPlan digest: {digest}"}] * 2, RuntimeError),
         ):
             with self.subTest(name=name):
+                stale_snapshot = self.tmp / ".refactor-loop" / "state" / "managed-work-snapshot.json"
+                stale_snapshot.write_text(
+                    json.dumps(
+                        {
+                            "fetched_at_epoch": 1000,
+                            "items": [{"kind": "issue", "number": 537, "labels": [labels.MANAGED]}],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
                 gh_calls: list[list[str]] = []
 
                 def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
@@ -3232,6 +3283,10 @@ class ControllerActionsTests(unittest.TestCase):
                     else:
                         self.assertEqual(expected, self.actions.apply_issue_decomposition_plan(str(plan_path)))
                 self.assertEqual([["issue", "view", "403", "--json", "comments"]], gh_calls)
+                if expected is RuntimeError:
+                    self.assertTrue(stale_snapshot.exists())
+                else:
+                    self.assertFalse(stale_snapshot.exists(), "idempotent decomposition reentry must invalidate stale managed-work snapshot")
 
     def test_apply_issue_decomposition_plan_is_active_controller_only_and_not_public_cli(self) -> None:
         decision = mock.Mock(

@@ -25,6 +25,7 @@ from .implement_lifecycle import (
     _implement_run_artifact_done_marker,
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    implement_attempt_is_terminal_or_noop_completion,
     is_implement_log,
 )
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
@@ -77,6 +78,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
+    "publish_review_fix_output_from_action",
     "dispatch_reviewers",
     "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
@@ -98,6 +100,7 @@ SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
 REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
+NON_BLOCKING_VALIDATION_REASONS = frozenset({"publish_implementation_empty_scoped_diff"})
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,7 @@ class RunnerResult:
 class WakeupApplyBudget:
     spawn_budget: int
     source: str
+    hard_gate_active: bool
 
     @classmethod
     def from_plan(cls, plan: Mapping[str, Any]) -> "WakeupApplyBudget":
@@ -128,11 +132,11 @@ class WakeupApplyBudget:
         deficit = _positive_int(concurrency.get("deficit"))
         if dispatch_required is None or deficit is None:
             return cls.legacy()
-        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit")
+        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit", True)
 
     @classmethod
     def legacy(cls) -> "WakeupApplyBudget":
-        return cls(1, "legacy-single-apply")
+        return cls(1, "legacy-single-apply", False)
 
     def is_spawn_action(self, action: Mapping[str, Any]) -> bool:
         return action.get("controller_action") in SPAWN_BATCH_CONTROLLER_ACTIONS
@@ -233,11 +237,14 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        worker_top_up_only = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if worker_top_up_only and not consumes_spawn_budget:
+                continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
                 continue
             result = self.apply_action(action)
@@ -253,6 +260,9 @@ class WakeupRunner:
                 break
             if consumes_spawn_budget:
                 applied_spawns += 1
+                continue
+            if budget.hard_gate_active and applied_spawns < budget.spawn_budget:
+                worker_top_up_only = True
                 continue
             break
         return results
@@ -275,13 +285,15 @@ class WakeupRunner:
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
-            if error == "issue_decomposition_duplicate_sentinel":
+            if error == "issue_decomposition_duplicate_sentinel" or error in NON_BLOCKING_VALIDATION_REASONS:
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
         if action.get("capability") == "release-rollup-body":
             self._prepare_release_rollup_body_prompt(action)
+        if action.get("capability") == "implementation-pr-artifact-repair":
+            self._prepare_implementation_pr_artifact_repair_prompt(action)
 
         controller_action = str(action.get("controller_action") or "")
         try:
@@ -402,6 +414,8 @@ class WakeupRunner:
             return self._validate_consensus_implementation(action)
         if controller_action == "publish_implementation_output":
             return self._validate_publish_implementation(action)
+        if controller_action == "publish_review_fix_output_from_action":
+            return self._validate_publish_review_fix_output(action)
         if controller_action == "dispatch_reviewers":
             return self._validate_dispatch_reviewers(action)
         if controller_action == "dispatch_remote_ci_fix":
@@ -426,6 +440,10 @@ class WakeupRunner:
             body_error = self._validate_release_rollup_body_spawn(action)
             if body_error:
                 return body_error
+        if action.get("capability") == "implementation-pr-artifact-repair":
+            repair_error = self._validate_implementation_pr_artifact_repair_spawn(action)
+            if repair_error:
+                return repair_error
         log = Path(str(action.get("log") or ""))
         if self._spawn_log_suppresses_retry(log):
             return "target_log_exists"
@@ -456,6 +474,40 @@ class WakeupRunner:
 
     def _prepare_release_rollup_body_prompt(self, action: Mapping[str, Any]) -> None:
         self.actions.render_release_rollup_body_prompt(action)
+
+    def _validate_implementation_pr_artifact_repair_spawn(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "implementation_pr_artifact_repair_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "implementation_pr_artifacts_missing_or_invalid",
+            "publish_implementation_output_status_only",
+        ):
+            if required not in preconditions:
+                return f"implementation_pr_artifact_repair_missing_precondition:{required}"
+        issue = action.get("issue_number")
+        if not isinstance(issue, int) or issue <= 0:
+            return "implementation_pr_artifact_repair_issue_missing"
+        cluster_id = str(action.get("cluster_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", cluster_id):
+            return "implementation_pr_artifact_repair_cluster_invalid"
+        for field, suffix in (("title_file", "-title.txt"), ("body_file", "-body.md")):
+            artifact = self.ctx.repo_root / str(action.get(field) or "")
+            try:
+                artifact.resolve().relative_to(self.ctx.paths.runs.resolve())
+            except ValueError:
+                return f"implementation_pr_artifact_repair_{field}_outside_runs"
+            if not artifact.name.startswith(f"implementation-pr-{cluster_id}") or not artifact.name.endswith(suffix):
+                return f"implementation_pr_artifact_repair_{field}_mismatch"
+        prompt = Path(str(action.get("prompt") or ""))
+        expected_prompt = self.ctx.paths.prompts / f"implementation-pr-artifacts-{cluster_id}.md"
+        if prompt.resolve() != expected_prompt.resolve():
+            return "implementation_pr_artifact_repair_prompt_mismatch"
+        return None
+
+    def _prepare_implementation_pr_artifact_repair_prompt(self, action: Mapping[str, Any]) -> None:
+        self.actions.render_implementation_pr_artifact_repair_prompt(action)
 
     def _validate_safe_push(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")
@@ -531,6 +583,7 @@ class WakeupRunner:
         for required in (
             "clean_exit_source_marker",
             "durable_consensus_artifact",
+            "plan_level_design_consensus_judge_artifact",
             "issue_decomposition_plan_digest_match",
             "live_parent_open_tracking",
             "github_sentinel_idempotency_owner",
@@ -557,8 +610,21 @@ class WakeupRunner:
         consensus_artifact = str(action.get("consensus_artifact") or "")
         if not consensus_artifact or plan.source_consensus_artifact != consensus_artifact:
             return "issue_decomposition_consensus_artifact_mismatch"
+        artifact_error = self._validate_consensus_artifact(action)
+        if artifact_error:
+            return "issue_decomposition_" + artifact_error
+        plan_level_artifact = str(action.get("plan_level_design_consensus_judge_artifact") or "")
+        if plan_level_artifact != consensus_artifact:
+            return "issue_decomposition_plan_level_judge_artifact_mismatch"
+        plan_level_log = _plan_level_judge_log_path(self.ctx.repo_root, plan_level_artifact)
+        if plan_level_log is None:
+            return "issue_decomposition_plan_level_judge_artifact_mismatch"
+        if str(action.get("source_artifact") or "") != plan_level_log.relative_to(self.ctx.repo_root).as_posix():
+            return "issue_decomposition_plan_level_judge_source_mismatch"
+        if not _source_log_has_clean_marker(plan_level_log, str(action.get("source_marker") or "")):
+            return "issue_decomposition_plan_level_judge_marker_missing"
         proof = str(action.get("issue_decomposition_proof") or "")
-        if digest not in proof or plan_path not in proof:
+        if digest not in proof or plan_path not in proof or consensus_artifact not in proof:
             return "issue_decomposition_proof_mismatch"
         sentinel_error = self._issue_decomposition_sentinel_error(plan.parent_issue, digest)
         if sentinel_error:
@@ -678,6 +744,14 @@ class WakeupRunner:
     def _validate_dispatch_reviewers(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
             return "dispatch_reviewers_target_missing"
+        return None
+
+    def _validate_publish_review_fix_output(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "publish_review_fix_output_target_missing"
+        marker = str(action.get("source_marker") or "")
+        if not marker.startswith("FIX_DONE:"):
+            return "publish_review_fix_output_marker_missing"
         return None
 
     def _validate_dispatch_remote_ci_fix(self, action: Mapping[str, Any]) -> str | None:
@@ -881,6 +955,11 @@ class WakeupRunner:
             return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
+        if controller_action == "publish_review_fix_output_from_action":
+            fix_publish_rc = self._commit_and_push_review_fix_output(action)
+            if fix_publish_rc != 0:
+                return fix_publish_rc
+            return self.actions.dispatch_reviewers(dict(action))
         if controller_action == "dispatch_reviewers":
             if str(action.get("source_marker") or "").startswith("FIX_DONE"):
                 fix_publish_rc = self._commit_and_push_review_fix_output(action)
@@ -941,7 +1020,7 @@ class WakeupRunner:
     def _spawn_log_suppresses_retry(self, log: Path) -> bool:
         if is_implement_log(log):
             state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
-            return state.in_flight or state.publish_ready
+            return state.in_flight or state.publish_ready or implement_attempt_is_terminal_or_noop_completion(state)
         return _spawn_log_suppresses_retry(log)
 
     def _clear_redispatchable_spawn_log(self, log: Path) -> None:
@@ -1462,7 +1541,7 @@ class WakeupRunner:
             return "target-log-absent"
         if is_implement_log(log):
             state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
-            if state.redispatch:
+            if state.redispatch and not implement_attempt_is_terminal_or_noop_completion(state):
                 return f"target-log-redispatchable:{state.reason}"
             return ""
         if _spawn_log_suppresses_retry(log):
@@ -1500,6 +1579,14 @@ def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     if not is_implement_log(path):
         return False
     return _implement_run_artifact_done_marker(path) == marker
+
+
+def _plan_level_judge_log_path(repo_root: Path, artifact_path: str) -> Path | None:
+    artifact = repo_root / artifact_path
+    match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if match is None:
+        return None
+    return repo_root / ".refactor-loop" / "logs" / f"{artifact.name.removesuffix('.md')}.log"
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:

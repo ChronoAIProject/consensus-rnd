@@ -29,6 +29,7 @@ from .implementation_pr_artifacts import (
 )
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
+from .managed_work_snapshot import invalidate_open_managed_work_snapshot
 from .prompt_contracts import inline_prompt_contracts
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
@@ -550,12 +551,15 @@ class ControllerActions:
         )
         sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
         if sentinel_count == 1:
+            invalidate_open_managed_work_snapshot(self.ctx)
             return tuple()
         if sentinel_count > 1:
             raise RuntimeError("apply_issue_decomposition_plan: multiple parent digest sentinels")
         created: list[tuple[int, str]] = []
         for child in plan.children:
             created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        if created:
+            invalidate_open_managed_work_snapshot(self.ctx)
         parent_comment = (self.ctx.repo_root / plan.parent_comment_artifact_path).read_text(encoding="utf-8")
         final_sentinel = f"\n{FINAL_SENTINEL}\n"
         if not parent_comment.endswith(final_sentinel):
@@ -1709,6 +1713,27 @@ class ControllerActions:
             env={
                 "RELEASE_ROLLUP_EVENT_JSON": event_json,
                 "RELEASE_ROLLUP_BODY_OUTPUT_PATH": body_file,
+            },
+        )
+        return prompt
+
+    def render_implementation_pr_artifact_repair_prompt(self, action: Mapping[str, object]) -> Path:
+        cluster_id = str(action.get("cluster_id") or "").strip()
+        prompt = self.ctx.paths.prompts / f"implementation-pr-artifacts-{cluster_id}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "implementation-pr-artifact-repair.md"),
+            str(prompt),
+            env={
+                "ISSUE_NUMBER": str(action.get("issue_number") or ""),
+                "CLUSTER_ID": cluster_id,
+                "IMPLEMENTATION_LOG": str(action.get("implementation_log") or action.get("source_artifact") or ""),
+                "IMPLEMENTATION_SUMMARY": str(action.get("implementation_summary") or ""),
+                "IMPLEMENTATION_WORKTREE": str(action.get("worktree") or ""),
+                "IMPLEMENTATION_HEAD_REF": str(action.get("head_ref") or ""),
+                "IMPLEMENTATION_PR_TITLE_OUTPUT_PATH": str(action.get("title_file") or ""),
+                "IMPLEMENTATION_PR_BODY_OUTPUT_PATH": str(action.get("body_file") or ""),
+                "SUPPRESSED_REASON": str(action.get("suppressed_reason") or ""),
             },
         )
         return prompt

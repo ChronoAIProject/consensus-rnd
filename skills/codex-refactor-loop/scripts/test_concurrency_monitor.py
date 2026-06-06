@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -145,6 +146,49 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn('os.environ.get("CODEX_FLOOR"', source)
         self.assertNotIn("REMOTE_CODEX_FLOOR", source)
         self.assertNotIn("cross_device_floor", source)
+
+    def test_compute_expected_suppresses_empty_scoped_diff_implementation_completion(self) -> None:
+        (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        (self.refactor_loop / "logs" / "implement-issue-581.log").write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "body": "",
+                "head_ref": "",
+                "is_draft": False,
+                "state": "open",
+            }
+        ]
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter581-issue-581\n", "")
+            if command[-3:] == ["merge-base", "HEAD", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+            if command[-2:] == ["--verify", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            if command[-2:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if command[-2:] == ["diff", "--quiet"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            items,
+            integration_branch="integration",
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
@@ -342,15 +386,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 5)
 
-    def test_monitor_emits_hard_gate_when_queue_empty(self) -> None:
+    def test_monitor_does_not_emit_hard_gate_when_expected_zero_and_queue_empty(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
-    def test_tick_empty_queue_writes_owner_local_status_snapshot_and_pending_event_only(self) -> None:
+    def test_tick_empty_queue_zero_expected_writes_owner_local_status_snapshot_only(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
@@ -364,8 +407,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(snapshot["p0_streak"], 0)
         self.assertFalse((self.refactor_loop / "state.json").exists())
         self.assertFalse((self.refactor_loop / "controller-runtime-registry.json").exists())
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_queue_empty_active_audit_writes_wait_event(self) -> None:
         active_audit = (
@@ -385,15 +427,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         )
         self.assertNotIn("HARD_GATE:dispatch_required=1", events)
 
-    def test_tick_queue_empty_no_active_audit_still_writes_positive_hard_gate(self) -> None:
+    def test_tick_queue_empty_zero_expected_no_active_audit_does_not_write_hard_gate(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
                 with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[]):
                     self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
-        self.assertNotIn("WAIT:single-active-audit", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_actionable_work_bypasses_single_active_audit_wait(self) -> None:
         active_audit = (
@@ -421,6 +461,30 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=1 queue=0", events)
         self.assertNotIn("WAIT:single-active-audit", events)
 
+    def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "state": "open",
+            }
+        ]
+        logs = self.refactor_loop / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "implement-issue-581.log").write_text(
+            "worker completed no-op\nIMPLEMENT_DONE:issue-581:partial\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+
     def test_tick_zero_expected_actionable_work_bypasses_single_active_audit_wait(self) -> None:
         active_audit = (
             f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
@@ -443,9 +507,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
                     self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
-        self.assertNotIn("WAIT:single-active-audit", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_queued_work_bypasses_single_active_audit_wait_and_consumes_queue(self) -> None:
         active_audit = (

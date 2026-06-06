@@ -20,6 +20,7 @@ sys.path.insert(0, str(SCRIPT_PATH.parent))
 
 from codex_refactor_loop.release.gate import isoformat
 from codex_refactor_loop.release.publish_preflight import ReleasePublishPreflight, canonical_digest
+from codex_refactor_loop.release.coordinates import plan_release_coordinate
 
 
 def write_json(path: Path, data: object) -> None:
@@ -163,6 +164,9 @@ def write_ready_artifacts(
         "blocked_reasons": [],
         "release_interval": {"passed": True},
     }
+    coordinate_plan = plan_release_coordinate(from_version, bump_type)
+    if coordinate_plan.to_version == version:
+        decision["coordinate_policy"] = coordinate_plan.policy
     candidate = {
         "schema": "decision-artifact-only/v2",
         "generated_at": isoformat(generated_at),
@@ -171,6 +175,7 @@ def write_ready_artifacts(
         "from_version": decision["from_version"],
         "to_version": version,
         "bump_type": bump_type,
+        "coordinate_policy": decision.get("coordinate_policy"),
         "ready": True,
         "target_ref": target_ref,
         "required_signals": decision["signals"],
@@ -310,6 +315,73 @@ class ReleasePublishPreflightTests(unittest.TestCase):
 
             self.assertTrue(result.allowed, result.reasons)
             self.assertEqual(result.version, "1.0.0-beta.4")
+
+    def test_publish_preflight_allows_beta_core_promotion_with_matching_policy(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.1.0-beta.1", bump_type="minor")
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertTrue(result.allowed, result.reasons)
+            self.assertEqual("beta_core_promotion", result.candidate["coordinate_policy"]["transition"])
+
+    def test_publish_preflight_rejects_beta_core_promotion_without_policy(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.1.0-beta.1", bump_type="minor")
+            for relative in (
+                ".refactor-loop/state/release-candidate.json",
+                ".refactor-loop/state/release-decision.json",
+            ):
+                artifact = read_json(repo / relative)
+                assert isinstance(artifact, dict)
+                artifact.pop("coordinate_policy", None)
+                write_json(repo / relative, artifact)
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("coordinate_policy_missing", result.reasons)
+
+    def test_publish_preflight_rejects_tampered_coordinate_policy(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.1.0-beta.1", bump_type="minor")
+            candidate_path = repo / ".refactor-loop/state/release-candidate.json"
+            candidate = read_json(candidate_path)
+            assert isinstance(candidate, dict)
+            candidate["coordinate_policy"]["to_core"] = "1.2.0"
+            write_json(candidate_path, candidate)
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("coordinate_policy_mismatch", result.reasons)
+
+    def test_publish_preflight_rejects_decision_coordinate_policy_mismatch(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_host_opt_in(repo)
+            write_ready_artifacts(repo, from_version="1.0.0-beta.3", version="1.1.0-beta.1", bump_type="minor")
+            decision_path = repo / ".refactor-loop/state/release-decision.json"
+            decision = read_json(decision_path)
+            assert isinstance(decision, dict)
+            decision["coordinate_policy"]["to_prerelease_index"] = 2
+            candidate_path = repo / ".refactor-loop/state/release-candidate.json"
+            candidate = read_json(candidate_path)
+            assert isinstance(candidate, dict)
+            candidate["decision_digest"] = canonical_digest(decision)
+            write_json(decision_path, decision)
+            write_json(candidate_path, candidate)
+
+            result = ReleasePublishPreflight(repo, now=lambda: NOW).validate(target_ref="abc123")
+
+            self.assertFalse(result.allowed)
+            self.assertIn("candidate_decision_coordinate_policy_mismatch", result.reasons)
 
     def test_publish_preflight_rejects_off_ladder_prerelease_candidate(self) -> None:
         with copy_repo_fixture() as tmp:

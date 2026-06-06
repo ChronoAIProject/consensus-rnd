@@ -44,6 +44,7 @@ query($searchQuery: String!, $perPage: Int!) {
         body
         headRefName
         headRefOid
+        isDraft
         labels(first: 30) {
           nodes {
             name
@@ -65,6 +66,7 @@ class ManagedWorkSnapshotItem:
     head_ref: str | None = None
     head_sha: str = ""
     body: str = ""
+    is_draft: bool = False
     state: str = "open"
     updated_at: str = ""
     snapshot_source: str = ""
@@ -87,6 +89,7 @@ class ManagedWorkSnapshotItem:
             head_ref=(str(row.get("head_ref") or "") or None) if kind == "PR" else None,
             head_sha=str(row.get("head_sha") or "") if kind == "PR" else "",
             body=str(row.get("body") or "") if kind == "PR" else "",
+            is_draft=bool(row.get("is_draft") is True) if kind == "PR" else False,
             state=str(row.get("state") or "open"),
             updated_at=str(row.get("updated_at") or ""),
             snapshot_source=str(row.get("snapshot_source") or ""),
@@ -101,6 +104,7 @@ class ManagedWorkSnapshotItem:
             "head_ref": self.head_ref,
             "head_sha": self.head_sha,
             "body": self.body,
+            "is_draft": self.is_draft,
             "state": self.state,
             "updated_at": self.updated_at,
             "snapshot_source": self.snapshot_source,
@@ -218,6 +222,7 @@ class ManagedWorkSnapshot:
                     head_ref=(str(row.get("headRefName") or "") or None) if kind == "PR" else None,
                     head_sha=str(row.get("headRefOid") or "") if kind == "PR" else "",
                     body=str(row.get("body") or "") if kind == "PR" else "",
+                    is_draft=bool(row.get("isDraft") is True) if kind == "PR" else False,
                     state="open",
                     updated_at=str(row.get("updatedAt") or ""),
                     snapshot_source="github-open-managed-items",
@@ -282,6 +287,7 @@ class ManagedWorkSnapshot:
                             "body": str(details.get("body") or ""),
                             "headRefName": str(details.get("headRefName") or ""),
                             "headRefOid": str(details.get("headRefOid") or ""),
+                            "isDraft": bool(details.get("isDraft") is True),
                         }
                     )
                 current = rows_by_key.get((typename, number))
@@ -299,7 +305,7 @@ class ManagedWorkSnapshot:
                 "--repo",
                 str(self.ctx.gh_repo_slug),
                 "--json",
-                "body,headRefName,headRefOid",
+                "body,headRefName,headRefOid,isDraft",
             ]
         )
         if result.returncode != 0 or not result.stdout.strip():
@@ -404,6 +410,16 @@ class ManagedWorkSnapshot:
 
 def load_open_managed_work_snapshot(ctx: LoopContext) -> ManagedWorkSnapshotResult:
     return ManagedWorkSnapshot(ctx).load()
+
+
+def invalidate_open_managed_work_snapshot(ctx: LoopContext) -> None:
+    """Drop the local read-only managed work cache after controller-owned GitHub writes."""
+    state_path = ctx.repo_root / STATE_RELATIVE_PATH
+    tmp_path = state_path.with_name(f".{state_path.name}.tmp.{os.getpid()}")
+    with contextlib.suppress(FileNotFoundError):
+        tmp_path.unlink()
+    with contextlib.suppress(FileNotFoundError):
+        state_path.unlink()
 
 
 def _ctx_host_env_int(ctx: LoopContext, name: str, default: int) -> int:

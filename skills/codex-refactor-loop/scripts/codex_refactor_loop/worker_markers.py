@@ -27,7 +27,9 @@ IMPLEMENT_DONE_STATUSES = {"ok", "partial", "blocked"}
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?:issue-)?[A-Za-z0-9._-]+\.log$")
 SOLVER_LOG_RE = re.compile(r"^(?:" + "phase9-" + r"|solver-)issue[1-9][0-9]*-r[1-9][0-9]*-(?:minimal|structural|delete)\.log$")
 JUDGE_LOG_RE = re.compile(r"^" + "phase9-" + r"issue[1-9][0-9]*-r[1-9][0-9]*-judge\.log$")
+PHASE9_REFLECTOR_LOG_RE = re.compile(r"^phase9-issue[1-9][0-9]*-r[1-9][0-9]*-reflector\.log$")
 REVIEW_LOG_RE = re.compile(r"^" + "review-" + r"pr[1-9][0-9]*-[A-Za-z][A-Za-z0-9_-]*-r[1-9][0-9]*\.log$")
+REFLECTOR_CONTEXT_MARKER_PREFIXES = ("SOLVER_DONE:", "META_JUDGE_DONE:")
 
 
 @dataclass(frozen=True)
@@ -47,7 +49,7 @@ def read_worker_terminal_marker(log_path: Path) -> WorkerMarkerRead:
         return WorkerMarkerRead(reason="log_unreadable")
     if _terminal_exit_line(lines) != "EXIT=0":
         return WorkerMarkerRead(reason="missing_exit_zero")
-    log_marker = _marker_from_clean_log_lines(lines)
+    log_marker = _marker_from_clean_log_lines(lines, log_path.name)
     if log_marker.found or log_marker.reason:
         return log_marker
     artifact_marker = _marker_from_companion_artifact(log_path)
@@ -107,20 +109,20 @@ def _reject_malformed_implement_marker(marker: str) -> bool:
     return True
 
 
-def _marker_from_clean_log_lines(lines: list[str]) -> WorkerMarkerRead:
+def _marker_from_clean_log_lines(lines: list[str], log_name: str) -> WorkerMarkerRead:
     try:
         exit_index = max(index for index, line in enumerate(lines) if line.strip() == "EXIT=0")
     except ValueError:
         return WorkerMarkerRead()
     before_exit = lines[:exit_index]
     tail = before_exit[-MARKER_TAIL_LINES:]
-    marker = _last_final_marker(tail)
+    marker = _last_final_marker(tail, log_name)
     if marker.found or marker.reason:
         return marker
     return _sentinel_adjacent_marker(tail)
 
 
-def _last_final_marker(lines: list[str]) -> WorkerMarkerRead:
+def _last_final_marker(lines: list[str], log_name: str) -> WorkerMarkerRead:
     final_marker = ""
     for index in range(len(lines) - 1, -1, -1):
         stripped = lines[index].strip()
@@ -136,11 +138,31 @@ def _last_final_marker(lines: list[str]) -> WorkerMarkerRead:
             for marker in (extract_standalone_marker(line) for line in lines[: index + 1])
             if marker
         ]
+        if _reflector_final_marker_tolerates_context_markers(log_name, final_marker, markers):
+            return WorkerMarkerRead(marker=final_marker, source="log")
         unique = set(markers)
         if len(unique) != 1:
             return WorkerMarkerRead(reason="duplicate_or_conflicting_log_marker")
         return WorkerMarkerRead(marker=final_marker, source="log")
     return WorkerMarkerRead()
+
+
+def _reflector_final_marker_tolerates_context_markers(log_name: str, final_marker: str, markers: list[str]) -> bool:
+    if PHASE9_REFLECTOR_LOG_RE.fullmatch(log_name) is None:
+        return False
+    if not final_marker.startswith("META_RESOLVED:"):
+        return False
+    if not markers:
+        return False
+    earlier_markers = markers[:-1]
+    if markers[-1] != final_marker:
+        return False
+    if any(marker.startswith("META_RESOLVED:") and marker != final_marker for marker in earlier_markers):
+        return False
+    return all(
+        marker == final_marker or marker.startswith(REFLECTOR_CONTEXT_MARKER_PREFIXES)
+        for marker in earlier_markers
+    )
 
 
 def _sentinel_adjacent_marker(lines: list[str]) -> WorkerMarkerRead:

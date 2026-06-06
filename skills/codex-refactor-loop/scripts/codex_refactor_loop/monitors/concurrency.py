@@ -13,17 +13,18 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
 from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
+from ..implement_lifecycle import implement_attempt_suppresses_expected_worker
 from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
 from ..update_check import parse_time
-from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
+from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -226,6 +227,7 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        payload.update(self.read_active_controller_projection())
         update_projection = self.read_update_projection(now=now)
         if update_projection:
             payload.update(update_projection)
@@ -233,6 +235,25 @@ class ConcurrencyMonitor:
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, self.statusline_snapshot)
+
+    def read_active_controller_projection(self) -> dict[str, object]:
+        raw = read_json(self.ctx.paths.state / "active-controller-status.json", {})
+        if not isinstance(raw, dict):
+            return {}
+        projection: dict[str, object] = {}
+        for field in (
+            "active_controller",
+            "owner_device",
+            "current_github_login",
+            "identity_authority",
+            "github_login_status",
+        ):
+            value = raw.get(field)
+            if isinstance(value, str):
+                projection[field] = value
+        if "identity_authority" not in projection:
+            projection["identity_authority"] = "display-only"
+        return projection
 
     def read_update_projection(self, *, now: datetime) -> dict[str, object]:
         raw = read_json(self.ctx.paths.state / "update-check.json", {})
@@ -334,20 +355,37 @@ class ConcurrencyMonitor:
                     "human": human,
                     "labels": label_names,
                     "body": entry.body,
+                    "head_ref": entry.head_ref or "",
+                    "is_draft": entry.is_draft,
                     "state": "open",
                 }
             )
         return items
 
-    def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
+    def compute_expected(
+        self,
+        items: list[dict],
+        *,
+        integration_branch: str = "",
+        command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+    ) -> tuple[int, list[dict]]:
         breakdown = []
         total = 0
         for item in ManagedWorkProjection(items).effective_worker_items():
+            if is_draft_release_rollup_pr(item):
+                continue
             if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([item.human]).canonical:
                 continue
             phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
+                if item.kind == "issue" and implement_attempt_suppresses_expected_worker(
+                    self.repo_root,
+                    item.number,
+                    integration_branch=integration_branch,
+                    command_runner=command_runner,
+                ):
+                    continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
         return total, breakdown
@@ -572,10 +610,16 @@ class ConcurrencyMonitor:
                     self.write_pending_event(event)
                     log(event)
                     tick_action = f"blocked:single-active-audit deficit={deficit}"
-                elif owner_allowed:
+                elif owner_allowed and expected > 0:
                     self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     tick_action = f"blocked:dispatch-required deficit={deficit}"
+                elif owner_allowed:
+                    log(
+                        "HARD_GATE:noop:zero-expected "
+                        f"actual={actual} expected={expected} floor={floor} queue=0 deficit={deficit}"
+                    )
+                    tick_action = f"noop:zero-expected deficit={deficit}"
                 else:
                     log(
                         "active_controller=noop:not-owner "
@@ -670,8 +714,17 @@ def list_auto_loop_issues() -> list[dict]:
     return _default_monitor().list_auto_loop_issues()
 
 
-def compute_expected(items: list[dict]) -> tuple[int, list[dict]]:
-    return _default_monitor().compute_expected(items)
+def compute_expected(
+    items: list[dict],
+    *,
+    integration_branch: str = "",
+    command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> tuple[int, list[dict]]:
+    return _default_monitor().compute_expected(
+        items,
+        integration_branch=integration_branch,
+        command_runner=command_runner,
+    )
 
 
 def write_alert(msg: str, detail: dict) -> None:

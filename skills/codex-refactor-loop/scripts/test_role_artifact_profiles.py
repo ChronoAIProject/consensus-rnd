@@ -34,6 +34,7 @@ ROLE_MARKER_TOKENS = (
     "TEST_BLOCKED",
     "TEST_ADD_DONE",
     "TRIAGE_DECISION_DONE",
+    "IMPLEMENTATION_PR_ARTIFACTS_DONE",
 )
 
 
@@ -118,7 +119,8 @@ PROFILES = {
         required_sections=(),
         final_marker_patterns=(
             r"^(AUDIT_DONE|AUDIT_INCOMPLETE|SCOPE_EXTEND|IMPLEMENT_DONE|VERIFY_DONE|REMOTE_CI_FIX_DONE|"
-            r"META_RESOLVED|TEST_BLOCKED|TEST_ADD_DONE|TRIAGE_DECISION_DONE):.+$",
+            r"META_RESOLVED|TEST_BLOCKED|TEST_ADD_DONE|TRIAGE_DECISION_DONE|"
+            r"IMPLEMENTATION_PR_ARTIFACTS_DONE):.+$",
         ),
         forbidden_marker_tokens=("REVIEW_DONE", "FIX_DONE", "FIX_BLOCKED", "SOLVER_DONE", "META_JUDGE_DONE"),
         sentinel_policy="penultimate-before-final-marker",

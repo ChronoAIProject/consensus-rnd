@@ -46,6 +46,25 @@ class StatuslineCliTests(unittest.TestCase):
         elapsed_ms = (time.monotonic() - start) * 1000
         self.assertLess(elapsed_ms, 200, output)
 
+    def test_entrypoint_statusline_does_not_import_full_router(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-X",
+                "importtime",
+                str(CLI),
+                "statusline",
+            ],
+            env={"REPO_ROOT": str(self.tmp)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("⏸ no-snapshot", result.stdout)
+        self.assertNotIn("codex_refactor_loop.cli", result.stderr)
+
     def test_no_snapshot_returns_placeholder(self) -> None:
         self.assertEqual("⏸ no-snapshot", self.run_statusline())
 
@@ -84,6 +103,26 @@ class StatuslineCliTests(unittest.TestCase):
     def test_update_available_renders_latest_version_from_snapshot(self) -> None:
         self.write_snapshot({"actual": 7, "expected": 5, "floor": 4, "p0_streak": 0, "open_pr_count": 5, "open_issue_count": 4, "freeze_minutes": 0, "update_available": True, "update_latest_version": "1.0.0-rc.1"})
         self.assertIn("up:v1.0.0-rc.1", self.run_statusline())
+
+    def test_display_only_github_login_renders_without_authority_label(self) -> None:
+        self.write_snapshot(
+            {
+                "actual": 7,
+                "expected": 5,
+                "floor": 4,
+                "p0_streak": 0,
+                "open_pr_count": 5,
+                "open_issue_count": 4,
+                "freeze_minutes": 0,
+                "current_github_login": "octocat",
+                "identity_authority": "display-only",
+            }
+        )
+
+        output = self.run_statusline()
+
+        self.assertIn("gh:octocat", output)
+        self.assertNotIn("owner_login", output)
 
 
 if __name__ == "__main__":

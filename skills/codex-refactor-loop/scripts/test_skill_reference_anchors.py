@@ -282,7 +282,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(forbidden=needle):
                 self.assertNotIn(needle, python_policy)
 
-    def test_issue_decomposition_discoverability_uses_pending_events_completed_marker_and_peek_not_wakeup_projection(self) -> None:
+    def test_issue_decomposition_discoverability_requires_plan_level_judge_fields(self) -> None:
         section = section_after_anchor(self.skill, "large-issue-decomposition")
         for needle in (
             "IssueDecompositionPlan",
@@ -298,9 +298,11 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "phase9-router-fallback",
             "completed_marker_actions()",
             "kind: completed-marker",
+            "first `consensus:decompose`, solver artifacts, prompt body, validator result, worker output, and `.refactor-loop/host.env` are not apply authorization",
             "exact named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "plan_level_design_consensus_judge_artifact",
             "plan path, digest, and proof",
-            "wakeup_runner.py` then revalidates clean source marker",
+            "wakeup_runner.py` then revalidates clean plan-level judge source marker",
             "live parent open/tracking",
             "sentinel idempotency",
             "wakeup_plan.py` is not the #403 read-model/status/authorization owner",
@@ -431,6 +433,54 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "no generic issue factory",
             "test_patrol_inspector.py",
             "test_patrol_issue_publisher.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
+    def test_issue_579_consensus_gate_proof_anchor_and_boundaries(self) -> None:
+        section = section_after_anchor(self.skill, "consensus-gate-proof")
+
+        for needle in (
+            "ConsensusGateProof",
+            "scripts/codex_refactor_loop/consensus_gate.py",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#consensus-gate-proof-579",
+            "controller-private pure proof-validity contract",
+            "not a public CLI",
+            "not a public CLI, runtime exception, wakeup action, proof-ticket/resume system, command bus, or lifecycle authority",
+            "target_kind",
+            "target_ref",
+            "target_digest",
+            "decision_producer_id",
+            "producer_id",
+            "role",
+            "artifact",
+            "artifact_digest",
+            "verdict",
+            "required_roles",
+            "verdict_rule",
+            "scope_paths",
+            "single-worker self-certification",
+            "target digest mismatch",
+            "missing required roles",
+            "duplicate or overlapping producers",
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "args",
+            "controller_action",
+            "proof_ticket",
+            "resume_ticket",
+            "does not authorize GitHub, git, file lifecycle",
+            "#191 active-controller owner gate",
+            "helper-specific preconditions",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -1100,6 +1150,15 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "action-specific lifecycle authorization",
             "generic lifecycle actor",
             "bypass for #191/#238/#322/#396/#403",
+            "Same-repo multi-GitHub-user handling is HOLD-collapse",
+            "display/admission/accounting/routing/status metadata only",
+            "forbidden as partition key",
+            "lifecycle owner",
+            "lifecycle authority",
+            "diagnostics-only helper",
+            "`current_github_login`",
+            '`identity_authority="display-only"`',
+            "must not enter durable lease state or executable action authority",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -1254,6 +1313,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "phase9/router.py",
                 "wakeup_plan.py",
                 "wakeup_runner.py",
+                "worker_markers.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
@@ -1261,7 +1321,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
-            "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py"},
+            "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py", "work_items.py"},
             "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
@@ -1816,10 +1876,31 @@ class WakeupRunnerContractTests(unittest.TestCase):
                 self.assertNotIn(stale, self.skill)
 
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
+        inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
+        for needle in (
+            "prose-only and non-authoritative",
+            "not a machine-readable catalog, registry, runtime scaffold, or package API",
+            "not imported by runtime code",
+            "no dispatch, write, state-transition, or authorization authority",
+            "restart.py::DAEMON_COMMANDS",
+            "restart_managed_daemon_names()",
+            "cli.py::COMMANDS[*].authority",
+            "SKILL.md#work-unit-contract",
+            "ctx.paths.pending_events",
+            ".refactor-loop/.controller-pending-events.log",
+            "no pending-events authority",
+            "owner-local files",
+            "shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, inventory)
+
         package_root = SKILL_ROOT / "scripts" / "codex_refactor_loop"
         forbidden_path_names = {
             "controller_runtime_scaffold.py",
             "controller_runtime_capabilities.py",
+            "controller_runtime_catalog.py",
+            "tick_helpers.py",
             "tick_outcome.py",
             "tick_outcomes.py",
             "daemon_registry.json",
@@ -1839,6 +1920,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "class TickOutcome",
             "TickOutcome(",
             "ControllerRuntimeScaffold",
+            "ControllerRuntimeCatalog",
             "ControllerRuntimeCapabilities",
             "ControllerRuntimeRegistry",
             "DaemonRegistry",
@@ -1854,10 +1936,25 @@ class WakeupRunnerContractTests(unittest.TestCase):
         for needle in (
             "SharedControllerProjection",
             "ProjectionRequest",
+            "collect_shared_controller_projection()",
+            "only shared informer read entrypoint",
+            "SharedControllerProjection.to_json()",
+            "top-level `freshness` object",
+            "generated_at",
+            "sources",
+            "overall_loaded_ok",
+            "failed_source_count",
+            "stale_source_count",
+            "next_retry_after_seconds",
+            "not a new public or parsed read-model authority",
+            "Do not add `ControllerProjectionInformer`",
             "ManagedWorkSnapshot",
             "key-only workqueue keys",
             "TickWorkItem(handler,key)",
             "KeyOnlyWorkQueue",
+            "backoff",
+            "noop",
+            "diagnostics only",
             "LegacyDaemonModeGuard",
             "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
             "canonical legacy daemon list unchanged",

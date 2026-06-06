@@ -23,6 +23,7 @@ from codex_refactor_loop.managed_work_snapshot import (
     STATE_RELATIVE_PATH,
     ManagedWorkSnapshotItem,
     ManagedWorkSnapshot,
+    invalidate_open_managed_work_snapshot,
 )
 
 
@@ -139,6 +140,62 @@ class ManagedWorkSnapshotTests(unittest.TestCase):
         self.assertTrue(result.loaded_ok)
         self.assertEqual("cache:fresh", result.source)
         self.assertEqual(100, result.age_seconds)
+
+    def test_invalidation_drops_fresh_cache_so_next_load_refreshes_open_managed_work(self) -> None:
+        path = self.tmp / STATE_RELATIVE_PATH
+        path.parent.mkdir(parents=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "fetched_at_epoch": 1000,
+                    "items": [{"kind": "issue", "number": 537, "labels": [label_catalog.MANAGED]}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        calls: list[list[str]] = []
+
+        def runner(command):
+            calls.append(list(command))
+            if command[:3] == ["gh", "api", "graphql"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "data": {
+                                "search": {
+                                    "nodes": [
+                                        {
+                                            "__typename": "Issue",
+                                            "number": 577,
+                                            "title": "child issue",
+                                            "updatedAt": "2026-06-06T00:00:00Z",
+                                            "labels": {
+                                                "nodes": [
+                                                    {"name": label_catalog.MANAGED},
+                                                    {"name": label_catalog.PHASE_DESIGN_SOLVING},
+                                                    {"name": label_catalog.HUMAN_AUTO},
+                                                ]
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        }
+                    ),
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 1, "", "unexpected")
+
+        invalidate_open_managed_work_snapshot(self.ctx)
+        with mock.patch("codex_refactor_loop.managed_work_snapshot.graphql_headroom_ok", return_value=True):
+            result = ManagedWorkSnapshot(self.ctx, ttl_seconds=300, runner=runner, now=lambda: 1100).load()
+
+        self.assertTrue(result.loaded_ok)
+        self.assertEqual("live", result.source)
+        self.assertEqual([577], [item.number for item in result.items])
+        self.assertTrue(calls, "expected GitHub refresh after invalidating fresh managed-work snapshot")
 
     def test_ttl_values_are_loaded_from_loop_context_host_env_only(self) -> None:
         path = self.tmp / STATE_RELATIVE_PATH

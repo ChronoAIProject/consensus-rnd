@@ -412,7 +412,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual([], self.pending_events())
         self.assertEqual([], self.operation_jsons())
 
-    def test_release_rollup_open_stale_throwaway_head_suppresses_new_event_for_singleton(self) -> None:
+    def test_release_rollup_open_stale_throwaway_head_emits_event_for_current_integration_sha(self) -> None:
         fake = FakeGit(
             merge_base_adopted=True,
             release_ahead=3,
@@ -422,7 +422,42 @@ class SyncDevBehaviorTests(unittest.TestCase):
         )
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
-        self.assertEqual([], self.pending_events())
+        prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
+        self.assertTrue(self.pending_events()[0].startswith(prefix))
+        event = json.loads(self.pending_events()[0][len(prefix):])
+        self.assertEqual("head-sha", event["integration_sha"])
+        self.assertEqual([], self.operation_jsons())
+
+    def test_release_rollup_open_ordinary_pr_does_not_suppress_needed_event(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="head-sha",
+            review_base_sha="base-sha",
+            open_gh_rows=[{"number": 78, "headRefName": "feature/unrelated", "headRefOid": "head-sha"}],
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        prefix = "DEV_SYNC_PENDING:release-rollup-needed:"
+        self.assertTrue(self.pending_events()[0].startswith(prefix))
+        event = json.loads(self.pending_events()[0][len(prefix):])
+        self.assertEqual("head-sha", event["integration_sha"])
+        self.assertEqual([], self.operation_jsons())
+
+    def test_release_rollup_open_matching_rollup_missing_sha_is_ambiguous_and_suppresses_rollup(self) -> None:
+        fake = FakeGit(
+            merge_base_adopted=True,
+            release_ahead=3,
+            remote_sha="head-sha",
+            review_base_sha="base-sha",
+            open_gh_rows=[{"number": 79, "headRefName": "rollup/head-sha"}],
+        )
+        self.daemon(fake, release_rollup_min_commits=1).tick()
+
+        self.assertEqual(
+            ["DEV_SYNC_PENDING:release-rollup-open-pr-query-ambiguous:missing-headRefOid"],
+            self.pending_events(),
+        )
         self.assertEqual([], self.operation_jsons())
 
     def test_release_rollup_open_pr_query_nonzero_appends_ambiguous_event_and_suppresses_rollup(self) -> None:

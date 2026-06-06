@@ -44,6 +44,7 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
 - **Numbers > adjectives**:"delete -180 LOC" 优于 "substantial cleanup"。
 - **No filler**:"我们会分析…"、"various improvements"、"comprehensive review" 禁用。
 - **No "见上面"/"详见英文"** 等跨段引用。
+- **zsh-safe 退出码变量**:如果你用 shell 保存 `gh` 退出码,变量名必须用 `post_exit_code` / `gh_exit_code` 等安全名,**禁止**用 `status`。`status` 是 zsh 只读特殊变量,给它赋值保存 `$?` 会让 worker 自身失败。
 
 ## 你能调的 gh 命令
 
@@ -76,8 +77,13 @@ escalation / consensus pick **必须**给清晰"方案 1/2/3"表格,cell 一行�
    - issue 评论:`gh issue comment <N> --body-file "$BODY"`
    - PR 评论:`gh pr comment <N> --body-file "$BODY"`
    - PR description 改写:`gh pr edit <N> --body-file "$BODY"`(覆盖,不是评论)
-4. 抓 URL:`POSTED_URL=$(gh issue/pr comment ... 2>&1 | tail -1)`
-5. log 打印:`POSTED:<post-type>:<N>:<URL>:<one-line headline>`
+4. 抓 URL 并保留退出码(变量名不要用 `status`):
+   ```bash
+   POST_OUTPUT=$(gh issue/pr comment ... 2>&1)
+   post_exit_code=$?
+   POSTED_URL=$(printf '%s\n' "$POST_OUTPUT" | tail -1)
+   ```
+5. 成功 log 打印:`POSTED:<post-type>:<N>:<URL>:<one-line headline>`
 6. 失败:`POST_FAILED:<post-type>:<N>:<gh stderr 概要>` 不重试,controller 介入
 
 ## @-mention 原作者

@@ -17,6 +17,7 @@ from .. import labels as label_catalog
 from ..context import HostEnvLocator, parse_host_env
 from ..restart import restart_managed_daemon_names
 from ..state import read_json, write_json
+from .coordinates import plan_release_coordinate
 from .required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .versions import SEMVER_RE, bump_semver, compare_semver, next_release_version, parse_semver
 
@@ -408,11 +409,18 @@ class AutoReleaseGate:
         candidate_bump = classify_bump(commits) if commits else None
         release_ready = stability.ready and interval["passed"] and bool(commits)
         bump_type = candidate_bump if release_ready else None
-        to_version = next_release_version(from_version, bump_type) if bump_type else from_version
+        coordinate_policy = None
+        if bump_type:
+            coordinate_plan = plan_release_coordinate(from_version, bump_type)
+            to_version = coordinate_plan.to_version
+            coordinate_policy = coordinate_plan.policy
+        else:
+            to_version = from_version
         return {
             "from_version": from_version,
             "to_version": to_version,
             "bump_type": bump_type,
+            "coordinate_policy": coordinate_policy,
             "commits": [{"sha": commit.sha, "subject": commit.subject} for commit in commits],
             "decided_at": isoformat(now),
             "stability_score": stability.score,
@@ -459,6 +467,7 @@ class AutoReleaseGate:
             "from_version": decision.get("from_version"),
             "to_version": decision.get("to_version"),
             "bump_type": decision.get("bump_type"),
+            "coordinate_policy": decision.get("coordinate_policy"),
             "ready": decision.get("ready"),
             "target_ref": os.environ.get("RELEASE_TARGET_REF", ""),
             "required_signals": required_signals,

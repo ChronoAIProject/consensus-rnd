@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Behavior tests for read-only daemon status projection."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from codex_refactor_loop import daemon_status
+
+
+class DaemonStatusProjectionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(tempfile.mkdtemp(prefix="daemon-status-test-"))
+        (self.tmp / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (self.tmp / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{self.tmp}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        state = self.tmp / ".refactor-loop" / "state"
+        state.mkdir(parents=True)
+        (state / "active-controller-status.json").write_text(
+            json.dumps(
+                {
+                    "active_controller": "noop:not-owner",
+                    "owner_device": "device-a",
+                    "current_github_login": "octocat",
+                    "identity_authority": "display-only",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    def tearDown(self) -> None:
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_collect_projects_cached_display_only_login(self) -> None:
+        env = {"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("codex_refactor_loop.daemon_status.DaemonProcessInventory.collect") as collect_inventory:
+                collect_inventory.return_value = daemon_status.DaemonProcessInventory(())
+                report = daemon_status.collect(repo_root=self.tmp, skill_root=SCRIPT_DIR.parent)
+
+        payload = report.to_json()
+        self.assertEqual("noop:not-owner", payload["active_controller"])
+        self.assertEqual("octocat", payload["current_github_login"])
+        self.assertEqual("display-only", payload["identity_authority"])
+        self.assertTrue(payload["daemons"])
+        self.assertEqual("not-owner", payload["daemons"][0]["status"])
+        self.assertEqual("octocat", payload["daemons"][0]["current_github_login"])
+        self.assertEqual("display-only", payload["daemons"][0]["identity_authority"])
+
+
+if __name__ == "__main__":
+    unittest.main()

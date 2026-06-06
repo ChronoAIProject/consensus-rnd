@@ -55,7 +55,10 @@ def render_snapshot(data: Mapping[str, Any]) -> str:
     update_seg = ""
     if data.get("update_available") is True and data.get("update_latest_version"):
         update_seg = f" up:v{data['update_latest_version']}"
-    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{update_seg}{p0_seg}{freeze_seg}\033[0m"
+    login_seg = ""
+    if data.get("identity_authority") == "display-only" and data.get("current_github_login"):
+        login_seg = f" gh:{data['current_github_login']}"
+    return f"{color}{icon} {actual}/{floor} PR:{prs} issue:{issues}{d_seg}{update_seg}{login_seg}{p0_seg}{freeze_seg}\033[0m"
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -45,6 +45,7 @@ TARGET_ANCHORS = {
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
     "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
+    "consensus-gate-proof-579": "## ConsensusGateProof contract",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -178,6 +179,73 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 for field in REQUIRED_FIELDS:
                     self.assertIn(field, project_markdown(entry).bullet_fields)
 
+    def test_issue_579_consensus_gate_proof_is_pure_validator_not_authority(self) -> None:
+        entry = mirror_entry(self.mirror, "consensus-gate-proof-579")
+        section = self.skill[self.skill.index("## ConsensusGateProof contract") :]
+        source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus_gate.py")
+
+        for needle in (
+            "controller-private ConsensusGateProof",
+            "#579",
+            "target_kind",
+            "target_ref",
+            "target_digest",
+            "decision_producer_id",
+            "producer_id",
+            "role",
+            "artifact",
+            "artifact_digest",
+            "verdict",
+            "required_roles",
+            "verdict_rule",
+            "scope_paths",
+            "single-worker self-certification",
+            "target digest mismatch",
+            "missing required roles",
+            "duplicate or overlapping producers",
+            "recursive lifecycle or command fields",
+            "test_consensus_gate.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, section)
+        for forbidden in (
+            "no GitHub/git/file lifecycle authority",
+            "no route/post/label/spawn/merge/apply side effects",
+            "no public CLI",
+            "no wakeup-plan action projection",
+            "no wakeup-runner action",
+            "no IssueDecompositionPlan apply migration in this issue",
+            "no proof-ticket/resume system",
+            "no command bus",
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "args",
+            "controller_action",
+            "proof_ticket",
+            "resume_ticket",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, section)
+
+        self.assertIn("class ConsensusGateProof", source)
+        self.assertIn("def validate_consensus_gate_proof", source)
+        self.assertIn("FORBIDDEN_CONSENSUS_PROOF_FIELDS", source)
+        self.assertNotIn("subprocess", source)
+        self.assertNotIn("requests", source)
+        self.assertNotIn("from .github", source)
+        self.assertNotIn("from .git", source)
+
     def test_issue_403_decomposition_allowlist_excludes_wakeup_plan_public_projection(self) -> None:
         entry = mirror_entry(self.mirror, "issue-decomposition-403")
         skill_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
@@ -192,10 +260,9 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "IssueDecompositionPlan",
             "children:[{slug,title,scope,non_goals,body_artifact_path}]",
             "parent_update:{comment_artifact_path}",
+            "clean plan-level judge source marker",
+            "plan_level_design_consensus_judge_artifact",
             "catalog design issue label bundle",
-            "phase9-router fallback pending events",
-            "generic completed-marker projection",
-            "read-only `peek` pending-events tail",
             "no daemon/worker issue creation",
             "no public issue factory",
             "no public command bus",
@@ -209,6 +276,16 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, entry)
+        for forbidden_source in (
+            "first `META_JUDGE_DONE:consensus:decompose`",
+            "solver artifacts",
+            "prompt-body free text",
+            "validator output",
+            "worker output",
+            "`.refactor-loop/host.env`",
+        ):
+            with self.subTest(forbidden_source=forbidden_source):
+                self.assertIn(forbidden_source, entry)
         for needle in (
             "#403 是唯一大 issue 分解 carveout",
             "checked-in apply helper",
@@ -622,6 +699,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "matching `decision_digest`",
             "matching `target_ref`",
             "mapped manifest `from_version`",
+            "matching coordinate policy when present",
+            "mandatory `coordinate_policy.transition=beta_core_promotion` evidence for beta core promotion",
             "required checks green",
             "python3 .github/scripts/bump_version.py --version <to_version>",
             "git add .version-bump.json <mapped manifests>",
@@ -1086,21 +1165,49 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
     def test_controller_tick_supervisor_mirror_preserves_no_lifecycle_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "controller-tick-supervisor-553")
 
-        for required in (
+        shared_required = (
             "SharedControllerProjection",
             "ProjectionRequest",
+            "collect_shared_controller_projection()",
+            "only shared informer read entrypoint",
+            "`freshness` object",
+            "generated_at",
+            "sources",
+            "overall_loaded_ok",
+            "failed_source_count",
+            "stale_source_count",
+            "next_retry_after_seconds",
             "ManagedWorkSnapshot",
             "key-only workqueue keys",
             "TickWorkItem(handler,key)",
             "LegacyDaemonModeGuard",
+            "backoff",
+            "noop",
+            "diagnostics only",
             "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
             "canonical legacy daemon list",
             "test_shared_controller_projection.py",
             "test_controller_tick_supervisor.py",
             "test_workqueue.py",
+        )
+        for required in shared_required:
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for required in (
+            "no `ControllerProjectionInformer`",
+            "no second public shared projection read surface",
+            "no freshness public or parsed read-model authority",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
+
+        for required in (
+            "Do not add `ControllerProjectionInformer`",
+            "not a new public or parsed read-model authority",
+        ):
+            with self.subTest(required=required):
                 self.assertIn(required, self.skill)
 
         for forbidden in (
@@ -1404,6 +1511,15 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "action-specific lifecycle authorization",
             "generic lifecycle actor",
             "bypass for #191/#238/#322/#396/#403",
+            "Same-repo multi-GitHub-user handling is HOLD-collapse",
+            "display/admission/accounting/routing/status metadata only",
+            "forbidden as partition key",
+            "lifecycle owner",
+            "lifecycle authority",
+            "diagnostics-only helper",
+            "`current_github_login`",
+            '`identity_authority="display-only"`',
+            "must not enter durable lease state or executable action authority",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
@@ -1449,6 +1565,22 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         assert mirror_allowlist is not None
         assert skill_allowlist is not None
         self.assertEqual(mirror_allowlist.group(0), skill_allowlist.group(0))
+
+    def test_active_controller_code_keeps_github_login_out_of_durable_lease(self) -> None:
+        source = read(ACTIVE_CONTROLLER)
+        tree = ast.parse(source)
+        fields: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "ActiveControllerLease":
+                for child in node.body:
+                    if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+                        fields.add(child.target.id)
+
+        self.assertEqual(
+            fields,
+            {"owner_device", "lease_id", "acquired_at", "expires_at", "renewed_at", "repo", "reason", "source_issue"},
+        )
+        self.assertNotIn("owner" + "_login", source)
 
     def test_banner_public_cli_removed_and_controller_action_owner_gated(self) -> None:
         cli_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")
