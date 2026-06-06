@@ -93,13 +93,14 @@ def classify_implement_attempt(
     branch = runner(["git", "-C", str(worktree), "rev-parse", "--abbrev-ref", "HEAD"])
     if branch.returncode != 0 or branch.stdout.strip() != head_ref:
         return ImplementAttemptState("redispatch", "noncanonical_branch", marker=marker, head_ref=head_ref, worktree=worktree)
+    stale_base = False
     if integration_branch:
         merge_base = runner(["git", "-C", str(worktree), "merge-base", "HEAD", f"origin/{integration_branch}"])
         current = runner(["git", "-C", str(worktree), "rev-parse", "--verify", f"origin/{integration_branch}"])
         if merge_base.returncode != 0 or current.returncode != 0:
             return ImplementAttemptState("redispatch", "base_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
         if merge_base.stdout.strip() != current.stdout.strip():
-            return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
+            stale_base = True
     status = runner(["git", "-C", str(worktree), "status", "--porcelain"])
     if status.returncode != 0:
         return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
@@ -109,6 +110,8 @@ def classify_implement_attempt(
             return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
         if diff.returncode != 1:
             return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
+    if stale_base:
+        return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
     return ImplementAttemptState("publish_ready", marker=marker, head_ref=head_ref, worktree=worktree)
 
 
@@ -145,9 +148,13 @@ def implement_attempt_suppresses_expected_worker(
             integration_branch=integration_branch,
             command_runner=command_runner,
         )
-        if state.terminal_non_ok or (state.redispatch and state.reason == "empty_scoped_diff"):
+        if implement_attempt_is_terminal_or_noop_completion(state):
             return True
     return False
+
+
+def implement_attempt_is_terminal_or_noop_completion(state: ImplementAttemptState) -> bool:
+    return state.terminal_non_ok or state.reason == "empty_scoped_diff"
 
 
 def _implement_run_artifact_done_marker(log_path: Path) -> str:

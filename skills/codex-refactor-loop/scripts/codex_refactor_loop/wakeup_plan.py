@@ -24,6 +24,7 @@ from codex_refactor_loop.context import LoopContext
 from codex_refactor_loop.implement_lifecycle import (
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    implement_attempt_is_terminal_or_noop_completion,
     implement_attempt_suppresses_expected_worker,
     _implement_run_artifact_done_marker,
     is_implement_log,
@@ -607,7 +608,7 @@ def _revive_stale_redispatchable_implement_log(
         integration_branch=_integration_branch_from_env(),
         command_runner=runner,
     )
-    if _publish_recoverable_stale_base_implement(state):
+    if _publish_recoverable_stale_base_implement(state) or implement_attempt_is_terminal_or_noop_completion(state):
         return False
     if state.redispatch:
         log_path.unlink(missing_ok=True)
@@ -622,7 +623,7 @@ def _revive_stale_redispatchable_implement_log(
 
 def _publish_recoverable_stale_base_implement(state: Any) -> bool:
     return (
-        getattr(state, "redispatch", False)
+        getattr(state, "refresh_needed", False)
         and getattr(state, "reason", "") == "stale_base"
         and str(getattr(state, "marker", "")).startswith("IMPLEMENT_DONE:")
         and str(getattr(state, "marker", "")).endswith(":ok")
@@ -3642,8 +3643,6 @@ def _stale_publish_implementation_reason(
         integration_branch=_integration_branch_from_env(),
         command_runner=lambda command: git_text(list(command), cwd=repo_root),
     )
-    if _publish_recoverable_stale_base_implement(state):
-        state = replace(state, status="publish_ready")
     if state.redispatch and state.reason == "empty_scoped_diff":
         return "implementation_noop_empty_scoped_diff"
     if state.redispatch:
