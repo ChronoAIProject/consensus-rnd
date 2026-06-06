@@ -1788,6 +1788,30 @@ class WakeupRunnerContractTests(unittest.TestCase):
         self.assertIn("wakeup_runner_daemon", self.skill)
         self.assertIn("`consensus-rnd-cli wakeup-runner`", self.skill)
 
+    def test_controller_tick_supervisor_anchor_documents_key_only_no_lifecycle_contract(self) -> None:
+        section = section_after_anchor(self.skill, "controller-tick-supervisor-553")
+        for needle in (
+            "SharedControllerProjection",
+            "ProjectionRequest",
+            "ManagedWorkSnapshot",
+            "key-only workqueue keys",
+            "TickWorkItem(handler,key)",
+            "KeyOnlyWorkQueue",
+            "LegacyDaemonModeGuard",
+            "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
+            "canonical legacy daemon list unchanged",
+            "canonical eight legacy daemon names",
+            "no generic executor",
+            "no pending-events authority",
+            "no host production SSOT",
+            "no first-pass dev-sync migration",
+            "test_shared_controller_projection.py",
+            "test_controller_tick_supervisor.py",
+            "test_workqueue.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
 
 if __name__ == "__main__":
     unittest.main()

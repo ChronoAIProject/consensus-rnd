@@ -44,6 +44,7 @@ TARGET_ANCHORS = {
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
     "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
+    "controller-tick-supervisor-553": "## ControllerTickSupervisor(per #553)",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -962,6 +963,37 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "generic process supervisor",
             "GitHub/git lifecycle authority",
             "generic lifecycle authority",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
+    def test_controller_tick_supervisor_mirror_preserves_no_lifecycle_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "controller-tick-supervisor-553")
+
+        for required in (
+            "SharedControllerProjection",
+            "ProjectionRequest",
+            "ManagedWorkSnapshot",
+            "key-only workqueue keys",
+            "TickWorkItem(handler,key)",
+            "LegacyDaemonModeGuard",
+            "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
+            "canonical legacy daemon list",
+            "test_shared_controller_projection.py",
+            "test_controller_tick_supervisor.py",
+            "test_workqueue.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no generic executor",
+            "no argv/shell/cmd/command_line/commands/env/git/gh payload",
+            "no pending-events authority",
+            "no host production SSOT",
+            "no dev-sync migration in the first pass",
+            "no write side-effect authorization",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)

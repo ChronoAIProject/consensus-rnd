@@ -311,6 +311,38 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         with mock.patch("codex_refactor_loop.restart.DAEMON_COMMANDS", patched):
             self.assertEqual(("first", "second"), restart.restart_managed_daemon_names())
 
+    def test_controller_tick_supervisor_restart_target_is_host_opt_in_only(self) -> None:
+        decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="restart-daemons", lease_id="lease", expires_at="")
+        calls: list[str] = []
+
+        def fake_start(helper: RestartDaemons, name: str, command: tuple[str, ...]) -> None:
+            calls.append(name)
+
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
+                with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
+                    helper = RestartDaemons(self.ctx, self.config, runtime=self.runtime)
+                    self.assertEqual(0, helper.run())
+        self.assertNotIn("controller_tick_supervisor", calls)
+
+        self.host_env_path.write_text(
+            f'export REPO_ROOT="{self.repo}"\n'
+            'export GH_REPO_SLUG="example/repo"\n'
+            'export MAINTAINER_WHITELIST="maintainer"\n'
+            'export CONTROLLER_TICK_SUPERVISOR_ENABLE="true"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, skill_root=self.skill, env={"CONSENSUS_RND_HOST_ENV": str(self.host_env_path)})
+        calls.clear()
+        with mock.patch("codex_refactor_loop.restart.require_active_controller", return_value=decision):
+            with mock.patch("codex_refactor_loop.restart.retain_runtime", return_value=self.noop_retention()):
+                with mock.patch.object(RestartDaemons, "start_daemon", fake_start):
+                    helper = RestartDaemons(ctx, self.config, runtime=self.runtime)
+                    self.assertEqual(0, helper.run())
+
+        self.assertEqual([*DAEMON_NAMES, "controller_tick_supervisor"], calls)
+        self.assertEqual(DAEMON_NAMES, restart_managed_daemon_names())
+
     def test_help_exits_without_starting_daemons(self) -> None:
         with mock.patch.object(restart.RestartDaemons, "run") as run:
             with self.assertRaises(SystemExit) as raised:
@@ -616,6 +648,9 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
         self.assertIn("PHASE9_ROUTER_INTERVAL_SECONDS", source)
         self.assertIn("WAKEUP_RUNNER_INTERVAL_SECONDS", source)
         self.assertIn("PATROL_INSPECTOR_INTERVAL_SECONDS", source)
+        self.assertIn("SUPERVISOR_DAEMON_COMMAND", source)
+        self.assertIn("CONTROLLER_TICK_SUPERVISOR_ENABLE", source)
+        self.assertIn("codex_refactor_loop.supervisor", source)
         history_forbidden = ("Refactor" + " (", "Old " + "pattern", "New " + "principle")
         for needle in history_forbidden:
             with self.subTest(needle=needle):
