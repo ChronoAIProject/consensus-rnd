@@ -596,7 +596,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    open_pr_77|review_thread_unresolved|review_thread_unresolved_unrelated|review_thread_unresolved_outdated|review_thread_resolved|review_thread_paginated_unresolved|review_thread_graphql_failure|review_thread_malformed|review_thread_pull_request_null|review_thread_page_info_null|review_thread_node_malformed)
+                    open_pr_77|fix_done_dirty_worktree|fix_done_clean_worktree|review_thread_unresolved|review_thread_unresolved_unrelated|review_thread_unresolved_outdated|review_thread_resolved|review_thread_paginated_unresolved|review_thread_graphql_failure|review_thread_malformed|review_thread_pull_request_null|review_thread_page_info_null|review_thread_node_malformed)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":77,"title":"open PR target","headRefName":"impl/pr77","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -901,6 +901,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 pr(480, "wedged review PR", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr480", head_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
             ],
             "open_pr_77": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "fix_done_dirty_worktree": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
+            "fix_done_clean_worktree": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "review_thread_unresolved": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "review_thread_unresolved_unrelated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
             "review_thread_unresolved_outdated": [pr(77, "open PR target", [managed, label_catalog.PHASE_REVIEWING, auto], head_ref="impl/pr77")],
@@ -949,6 +951,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"worktree list --porcelain"* ]]; then
                   [[ "$fixture" == "unpushed_no_worktree" ]] && exit 0
+                  if [[ "$fixture" == "fix_done_dirty_worktree" || "$fixture" == "fix_done_clean_worktree" ]]; then
+                    printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/impl/pr77\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
@@ -1047,7 +1053,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf '2\n' && exit 0
                   exit 1
                 fi
-                if [[ "$*" == *"diff --quiet"* ]]; then
+                if [[ "$*" == *"diff"* && "$*" == *"--quiet"* ]]; then
+                  [[ "$fixture" == "fix_done_dirty_worktree" ]] && exit 1
+                  [[ "$fixture" == "fix_done_clean_worktree" ]] && exit 0
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && exit 1
                   exit 0
                 fi
@@ -3217,6 +3225,37 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["controller_action"], "dispatch_reviewers")
         self.assertEqual(action["runner_authority"], "wakeup-runner-396")
         self.assertNotIn("status_only", action)
+
+    def test_fix_done_dirty_fix_worktree_projects_publish_before_reviewers(self) -> None:
+        (self.repo / ".worktrees" / "pr77").mkdir(parents=True)
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE:77:round-3:applied-1:rejected-0:blocked-0")
+
+        plan = self.run_plan(fixture="fix_done_dirty_worktree")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["phase"], "publish")
+        self.assertEqual(action["actor"], "controller")
+        self.assertEqual(action["route"], "publish-review-fix-output")
+        self.assertEqual(action["controller_action"], "publish_review_fix_output_from_action")
+        self.assertEqual(action["head_ref"], "impl/pr77")
+        self.assertEqual(Path(action["worktree"]).resolve(), (self.repo / ".worktrees" / "pr77").resolve())
+        self.assertIn("dirty_fix_worktree", action["preconditions"])
+        self.assertNotEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertNotIn("status_only", action)
+
+    def test_fix_done_clean_fix_worktree_does_not_project_empty_publish(self) -> None:
+        (self.repo / ".worktrees" / "pr77").mkdir(parents=True)
+        self.write_completed_log("fix-pr77-r3.log", "FIX_DONE:77:round-3:applied-0:rejected-0:blocked-0")
+
+        plan = self.run_plan(fixture="fix_done_clean_worktree")
+
+        action = completed_marker_action(plan, "completed-marker:fix-pr77-r3")
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "dispatch_reviewers")
+        self.assertEqual(action["phase"], "review-gate")
+        self.assertNotIn("publish_review_fix_output_from_action", json.dumps(action, sort_keys=True))
+        self.assertNotIn("dirty_fix_worktree", action["preconditions"])
 
     def test_fix_done_with_unresolved_original_review_thread_blocks_dispatch_reviewers(self) -> None:
         completion_dir = self.repo / ".refactor-loop" / "state" / "review-thread-completion"
