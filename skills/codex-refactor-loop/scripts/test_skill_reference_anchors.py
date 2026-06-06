@@ -1100,6 +1100,15 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "action-specific lifecycle authorization",
             "generic lifecycle actor",
             "bypass for #191/#238/#322/#396/#403",
+            "Same-repo multi-GitHub-user handling is HOLD-collapse",
+            "display/admission/accounting/routing/status metadata only",
+            "forbidden as partition key",
+            "lifecycle owner",
+            "lifecycle authority",
+            "diagnostics-only helper",
+            "`current_github_login`",
+            '`identity_authority="display-only"`',
+            "must not enter durable lease state or executable action authority",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)

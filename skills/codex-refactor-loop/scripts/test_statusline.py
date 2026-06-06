@@ -85,6 +85,26 @@ class StatuslineCliTests(unittest.TestCase):
         self.write_snapshot({"actual": 7, "expected": 5, "floor": 4, "p0_streak": 0, "open_pr_count": 5, "open_issue_count": 4, "freeze_minutes": 0, "update_available": True, "update_latest_version": "1.0.0-rc.1"})
         self.assertIn("up:v1.0.0-rc.1", self.run_statusline())
 
+    def test_display_only_github_login_renders_without_authority_label(self) -> None:
+        self.write_snapshot(
+            {
+                "actual": 7,
+                "expected": 5,
+                "floor": 4,
+                "p0_streak": 0,
+                "open_pr_count": 5,
+                "open_issue_count": 4,
+                "freeze_minutes": 0,
+                "current_github_login": "octocat",
+                "identity_authority": "display-only",
+            }
+        )
+
+        output = self.run_statusline()
+
+        self.assertIn("gh:octocat", output)
+        self.assertNotIn("owner_login", output)
+
 
 if __name__ == "__main__":
     unittest.main()
