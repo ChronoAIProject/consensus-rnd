@@ -648,6 +648,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
+                    draft_rollup_missing_snapshot_draft)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":572,"title":"draft rollup PR","headRefName":"rollup/integration-sha","headRefOid":"integration-sha","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":573,"title":"ordinary draft review PR","headRefName":"refactor/iter573-fix","isDraft":true,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":574,"title":"non-draft rollup PR","headRefName":"rollup/integration-sha-2","headRefOid":"integration-sha-2","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
+                    draft_rollup_only_missing_snapshot_draft)
+                      if [[ "$label" == "crnd:lifecycle:managed" ]]; then
+                        printf '[{"number":572,"title":"draft rollup PR","headRefName":"rollup/integration-sha","headRefOid":"integration-sha","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+                      else
+                        printf '[]\n'
+                      fi
+                      ;;
                     *)
                       printf '[]\n'
                       ;;
@@ -734,6 +748,14 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$cmd1 $cmd2" == "pr view" && "$cmd3" == "177" ]]; then
                   printf '{"mergeable":"CONFLICTING","mergeStateStatus":"DIRTY","headRefOid":"stale-head-sha"}\n'
+                  exit 0
+                fi
+                if [[ "$cmd1 $cmd2" == "pr view" && ( "$fixture" == "draft_rollup_missing_snapshot_draft" || "$fixture" == "draft_rollup_only_missing_snapshot_draft" ) && "$cmd3" == "572" ]]; then
+                  printf '{"number":572,"baseRefName":"review","headRefName":"rollup/integration-sha","headRefOid":"integration-sha","isDraft":true,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
+                  exit 0
+                fi
+                if [[ "$cmd1 $cmd2" == "pr view" && "$fixture" == "draft_rollup_missing_snapshot_draft" && "$cmd3" == "574" ]]; then
+                  printf '{"number":574,"baseRefName":"review","headRefName":"rollup/integration-sha-2","headRefOid":"integration-sha-2","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}\n'
                   exit 0
                 fi
                 if [[ "$cmd1 $cmd2" == "issue view" || "$cmd1 $cmd2" == "pr view" ]]; then
@@ -956,6 +978,38 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     [managed, label_catalog.PHASE_REVIEWING, auto],
                     head_ref="rollup/integration-sha-2",
                     head_sha="integration-sha-2",
+                ),
+            ],
+            "draft_rollup_missing_snapshot_draft": [
+                pr(
+                    572,
+                    "draft rollup PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="rollup/integration-sha",
+                    head_sha="integration-sha",
+                ),
+                pr(
+                    573,
+                    "ordinary draft review PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="refactor/iter573-fix",
+                    is_draft=True,
+                ),
+                pr(
+                    574,
+                    "non-draft rollup PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="rollup/integration-sha-2",
+                    head_sha="integration-sha-2",
+                ),
+            ],
+            "draft_rollup_only_missing_snapshot_draft": [
+                pr(
+                    572,
+                    "draft rollup PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="rollup/integration-sha",
+                    head_sha="integration-sha",
                 ),
             ],
         }
@@ -4982,6 +5036,48 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 2)
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+
+    def test_live_draft_suppressed_rollup_is_not_expected_when_snapshot_draft_missing(self) -> None:
+        plan, _stdout = self.run_plan_with_env(
+            {"REVIEW_BASE_BRANCH": "review"},
+            fixture="draft_rollup_missing_snapshot_draft",
+            ps_count=5,
+        )
+
+        rollup_action = next(
+            action
+            for action in plan["actions"]
+            if action.get("kind") == "release-rollup-auto-merge" and action.get("target_number") == 572
+        )
+        self.assertTrue(rollup_action["status_only"])
+        self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [
+                {"expected": 1, "id": "#573", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
+                {"expected": 1, "id": "#574", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
+            ],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 2)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+
+    def test_live_draft_suppressed_rollup_does_not_restore_expected_via_monitor_fallback(self) -> None:
+        plan, stdout = self.run_plan_with_env(
+            {"REVIEW_BASE_BRANCH": "review"},
+            fixture="draft_rollup_only_missing_snapshot_draft",
+            ps_count=0,
+        )
+
+        rollup_action = next(
+            action
+            for action in plan["actions"]
+            if action.get("kind") == "release-rollup-auto-merge" and action.get("target_number") == 572
+        )
+        self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")

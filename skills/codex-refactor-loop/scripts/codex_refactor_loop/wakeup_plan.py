@@ -893,22 +893,73 @@ def canonical_actual_count(repo_root: Path, monitor: Any | None) -> int:
         return 0
 
 
-def canonical_expected_from_active_tasks(monitor: Any | None) -> tuple[int, list[dict[str, Any]]]:
+def _exclude_draft_suppressed_release_rollups(
+    items: list[dict[str, Any]],
+    release_rollup_actions: list[Mapping[str, Any]] | None,
+) -> list[dict[str, Any]]:
+    draft_suppressed_rollups = _draft_suppressed_release_rollup_numbers(release_rollup_actions)
+    if not draft_suppressed_rollups:
+        return items
+    return [
+        item
+        for item in items
+        if not (
+            str(item.get("kind") or "") == "pr"
+            and int(item.get("number") or 0) in draft_suppressed_rollups
+            and str(item.get("head_ref") or "").startswith("rollup/")
+        )
+    ]
+
+
+def canonical_expected_from_active_tasks(
+    monitor: Any | None,
+    *,
+    release_rollup_actions: list[Mapping[str, Any]] | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
     if monitor is None:
         return 0, []
     try:
         items = monitor.list_auto_loop_issues()
+        items = _exclude_draft_suppressed_release_rollups(items, release_rollup_actions)
         expected, breakdown = monitor.compute_expected(items)
         return int(expected), list(breakdown)
     except Exception:
         return 0, []
 
 
-def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, Any]]]:
+def _draft_suppressed_release_rollup_numbers(actions: list[Mapping[str, Any]] | None) -> frozenset[int]:
+    if not actions:
+        return frozenset()
+    numbers: set[int] = set()
+    for action in actions:
+        if action.get("kind") != "release-rollup-auto-merge":
+            continue
+        if action.get("suppressed_reason") != "rollup_auto_merge_draft":
+            continue
+        head_ref = safe_head_ref(str(action.get("head_ref") or ""))
+        if not head_ref or not head_ref.startswith("rollup/"):
+            continue
+        try:
+            number = int(action.get("target_number") or 0)
+        except (TypeError, ValueError):
+            continue
+        if number > 0:
+            numbers.add(number)
+    return frozenset(numbers)
+
+
+def expected_from_open_items(
+    items: list[GhItem],
+    *,
+    release_rollup_actions: list[Mapping[str, Any]] | None = None,
+) -> tuple[int, list[dict[str, Any]]]:
     breakdown: list[dict[str, Any]] = []
     total = 0
+    draft_suppressed_rollups = _draft_suppressed_release_rollup_numbers(release_rollup_actions)
     for item in ManagedWorkProjection(_projection_items(items)).effective_worker_items():
         if is_draft_release_rollup_pr(item):
+            continue
+        if item.kind == "pr" and item.number in draft_suppressed_rollups and item.head_ref.startswith("rollup/"):
             continue
         labels = set(item.labels)
         if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
@@ -929,15 +980,19 @@ def concurrency_plan(
     gh_items: list[GhItem] | None = None,
     monitor: Any | None = None,
     concurrency_module: Any | None = None,
+    release_rollup_actions: list[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if concurrency_module is None:
         concurrency_module = import_concurrency_monitor(repo_root)
     if monitor is None:
         monitor = build_concurrency_monitor(repo_root, concurrency_module)
     actual = canonical_actual_count(repo_root, monitor)
-    expected, breakdown = expected_from_open_items(gh_items or [])
+    expected, breakdown = expected_from_open_items(gh_items or [], release_rollup_actions=release_rollup_actions)
     if expected == 0:
-        expected, breakdown = canonical_expected_from_active_tasks(monitor)
+        expected, breakdown = canonical_expected_from_active_tasks(
+            monitor,
+            release_rollup_actions=release_rollup_actions,
+        )
     floor = configured_floor()
     target = max(floor, expected)
     deficit = max(0, target - actual)
@@ -3693,12 +3748,14 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     audit_none_fixed_point = latest_controller_validated_audit_none(repo_root)
     concurrency_module = import_concurrency_monitor(repo_root)
     monitor = build_concurrency_monitor(repo_root, concurrency_module)
+    rollup_auto_merge_actions = release_rollup_auto_merge_actions(ctx, gh_items if gh_items_loaded else [])
     concurrency = concurrency_plan(
         repo_root,
         fixed_point=audit_none_fixed_point,
         gh_items=gh_items,
         monitor=monitor,
         concurrency_module=concurrency_module,
+        release_rollup_actions=rollup_auto_merge_actions,
     )
 
     actions: list[dict[str, Any]] = []
@@ -3712,7 +3769,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(completed_marker_actions(repo_root, ctx, completed_marker_open_targets, gh_items if gh_items_loaded else None, monitor))
     actions.extend(rebase_resolve_completed_marker_actions(repo_root, gh_items if gh_items_loaded else []))
     actions.extend(release_rollup_actions(repo_root))
-    actions.extend(release_rollup_auto_merge_actions(ctx, gh_items if gh_items_loaded else []))
+    actions.extend(rollup_auto_merge_actions)
     actions.extend(ci_red_actions(repo_root, gh_items, ctx))
     actions.extend(no_gap_actions(repo_root))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)
