@@ -11,7 +11,7 @@ from pathlib import Path
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.workqueue import KeyOnlyWorkQueue, TickWorkItem
+from codex_refactor_loop.workqueue import FORBIDDEN_PAYLOAD_FIELDS, KeyOnlyWorkQueue, TickWorkItem
 
 
 class KeyOnlyWorkQueueTests(unittest.TestCase):
@@ -19,7 +19,7 @@ class KeyOnlyWorkQueueTests(unittest.TestCase):
         item = TickWorkItem.from_json({"handler": "phase9-router", "key": "issue/553"})
         self.assertEqual({"handler": "phase9-router", "key": "issue/553"}, item.to_json())
 
-        for forbidden in ("argv", "shell", "env", "git", "gh", "executor", "lifecycle_authority"):
+        for forbidden in sorted(FORBIDDEN_PAYLOAD_FIELDS):
             with self.subTest(forbidden=forbidden):
                 with self.assertRaises(ValueError):
                     TickWorkItem.from_json({"handler": "phase9-router", "key": "issue/553", forbidden: "x"})

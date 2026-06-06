@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -21,7 +22,7 @@ from codex_refactor_loop.supervisor import (
     TickHandlerResult,
     build_legacy_guard,
 )
-from codex_refactor_loop.workqueue import KeyOnlyWorkQueue, TickWorkItem
+from codex_refactor_loop.workqueue import FORBIDDEN_PAYLOAD_FIELDS, KeyOnlyWorkQueue, TickWorkItem
 
 
 @dataclass
@@ -60,12 +61,22 @@ class ControllerTickSupervisorTests(unittest.TestCase):
             legacy_guard=LegacyDaemonModeGuard(supervisor_enabled=True, legacy_daemon_names=()),
         )
 
-        result = supervisor.tick()
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
 
         self.assertEqual(("phase9-router:issue/553:/repo",), tuple(handler.calls))
         self.assertEqual(("handled",), tuple(item.status for item in result.processed))
         self.assertEqual(("unknown-handler",), tuple(item.handler for item in result.skipped))
         self.assertEqual(("unknown-handler",), tuple(item.reason for item in result.skipped))
+        stderr.write.assert_called_once()
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("CONTROLLER_TICK_SUPERVISOR_SKIP", diagnostic)
+        self.assertIn("handler=unknown-handler", diagnostic)
+        self.assertIn("key=issue/553", diagnostic)
+        self.assertIn("reason='unknown-handler'", diagnostic)
+        self.assertIn("processed=1", diagnostic)
+        self.assertIn("skipped=1", diagnostic)
+        self.assertIn("drained=2", diagnostic)
 
     def test_legacy_daemon_mode_guard_prevents_same_target_second_system(self) -> None:
         queue = KeyOnlyWorkQueue()
@@ -82,11 +93,21 @@ class ControllerTickSupervisorTests(unittest.TestCase):
             ),
         )
 
-        result = supervisor.tick()
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
 
         self.assertEqual([], handler.calls)
         self.assertEqual((), result.processed)
         self.assertIn("conflicts with legacy daemon target=comment-monitor", result.skipped[0].reason)
+        stderr.write.assert_called_once()
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("CONTROLLER_TICK_SUPERVISOR_SKIP", diagnostic)
+        self.assertIn("handler=comment-monitor", diagnostic)
+        self.assertIn("key=issue/553", diagnostic)
+        self.assertIn("conflicts with legacy daemon target=comment-monitor", diagnostic)
+        self.assertIn("processed=0", diagnostic)
+        self.assertIn("skipped=1", diagnostic)
+        self.assertIn("drained=1", diagnostic)
 
     def test_default_legacy_mode_denies_migrated_handler(self) -> None:
         guard = LegacyDaemonModeGuard(supervisor_enabled=False, legacy_daemon_names=())
@@ -122,7 +143,7 @@ class ControllerTickSupervisorTests(unittest.TestCase):
     def test_supervisor_cannot_dispatch_command_payload_items(self) -> None:
         queue = KeyOnlyWorkQueue()
 
-        for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
+        for forbidden in sorted(FORBIDDEN_PAYLOAD_FIELDS):
             with self.subTest(forbidden=forbidden):
                 with self.assertRaises(ValueError):
                     queue.enqueue_json({"handler": "phase9-router", "key": "issue/553", forbidden: "x"})

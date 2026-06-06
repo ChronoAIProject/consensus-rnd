@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import dataclass
 from typing import Callable, Mapping, Protocol, Sequence
 
@@ -95,15 +96,20 @@ class ControllerTickSupervisor:
         projection = self.projection_loader(self.request)
         processed: list[TickHandlerResult] = []
         skipped: list[TickHandlerResult] = []
-        for item in self.queue.drain(limit=limit):
+        drained = self.queue.drain(limit=limit)
+        for item in drained:
             handler = self.handlers.get(item.handler)
             if handler is None:
-                skipped.append(TickHandlerResult(item.handler, item.key, "skipped", "unknown-handler"))
+                result = TickHandlerResult(item.handler, item.key, "skipped", "unknown-handler")
+                skipped.append(result)
+                _log_tick_skip(result, processed_count=len(processed), skipped_count=len(skipped), drained_count=len(drained))
                 continue
             try:
                 self.legacy_guard.assert_supervisor_allowed(handler.name)
             except RuntimeError as exc:
-                skipped.append(TickHandlerResult(item.handler, item.key, "skipped", str(exc)))
+                result = TickHandlerResult(item.handler, item.key, "skipped", str(exc))
+                skipped.append(result)
+                _log_tick_skip(result, processed_count=len(processed), skipped_count=len(skipped), drained_count=len(drained))
                 continue
             processed.append(handler.handle(item=item, projection=projection))
         return ControllerTickResult(tuple(processed), tuple(skipped))
@@ -122,6 +128,25 @@ def build_legacy_guard(ctx: LoopContext) -> LegacyDaemonModeGuard:
 
 def _truthy(value: object) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_tick_skip(
+    result: TickHandlerResult,
+    *,
+    processed_count: int,
+    skipped_count: int,
+    drained_count: int,
+) -> None:
+    sys.stderr.write(
+        "CONTROLLER_TICK_SUPERVISOR_SKIP "
+        f"handler={result.handler} "
+        f"key={result.key} "
+        f"status={result.status} "
+        f"reason={result.reason!r} "
+        f"processed={processed_count} "
+        f"skipped={skipped_count} "
+        f"drained={drained_count}\n"
+    )
 
 
 def run_empty_supervisor_daemon(ctx: LoopContext, *, interval_seconds: int = 120) -> int:
