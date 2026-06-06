@@ -297,6 +297,87 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
         self.assertEqual("display-only", payload["identity_authority"])
         self.assertNotIn("owner_login", payload)
 
+    def test_active_controller_status_filters_explicit_diagnostics_authority_fields(self) -> None:
+        repo = self.a
+        (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        decision = self.store(repo, "device-a").try_acquire("device-a", 1800)
+
+        write_active_controller_status(
+            ctx,
+            decision,
+            github_diagnostics={
+                "active_controller": "owner",
+                "owner_device": "other-device",
+                "lease_id": "other-lease",
+                "expires_at": "2099-01-01T00:00:00Z",
+                "current_github_login": "octocat",
+                "identity_authority": "display-only",
+                "github_login_status": "ok",
+                "owner_login": "forbidden",
+            },
+        )
+
+        payload = json.loads((repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("owner", payload["active_controller"])
+        self.assertEqual("device-a", payload["owner_device"])
+        self.assertEqual(decision.lease_id, payload["lease_id"])
+        self.assertEqual(decision.expires_at, payload["expires_at"])
+        self.assertEqual("octocat", payload["current_github_login"])
+        self.assertEqual("display-only", payload["identity_authority"])
+        self.assertEqual("ok", payload["github_login_status"])
+        self.assertNotIn("owner_login", payload)
+
+    def test_active_controller_status_preserves_cached_display_only_login_without_explicit_diagnostics(self) -> None:
+        repo = self.a
+        (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        status_path = repo / ".refactor-loop" / "state" / "active-controller-status.json"
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(
+            json.dumps(
+                {
+                    "active_controller": "noop:not-owner",
+                    "owner_device": "previous-device",
+                    "lease_id": "previous-lease",
+                    "expires_at": "2099-01-01T00:00:00Z",
+                    "current_github_login": "octocat",
+                    "identity_authority": "display-only",
+                    "github_login_status": "ok",
+                    "owner_login": "forbidden",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        decision = self.store(repo, "device-a").try_acquire("device-a", 1800)
+
+        write_active_controller_status(ctx, decision)
+
+        payload = json.loads(status_path.read_text(encoding="utf-8"))
+        self.assertEqual("owner", payload["active_controller"])
+        self.assertEqual("device-a", payload["owner_device"])
+        self.assertEqual(decision.lease_id, payload["lease_id"])
+        self.assertEqual(decision.expires_at, payload["expires_at"])
+        self.assertEqual("octocat", payload["current_github_login"])
+        self.assertEqual("display-only", payload["identity_authority"])
+        self.assertEqual("ok", payload["github_login_status"])
+        self.assertNotIn("owner_login", payload)
+
+        git(self.b, "fetch", "origin", DEFAULT_ACTIVE_CONTROLLER_REF)
+        durable = json.loads(git(self.b, "show", "FETCH_HEAD:active-controller.json").stdout)
+        self.assertEqual("device-a", durable["owner_device"])
+        self.assertNotIn("owner_login", durable)
+        self.assertNotIn("current_github_login", durable)
+
 
 if __name__ == "__main__":
     unittest.main()

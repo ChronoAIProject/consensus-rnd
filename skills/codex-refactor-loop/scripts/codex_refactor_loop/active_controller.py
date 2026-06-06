@@ -17,6 +17,12 @@ DEFAULT_ACTIVE_CONTROLLER_REF = "refs/heads/crnd/active-controller"
 DEFAULT_ACTIVE_CONTROLLER_TTL_SECONDS = 1800
 LEASE_BLOB_PATH = "active-controller.json"
 ZERO_SHA = "0" * 40
+GITHUB_DIAGNOSTIC_STATUS_FIELDS = (
+    "current_github_login",
+    "identity_authority",
+    "github_login_status",
+    "github_login_error",
+)
 
 
 @dataclass(frozen=True)
@@ -298,7 +304,11 @@ def write_active_controller_status(
 ) -> None:
     path = ctx.paths.state / "active-controller-status.json"
     path.parent.mkdir(parents=True, exist_ok=True)
-    diagnostics = dict(github_diagnostics) if github_diagnostics is not None else _cached_github_diagnostics(path)
+    diagnostics = (
+        _github_diagnostic_status_projection(github_diagnostics)
+        if github_diagnostics is not None
+        else _cached_github_diagnostics(path)
+    )
     payload = {
         "active_controller": "owner" if decision.allowed else f"noop:{decision.status}",
         "action": decision.action,
@@ -318,8 +328,12 @@ def _cached_github_diagnostics(path: Path) -> dict[str, str]:
         payload = {}
     if not isinstance(payload, dict):
         payload = {}
+    return _github_diagnostic_status_projection(payload)
+
+
+def _github_diagnostic_status_projection(payload: Mapping[str, object]) -> dict[str, str]:
     diagnostics: dict[str, str] = {}
-    for field in ("current_github_login", "identity_authority", "github_login_status", "github_login_error"):
+    for field in GITHUB_DIAGNOSTIC_STATUS_FIELDS:
         value = payload.get(field)
         if isinstance(value, str):
             diagnostics[field] = value
