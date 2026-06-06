@@ -198,6 +198,10 @@ class FakeActions:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
 
+    def auto_merge_release_rollup_pr_from_action(self, action: dict) -> int:
+        self.calls.append(("auto_merge_release_rollup_pr_from_action", dict(action)))
+        return 0
+
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
         self.calls.append(("apply_issue_decomposition_plan", plan_path))
         return ((501, "https://github.com/owner/repo/issues/501"),)
@@ -772,6 +776,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "no_generic_command": True,
             "event": {"integration_sha": "abc123"},
             "body_file": ".refactor-loop/runs/release-rollup-pr-body.md",
+        }
+        action.update(overrides)
+        return action
+
+    def rollup_auto_merge_action(self, **overrides) -> dict:
+        action = {
+            "kind": "release-rollup-auto-merge",
+            "action_id": "release-rollup-auto-merge:88:abc123",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "live_open_target",
+                "rollup_head_prefix",
+                "review_base_target",
+                "required_checks_green_exact_head",
+                "rollup_auto_merge_enabled",
+            ],
+            "source_artifact": "github-open-managed-work-snapshot",
+            "source_marker": "RELEASE_ROLLUP_AUTO_MERGE:88:abc123",
+            "target_kind": "PR",
+            "target_number": 88,
+            "target": {"kind": "PR", "number": 88},
+            "controller_action": "auto_merge_release_rollup_pr_from_action",
+            "no_generic_command": True,
+            "head_ref": "rollup/abc123",
+            "head_sha": "abc123",
+            "base_ref": "dev",
         }
         action.update(overrides)
         return action
@@ -1709,11 +1740,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "publish_implementation_output",
             "publish_worker_output_from_action",
             "dispatch_reviewers",
+            "dispatch_remote_ci_fix",
             "dispatch_pr_rebase_resolve",
             "commit_push_resolved_pr_rebase",
             "open_release_rollup_pr_from_action",
             "close_managed_item_from_drop_marker",
             "review_gate",
+            "auto_merge_release_rollup_pr_from_action",
             "publish_release_candidate",
             "apply_issue_decomposition_plan",
         }
@@ -3010,6 +3043,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 actions = FakeActions()
                 results = self.run_result(self.base_plan(action), actions=actions)
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_rollup_auto_merge_routes_to_named_helper_after_narrow_validation(self) -> None:
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.rollup_auto_merge_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "auto_merge_release_rollup_pr_from_action")
+
+    def test_rollup_auto_merge_blocks_non_rollup_or_wrong_base_before_dispatch(self) -> None:
+        cases = (
+            ("wrong-head", {"head_ref": "refactor/iter88-work"}, "rollup_auto_merge_invalid_head_ref"),
+            ("wrong-base", {"base_ref": "auto-refact-dev"}, "rollup_auto_merge_base_mismatch"),
+            (
+                "missing-check-precondition",
+                {"preconditions": ["active_controller_owner", "live_open_target", "rollup_head_prefix", "review_base_target", "rollup_auto_merge_enabled"]},
+                "rollup_auto_merge_missing_precondition:required_checks_green_exact_head",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.rollup_auto_merge_action(action_id=f"rollup-auto:{name}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_daemon_run_once_periodically_renews_heartbeat_during_long_tick(self) -> None:

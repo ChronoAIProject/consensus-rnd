@@ -396,3 +396,19 @@ New: mirror narrows skip to pid alive + fresh heartbeat + current fingerprint + 
 - forbidden: no issue/PR/label lifecycle, no merge/close, no tag/release, no dispatch, no controller lifecycle authority, no host config edits, no GitHub request made only for measurement, no stdout/stderr/stdin capture that changes gh semantics, no accounting artifact outside `$REPO_ROOT`, and no blocking real gh when accounting fails.
 - verification: `test_gh_accounting.py`, `test_cli_command_router.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This is observability-only accounting over existing `gh` calls; it does not authorize any new GitHub or git side effect.
+
+<a id="rollup-autonomous-merge-2026-06-06"></a>
+## rollup-autonomous-merge-2026-06-06
+
+- surface: `release rollup singleton CI-only squash merge`
+- source_issue: `maintainer-directive-2026-06-06`
+- source_round: `maintainer-directive`
+- source_marker: `rollup 只要ci过了就可以,不用review`
+- durable_artifact: `.refactor-loop/runs/maintainer-directives/2026-06-06-rollup-autonomous-merge.md`
+- skill_anchor: `#rollup-autonomous-merge-2026-06-06`
+- allowed: active-controller owner only; detect and maintain exactly one open rollup PR whose head starts with `rollup/` and base is `$REVIEW_BASE_BRANCH`; when one exists, update only that rollup head with `git push --force-with-lease origin <integration_sha>:refs/heads/<existing-rollup-head>` and refresh title/body; create a new rollup PR only when no open rollup exists; exclude rollup PRs from reviewer dispatch, review-fix, and remote-ci-fix; project only `auto_merge_release_rollup_pr_from_action`; re-read live PR base/head/head SHA; verify `$ROLLUP_AUTO_MERGE` is auto/true-like; verify exact live head SHA required checks through `ReleaseRequiredChecksProjection`; then run only `gh pr merge <N> --squash --delete-branch`.
+- forbidden: no cluster PR review policy change, no reviewer bypass for non-rollup PRs, no generic merge-to-review-base authority, no direct push to `$REVIEW_BASE_BRANCH`, no force-push except singleton rollup head update, no admin merge, no branch-protection bypass, no issue lifecycle, no label mutation, no tag/release, no #322 release publication change, no public lifecycle CLI, no generic lifecycle actor, no worker-owned commit/push/merge.
+- fact_source: maintainer directive artifact plus host env surface matrix for `$INTEGRATION_BRANCH`, `$REVIEW_BASE_BRANCH`, `$ROLLUP_AUTO_MERGE`, and `$HOST_GITHUB_RELEASE_REQUIRED_CHECKS`; live GitHub PR view for base/head/head SHA; Checks API projection for exact-SHA required checks.
+- fail_closed: missing/invalid branch config, non-rollup head, wrong base, stale action head, missing required checks, pending/red/missing/API-failed checks, invalid `$ROLLUP_AUTO_MERGE`, or branch-protection/host-policy merge failure writes a grepable pending event and leaves the PR for humans.
+- verification: `test_sync_dev.py`, `test_controller_actions.py`, `test_wakeup_plan.py`, `test_wakeup_runner.py`, `test_host_env_surface_matrix.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This mirror grants only singleton rollup head maintenance and CI-green squash merge for `rollup/` PRs into `$REVIEW_BASE_BRANCH`; it does not authorize generic merge, release publication, review-gate bypass outside rollups, or any public lifecycle command.

@@ -32,6 +32,7 @@ from .issue_decomposition import issue_decomposition_plan_file_digest, load_issu
 from .prompt_contracts import inline_prompt_contracts
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
+from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from .git import Git
 from .review_fix_dispatch import (
     ReviewFixDispatchSpec,
@@ -69,6 +70,31 @@ MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$
 REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
 REBASE_RESOLVE_BLOCKED_RE = re.compile(
     r"^REBASE_RESOLVE_BLOCKED:([1-9][0-9]*):(conflict|human-decision|build-broken|other):(.+)$"
+)
+ROLLUP_HEAD_PREFIX = "rollup/"
+ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
+
+
+def _utf8_hex(hex_text: str) -> str:
+    return bytes.fromhex(hex_text).decode("utf-8")
+
+
+ROLLUP_TITLE_PREFIX = _utf8_hex("e58f91e5b88320726f6c6c75703a20696e746567726174696f6e20616865616420")
+ROLLUP_BODY_HEADING = _utf8_hex("232320e58f91e5b88320726f6c6c7570")
+ROLLUP_TARGET_LABEL = _utf8_hex("2d20e79baee6a0873a2060")
+ROLLUP_AHEAD_LABEL = _utf8_hex("2d20e99b86e68890e58886e694afe9a286e58588207265766965772d626173653a2060")
+ROLLUP_RANGE_LABEL = _utf8_hex("2d20e88c83e59bb43a2060")
+ROLLUP_ISSUES_LABEL = _utf8_hex("2d20e6b689e58f8a2069737375653a20")
+ROLLUP_COMMIT_SUMMARY_HEADING = _utf8_hex("232320636f6d6d697420e69198e8a681")
+ROLLUP_COMMIT_SUMMARY_UNAVAILABLE = _utf8_hex(
+    "2d20e69cace59cb020636f6d6d697420e69198e8a681e4b88de58fafe794a83be4bba520476974487562205052206469666620e4b8bae58786e38082"
+)
+ROLLUP_MERGE_POLICY_HEADING = _utf8_hex("232320e59088e5b9b6e7ad96e795a5")
+ROLLUP_AUTO_MERGE_POLICY_LINE = _utf8_hex(
+    "2d20726571756972656420636865636b7320e585a8e7bbbfe5908ee794b120636f6e74726f6c6c657220e887aae58aa820737175617368206d657267653b2060524f4c4c55505f4155544f5f4d455247453d6d616e75616c6020e697b6e7ad89e5be85e4babae5b7a5207265766965772f6d65726765e38082"
+)
+ROLLUP_SINGLETON_POLICY_LINE = _utf8_hex(
+    "2d20e8afa520505220e698af2072656c6561736520726f6c6c75702073696e676c65746f6e3be5b7b2e69c89206f70656e20726f6c6c757020e697b620636f6e74726f6c6c657220e58faae69bb4e696b0206865616420e5928c20626f64792ce4b88de5bc80e696b0205052e38082"
 )
 
 
@@ -350,6 +376,92 @@ class ControllerActions:
                 self.git(["worktree", "remove", str(wt), "--force"], check=False)
         return 0
 
+    def _rollup_auto_merge_enabled(self) -> bool | None:
+        raw = str(self.ctx.host_env.get("ROLLUP_AUTO_MERGE", "auto") or "auto").strip().lower()
+        if raw in {"", "auto", "true", "1", "yes", "on"}:
+            return True
+        if raw in {"manual", "false", "0", "no", "off"}:
+            return False
+        return None
+
+    def _rollup_required_checks_status(self, head_sha: str):
+        if not self.ctx.gh_repo_slug:
+            raise RuntimeError("rollup_auto_merge: missing GH_REPO_SLUG")
+
+        def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            argv = list(command)
+            if argv[:2] == ["gh", "api"]:
+                return self.gh(argv[1:], check=False)
+            return subprocess.run(argv, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
+
+        return ReleaseRequiredChecksProjection(
+            runner=runner,
+            required_checks=required_release_checks(self.ctx.host_env),
+            env=self.ctx.host_env,
+        ).check_ref(self.ctx.gh_repo_slug, head_sha)
+
+    def auto_merge_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("rollup-auto-merge", code=3):
+            return 3
+        enabled = self._rollup_auto_merge_enabled()
+        pr_target = str(action.get("target_number") or action.get("pr_number") or "").strip()
+        if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(pr_target):
+            self._append_pending_event("ROLLUP_AUTO_MERGE_BLOCKED:invalid-pr-target")
+            return 2
+        if enabled is None:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:invalid-config")
+            return 3
+        if not enabled:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:manual-config")
+            return 3
+        self._require_branch_config()
+        view = self.gh(
+            [
+                "pr",
+                "view",
+                pr_target,
+                "--json",
+                "number,baseRefName,headRefName,headRefOid,isDraft",
+            ],
+            check=False,
+        )
+        if view.returncode != 0:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-failed")
+            return 3
+        try:
+            payload = json.loads(view.stdout or "{}")
+        except json.JSONDecodeError:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-invalid-json")
+            return 3
+        if not isinstance(payload, dict):
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-invalid-json")
+            return 3
+        base = str(payload.get("baseRefName") or "")
+        head = str(payload.get("headRefName") or "")
+        head_sha = str(payload.get("headRefOid") or "")
+        if base != self.review_base_branch or not head.startswith(ROLLUP_HEAD_PREFIX):
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_BLOCKED:{pr_target}:not-rollup-pr:{base}:{head}")
+            return 2
+        action_head = str(action.get("head_sha") or "").strip()
+        if action_head and action_head != head_sha:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:stale-action-head:{action_head}:{head_sha}")
+            return 3
+        status = self._rollup_required_checks_status(head_sha)
+        if not status.passed:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:checks-not-green:{status.reason or 'unknown'}:{head_sha}")
+            return 3
+        if payload.get("isDraft") is True:
+            ready = self.gh(["pr", "ready", pr_target], check=False)
+            if ready.returncode != 0:
+                self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:ready-failed")
+                return 3
+        merge = self.gh(["pr", "merge", pr_target, "--squash", "--delete-branch"], check=False)
+        if merge.returncode != 0:
+            reason = (merge.stderr.strip() or merge.stdout.strip() or "merge-failed").replace("\n", " ")[:240]
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:branch-protection-or-host-policy:{reason}")
+            return 3
+        return 0
+
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
         self._require_owner_or_raise("open-pr")
         base = base or self._require_branch_config()[0]
@@ -511,6 +623,146 @@ class ControllerActions:
             body_path = self.ctx.repo_root / body_path
         return body_path.read_text(encoding="utf-8")
 
+    def _body_path(self, body_file: str) -> Path:
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        return body_path
+
+    def _release_rollup_summary(self, event: Mapping[str, object]) -> dict[str, object]:
+        integration_branch = str(event.get("integration_branch") or self.integration_branch).strip()
+        review_base_branch = str(event.get("review_base_branch") or self.review_base_branch).strip()
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        review_base_sha = str(event.get("review_base_sha") or "").strip()
+        ahead_count = str(event.get("ahead_count") or "").strip()
+        range_expr = f"{review_base_sha}..{integration_sha}" if review_base_sha and integration_sha else ""
+        subjects: list[str] = []
+        issues: list[str] = []
+        if range_expr:
+            log = self.git(["log", "--no-merges", "--format=%s", "--max-count=25", range_expr], check=False)
+            if log.returncode == 0:
+                subjects = [line.strip() for line in log.stdout.splitlines() if line.strip()]
+                seen_issues: set[str] = set()
+                for subject in subjects:
+                    for issue in re.findall(r"#([1-9][0-9]*)", subject):
+                        if issue not in seen_issues:
+                            seen_issues.add(issue)
+                            issues.append(issue)
+        return {
+            "integration_branch": integration_branch,
+            "review_base_branch": review_base_branch,
+            "integration_sha": integration_sha,
+            "review_base_sha": review_base_sha,
+            "ahead_count": ahead_count,
+            "subjects": subjects,
+            "issues": issues,
+        }
+
+    def _release_rollup_title(self, summary: Mapping[str, object]) -> str:
+        ahead = str(summary.get("ahead_count") or "?")
+        integration_sha = str(summary.get("integration_sha") or "")
+        short_sha = integration_sha[:12] if integration_sha else "unknown"
+        return f"{ROLLUP_TITLE_PREFIX}{ahead} commits ({short_sha})"
+
+    def _write_release_rollup_body(self, body_file: str, event: Mapping[str, object]) -> None:
+        summary = self._release_rollup_summary(event)
+        subjects = [str(item) for item in summary.get("subjects", []) if str(item)]
+        issues = [str(item) for item in summary.get("issues", []) if str(item)]
+        ahead = str(summary.get("ahead_count") or "?")
+        integration_branch = str(summary.get("integration_branch") or "")
+        review_base_branch = str(summary.get("review_base_branch") or "")
+        integration_sha = str(summary.get("integration_sha") or "")
+        review_base_sha = str(summary.get("review_base_sha") or "")
+        body_lines = [
+            ROLLUP_BODY_HEADING,
+            "",
+            f"{ROLLUP_TARGET_LABEL}{integration_branch}` -> `{review_base_branch}`",
+            f"{ROLLUP_AHEAD_LABEL}{ahead}` commits",
+            f"{ROLLUP_RANGE_LABEL}{review_base_sha[:12] or 'unknown'}..{integration_sha[:12] or 'unknown'}`",
+        ]
+        if issues:
+            body_lines.append(f"{ROLLUP_ISSUES_LABEL}{', '.join('#' + issue for issue in issues[:20])}")
+        body_lines.extend(["", ROLLUP_COMMIT_SUMMARY_HEADING, ""])
+        if subjects:
+            body_lines.extend(f"- {subject}" for subject in subjects[:25])
+        else:
+            body_lines.append(ROLLUP_COMMIT_SUMMARY_UNAVAILABLE)
+        body_lines.extend(
+            [
+                "",
+                ROLLUP_MERGE_POLICY_HEADING,
+                "",
+                ROLLUP_AUTO_MERGE_POLICY_LINE,
+                ROLLUP_SINGLETON_POLICY_LINE,
+                "",
+                ROLLUP_BODY_SENTINEL,
+                "⟦AI:AUTO-LOOP⟧",
+                "",
+            ]
+        )
+        body_path = self._body_path(body_file)
+        body_path.parent.mkdir(parents=True, exist_ok=True)
+        body_path.write_text("\n".join(body_lines), encoding="utf-8")
+
+    def _open_rollup_prs(self, review_base_branch: str) -> list[dict[str, object]]:
+        result = self.gh(
+            [
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--base",
+                review_base_branch,
+                "--limit",
+                "100",
+                "--json",
+                "number,headRefName,baseRefName,headRefOid",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "open rollup PR query failed")
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("open rollup PR query returned invalid JSON") from exc
+        if not isinstance(payload, list):
+            raise RuntimeError("open rollup PR query returned non-list JSON")
+        rollups: list[dict[str, object]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("baseRefName") or review_base_branch) != review_base_branch:
+                continue
+            head = str(item.get("headRefName") or "")
+            if not head.startswith(ROLLUP_HEAD_PREFIX):
+                continue
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            rollups.append(item)
+        return rollups
+
+    def _update_existing_release_rollup_pr(
+        self,
+        pr: Mapping[str, object],
+        *,
+        integration_sha: str,
+        body_file: str,
+        title: str,
+    ) -> tuple[int, str]:
+        pr_target = str(pr.get("number") or "").strip()
+        head = str(pr.get("headRefName") or "").strip()
+        if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(pr_target) or not head.startswith(ROLLUP_HEAD_PREFIX):
+            raise RuntimeError("update release rollup singleton: invalid live rollup PR")
+        pushed = self.git(["push", "--force-with-lease", "origin", f"{integration_sha}:refs/heads/{head}"], check=False)
+        if pushed.returncode != 0:
+            raise RuntimeError(pushed.stderr.strip() or pushed.stdout.strip() or f"failed to update {head}")
+        edited = self.gh(["pr", "edit", pr_target, "--title", title, "--body-file", body_file], check=False)
+        if edited.returncode != 0:
+            raise RuntimeError(edited.stderr.strip() or edited.stdout.strip() or f"failed to refresh rollup PR #{pr_target}")
+        return int(pr_target), head
+
     def open_release_rollup_pr_from_pending_event(
         self,
         event_json: str,
@@ -533,6 +785,7 @@ class ControllerActions:
             raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")
         if not re.fullmatch(r"[0-9A-Za-z._-]+", integration_sha):
             raise RuntimeError("open_release_rollup_pr_from_pending_event: unsafe integration sha for rollup branch")
+        self._write_release_rollup_body(body_file, event)
         self._validate_pr_body_file(body_file)
 
         remote = self.git(["ls-remote", "--exit-code", "--heads", "origin", integration_branch], check=False)
@@ -543,6 +796,16 @@ class ControllerActions:
             raise RuntimeError(
                 "open_release_rollup_pr_from_pending_event: stale integration sha "
                 f"{integration_sha}; origin/{integration_branch} is {remote_sha}"
+            )
+
+        title = self._release_rollup_title(self._release_rollup_summary(event)) if title == "Release rollup" else title
+        open_rollups = self._open_rollup_prs(review_base_branch)
+        if open_rollups:
+            return self._update_existing_release_rollup_pr(
+                open_rollups[0],
+                integration_sha=integration_sha,
+                body_file=body_file,
+                title=title,
             )
 
         rollup_head = f"rollup/{integration_sha}"

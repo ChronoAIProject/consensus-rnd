@@ -40,6 +40,7 @@ TARGET_ANCHORS = {
     "runtime-retention-437": "## Named runtime exception - RuntimeRetention(per #437)",
     "phase9-router-open-state-gate-229": "### Consensus-rnd Phase design-consensus router daemon command body",
     "controller-release-publisher-334": "## Named runtime exception — release-publication(per #322)",
+    "rollup-autonomous-merge-2026-06-06": "## Named runtime exception - rollup-autonomous-merge(maintainer-directive 2026-06-06)",
     "gh-usage-accounting-455": "## Named runtime exception — gh usage accounting(per #455)",
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
@@ -399,6 +400,36 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in ("prompt.read_text", "worker prose", "discussion"):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, holistic_source)
+
+    def test_rollup_autonomous_merge_2026_06_06_is_singleton_ci_only(self) -> None:
+        entry = mirror_entry(self.mirror, "rollup-autonomous-merge-2026-06-06")
+        skill_section = self.skill[self.skill.index("## Named runtime exception - rollup-autonomous-merge(maintainer-directive 2026-06-06)") :]
+        for needle in (
+            "maintainer-directive-2026-06-06",
+            "rollup 只要ci过了就可以,不用review",
+            "exactly one open rollup PR",
+            "head starts with `rollup/`",
+            "`git push --force-with-lease origin <integration_sha>:refs/heads/<existing-rollup-head>`",
+            "exclude rollup PRs from reviewer dispatch, review-fix, and remote-ci-fix",
+            "`auto_merge_release_rollup_pr_from_action`",
+            "ReleaseRequiredChecksProjection",
+            "`gh pr merge <N> --squash --delete-branch`",
+            "no generic merge-to-review-base authority",
+            "no #322 release publication change",
+            "branch-protection/host-policy merge failure",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+        for needle in (
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#rollup-autonomous-merge-2026-06-06",
+            ".refactor-loop/runs/maintainer-directives/2026-06-06-rollup-autonomous-merge.md",
+            "$ROLLUP_AUTO_MERGE",
+            "head_ref=rollup/*",
+            "required checks",
+            "no cluster PR review policy change",
+        ):
+            with self.subTest(skill_needle=needle):
+                self.assertIn(needle, skill_section)
 
     def test_issue_541_patrol_inspector_issue_intake_is_narrow(self) -> None:
         entry = mirror_entry(self.mirror, "patrol-inspector-issue-intake-541")

@@ -31,6 +31,7 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
 from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     GhItem,
     _revive_stale_redispatchable_implement_log,
+    ci_red_actions,
     close_projection_actions,
     force_revive_stuck_implements,
     completed_marker_actions,
@@ -45,7 +46,9 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     rebase_resolve_actions,
     rebase_resolve_completed_marker_actions,
     release_countdown_actions,
+    release_rollup_auto_merge_actions,
     release_rollup_actions,
+    review_evidence_redispatch_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
     stale_revival_seconds,
@@ -3413,6 +3416,48 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(1, len(actions))
         self.assertEqual(actions[0]["event"]["integration_sha"], "integration-sha")
 
+    def test_rollup_pr_is_excluded_from_reviewer_and_ci_fix_projection(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=88,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="integration-sha",
+        )
+        ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
+
+        with mock.patch("codex_refactor_loop.wakeup_plan.PrChecksProjection") as checks_projection:
+            review_actions = review_evidence_redispatch_actions(self.repo, [item], ctx)
+            ci_actions = ci_red_actions(self.repo, [item], ctx)
+
+        self.assertEqual([], review_actions)
+        self.assertEqual([], ci_actions)
+        checks_projection.assert_not_called()
+
+    def test_rollup_pr_projects_ci_only_auto_merge_action(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=88,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="integration-sha",
+        )
+        ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
+
+        actions = release_rollup_auto_merge_actions(ctx, [item])
+
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual("release-rollup-auto-merge", action["kind"])
+        self.assertEqual("auto_merge_release_rollup_pr_from_action", action["controller_action"])
+        self.assertEqual("rollup/integration-sha", action["head_ref"])
+        self.assertEqual("review", action["base_ref"])
+        self.assertIn("required_checks_green_exact_head", action["preconditions"])
+        self.assertNotIn("dispatch_reviewers", json.dumps(action))
+        self.assertNotIn("review_gate", json.dumps(action))
+
     def test_consensus_marker_after_exit_zero_with_harness_done_at_projects_implementation(self) -> None:
         artifact = self.write_consensus_artifact(issue=449, round_no=2)
         self.write_completed_log("phase9-issue449-r2-judge.log", "META_JUDGE_DONE:consensus:minimal")
@@ -3797,6 +3842,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "publish_implementation_output",
                 "dispatch_reviewers",
                 "open_release_rollup_pr_from_action",
+                "auto_merge_release_rollup_pr_from_action",
             },
         )
         self.assertNotIn("HeadlessLifecycleAction", projection.class_names)

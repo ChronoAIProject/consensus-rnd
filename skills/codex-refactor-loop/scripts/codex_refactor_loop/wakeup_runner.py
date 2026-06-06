@@ -84,6 +84,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "open_release_rollup_pr_from_action",
     "close_managed_item_from_drop_marker",
     "review_gate",
+    "auto_merge_release_rollup_pr_from_action",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
 }
@@ -411,6 +412,8 @@ class WakeupRunner:
             return self._validate_commit_push_resolved_pr_rebase(action)
         if controller_action == "open_release_rollup_pr_from_action":
             return self._validate_release_rollup(action)
+        if controller_action == "auto_merge_release_rollup_pr_from_action":
+            return self._validate_release_rollup_auto_merge(action)
         if controller_action == "close_managed_item_from_drop_marker":
             return self._validate_close_managed_drop(action)
         return None
@@ -758,6 +761,34 @@ class WakeupRunner:
             return "release_rollup_body_missing"
         return None
 
+    def _validate_release_rollup_auto_merge(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "rollup_auto_merge_target_missing"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "rollup_auto_merge_missing_preconditions"
+        for required in (
+            "active_controller_owner",
+            "live_open_target",
+            "rollup_head_prefix",
+            "review_base_target",
+            "required_checks_green_exact_head",
+            "rollup_auto_merge_enabled",
+        ):
+            if required not in preconditions:
+                return f"rollup_auto_merge_missing_precondition:{required}"
+        head_ref = str(action.get("head_ref") or "")
+        if not _safe_branch_name(head_ref) or not head_ref.startswith("rollup/"):
+            return "rollup_auto_merge_invalid_head_ref"
+        head_sha = str(action.get("head_sha") or "").strip()
+        if not re.fullmatch(r"[0-9A-Za-z._-]+", head_sha):
+            return "rollup_auto_merge_invalid_head_sha"
+        base_ref = str(action.get("base_ref") or "").strip()
+        expected_base = str(self.ctx.host_env.get("REVIEW_BASE_BRANCH") or "").strip()
+        if not expected_base or base_ref != expected_base:
+            return "rollup_auto_merge_base_mismatch"
+        return None
+
     def _validate_no_conflicting_open_implementation_pr(self, action: Mapping[str, Any]) -> str | None:
         head_ref = str(action.get("head_ref") or "").strip()
         if not _safe_branch_name(head_ref):
@@ -864,6 +895,8 @@ class WakeupRunner:
             return self.actions.commit_push_resolved_pr_rebase(dict(action))
         if controller_action == "open_release_rollup_pr_from_action":
             return self.actions.open_release_rollup_pr_from_action(dict(action))
+        if controller_action == "auto_merge_release_rollup_pr_from_action":
+            return self.actions.auto_merge_release_rollup_pr_from_action(dict(action))
         if controller_action == "close_managed_item_from_drop_marker":
             return self.actions.close_managed_item_from_drop_marker(dict(action))
         if controller_action == "review_gate":
