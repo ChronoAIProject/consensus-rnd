@@ -1913,6 +1913,27 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual("spawn_codex_harness_background", action["controller_action"])
         self.assertEqual("dispatch-consensus-implementation:20", action["intent_id"])
 
+    def test_harness_spawn_intent_suppresses_terminal_non_ok_implement_result(self) -> None:
+        for status in ("blocked", "partial"):
+            with self.subTest(status=status):
+                self.tmp.cleanup()
+                self.setUp()
+                self.write_consensus_artifact()
+                self.append_harness_spawn_intent(
+                    intent_id="dispatch-consensus-implementation:20",
+                    task_id="implement-issue-20",
+                    route="dispatch-consensus-implementation",
+                    log=".refactor-loop/logs/implement-issue-20.log",
+                )
+                (self.logs / "implement-issue-20.log").write_text(
+                    f"worker summary\nIMPLEMENT_DONE:issue-20:{status}\nEXIT=0\n",
+                    encoding="utf-8",
+                )
+
+                plan = self.run_plan(fixture="open_issue_20")
+
+                self.assertEqual(self.harness_spawn_actions(plan), [])
+
     def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
         self.append_harness_spawn_intent(
             intent_id="empty-read-model-target",
@@ -4023,6 +4044,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual("pending_implement_intent", reason)
 
+    def test_consensus_implementation_readiness_terminal_non_ok_beats_pending_intent(self) -> None:
+        action = {
+            "target_kind": "issue",
+            "target_number": 537,
+            "iteration": "537",
+            "cluster_id": "issue-537",
+        }
+        (self.repo / ".worktrees" / "iter537-issue-537").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:537",
+            task_id="implement-issue-537",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-537.log",
+        )
+        (self.logs / "implement-issue-537.log").write_text(
+            "IMPLEMENT_DONE:issue-537:blocked\nEXIT=0\n", encoding="utf-8"
+        )
+
+        reason = consensus_implementation_suppressed_reason(action, self.repo, monitor=None)
+
+        self.assertEqual("terminal_implement_result", reason)
+
     def test_consensus_implementation_readiness_suppresses_worktree_log_pending_and_in_flight(self) -> None:
         cases = (
             ("pending", "pending_implement_intent"),
@@ -5674,6 +5717,11 @@ class StaleRevivalTests(unittest.TestCase):
         )
         return log
 
+    def _write_markerless(self, issue: int) -> Path:
+        log = self.logs / f"implement-issue-{issue}.log"
+        log.write_text("worker finished without terminal marker\nEXIT=0\n", encoding="utf-8")
+        return log
+
     def test_default_threshold_is_three_hours(self) -> None:
         prev = os.environ.pop("STALE_REVIVAL_HOURS", None)
         try:
@@ -5724,11 +5772,17 @@ class StaleRevivalTests(unittest.TestCase):
             else:
                 os.environ["STALE_REVIVAL_HOURS"] = prev_stale
 
-    def test_stale_partial_implement_log_is_revived(self) -> None:
-        log = self._write_partial(421)
+    def test_stale_markerless_implement_log_is_revived(self) -> None:
+        log = self._write_markerless(421)
         revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
         self.assertTrue(revived)
         self.assertFalse(log.exists())
+
+    def test_terminal_partial_implement_log_is_not_revived(self) -> None:
+        log = self._write_partial(421)
+        revived = _revive_stale_redispatchable_implement_log(log, now=time.time() + 10 * 3600)
+        self.assertFalse(revived)
+        self.assertTrue(log.exists())
 
     def test_fresh_partial_implement_log_is_not_revived(self) -> None:
         log = self._write_partial(421)
@@ -5794,10 +5848,10 @@ class StaleRevivalTests(unittest.TestCase):
         self.assertFalse(revived)
         self.assertTrue(log.exists())
 
-    def test_force_revives_fresh_partial_without_age_wait(self) -> None:
-        # manual trigger: a just-finished partial (age 0) is NOT revived automatically
-        # but force=True clears it immediately.
-        log = self._write_partial(421)
+    def test_force_revives_fresh_markerless_without_age_wait(self) -> None:
+        # manual trigger: a just-finished markerless attempt (age 0) is NOT
+        # revived automatically but force=True clears it immediately.
+        log = self._write_markerless(421)
         self.assertFalse(_revive_stale_redispatchable_implement_log(log, now=time.time()))
         self.assertTrue(log.exists())
         self.assertTrue(_revive_stale_redispatchable_implement_log(log, now=time.time(), force=True))
@@ -5823,18 +5877,21 @@ class StaleRevivalTests(unittest.TestCase):
         self.assertFalse(log.exists())
 
     def test_force_revive_stuck_implements_scans_and_reports(self) -> None:
-        p493 = self._write_partial(493)
-        p494 = self._write_partial(494)
+        p493 = self._write_markerless(493)
+        p494 = self._write_markerless(494)
         # an in_flight log (no terminal EXIT) with no monitor proof is left alone
         inflight = self._write_inflight(490)
+        terminal_partial = self._write_partial(495)
         revived = force_revive_stuck_implements(self.repo, monitor=None)
         names = {r["log"] for r in revived}
         self.assertIn("implement-issue-493.log", names)
         self.assertIn("implement-issue-494.log", names)
         self.assertNotIn("implement-issue-490.log", names)
+        self.assertNotIn("implement-issue-495.log", names)
         self.assertFalse(p493.exists())
         self.assertFalse(p494.exists())
         self.assertTrue(inflight.exists())
+        self.assertTrue(terminal_partial.exists())
 
 
 if __name__ == "__main__":

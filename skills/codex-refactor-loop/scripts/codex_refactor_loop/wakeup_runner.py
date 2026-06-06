@@ -997,7 +997,7 @@ class WakeupRunner:
     def _spawn_log_suppresses_retry(self, log: Path) -> bool:
         if is_implement_log(log):
             state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
-            return state.in_flight or state.publish_ready
+            return state.in_flight or state.publish_ready or state.terminal_non_ok
         return _spawn_log_suppresses_retry(log)
 
     def _clear_redispatchable_spawn_log(self, log: Path) -> None:

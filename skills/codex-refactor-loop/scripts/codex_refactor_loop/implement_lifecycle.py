@@ -11,6 +11,7 @@ from typing import Callable, Mapping, Sequence
 from .worker_markers import read_worker_terminal_marker
 
 IMPLEMENT_DONE_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:ok$")
+IMPLEMENT_DONE_TERMINAL_NON_OK_RE = re.compile(r"^IMPLEMENT_DONE:.+:(?:partial|blocked)$")
 IMPLEMENT_LOG_RE = re.compile(r"^implement-(?P<cluster>[A-Za-z0-9._-]+)\.log$")
 
 
@@ -41,6 +42,10 @@ class ImplementAttemptState:
     def refresh_needed(self) -> bool:
         return self.status == "refresh_needed"
 
+    @property
+    def terminal_non_ok(self) -> bool:
+        return self.status == "terminal_non_ok"
+
 
 def classify_implement_attempt(
     *,
@@ -70,6 +75,8 @@ def classify_implement_attempt(
         if exit_line is None:
             return ImplementAttemptState("in_flight", "no_terminal_exit")
         return ImplementAttemptState("redispatch", "nonzero_exit")
+    if IMPLEMENT_DONE_TERMINAL_NON_OK_RE.fullmatch(marker_read.marker):
+        return ImplementAttemptState("terminal_non_ok", "terminal_non_ok", marker=marker_read.marker)
     marker = marker_read.marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker_read.marker) else ""
     if not marker and marker_read.reason == "duplicate_or_conflicting_log_marker":
         marker = _implement_run_artifact_done_marker(log_path)
