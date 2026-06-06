@@ -524,7 +524,7 @@ def _render_audit_fallback_prompt(ctx: LoopContext, prompt: Path, task_id: str) 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
     if is_implement_log(log_path):
         state = classify_implement_attempt(repo_root=_repo_root_from_log(log_path), log_path=log_path)
-        return state.in_flight or state.terminal_non_ok
+        return state.in_flight or state.terminal_non_ok or implement_attempt_is_terminal_or_noop_completion(state)
     if not log_path.exists():
         return False
     try:
