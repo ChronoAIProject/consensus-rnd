@@ -407,6 +407,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         gh_head_ref: str = "refactor/iter77-worker",
         git_diff_code: int = 0,
         implementation_status: str | None = None,
+        implementation_issue: int = 77,
         duplicate_prs: list[dict] | None = None,
         implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
@@ -468,13 +469,13 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             repo_root = self.ctx.repo_root
             if git_cwd == (self.repo / ".worktrees" / "pr77").resolve():
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
-            if git_cwd == (self.repo / ".worktrees" / "iter77-issue-77").resolve():
+            if git_cwd == (self.repo / ".worktrees" / f"iter{implementation_issue}-issue-{implementation_issue}").resolve():
                 if command[3:] == ["status", "--porcelain"]:
                     return subprocess.CompletedProcess(command, 0, implementation_status or "", "")
                 if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, git_diff_code, "", "")
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
-                    return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
+                    return subprocess.CompletedProcess(command, 0, f"refactor/iter{implementation_issue}-issue-{implementation_issue}\n", "")
                 if command[3:] == ["merge-base", "HEAD", "origin/auto-refact-dev"]:
                     return subprocess.CompletedProcess(command, 0, implementation_base[0] + "\n", "")
                 if command[3:] == ["rev-parse", "--verify", "origin/auto-refact-dev"]:
@@ -1199,6 +1200,43 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertNotIn(
             "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:537",
+            pending,
+        )
+
+    def test_wakeup_runner_stale_applied_spawn_ledger_does_not_retry_empty_scoped_diff_implement(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter581-issue-581"
+        worktree.mkdir(parents=True)
+        log = self.repo / ".refactor-loop/logs/implement-issue-581.log"
+        log.write_text("no code changes required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n", encoding="utf-8")
+        action = self.spawn_action(
+            action_id="harness-spawn-intent:dispatch-consensus-implementation:581",
+            target={"kind": "codex", "task_id": "implement-issue-581"},
+            log=str(log),
+        )
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": "", "kind": "harness-spawn-intent"})
+            + "\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(
+                self.base_plan(action),
+                gh_state="OPEN",
+                git_diff_code=0,
+                implementation_status="",
+                implementation_issue=581,
+                actions=FakeActions(),
+            )
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        self.assertTrue(log.exists())
+        launch.assert_not_called()
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertNotIn(
+            "WAKEUP_RUNNER_STALE_SPAWN_LEDGER:harness-spawn-intent:dispatch-consensus-implementation:581",
             pending,
         )
 

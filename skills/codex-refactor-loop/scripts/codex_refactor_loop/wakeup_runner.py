@@ -25,6 +25,7 @@ from .implement_lifecycle import (
     _implement_run_artifact_done_marker,
     classify_implement_attempt,
     clear_redispatchable_implement_log,
+    implement_attempt_is_terminal_or_noop_completion,
     is_implement_log,
 )
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
@@ -1019,7 +1020,7 @@ class WakeupRunner:
     def _spawn_log_suppresses_retry(self, log: Path) -> bool:
         if is_implement_log(log):
             state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
-            return state.in_flight or state.publish_ready or state.terminal_non_ok
+            return state.in_flight or state.publish_ready or implement_attempt_is_terminal_or_noop_completion(state)
         return _spawn_log_suppresses_retry(log)
 
     def _clear_redispatchable_spawn_log(self, log: Path) -> None:
@@ -1540,7 +1541,7 @@ class WakeupRunner:
             return "target-log-absent"
         if is_implement_log(log):
             state = classify_implement_attempt(repo_root=self.ctx.repo_root, log_path=log, command_runner=self.command_runner)
-            if state.redispatch:
+            if state.redispatch and not implement_attempt_is_terminal_or_noop_completion(state):
                 return f"target-log-redispatchable:{state.reason}"
             return ""
         if _spawn_log_suppresses_retry(log):

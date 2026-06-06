@@ -138,6 +138,31 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
             self.assertEqual(state.reason, "empty_scoped_diff")
             self.assertTrue(implement_attempt_is_terminal_or_noop_completion(state))
 
+    def test_clear_redispatchable_keeps_clean_ok_empty_scoped_diff_log(self) -> None:
+        from codex_refactor_loop.implement_lifecycle import clear_redispatchable_implement_log
+
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self._repo(tmp)
+            repo = Path(tmp)
+            worktree = repo / ".worktrees" / "iter581-issue-581"
+            worktree.mkdir(parents=True)
+            log = logs / "implement-issue-581.log"
+            log.write_text("no code changes required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n", encoding="utf-8")
+
+            def runner(command):
+                if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter581-issue-581\n", "")
+                if command[-2:] == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if command[-2:] == ["diff", "--quiet"]:
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            cleared = clear_redispatchable_implement_log(repo_root=repo, log_path=log, command_runner=runner)
+
+            self.assertFalse(cleared)
+            self.assertTrue(log.exists())
+
     def test_staged_only_worker_diff_is_publish_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self._repo(tmp)
