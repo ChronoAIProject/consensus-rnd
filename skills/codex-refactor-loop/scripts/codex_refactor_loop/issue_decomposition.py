@@ -13,13 +13,12 @@ from .github_body import GitHubBodyError, validate_self_contained_github_body
 
 
 SCHEMA = "IssueDecompositionPlan"
-FORBIDDEN_PLAN_FIELDS = frozenset(
+MINIMUM_FORBIDDEN_PLAN_FIELDS = frozenset(
     {
         "lifecycle_owner",
         "lifecycle_authority",
         "cmd",
         "argv",
-        "args",
         "shell",
         "command_line",
         "commands",
@@ -27,11 +26,17 @@ FORBIDDEN_PLAN_FIELDS = frozenset(
         "gh",
         "git",
         "executor",
+    }
+)
+COMPATIBILITY_FORBIDDEN_PLAN_FIELDS = frozenset(
+    {
+        "args",
         "close",
         "assignee",
         "milestone",
     }
 )
+FORBIDDEN_PLAN_FIELDS = MINIMUM_FORBIDDEN_PLAN_FIELDS | COMPATIBILITY_FORBIDDEN_PLAN_FIELDS
 CHILD_FIELDS = frozenset({"slug", "title", "scope", "non_goals", "body_artifact_path"})
 PLAN_FIELDS = frozenset({"schema", "parent_issue", "source_consensus_artifact", "children", "parent_update"})
 PARENT_UPDATE_FIELDS = frozenset({"comment_artifact_path"})

@@ -331,7 +331,9 @@ class IssueDecompositionTests(unittest.TestCase):
             "lifecycle_authority",
             "lifecycle_owner",
         }
-        self.assertLessEqual(minimum_forbidden_fields, issue_decomposition.FORBIDDEN_PLAN_FIELDS)
+        self.assertEqual(minimum_forbidden_fields, issue_decomposition.MINIMUM_FORBIDDEN_PLAN_FIELDS)
+        self.assertLessEqual(issue_decomposition.MINIMUM_FORBIDDEN_PLAN_FIELDS, issue_decomposition.FORBIDDEN_PLAN_FIELDS)
+        self.assertIn("args", issue_decomposition.COMPATIBILITY_FORBIDDEN_PLAN_FIELDS)
         self.assertIn("args", issue_decomposition.FORBIDDEN_PLAN_FIELDS)
 
 

@@ -236,6 +236,60 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
 
+    def test_issue_403_and_wakeup_runner_396_share_effect_admission_boundary_language(self) -> None:
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
+        runner_section = self.skill[self.skill.index("## Named runtime exception - wakeup-runner(per #396)") :]
+
+        for text in (
+            "not a second apply schema, public command bus, executor layer, or generic effect-adapter runtime abstraction",
+            "ControllerActions.apply_issue_decomposition_plan()",
+        ):
+            with self.subTest(issue_boundary_text=text):
+                self.assertIn(text, issue_entry)
+                self.assertIn(text, issue_section)
+        for text in (
+            "effect-adapter boundary is only the owner-local admission contract",
+            "effects are allowed only by concrete `controller_action` or helper name",
+            "ordinary rejection uses grep-able one-line runner diagnostics",
+            "helper-owned durable result/diagnostic artifacts",
+            "`.refactor-loop/host.env` may be skill-private runtime/cache/log read state only",
+        ):
+            with self.subTest(runner_boundary_text=text):
+                self.assertIn(text.lower(), runner_entry.lower())
+                self.assertIn(text.lower(), runner_section.lower())
+
+    def test_effect_admission_forbidden_field_floor_is_mirrored_and_implemented(self) -> None:
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        issue_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "issue_decomposition.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        minimum_forbidden_fields = (
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        )
+
+        self.assertIn("the fixed forbidden field set is at least", runner_entry)
+        for field in minimum_forbidden_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, runner_entry)
+                self.assertIn(field, issue_entry)
+                self.assertIn(f'"{field}"', issue_source)
+                self.assertIn(f'"{field}"', wakeup_source)
+        self.assertIn("existing extra `args` rejection retained", runner_entry)
+        self.assertIn('"args"', issue_source)
+        self.assertIn('"args"', wakeup_source)
+
     def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "runtime-retention-437")
         skill_section = self.skill[self.skill.index("## Named runtime exception - RuntimeRetention(per #437)") :]
