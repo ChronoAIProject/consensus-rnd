@@ -35,6 +35,16 @@ class RecordingHandler:
         return TickHandlerResult(item.handler, item.key, "handled")
 
 
+@dataclass
+class FixedResultHandler:
+    name: str
+    status: str
+    reason: str
+
+    def handle(self, *, item: TickWorkItem, projection: SharedControllerProjection) -> TickHandlerResult:
+        return TickHandlerResult(item.handler, item.key, self.status, self.reason)
+
+
 def fake_projection(_request: ProjectionRequest) -> SharedControllerProjection:
     return SharedControllerProjection(
         repo_root="/repo",
@@ -164,6 +174,54 @@ class ControllerTickSupervisorTests(unittest.TestCase):
         self.assertEqual((), result.processed)
         self.assertEqual((), result.skipped)
         self.assertTrue(queue.empty())
+
+    def test_handler_backoff_result_is_returned_as_non_action_skip_with_diagnostic(self) -> None:
+        queue = KeyOnlyWorkQueue()
+        queue.enqueue("phase9-router", "issue/578")
+        handler = FixedResultHandler("phase9-router", "backoff", "projection-stale")
+
+        supervisor = ControllerTickSupervisor(
+            handlers=(handler,),
+            queue=queue,
+            projection_loader=fake_projection,
+            legacy_guard=LegacyDaemonModeGuard(supervisor_enabled=True, legacy_daemon_names=()),
+        )
+
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
+
+        self.assertEqual((), result.processed)
+        self.assertEqual(("backoff",), tuple(item.status for item in result.skipped))
+        self.assertEqual(("projection-stale",), tuple(item.reason for item in result.skipped))
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("CONTROLLER_TICK_SUPERVISOR_SKIP", diagnostic)
+        self.assertIn("handler=phase9-router", diagnostic)
+        self.assertIn("status=backoff", diagnostic)
+        self.assertIn("reason='projection-stale'", diagnostic)
+
+    def test_handler_noop_result_is_returned_as_non_action_skip_with_diagnostic(self) -> None:
+        queue = KeyOnlyWorkQueue()
+        queue.enqueue("comment-monitor", "issue/578")
+        handler = FixedResultHandler("comment-monitor", "noop", "nothing-to-do")
+
+        supervisor = ControllerTickSupervisor(
+            handlers=(handler,),
+            queue=queue,
+            projection_loader=fake_projection,
+            legacy_guard=LegacyDaemonModeGuard(supervisor_enabled=True, legacy_daemon_names=()),
+        )
+
+        with mock.patch("sys.stderr") as stderr:
+            result = supervisor.tick()
+
+        self.assertEqual((), result.processed)
+        self.assertEqual(("noop",), tuple(item.status for item in result.skipped))
+        self.assertEqual(("nothing-to-do",), tuple(item.reason for item in result.skipped))
+        diagnostic = stderr.write.call_args.args[0]
+        self.assertIn("CONTROLLER_TICK_SUPERVISOR_SKIP", diagnostic)
+        self.assertIn("handler=comment-monitor", diagnostic)
+        self.assertIn("status=noop", diagnostic)
+        self.assertIn("reason='nothing-to-do'", diagnostic)
 
 
 if __name__ == "__main__":

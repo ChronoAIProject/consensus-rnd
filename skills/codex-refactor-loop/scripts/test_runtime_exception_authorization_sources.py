@@ -1086,21 +1086,49 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
     def test_controller_tick_supervisor_mirror_preserves_no_lifecycle_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "controller-tick-supervisor-553")
 
-        for required in (
+        shared_required = (
             "SharedControllerProjection",
             "ProjectionRequest",
+            "collect_shared_controller_projection()",
+            "only shared informer read entrypoint",
+            "`freshness` object",
+            "generated_at",
+            "sources",
+            "overall_loaded_ok",
+            "failed_source_count",
+            "stale_source_count",
+            "next_retry_after_seconds",
             "ManagedWorkSnapshot",
             "key-only workqueue keys",
             "TickWorkItem(handler,key)",
             "LegacyDaemonModeGuard",
+            "backoff",
+            "noop",
+            "diagnostics only",
             "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
             "canonical legacy daemon list",
             "test_shared_controller_projection.py",
             "test_controller_tick_supervisor.py",
             "test_workqueue.py",
+        )
+        for required in shared_required:
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for required in (
+            "no `ControllerProjectionInformer`",
+            "no second public shared projection read surface",
+            "no freshness public or parsed read-model authority",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
+
+        for required in (
+            "Do not add `ControllerProjectionInformer`",
+            "not a new public or parsed read-model authority",
+        ):
+            with self.subTest(required=required):
                 self.assertIn(required, self.skill)
 
         for forbidden in (
