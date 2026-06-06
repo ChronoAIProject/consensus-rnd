@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,16 @@ SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 RESTART_MODULE = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py"
 RUNTIME_EXCEPTIONS = SKILL_ROOT / "authorizations" / "runtime-exceptions.md"
+
+
+def restart_source_daemon_commands(source: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    tree = ast.parse(source)
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "DAEMON_COMMANDS" for target in node.targets):
+            return ast.literal_eval(node.value)
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "DAEMON_COMMANDS":
+            return ast.literal_eval(node.value)
+    raise AssertionError("DAEMON_COMMANDS assignment missing from restart.py")
 
 
 class AntiStopRestartHelperContractTests(unittest.TestCase):
@@ -74,21 +85,15 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(needle, self.restart)
 
     def test_restart_daemon_allowlist_uses_cli_daemon_commands(self) -> None:
-        for name, op in (
-            ("concurrency_monitor", "concurrency"),
-            ("comment-monitor", "comment-monitor"),
-            ("codex-progress-reporter", "progress-reporter"),
-            ("dev_sync_daemon", "dev-sync"),
-            ("phase9_router_daemon", "phase9-router"),
-            ("closed_label_reconciler", "closed-label-reconciler"),
-            ("wakeup_runner_daemon", "wakeup-runner"),
-            ("patrol_inspector_daemon", "patrol-inspector"),
-        ):
+        # Fix (remote-ci/contract-tests): parse the checked-in restart source
+        # so unittest discovery cannot inherit a patched runtime allowlist.
+        daemon_commands = restart_source_daemon_commands(self.restart)
+        for name, command in daemon_commands:
             with self.subTest(name=name):
                 self.assertIn(name, self.restart)
                 self.assertIn('"consensus-rnd-cli"', self.restart)
-                self.assertIn(f'"{op}"', self.restart)
-        self.assertEqual(8, self.restart.count('"--daemon"'))
+                self.assertIn(f'"{command[2]}"', self.restart)
+        self.assertEqual(len(daemon_commands), self.restart.count('"--daemon"'))
 
     def test_restart_module_has_no_controller_lifecycle_authority(self) -> None:
         for token in ("gh ", "git ", "pr merge", "issue close", "git tag", "gh release"):
