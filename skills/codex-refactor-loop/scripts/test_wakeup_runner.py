@@ -213,6 +213,13 @@ class FakeActions:
         prompt.write_text("release rollup body prompt\n", encoding="utf-8")
         return prompt
 
+    def render_implementation_pr_artifact_repair_prompt(self, action: dict) -> Path:
+        self.calls.append(("render_implementation_pr_artifact_repair_prompt", dict(action)))
+        prompt = Path(action["prompt"])
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("implementation PR artifact repair prompt\n", encoding="utf-8")
+        return prompt
+
     def close_managed_item_from_drop_marker(self, action: dict) -> int:
         self.calls.append(("close_managed_item_from_drop_marker", dict(action)))
         return self.close_code
@@ -835,6 +842,46 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "cd": str(self.repo),
             "prompt": str(self.repo / ".refactor-loop/prompts/release-rollup-body.md"),
             "log": str(self.repo / ".refactor-loop/logs/release-rollup-body.log"),
+            "stall": 1800,
+        }
+        action.update(overrides)
+        return action
+
+    def implementation_pr_artifact_repair_action(self, **overrides) -> dict:
+        marker = "IMPLEMENT_DONE:issue-77:ok"
+        log = self.repo / ".refactor-loop/logs/implement-issue77.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        runs = self.repo / ".refactor-loop/runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / "implement-issue77.md").write_text("implementation summary\nIMPLEMENT_DONE:issue-77:ok\n", encoding="utf-8")
+        action = {
+            "kind": "harness-spawn-intent",
+            "action_id": "implementation-pr-artifacts:issue-77:implementation_pr_title_artifact_missing",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "target_log_absent",
+                "implementation_pr_artifacts_missing_or_invalid",
+                "publish_implementation_output_status_only",
+            ],
+            "source_artifact": ".refactor-loop/logs/implement-issue77.log",
+            "source_marker": marker,
+            "target_kind": "codex",
+            "target_number": None,
+            "target": {"kind": "codex", "task_id": "implementation-pr-artifacts-issue-77"},
+            "controller_action": "spawn_codex_harness_background",
+            "capability": "implementation-pr-artifact-repair",
+            "no_generic_command": True,
+            "issue_number": 77,
+            "cluster_id": "issue-77",
+            "implementation_log": ".refactor-loop/logs/implement-issue77.log",
+            "implementation_summary": ".refactor-loop/runs/implement-issue77.md",
+            "title_file": ".refactor-loop/runs/implementation-pr-issue-77-title.txt",
+            "body_file": ".refactor-loop/runs/implementation-pr-issue-77-body.md",
+            "cd": str(self.repo),
+            "prompt": str(self.repo / ".refactor-loop/prompts/implementation-pr-artifacts-issue-77.md"),
+            "log": str(self.repo / ".refactor-loop/logs/implementation-pr-artifacts-issue-77.log"),
             "stall": 1800,
         }
         action.update(overrides)
@@ -3072,6 +3119,56 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             with self.subTest(name=name):
                 actions = FakeActions()
                 action = self.release_rollup_body_action(action_id=f"release-rollup-body:{name}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_implementation_pr_artifact_repair_spawn_renders_prompt_and_does_not_publish(self) -> None:
+        action = self.implementation_pr_artifact_repair_action()
+        actions = FakeActions()
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "render_implementation_pr_artifact_repair_prompt")
+        self.assertEqual(len(actions.calls), 1)
+        launch.assert_called_once()
+        self.assertFalse((self.repo / ".refactor-loop/runs/implementation-pr-issue-77-title.txt").exists())
+        self.assertFalse((self.repo / ".refactor-loop/runs/implementation-pr-issue-77-body.md").exists())
+
+    def test_implementation_pr_artifact_repair_spawn_blocks_invalid_narrow_allowlist_inputs_before_dispatch(self) -> None:
+        cases = (
+            (
+                "missing-artifact-precondition",
+                {
+                    "preconditions": [
+                        "active_controller_owner",
+                        "clean_exit_source_marker",
+                        "target_log_absent",
+                        "publish_implementation_output_status_only",
+                    ]
+                },
+                "implementation_pr_artifact_repair_missing_precondition:implementation_pr_artifacts_missing_or_invalid",
+            ),
+            ("missing-issue", {"issue_number": None}, "implementation_pr_artifact_repair_issue_missing"),
+            ("bad-cluster", {"cluster_id": "../bad"}, "implementation_pr_artifact_repair_cluster_invalid"),
+            ("title-outside-runs", {"title_file": ".refactor-loop/state/implementation-pr-issue-77-title.txt"}, "implementation_pr_artifact_repair_title_file_outside_runs"),
+            ("body-mismatch", {"body_file": ".refactor-loop/runs/other-body.md"}, "implementation_pr_artifact_repair_body_file_mismatch"),
+            (
+                "prompt-mismatch",
+                {"prompt": str(self.repo / ".refactor-loop/prompts/other.md")},
+                "implementation_pr_artifact_repair_prompt_mismatch",
+            ),
+        )
+        for name, overrides, reason in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.implementation_pr_artifact_repair_action(
+                    action_id=f"implementation-pr-artifacts:{name}",
+                    **overrides,
+                )
 
                 results = self.run_result(self.base_plan(action), actions=actions)
 

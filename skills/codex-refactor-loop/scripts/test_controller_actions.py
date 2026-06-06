@@ -2632,6 +2632,29 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertIn(".refactor-loop/runs/release-rollup-pr-body.md", body)
         self.assertIn("Do not run `gh`.", body)
 
+    def test_render_implementation_pr_artifact_repair_prompt_binds_evidence_and_output_paths(self) -> None:
+        prompt = self.actions.render_implementation_pr_artifact_repair_prompt(
+            {
+                "issue_number": 77,
+                "cluster_id": "issue-77",
+                "implementation_log": ".refactor-loop/logs/implement-issue77.log",
+                "implementation_summary": ".refactor-loop/runs/implement-issue77.md",
+                "worktree": str(self.tmp / ".worktrees/iter77-issue-77"),
+                "head_ref": "refactor/iter77-issue-77",
+                "title_file": ".refactor-loop/runs/implementation-pr-issue-77-title.txt",
+                "body_file": ".refactor-loop/runs/implementation-pr-issue-77-body.md",
+                "suppressed_reason": "implementation_pr_title_artifact_missing",
+            }
+        )
+
+        self.assertEqual(prompt.resolve(), (self.tmp / ".refactor-loop/prompts/implementation-pr-artifacts-issue-77.md").resolve())
+        body = prompt.read_text(encoding="utf-8")
+        self.assertIn("managed issue #77", body)
+        self.assertIn(".refactor-loop/logs/implement-issue77.log", body)
+        self.assertIn(".refactor-loop/runs/implementation-pr-issue-77-title.txt", body)
+        self.assertIn(".refactor-loop/runs/implementation-pr-issue-77-body.md", body)
+        self.assertIn("Do not run `gh`.", body)
+
     def test_close_managed_item_from_drop_marker_closes_issue_and_pr_with_drop_marker(self) -> None:
         decision = mock.Mock(allowed=True, owner_device="device-a", status="owner", action="close-managed-drop", lease_id="lease", expires_at="soon")
         calls: list[list[str]] = []
