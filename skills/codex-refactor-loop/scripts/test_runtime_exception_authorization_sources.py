@@ -187,6 +187,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
 
         for needle in (
             "active-controller owner only",
+            "existing `ControllerActions.apply_issue_decomposition_plan()` helper's private validation gate",
             "IssueDecompositionPlan",
             "children:[{slug,title,scope,non_goals,body_artifact_path}]",
             "parent_update:{comment_artifact_path}",
@@ -196,10 +197,14 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "read-only `peek` pending-events tail",
             "no daemon/worker issue creation",
             "no public issue factory",
+            "no public command bus",
+            "no executor layer",
+            "no generic effect-adapter runtime abstraction",
             "no public CLI command",
             "no wakeup-plan decompose projection except the #396 evidence-bound named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "no second #403 apply schema",
             "no parent issue close/reopen/body-title edit",
-            "no lifecycle_owner/lifecycle_authority/cmd/argv/shell/gh/git/close fields",
+            "no lifecycle_owner/lifecycle_authority/cmd/argv/args/shell/command_line/commands/env/gh/git/executor/close fields",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, entry)
@@ -232,6 +237,60 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
         self.assertIn("wakeup_plan.py` is not the #403 read-model/status/authorization owner", skill_section)
+
+    def test_issue_403_and_wakeup_runner_396_share_effect_admission_boundary_language(self) -> None:
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_section = self.skill[self.skill.index("## Large issue decomposition(per #403)") :]
+        runner_section = self.skill[self.skill.index("## Named runtime exception - wakeup-runner(per #396)") :]
+
+        for text in (
+            "not a second apply schema, public command bus, executor layer, or generic effect-adapter runtime abstraction",
+            "ControllerActions.apply_issue_decomposition_plan()",
+        ):
+            with self.subTest(issue_boundary_text=text):
+                self.assertIn(text, issue_entry)
+                self.assertIn(text, issue_section)
+        for text in (
+            "effect-adapter boundary is only the owner-local admission contract",
+            "effects are allowed only by concrete `controller_action` or helper name",
+            "ordinary rejection uses grep-able one-line runner diagnostics",
+            "helper-owned durable result/diagnostic artifacts",
+            "`.refactor-loop/host.env` may be skill-private runtime/cache/log read state only",
+        ):
+            with self.subTest(runner_boundary_text=text):
+                self.assertIn(text.lower(), runner_entry.lower())
+                self.assertIn(text.lower(), runner_section.lower())
+
+    def test_effect_admission_forbidden_field_floor_is_mirrored_and_implemented(self) -> None:
+        runner_entry = mirror_entry(self.mirror, "wakeup-runner-396")
+        issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
+        issue_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "issue_decomposition.py")
+        wakeup_source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        minimum_forbidden_fields = (
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        )
+
+        self.assertIn("the fixed forbidden field set is at least", runner_entry)
+        for field in minimum_forbidden_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, runner_entry)
+                self.assertIn(field, issue_entry)
+                self.assertIn(f'"{field}"', issue_source)
+                self.assertIn(f'"{field}"', wakeup_source)
+        self.assertIn("existing extra `args` rejection retained", runner_entry)
+        self.assertIn('"args"', issue_source)
+        self.assertIn('"args"', wakeup_source)
 
     def test_runtime_retention_437_preserves_narrow_local_gc_boundary(self) -> None:
         entry = mirror_entry(self.mirror, "runtime-retention-437")
@@ -750,6 +809,18 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         self.assertIn("action `head_sha` cannot substitute for reviewer-head authority", entry)
         self.assertIn("all required reviewer heads equal live PR head", entry)
         self.assertIn("all required reviewer heads equal live PR head", self.skill)
+        for required in (
+            "effect-adapter boundary",
+            "owner-local admission contract",
+            "concrete `controller_action`",
+            "durable artifact",
+            "ConsensusGate/meta-judge or review truth table",
+            "helper-owned durable result/diagnostic artifacts",
+            "`.refactor-loop/host.env` may be skill-private runtime/cache/log read state only",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
         self.assertIn(
             "Consensus→implement projection durable fact source is the consensus judge artifact frontmatter, `## If consensus`, `Implementation owner`, and Implement plan structured fields `scope_paths`, `old_pattern`, `new_principle`, and optional `verification_hints`; parser failure emits no implementation action.",
             self.skill,
@@ -767,13 +838,23 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "generic codex fallback",
             "prompt-body decision",
             "standalone authorization from `wakeup-plan`",
-            "argv/shell/cmd/command_line/commands/env/git/gh/executor/lifecycle_authority/lifecycle_owner/generic command fields",
+            "the fixed forbidden field set is at least",
+            "existing extra `args` rejection retained",
             "new lifecycle authority",
             "`ControllerTurnDecision`",
             "controller-turn worker",
             "active-active scheduler",
             "`.refactor-loop/host.env` as host production SSOT",
             "generic lifecycle actor",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, self.skill)
+
+        for forbidden in (
+            "no generic effect-adapter runtime abstraction",
+            "no public command bus",
+            "no executor layer",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
@@ -1366,7 +1447,20 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in sorted(forbidden_action_fields):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, combined_authority)
-        self.assertIn("test_forbidden_fields_fail_closed", read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"))
+        runner_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_runner.py")
+        for forbidden_name in (
+            "ControllerEffectAdapter",
+            "WakeupActionAdmission",
+            "WakeupActionResult",
+            "ControllerTurnDecision",
+        ):
+            with self.subTest(forbidden_name=forbidden_name):
+                self.assertNotIn(forbidden_name, runner_projection.class_names)
+                self.assertNotIn(forbidden_name, runner_projection.string_literals)
+        self.assertIn(
+            "test_effect_admission_boundary_rejects_minimum_forbidden_command_and_lifecycle_fields",
+            read(SKILL_ROOT / "scripts" / "test_wakeup_runner.py"),
+        )
 
     def test_observability_comment_writers_owner_local_contract_is_locked(self) -> None:
         heading = "## Named runtime exception — observability-comment-writers(per #53)"

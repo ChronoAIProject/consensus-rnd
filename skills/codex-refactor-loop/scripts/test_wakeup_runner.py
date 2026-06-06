@@ -28,6 +28,7 @@ from codex_refactor_loop import labels
 from codex_refactor_loop.wakeup_runner import (
     WakeupRunner,
     RunnerResult,
+    SUPPORTED_CONTROLLER_ACTIONS,
     _log_tick_status,
     _run_once_with_periodic_heartbeat,
     _wakeup_tick_action,
@@ -1660,14 +1661,72 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual([(result.action_id, result.status, result.reason) for result in results], [("spawn:failed-target-log", "applied", "")])
         launch.assert_called_once()
 
-    def test_forbidden_fields_fail_closed(self) -> None:
-        for field in ("argv", "command_line", "lifecycle_authority", "lifecycle_owner", "target_ref"):
+    def test_effect_admission_boundary_rejects_minimum_forbidden_command_and_lifecycle_fields(self) -> None:
+        minimum_forbidden_fields = (
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+        )
+        for field in minimum_forbidden_fields:
             with self.subTest(field=field):
                 results = self.run_result(self.base_plan(self.spawn_action(action_id=f"forbidden:{field}", **{field: "forbidden"})))
 
                 self.assertEqual(results[0].status, "blocked")
                 self.assertEqual(results[0].reason, f"forbidden_fields:{field}")
                 self.assertEqual(self.supervisor.calls, [])
+                pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+                self.assertIn(f"WAKEUP_RUNNER_BLOCKED:forbidden:{field}:forbidden_fields:{field}", pending)
+                self.assert_blocked_ledger(f"forbidden:{field}", f"forbidden_fields:{field}")
+
+    def test_effect_admission_boundary_keeps_compatibility_extra_forbidden_fields(self) -> None:
+        for field in (
+            "args",
+            "target_ref",
+        ):
+            with self.subTest(field=field):
+                results = self.run_result(self.base_plan(self.spawn_action(action_id=f"forbidden:{field}", **{field: "forbidden"})))
+
+                self.assertEqual(results[0].status, "blocked")
+                self.assertEqual(results[0].reason, f"forbidden_fields:{field}")
+                self.assertEqual(self.supervisor.calls, [])
+                pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+                self.assertIn(f"WAKEUP_RUNNER_BLOCKED:forbidden:{field}:forbidden_fields:{field}", pending)
+                self.assert_blocked_ledger(f"forbidden:{field}", f"forbidden_fields:{field}")
+
+    def test_effect_admission_boundary_is_concrete_controller_action_allowlist_only(self) -> None:
+        expected_actions = {
+            "spawn_codex_harness_background",
+            "safe_push",
+            "dispatch_consensus_implementation",
+            "publish_implementation_output",
+            "publish_worker_output_from_action",
+            "dispatch_reviewers",
+            "dispatch_pr_rebase_resolve",
+            "commit_push_resolved_pr_rebase",
+            "open_release_rollup_pr_from_action",
+            "close_managed_item_from_drop_marker",
+            "review_gate",
+            "publish_release_candidate",
+            "apply_issue_decomposition_plan",
+        }
+
+        self.assertEqual(SUPPORTED_CONTROLLER_ACTIONS, expected_actions)
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "wakeup_runner.py").read_text(encoding="utf-8")
+        for forbidden_runtime_abstraction in (
+            "ControllerEffectAdapter",
+            "WakeupActionAdmission",
+            "WakeupActionResult",
+        ):
+            with self.subTest(forbidden_runtime_abstraction=forbidden_runtime_abstraction):
+                self.assertNotIn(forbidden_runtime_abstraction, source)
 
     def test_nested_forbidden_fields_fail_closed(self) -> None:
         action = self.issue_decomposition_action(
