@@ -3795,11 +3795,12 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     suppress_publish_superseded_implementation_spawn_intents(actions)
     if gh_items_loaded and not has_dispatchable_action(actions):
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
+    serialize_conflicting_consensus_implementation_actions(actions)
+    restore_hard_gate_for_dispatchable_actions(concurrency, actions)
     fallback = audit_fallback_action(ctx, concurrency, actions)
     if fallback is not None:
         actions.append(fallback)
     actions.sort(key=action_priority_sort_key)
-    serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
 
     recommendation: str | None = None
