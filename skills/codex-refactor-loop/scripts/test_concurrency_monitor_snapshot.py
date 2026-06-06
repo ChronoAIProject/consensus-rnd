@@ -214,6 +214,32 @@ class ConcurrencyMonitorSnapshotTests(unittest.TestCase):
         self.assertEqual("github-release", data["update_source"])
         self.assertEqual("https://example/release", data["update_release_url"])
 
+    def test_snapshot_projects_cached_display_only_active_controller_identity(self) -> None:
+        status_path = self.repo / ".refactor-loop" / "state" / "active-controller-status.json"
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        status_path.write_text(
+            json.dumps(
+                {
+                    "active_controller": "owner",
+                    "owner_device": "device-a",
+                    "current_github_login": "octocat",
+                    "identity_authority": "display-only",
+                    "github_login_status": "ok",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        data = self.write_snapshot()
+
+        self.assertEqual("owner", data["active_controller"])
+        self.assertEqual("device-a", data["owner_device"])
+        self.assertEqual("octocat", data["current_github_login"])
+        self.assertEqual("display-only", data["identity_authority"])
+        self.assertEqual("ok", data["github_login_status"])
+        self.assertNotIn("owner_login", data)
+
     def test_snapshot_omits_disabled_unknown_and_stale_update_state(self) -> None:
         now = datetime(2026, 5, 31, 12, 0, tzinfo=timezone.utc)
         cases = (

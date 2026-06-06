@@ -8,7 +8,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Callable, Mapping, Sequence
 
 from .context import LoopContext
 
@@ -17,6 +17,12 @@ DEFAULT_ACTIVE_CONTROLLER_REF = "refs/heads/crnd/active-controller"
 DEFAULT_ACTIVE_CONTROLLER_TTL_SECONDS = 1800
 LEASE_BLOB_PATH = "active-controller.json"
 ZERO_SHA = "0" * 40
+GITHUB_DIAGNOSTIC_STATUS_FIELDS = (
+    "current_github_login",
+    "identity_authority",
+    "github_login_status",
+    "github_login_error",
+)
 
 
 @dataclass(frozen=True)
@@ -290,9 +296,19 @@ def require_active_controller(ctx: LoopContext, action: str) -> LeaseDecision:
     return ActiveControllerLeaseStore.from_context(ctx).require_owner(action)
 
 
-def write_active_controller_status(ctx: LoopContext, decision: LeaseDecision) -> None:
+def write_active_controller_status(
+    ctx: LoopContext,
+    decision: LeaseDecision,
+    *,
+    github_diagnostics: Mapping[str, str] | None = None,
+) -> None:
     path = ctx.paths.state / "active-controller-status.json"
     path.parent.mkdir(parents=True, exist_ok=True)
+    diagnostics = (
+        _github_diagnostic_status_projection(github_diagnostics)
+        if github_diagnostics is not None
+        else _cached_github_diagnostics(path)
+    )
     payload = {
         "active_controller": "owner" if decision.allowed else f"noop:{decision.status}",
         "action": decision.action,
@@ -301,7 +317,28 @@ def write_active_controller_status(ctx: LoopContext, decision: LeaseDecision) ->
         "expires_at": decision.expires_at,
         "updated_at": _format_time(_now()),
     }
+    payload.update(diagnostics)
     path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _cached_github_diagnostics(path: Path) -> dict[str, str]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    return _github_diagnostic_status_projection(payload)
+
+
+def _github_diagnostic_status_projection(payload: Mapping[str, object]) -> dict[str, str]:
+    diagnostics: dict[str, str] = {}
+    for field in GITHUB_DIAGNOSTIC_STATUS_FIELDS:
+        value = payload.get(field)
+        if isinstance(value, str):
+            diagnostics[field] = value
+    diagnostics.setdefault("identity_authority", "display-only")
+    return diagnostics
 
 
 def _now() -> datetime:

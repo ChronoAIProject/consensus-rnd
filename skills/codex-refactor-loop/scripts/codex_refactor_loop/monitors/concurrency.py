@@ -226,6 +226,7 @@ class ConcurrencyMonitor:
             "daemons_healthy": healthy,
             "daemons_total": len(daemons),
         }
+        payload.update(self.read_active_controller_projection())
         update_projection = self.read_update_projection(now=now)
         if update_projection:
             payload.update(update_projection)
@@ -233,6 +234,25 @@ class ConcurrencyMonitor:
         tmp = self.statusline_snapshot.with_name(f".{self.statusline_snapshot.name}.tmp.{os.getpid()}")
         tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
         os.replace(tmp, self.statusline_snapshot)
+
+    def read_active_controller_projection(self) -> dict[str, object]:
+        raw = read_json(self.ctx.paths.state / "active-controller-status.json", {})
+        if not isinstance(raw, dict):
+            return {}
+        projection: dict[str, object] = {}
+        for field in (
+            "active_controller",
+            "owner_device",
+            "current_github_login",
+            "identity_authority",
+            "github_login_status",
+        ):
+            value = raw.get(field)
+            if isinstance(value, str):
+                projection[field] = value
+        if "identity_authority" not in projection:
+            projection["identity_authority"] = "display-only"
+        return projection
 
     def read_update_projection(self, *, now: datetime) -> dict[str, object]:
         raw = read_json(self.ctx.paths.state / "update-check.json", {})
