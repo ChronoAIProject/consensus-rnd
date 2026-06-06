@@ -1083,6 +1083,37 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertIn(forbidden, entry)
 
+    def test_controller_tick_supervisor_mirror_preserves_no_lifecycle_boundary(self) -> None:
+        entry = mirror_entry(self.mirror, "controller-tick-supervisor-553")
+
+        for required in (
+            "SharedControllerProjection",
+            "ProjectionRequest",
+            "ManagedWorkSnapshot",
+            "key-only workqueue keys",
+            "TickWorkItem(handler,key)",
+            "LegacyDaemonModeGuard",
+            "$CONTROLLER_TICK_SUPERVISOR_ENABLE=true",
+            "canonical legacy daemon list",
+            "test_shared_controller_projection.py",
+            "test_controller_tick_supervisor.py",
+            "test_workqueue.py",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, entry)
+                self.assertIn(required, self.skill)
+
+        for forbidden in (
+            "no generic executor",
+            "no argv/shell/cmd/command_line/commands/env/git/gh payload",
+            "no pending-events authority",
+            "no host production SSOT",
+            "no dev-sync migration in the first pass",
+            "no write side-effect authorization",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+
     def test_no_targeted_phase9_judge_run_is_authorization_source(self) -> None:
         targeted_old_paths = re.compile(r"\.refactor-loop/runs/phase9-issue(?:49|51|53|56|65|66|191)-r\d+-judge\.md")
         checked_paths = (

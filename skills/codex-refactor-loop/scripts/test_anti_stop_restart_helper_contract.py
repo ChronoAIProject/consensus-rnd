@@ -10,19 +10,24 @@ from pathlib import Path
 
 SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
+
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 RESTART_MODULE = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "restart.py"
 RUNTIME_EXCEPTIONS = SKILL_ROOT / "authorizations" / "runtime-exceptions.md"
 
 
 def restart_source_daemon_commands(source: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return restart_source_assignment(source, "DAEMON_COMMANDS")
+
+
+def restart_source_assignment(source: str, name: str):
     tree = ast.parse(source)
     for node in tree.body:
-        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "DAEMON_COMMANDS" for target in node.targets):
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == name for target in node.targets):
             return ast.literal_eval(node.value)
-        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == "DAEMON_COMMANDS":
+        if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name) and node.target.id == name:
             return ast.literal_eval(node.value)
-    raise AssertionError("DAEMON_COMMANDS assignment missing from restart.py")
+    raise AssertionError(f"{name} assignment missing from restart.py")
 
 
 class AntiStopRestartHelperContractTests(unittest.TestCase):
@@ -93,7 +98,15 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(name, self.restart)
                 self.assertIn('"consensus-rnd-cli"', self.restart)
                 self.assertIn(f'"{command[2]}"', self.restart)
-        self.assertEqual(len(daemon_commands), self.restart.count('"--daemon"'))
+
+        # The opt-in supervisor command also uses --daemon, but it must not
+        # become part of the canonical legacy daemon allowlist.
+        supervisor_command = restart_source_assignment(self.restart, "SUPERVISOR_DAEMON_COMMAND")
+        self.assertEqual(7, len(daemon_commands))
+        self.assertNotIn("patrol_inspector_daemon", {name for name, _command in daemon_commands})
+        self.assertNotIn(supervisor_command[0], {name for name, _command in daemon_commands})
+        self.assertEqual(len(daemon_commands), sum(command.count("--daemon") for _name, command in daemon_commands))
+        self.assertIn("--daemon", supervisor_command[1])
 
     def test_restart_module_has_no_controller_lifecycle_authority(self) -> None:
         for token in ("gh ", "git ", "pr merge", "issue close", "git tag", "gh release"):

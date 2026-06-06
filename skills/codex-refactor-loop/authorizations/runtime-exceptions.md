@@ -358,6 +358,19 @@ New: mirror narrows skip to pid alive + fresh heartbeat + current fingerprint + 
 - verification: `test_restart_daemons.py`, `test_anti_stop_restart_helper_contract.py`, `test_cli_command_router.py`, `test_runtime_retention.py`, `test_runtime_exception_authorization_sources.py`
 - no_new_runtime_authority: This mirror only replaces the missing ignored judge-log authorization path.
 
+<a id="controller-tick-supervisor-553"></a>
+## ControllerTickSupervisor(per #553)
+
+- surface: `ControllerTickSupervisor`
+- source_issue: `#553`
+- source_round: `r1`
+- source_marker: `META_JUDGE_DONE:consensus:structural:shared-read-projection-then-narrow-tick-supervisor-with-key-only-queue-and-legacy-mode-guard`
+- skill_anchor: `#controller-tick-supervisor-553`
+- allowed: `SharedControllerProjection` and `ProjectionRequest` are rebuildable typed read-only projections over owner-local fact sources such as `ManagedWorkSnapshot`, daemon-status, statusline snapshot, and key-only workqueue keys. `ControllerTickSupervisor` may schedule only named `TickHandler` implementations from `TickWorkItem(handler,key)` pairs after `LegacyDaemonModeGuard` proves the same target is not also owned by a legacy restart-helper-managed daemon. `$CONTROLLER_TICK_SUPERVISOR_ENABLE=true` is a first migration opt-in that lets `restart-daemons` include the supervisor target without changing the canonical legacy daemon list.
+- forbidden: no generic executor, no argv/shell/cmd/command_line/commands/env/git/gh payload, no pending-events authority, no host production SSOT, no issue/PR lifecycle, no label mutation, no commit, no push, no merge, no tag, no release, no public lifecycle verb, no dev-sync migration in the first pass, and no write side-effect authorization; existing helpers must re-check #191/#396/#238/#322/#403/#437/#504 or #53 gates.
+- verification: `test_shared_controller_projection.py`, `test_controller_tick_supervisor.py`, `test_workqueue.py`, `test_restart_daemons.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This mirror documents an opt-in migration building block only. It does not authorize lifecycle mutations or make `.refactor-loop/` a host production fact source.
+
 <a id="runtime-retention-437"></a>
 ## runtime-retention-437
 

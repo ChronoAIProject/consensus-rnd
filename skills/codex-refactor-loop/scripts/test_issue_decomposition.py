@@ -180,6 +180,11 @@ class IssueDecompositionTests(unittest.TestCase):
             load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
 
         payload = self.valid_payload()
+        payload["children"][0]["scope"] = {"cmd": "forbidden"}
+        with self.assertRaisesRegex(IssueDecompositionError, "forbidden lifecycle/command fields"):
+            load_issue_decomposition_plan(self.ctx, self.write_plan(payload))
+
+        payload = self.valid_payload()
         payload["children"][0]["body_artifact_path"] = str((self.tmp / ".refactor-loop/runs/child-one.md").resolve())
         with self.assertRaisesRegex(IssueDecompositionError, "repo-relative"):
             load_issue_decomposition_plan(self.ctx, self.write_plan(payload))

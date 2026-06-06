@@ -125,6 +125,7 @@ This matrix is the only manually maintained host.env contract. `host.env.example
 | `$PATROL_INSPECTOR_ENABLE` | optional-noop | patrol-inspector | `false` | false or empty exits 0 with disabled patrol state and no patrol-owned issue publication | patrol-inspector, restart-daemons | `test_patrol_authority.py`, `test_host_env_surface_matrix.py` |
 | `$PATROL_INSPECTOR_INTERVAL_SECONDS` | defaulted | patrol-inspector | `7200` | default to `7200` seconds for the explicit patrol-inspector daemon command; this is a loop runtime injection knob, not host production SSOT | patrol-inspector | `test_patrol_inspector.py`, `test_host_env_surface_matrix.py` |
 | `$PATROL_INSPECTOR_MAX_FINDINGS` | defaulted | patrol-inspector | `25` | default to `25` findings per patrol tick; invalid, missing, or non-positive values use the default | patrol-inspector | `test_patrol_inspector.py`, `test_host_env_surface_matrix.py` |
+| `$CONTROLLER_TICK_SUPERVISOR_ENABLE` | optional-noop | ControllerTickSupervisor | `false` | false or empty keeps the legacy restart-helper-managed daemon list unchanged; true opts into the narrow supervisor target while `LegacyDaemonModeGuard` still rejects same-target legacy/supervisor overlap | supervisor, restart-daemons | `test_controller_tick_supervisor.py`, `test_restart_daemons.py` |
 | `$COMMENT_MONITOR_INTERVAL` | defaulted | comment-monitor | `30` | default to `30` seconds; higher values lower fixed search cost while unchanged `updatedAt` items skip comments queries | comment-monitor | `test_comment_monitor.py` |
 | `$COMMENT_MONITOR_LOOKBACK` | optional-noop | comment-monitor | empty or `YYYY-MM-DD` / `updated:>=YYYY-MM-DD` search fragment | empty adds no lookback filter; non-empty is limited to a GitHub `updated:` search qualifier and must not change labels, ownership, or write behavior | comment-monitor | `test_comment_monitor.py`, `test_host_env_surface_matrix.py` |
 | `$HOST_HOLISTIC_STATUS_ENABLE` | optional-noop | global-dashboard-status-card | `false` | false or empty exits 0 with noop reason; true only enables the progress-reporter issue-comment PATCH subpath after #191 owner, interval, hash, and headroom gates | progress-reporter, holistic-status | `test_holistic_status.py`, `test_progress_reporter.py`, `test_host_env_surface_matrix.py` |
@@ -459,6 +460,19 @@ Uninstall note: remove the cron line or unload/delete the launchd plist; do not 
 - **Source-regression**: `AntiStopRestartHelperContractTests` + `RestartDaemonsBehaviorTests.test_restart_helper_source_mentions_launch_fingerprint_contract` + `RuntimeRetentionSourceRegressionTests` 字面断言本段标题、narrow allowlist、no lifecycle authority、cron/launchd install、#49 mirror authorization path、helper singleton check + actor-owned heartbeat freshness check + helper-private launch fingerprint fact source、controller wakeup ordering、anti-regression forbidden tokens、no wrapper sidecar heartbeat writer、direct rm、no archive/index/new daemon。
 
 授权来源:`skills/codex-refactor-loop/authorizations/runtime-exceptions.md#anti-stop-restart-helper-49`(Consensus-rnd Phase design-consensus r3 `META_JUDGE_DONE:consensus:A-cron-only-with-pending-event-alert`)。
+
+<a id="controller-tick-supervisor-553"></a>
+## ControllerTickSupervisor(per #553)
+
+Authorization source: `skills/codex-refactor-loop/authorizations/runtime-exceptions.md#controller-tick-supervisor-553`.
+
+`SharedControllerProjection` / `ProjectionRequest` are typed, rebuildable, read-only projection surfaces. They reuse owner-local fact sources such as `ManagedWorkSnapshot`, `consensus-rnd-cli daemon-status --json`, statusline snapshot, and key-only workqueue keys. They are not host production SSOT and do not grant lifecycle authority.
+
+`ControllerTickSupervisor` is a narrow migration scheduler for named `TickHandler` implementations. It consumes only `TickWorkItem(handler,key)` pairs from `KeyOnlyWorkQueue`; queue items carrying `argv`, `shell`, `cmd`, `command_line`, `commands`, `env`, `git`, `gh`, `executor`, `lifecycle_authority`, or `lifecycle_owner` fail closed before dispatch. `LegacyDaemonModeGuard` must prove the same target is not also owned by a legacy restart-helper-managed daemon before a handler runs. `$CONTROLLER_TICK_SUPERVISOR_ENABLE=true` only opts `restart-daemons` into maintaining the supervisor target; false or empty leaves the canonical legacy daemon list unchanged, including the canonical eight legacy daemon names.
+
+Forbidden: no generic executor, no pending-events authority, no host production SSOT, no issue/PR lifecycle, no label mutation, no commit, no push, no merge, no tag, no release, no public lifecycle verb, no first-pass dev-sync migration, and no write side-effect authorization. Any write side effect remains inside existing helpers, which must re-check #191/#396/#238/#322/#403/#437/#504 or #53 gates.
+
+Verification: `test_shared_controller_projection.py`, `test_controller_tick_supervisor.py`, `test_workqueue.py`, `test_restart_daemons.py`, `test_runtime_exception_authorization_sources.py`, and `test_skill_reference_anchors.py`.
 
 ## Dogfood anti-rules(per #205)
 

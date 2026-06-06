@@ -1772,6 +1772,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "blocked")
         self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
 
+    def test_nested_forbidden_fields_fail_closed(self) -> None:
+        action = self.issue_decomposition_action(
+            action_id="decompose:nested-forbidden",
+            proof_payload={"executor": "shell", "nested": [{"env": {"TOKEN": "x"}}]},
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
+
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
         plan = self.base_plan(self.spawn_action())

@@ -16,7 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .active_controller import require_active_controller, write_active_controller_status
 from . import labels
-from .context import LoopContext, LoopContextError
+from .context import LoopContext
 from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
