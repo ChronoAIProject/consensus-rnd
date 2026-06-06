@@ -209,6 +209,29 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(reflector_marker.reason, "")
             self.assertEqual(read_worker_terminal_marker(solver).reason, "duplicate_or_conflicting_log_marker")
 
+    def test_phase9_reflector_final_meta_resolved_tolerates_duplicate_identical_final_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            reflector = logs / "phase9-issue573-r3-reflector.log"
+            reflector.write_text(
+                "SOLVER_DONE:delete:abstain:no-current-deletion\n"
+                "⟦AI:AUTO-LOOP⟧\n"
+                "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
+                "tokens used\n"
+                "input tokens: 1\n"
+                "output tokens: 2\n"
+                "⟦AI:AUTO-LOOP⟧\n"
+                "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(reflector)
+            self.assertTrue(marker.found)
+            self.assertEqual(marker.marker, "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
+            self.assertEqual(marker.source, "log")
+            self.assertEqual(marker.reason, "")
+
     def test_single_nonfinal_log_marker_is_not_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)
