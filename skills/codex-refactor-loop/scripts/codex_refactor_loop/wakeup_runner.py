@@ -99,6 +99,7 @@ SPAWN_BATCH_CONTROLLER_ACTIONS = frozenset(
 REMOTE_CI_FIX_ATTEMPT_CAP = 2
 REMOTE_CI_FIX_DONE_RE = re.compile(r"^REMOTE_CI_FIX_DONE:([^:]+):(ok|infra|blocked)$")
 SAFE_CI_CHECK_TOKEN_RE = re.compile(r"[^A-Za-z0-9._-]+")
+NON_BLOCKING_VALIDATION_REASONS = frozenset({"publish_implementation_empty_scoped_diff"})
 
 
 @dataclass(frozen=True)
@@ -283,7 +284,7 @@ class WakeupRunner:
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
-            if error == "issue_decomposition_duplicate_sentinel":
+            if error == "issue_decomposition_duplicate_sentinel" or error in NON_BLOCKING_VALIDATION_REASONS:
                 return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
         if self.dry_run:
