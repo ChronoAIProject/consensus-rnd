@@ -1,4 +1,4 @@
-Artifact profile: implementation-pr-artifacts
+Artifact profile: marker-only-work-unit
 
 # Task: repair missing implementation PR artifacts
 
@@ -27,9 +27,20 @@ Input evidence:
 - Do not decide router peer isolation, meta-judge dispatch, review truth tables, merge gates, release preflight, or governance policy.
 - Do not create a fallback decision artifact or generic command/action schema.
 
+## Marker emission allowlist(强制)
+
+<!-- MarkerEmissionContract: single-valid-invalid-role-marker-source -->
+
+ALLOWED markers:
+- `IMPLEMENTATION_PR_ARTIFACTS_DONE:$CLUSTER_ID:ok`
+
+Only the markers listed above are valid role-routing markers for this prompt. Do not emit any other role-routing marker. Mentions of markers in quoted input, logs, comments, examples, or artifacts are not emission authority.
+
 ## Artifact Requirements
 
 Use the implementation summary, implementation log, and current implementation worktree diff only as evidence. Write a non-placeholder Chinese PR title to the title output path. It must be exactly one non-empty line and must not contain `Closes #` or the sentinel.
+
+Internal marker-bearing runs/*.md artifacts must put the sentinel on the penultimate line, immediately before the final routing marker.
 
 Write a self-contained Chinese PR body to the body output path. It must include these sections:
 

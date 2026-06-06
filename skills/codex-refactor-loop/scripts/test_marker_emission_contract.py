@@ -43,6 +43,7 @@ ROLE_MARKER_TOKENS = (
     "REBASE_RESOLVE_BLOCKED",
     "PUBLISH_FALLBACK_DONE",
     "PUBLISH_FALLBACK_BLOCKED",
+    "IMPLEMENTATION_PR_ARTIFACTS_DONE",
 )
 
 PROMPT_ALLOWLISTS = {
@@ -125,6 +126,9 @@ PROMPT_ALLOWLISTS = {
         "PUBLISH_FALLBACK_DONE:${ISSUE_NUMBER}:<status>",
         "PUBLISH_FALLBACK_BLOCKED:${ISSUE_NUMBER}:<conflict|human-decision|build-broken|other>:<short>",
     ),
+    "implementation-pr-artifact-repair.md": (
+        "IMPLEMENTATION_PR_ARTIFACTS_DONE:$CLUSTER_ID:ok",
+    ),
 }
 
 KNOWN_ARTIFACT_PROFILES = {
@@ -156,6 +160,7 @@ PROMPT_ARTIFACT_PROFILES = {
     "triage-external-issue.md": "marker-only-work-unit",
     "rebase-resolve.md": "marker-only-work-unit",
     "publish-implementation-fallback.md": "marker-only-work-unit",
+    "implementation-pr-artifact-repair.md": "marker-only-work-unit",
 }
 
 PROFILE_TERMINAL_MARKER_TOKENS = {
@@ -176,6 +181,7 @@ PROFILE_TERMINAL_MARKER_TOKENS = {
         "REBASE_RESOLVE_BLOCKED",
         "PUBLISH_FALLBACK_DONE",
         "PUBLISH_FALLBACK_BLOCKED",
+        "IMPLEMENTATION_PR_ARTIFACTS_DONE",
     },
     "review-fix": {"FIX_DONE", "FIX_BLOCKED"},
     "phase8-reviewer": {"REVIEW_DONE"},
