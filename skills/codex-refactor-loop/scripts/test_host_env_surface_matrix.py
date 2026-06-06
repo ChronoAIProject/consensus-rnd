@@ -170,7 +170,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "MANAGED_WORK_SNAPSHOT_STALE_MAX_SECONDS": ("900", "discovery returns `loaded_ok=false`"),
             "PHASE9_ROUTER_INTERVAL_SECONDS": ("120", "phase9-router daemon command"),
             "WAKEUP_RUNNER_INTERVAL_SECONDS": ("120", "wakeup-runner daemon command"),
-            "PATROL_INSPECTOR_ENABLE": ("false", "disabled patrol state"),
+            "PATROL_INSPECTOR_ENABLE": ("true", "host-owned explicit false/empty keeps it off"),
             "PATROL_INSPECTOR_INTERVAL_SECONDS": ("7200", "patrol-inspector daemon command"),
             "PATROL_INSPECTOR_MAX_FINDINGS": ("25", "findings per patrol tick"),
             "COMMENT_MONITOR_INTERVAL": ("30", "unchanged `updatedAt` items skip comments queries"),
@@ -179,7 +179,7 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
             "HOST_HOLISTIC_STATUS_INTERVAL_SECONDS": ("600", "unchanged rendered hash skips PATCH"),
             "RELEASE_ROLLUP_COOLDOWN_SECONDS": ("21600", "same integration SHA"),
             "STALE_REVIVAL_HOURS": ("3", "redispatchable implement log"),
-            "META_ESCALATION_STUCK_HOURS": ("24", "max(META_ESCALATION_STUCK_HOURS, STALE_REVIVAL_HOURS)"),
+            "META_ESCALATION_STUCK_HOURS": ("3", "max(META_ESCALATION_STUCK_HOURS, STALE_REVIVAL_HOURS)"),
         }
         for key, (default, behavior) in cases.items():
             with self.subTest(key=key):
@@ -223,9 +223,9 @@ class HostEnvSurfaceMatrixTests(unittest.TestCase):
         self.assertEqual("defaulted", meta_escalation["Category"])
         self.assertEqual("repository stalled meta-reflector", meta_escalation["Owner"])
         self.assertEqual("wakeup plan", meta_escalation["Consumer"])
-        self.assertIn("missing, invalid, or non-positive defaults to `24` hours", meta_escalation["Missing/empty behavior"])
-        self.assertIn("later than ordinary stale revival", meta_escalation["Missing/empty behavior"])
-        self.assertEqual("24", self.exports["META_ESCALATION_STUCK_HOURS"]["value"])
+        self.assertIn("missing, invalid, or non-positive defaults to `3` hours", meta_escalation["Missing/empty behavior"])
+        self.assertIn("not earlier than ordinary stale revival", meta_escalation["Missing/empty behavior"])
+        self.assertEqual("3", self.exports["META_ESCALATION_STUCK_HOURS"]["value"])
         self.assertIn("defaulted", self.exports["META_ESCALATION_STUCK_HOURS"]["section"])
         self.assertIn("META_ESCALATION_STUCK_HOURS", read(HOST_ENV_EXAMPLE))
         self.assertIn("test_wakeup_plan.py", meta_escalation["Test owner"])

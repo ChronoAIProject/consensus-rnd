@@ -5607,13 +5607,13 @@ class StaleRevivalTests(unittest.TestCase):
         try:
             os.environ.pop("META_ESCALATION_STUCK_HOURS", None)
             os.environ.pop("STALE_REVIVAL_HOURS", None)
-            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+            self.assertEqual(3 * 3600.0, meta_escalation_stuck_seconds())
 
             os.environ["META_ESCALATION_STUCK_HOURS"] = "bad"
-            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+            self.assertEqual(3 * 3600.0, meta_escalation_stuck_seconds())
 
             os.environ["META_ESCALATION_STUCK_HOURS"] = "0"
-            self.assertEqual(24 * 3600.0, meta_escalation_stuck_seconds())
+            self.assertEqual(3 * 3600.0, meta_escalation_stuck_seconds())
 
             os.environ["META_ESCALATION_STUCK_HOURS"] = "2"
             os.environ["STALE_REVIVAL_HOURS"] = "5"
