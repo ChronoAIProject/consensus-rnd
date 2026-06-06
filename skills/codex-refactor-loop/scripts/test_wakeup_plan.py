@@ -2723,6 +2723,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         log.write_text(
             "context from solver artifact:\n"
             "SOLVER_DONE:delete:abstain:no-current-deletion\n"
+            "context from judge artifact:\n"
+            "META_JUDGE_DONE:converge:round-3\n"
             "reflector final decision follows\n"
             "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
             "EXIT=0\n",
@@ -2746,6 +2748,12 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 573)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 573})
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        )
         self.assertNotIn("status_only", action)
 
     def test_meta_resolved_drop_completed_marker_for_closed_target_is_status_only(self) -> None:
