@@ -38,11 +38,16 @@ DAEMON_COMMANDS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "wakeup_runner_daemon",
         ("python3", "{skill_root}/scripts/consensus-rnd-cli", "wakeup-runner", "--daemon", "--interval-seconds", "{wakeup_runner_interval_seconds}"),
     ),
+    (
+        "patrol_inspector_daemon",
+        ("python3", "{skill_root}/scripts/consensus-rnd-cli", "patrol-inspector", "--daemon", "--interval-seconds", "{patrol_inspector_interval_seconds}"),
+    ),
 )
 
 DAEMON_COMMAND_ENV_PLACEHOLDERS: dict[str, tuple[str, str]] = {
     "{phase9_router_interval_seconds}": ("PHASE9_ROUTER_INTERVAL_SECONDS", "120"),
     "{wakeup_runner_interval_seconds}": ("WAKEUP_RUNNER_INTERVAL_SECONDS", "120"),
+    "{patrol_inspector_interval_seconds}": ("PATROL_INSPECTOR_INTERVAL_SECONDS", "7200"),
 }
 
 def restart_managed_daemon_names() -> tuple[str, ...]:

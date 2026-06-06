@@ -79,6 +79,7 @@ class HeadlessDogfoodFixture:
                     "INTEGRATION_BRANCH=auto-refact-dev",
                     "REVIEW_BASE_BRANCH=dev",
                     "CODEX_FLOOR=2",
+                    "META_ESCALATION_STUCK_HOURS=999999",
                     f'CODEX_REFACTOR_LOOP_SKILL_ROOT="{SKILL_ROOT}"',
                     "",
                 )
@@ -97,6 +98,7 @@ class HeadlessDogfoodFixture:
             "GH_REPO_SLUG": "owner/repo",
             "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
             "CODEX_REFACTOR_LOOP_SKILL_ROOT": str(SKILL_ROOT),
+            "META_ESCALATION_STUCK_HOURS": "999999",
             "PATH": f"{self.fakebin}:{os.environ.get('PATH', '')}",
         }
         self.ctx = LoopContext.load(repo_root=self.repo, env=self.env)

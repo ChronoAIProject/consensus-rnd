@@ -72,6 +72,7 @@ class HolisticStatusProjection:
     open_items: tuple[HolisticWorkItem, ...]
     dependencies: tuple[HolisticDependency, ...]
     daemon_summary: tuple[str, ...]
+    patrol_summary: tuple[str, ...]
     statusline: Mapping[str, Any]
     recent_merges: int
 
@@ -93,6 +94,7 @@ def collect(
         open_items=open_items,
         dependencies=dependencies,
         daemon_summary=_daemon_summary(ctx),
+        patrol_summary=_patrol_summary(ctx.paths.state / "patrol-inspector.json"),
         statusline=_read_json(ctx.paths.statusline_snapshot),
         recent_merges=_recent_merge_count(ctx.paths.recent_pr_merges),
     )
@@ -118,6 +120,11 @@ def render_markdown(projection: HolisticStatusProjection) -> str:
     lines.extend(f"- {item}" for item in projection.daemon_summary)
     if not projection.daemon_summary:
         lines.append("- daemon status unavailable")
+    lines.extend(["", "### Patrol", ""])
+    if projection.patrol_summary:
+        lines.extend(f"- {item}" for item in projection.patrol_summary)
+    else:
+        lines.append("- patrol state unavailable")
     lines.extend(["", "### Open Managed Items", ""])
     if projection.open_items:
         for item in projection.open_items:
@@ -158,7 +165,7 @@ def render_peek_summary(projection: HolisticStatusProjection) -> list[str]:
     lines = [
         "▍Holistic status:",
         f"  workers actual={t.actual_workers} target={t.target_workers} floor={t.floor} deficit={t.deficit} queue={t.queued_dispatches}",
-        f"  open_items={len(projection.open_items)} dispatchable={dispatchable} blocked={blocked} dependencies={len(projection.dependencies)}",
+        f"  open_items={len(projection.open_items)} dispatchable={dispatchable} blocked={blocked} dependencies={len(projection.dependencies)} patrol={len(projection.patrol_summary)}",
     ]
     for item in projection.open_items[:5]:
         deps = ",".join(item.dependencies) if item.dependencies else "-"
@@ -325,6 +332,18 @@ def _daemon_summary(ctx: LoopContext) -> tuple[str, ...]:
     except Exception:
         return ()
     return tuple(f"{daemon.name}: {daemon.status}" for daemon in report.daemons)
+
+
+def _patrol_summary(path: Path) -> tuple[str, ...]:
+    data = _read_json(path)
+    status = data.get("status")
+    if not isinstance(status, str) or not status:
+        return ()
+    findings = data.get("findings")
+    count = len(findings) if isinstance(findings, list) else 0
+    published = data.get("published")
+    published_count = len(published) if isinstance(published, list) else 0
+    return (f"patrol-inspector: {status} findings={count} published={published_count}",)
 
 
 def _read_json(path: Path) -> Mapping[str, Any]:

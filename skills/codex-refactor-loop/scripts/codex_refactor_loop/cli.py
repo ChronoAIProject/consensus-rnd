@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from . import github_body, holistic_status, project_rules, spawn, statusline
+from . import github_body, holistic_status, patrol, project_rules, spawn, statusline
 from .closed_label_reconciler import main as closed_label_reconciler_main
 from .checks.degradation import main as degradation_main
 from .checks.manifest import main as manifest_main
@@ -105,6 +105,11 @@ COMMANDS: dict[str, CommandSpec] = {
         closed_label_reconciler_main,
         "run the closed managed item phase-label reconciler",
         ("read-gh", "gh-label-closed-reconcile", "write-state"),
+    ),
+    "patrol-inspector": CommandSpec(
+        patrol.main,
+        "run the #541 patrol-inspector issue intake daemon",
+        ("read-state", "read-log", "read-gh", "gh-open", "gh-edit", "write-state"),
     ),
     "concurrency": CommandSpec(
         concurrency_main,

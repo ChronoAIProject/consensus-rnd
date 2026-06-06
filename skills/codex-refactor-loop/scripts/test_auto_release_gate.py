@@ -604,7 +604,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
 
             self.assertTrue(signal["passed"])
             self.assertEqual(signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 8)
+            self.assertEqual(sum(1 for value in signal["heartbeats"].values() if value), 9)
             self.assertTrue(signal["heartbeats"]["concurrency_monitor"])
             self.assertTrue(signal["heartbeats"]["closed_label_reconciler"])
             self.assertTrue(signal["heartbeats"]["wakeup_runner_daemon"])

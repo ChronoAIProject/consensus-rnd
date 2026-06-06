@@ -70,6 +70,7 @@ DAEMON_COMMANDS = {
     "concurrency",
     "dev-sync",
     "phase9-router",
+    "patrol-inspector",
     "progress-reporter",
     "release-gate",
     "restart-daemons",
@@ -94,6 +95,7 @@ DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
     "runtime-retention": {"git-worktree"},
     "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
+    "patrol-inspector": {"gh-open", "gh-edit"},
 }
 
 LIFECYCLE_TOKENS = {
@@ -125,6 +127,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "gh-stats",
                 "holistic-status",
                 "labels",
+                "patrol-inspector",
                 "concurrency",
                 "dev-sync",
                 "runtime-retention",
@@ -185,11 +188,18 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertNotIn("reconcile-labels", COMMANDS)
         for name, spec in COMMANDS.items():
             with self.subTest(command=name):
-                if name == "closed-label-reconciler":
+                if name in {"closed-label-reconciler", "patrol-inspector"}:
                     continue
                 self.assertNotIn("gh-label-closed-reconcile", spec.authority)
                 self.assertNotIn("gh-label", spec.authority)
                 self.assertNotIn("gh-edit", spec.authority)
+
+    def test_patrol_inspector_declares_only_patrol_issue_intake_authority(self) -> None:
+        self.assertEqual(
+            ("read-state", "read-log", "read-gh", "gh-open", "gh-edit", "write-state"),
+            COMMANDS["patrol-inspector"].authority,
+        )
+        self.assertFalse({"gh-close", "gh-label", "gh-merge", "git-push"} & set(COMMANDS["patrol-inspector"].authority))
 
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
