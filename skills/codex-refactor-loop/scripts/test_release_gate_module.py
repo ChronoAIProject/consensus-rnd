@@ -153,6 +153,30 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertFalse((repo / ".refactor-loop/.controller-pending-events.log").exists())
             self.assertFalse((repo / ".refactor-loop/dispatch-queue").exists())
 
+    def test_dispatch_candidate_uses_review_base_target_ref_when_release_target_ref_is_unset(self) -> None:
+        with copy_repo_fixture() as tmp:
+            repo = Path(tmp) / "repo"
+            write_green_fixture_signals(repo)
+            release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=FakeRunner())
+            old_env = {key: gate.os.environ.get(key) for key in ("RELEASE_TARGET_REF", "REVIEW_BASE_BRANCH")}
+            try:
+                gate.os.environ.pop("RELEASE_TARGET_REF", None)
+                gate.os.environ["REVIEW_BASE_BRANCH"] = "dev/auto-refact-dev"
+                stability = release_gate.compute_stability(min_recent_merges=0)
+                decision = release_gate.decide_release(stability, min_interval_hours=2)
+                release_gate.dispatch_release(decision)
+            finally:
+                for key, value in old_env.items():
+                    if value is None:
+                        gate.os.environ.pop(key, None)
+                    else:
+                        gate.os.environ[key] = value
+
+            candidate = read_json(repo / ".refactor-loop/state/release-candidate.json")
+            self.assertIsInstance(candidate, dict)
+            assert isinstance(candidate, dict)
+            self.assertEqual(candidate["target_ref"], "origin/dev/auto-refact-dev")
+
     def test_live_signal_parity_for_required_checks_labels_and_heartbeats(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"

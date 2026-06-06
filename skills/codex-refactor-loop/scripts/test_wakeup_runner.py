@@ -2031,6 +2031,63 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
 
+    def test_release_dispatch_recovers_existing_candidate_with_empty_target_ref(self) -> None:
+        self.write_release_dispatch_fixtures()
+        bad_candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        bad_candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        actions = FakeActions()
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_target_ref_invalid",
+                    ],
+                )
+            ),
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [])
+        candidate = json.loads(bad_candidate.read_text(encoding="utf-8"))
+        self.assertTrue(candidate["ready"])
+        self.assertEqual(candidate["target_ref"], "origin/dev")
+        self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_rejects_existing_candidate_with_valid_target_ref(self) -> None:
+        self.write_release_dispatch_fixtures()
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps({"ready": True, "target_ref": "origin/dev", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(
+                self.release_dispatch_action(
+                    preconditions=[
+                        "active_controller_owner",
+                        "release_auto_opt_in",
+                        "release_gate_ready",
+                        "decision_artifact_only",
+                        "release_candidate_target_ref_invalid",
+                    ],
+                )
+            ),
+            actions=FakeActions(),
+        )
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "release_candidate_already_exists")
+
     def test_release_dispatch_fails_closed_without_host_opt_in(self) -> None:
         self.write_release_dispatch_fixtures(auto_enable=False)
 

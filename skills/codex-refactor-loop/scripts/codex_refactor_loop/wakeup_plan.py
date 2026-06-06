@@ -3421,7 +3421,9 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
         return []
     candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
     if candidate_path.exists():
-        return []
+        candidate = read_json(candidate_path, {})
+        if not release_candidate_target_ref_invalid(candidate):
+            return []
     score = _release_countdown_score(repo_root, scorer=scorer)
     if not score.get("ready"):
         return []
@@ -3449,6 +3451,11 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
                 "release_auto_opt_in",
                 "release_gate_ready",
                 "decision_artifact_only",
+                *(
+                    ["release_candidate_target_ref_invalid"]
+                    if candidate_path.exists()
+                    else []
+                ),
             ],
             "runner_authority": RUNNER_AUTHORITY,
             "no_generic_command": True,
@@ -3457,6 +3464,15 @@ def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) ->
             "to_version": to_version,
         }
     ]
+
+
+def release_candidate_target_ref_invalid(candidate: Any) -> bool:
+    if not isinstance(candidate, dict):
+        return False
+    if "target_ref" not in candidate:
+        return True
+    target_ref = candidate.get("target_ref")
+    return not isinstance(target_ref, str) or not target_ref.strip()
 
 
 def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:

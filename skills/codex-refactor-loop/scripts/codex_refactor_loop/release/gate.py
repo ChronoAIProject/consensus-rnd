@@ -469,7 +469,7 @@ class AutoReleaseGate:
             "bump_type": decision.get("bump_type"),
             "coordinate_policy": decision.get("coordinate_policy"),
             "ready": decision.get("ready"),
-            "target_ref": os.environ.get("RELEASE_TARGET_REF", ""),
+            "target_ref": release_target_ref_from_env(os.environ),
             "required_signals": required_signals,
             "decision_digest": canonical_digest(decision),
             "publish_preflight": "controller-release-publish-preflight",
@@ -482,6 +482,18 @@ class AutoReleaseGate:
                 "commit, push, tag, publish, merge, or close."
             ),
         }
+
+
+def release_target_ref_from_env(env: Mapping[str, str]) -> str:
+    explicit = str(env.get("RELEASE_TARGET_REF") or "").strip()
+    if explicit:
+        return explicit
+    review_base = str(env.get("REVIEW_BASE_BRANCH") or "").strip()
+    if not review_base:
+        return ""
+    if review_base.startswith("origin/"):
+        return review_base
+    return f"origin/{review_base}"
 
 
 def resolve_field(data: Any, field: str) -> Any:
