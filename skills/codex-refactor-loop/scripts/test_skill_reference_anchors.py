@@ -1828,10 +1828,31 @@ class WakeupRunnerContractTests(unittest.TestCase):
                 self.assertNotIn(stale, self.skill)
 
     def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
+        inventory = section_after_anchor_until_heading(self.skill, "tier0-scaffold-inventory", level=3)
+        for needle in (
+            "prose-only and non-authoritative",
+            "not a machine-readable catalog, registry, runtime scaffold, or package API",
+            "not imported by runtime code",
+            "no dispatch, write, state-transition, or authorization authority",
+            "restart.py::DAEMON_COMMANDS",
+            "restart_managed_daemon_names()",
+            "cli.py::COMMANDS[*].authority",
+            "SKILL.md#work-unit-contract",
+            "ctx.paths.pending_events",
+            ".refactor-loop/.controller-pending-events.log",
+            "no pending-events authority",
+            "owner-local files",
+            "shared `TickOutcome`, `tick_helpers.py`, or controller-runtime catalog",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, inventory)
+
         package_root = SKILL_ROOT / "scripts" / "codex_refactor_loop"
         forbidden_path_names = {
             "controller_runtime_scaffold.py",
             "controller_runtime_capabilities.py",
+            "controller_runtime_catalog.py",
+            "tick_helpers.py",
             "tick_outcome.py",
             "tick_outcomes.py",
             "daemon_registry.json",
@@ -1851,6 +1872,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "class TickOutcome",
             "TickOutcome(",
             "ControllerRuntimeScaffold",
+            "ControllerRuntimeCatalog",
             "ControllerRuntimeCapabilities",
             "ControllerRuntimeRegistry",
             "DaemonRegistry",
