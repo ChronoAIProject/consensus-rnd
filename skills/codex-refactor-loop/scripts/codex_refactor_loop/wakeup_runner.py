@@ -21,7 +21,12 @@ from .controller_actions import ControllerActions
 from .gh_invoke import build_gh_argv
 from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
-from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
+from .implement_lifecycle import (
+    _implement_run_artifact_done_marker,
+    classify_implement_attempt,
+    clear_redispatchable_implement_log,
+    is_implement_log,
+)
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
 from .issue_decomposition import (
     IssueDecompositionError,
@@ -1265,7 +1270,13 @@ class WakeupRunner:
 
 def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     marker_read = read_worker_terminal_marker(path)
-    return marker_read.marker == marker
+    if marker_read.marker == marker:
+        return True
+    if marker_read.reason != "duplicate_or_conflicting_log_marker":
+        return False
+    if not is_implement_log(path):
+        return False
+    return _implement_run_artifact_done_marker(path) == marker
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:

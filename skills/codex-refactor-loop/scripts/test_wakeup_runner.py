@@ -36,6 +36,74 @@ from codex_refactor_loop.wakeup_runner import (
 
 
 class SourceMarkerRevalidationFallbackTests(unittest.TestCase):
+    def test_revalidation_falls_back_to_implement_run_artifact_for_duplicate_log_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            runs = repo / ".refactor-loop" / "runs"
+            logs.mkdir(parents=True)
+            runs.mkdir(parents=True)
+            log = logs / "implement-issue-553.log"
+            log.write_text(
+                "IMPLEMENT_DONE:issue-553:partial\n"
+                "more worker output\n"
+                "IMPLEMENT_DONE:issue-553:ok\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "implement-issue-553.md").write_text(
+                "body\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-553:ok\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(_source_log_has_clean_marker(log, "IMPLEMENT_DONE:issue-553:ok"))
+
+    def test_duplicate_implement_log_revalidation_requires_single_ok_artifact_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            runs = repo / ".refactor-loop" / "runs"
+            logs.mkdir(parents=True)
+            runs.mkdir(parents=True)
+            marker = "IMPLEMENT_DONE:issue-553:ok"
+            log = logs / "implement-issue-553.log"
+            log.write_text(f"IMPLEMENT_DONE:issue-553:partial\nworker output\n{marker}\nEXIT=0\n", encoding="utf-8")
+
+            cases = (
+                ("missing", None),
+                ("multiple", f"{marker}\nIMPLEMENT_DONE:issue-554:ok\n"),
+                ("blocked", "IMPLEMENT_DONE:issue-553:blocked\n"),
+            )
+            for name, artifact_text in cases:
+                with self.subTest(name=name):
+                    artifact = runs / "implement-issue-553.md"
+                    if artifact.exists():
+                        artifact.unlink()
+                    if artifact_text is not None:
+                        artifact.write_text(artifact_text, encoding="utf-8")
+                    self.assertFalse(_source_log_has_clean_marker(log, marker))
+
+    def test_duplicate_marker_fallback_is_limited_to_implement_log_duplicate_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            logs = repo / ".refactor-loop" / "logs"
+            runs = repo / ".refactor-loop" / "runs"
+            logs.mkdir(parents=True)
+            runs.mkdir(parents=True)
+            other = logs / "review-pr77-security-r1.log"
+            other.write_text(
+                "REVIEW_DONE:77:security:comment\n"
+                "REVIEW_DONE:77:security:approve\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            (runs / "review-pr77-security-r1.md").write_text(
+                "REVIEW_DONE:77:security:approve\n",
+                encoding="utf-8",
+            )
+
+            self.assertFalse(_source_log_has_clean_marker(other, "REVIEW_DONE:77:security:approve"))
+
     def test_revalidation_falls_back_to_implement_run_artifact_for_markerless_log(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
@@ -1840,6 +1908,70 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_publish_implementation_output_accepts_duplicate_log_marker_with_valid_artifact_marker(self) -> None:
+        actions = FakeActions()
+        action = self.implementation_output_action()
+        source_log = self.repo / action["source_artifact"]
+        source_log.write_text(
+            "IMPLEMENT_DONE:issue-77:partial\n"
+            "worker output\n"
+            "IMPLEMENT_DONE:issue-77:ok\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.repo / ".refactor-loop/runs/implement-issue77.md").write_text(
+            "summary\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-77:ok\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=1,
+            implementation_status="M  staged.py\n",
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls[0][0], "publish_implementation_output")
+
+    def test_publish_implementation_output_blocks_duplicate_log_marker_without_valid_artifact_marker(self) -> None:
+        cases = (
+            ("missing", None),
+            ("multiple", "IMPLEMENT_DONE:issue-77:ok\nIMPLEMENT_DONE:issue-78:ok\n"),
+            ("blocked", "IMPLEMENT_DONE:issue-77:blocked\n"),
+        )
+        for name, artifact_text in cases:
+            with self.subTest(name=name):
+                actions = FakeActions()
+                action = self.implementation_output_action(action_id=f"publish-implementation:duplicate-{name}")
+                source_log = self.repo / action["source_artifact"]
+                source_log.write_text(
+                    "IMPLEMENT_DONE:issue-77:partial\n"
+                    "worker output\n"
+                    "IMPLEMENT_DONE:issue-77:ok\n"
+                    "EXIT=0\n",
+                    encoding="utf-8",
+                )
+                artifact = self.repo / ".refactor-loop/runs/implement-issue77.md"
+                if artifact_text is None:
+                    artifact.unlink(missing_ok=True)
+                else:
+                    artifact.write_text(artifact_text, encoding="utf-8")
+
+                results = self.run_result(
+                    self.base_plan(action),
+                    git_diff_code=1,
+                    implementation_status="M  staged.py\n",
+                    actions=actions,
+                )
+
+                self.assert_blocked_before_dispatch(
+                    results,
+                    f"publish-implementation:duplicate-{name}",
+                    "clean_exit_marker_missing",
+                    actions,
+                )
 
     def test_publish_implementation_output_blocks_before_helper_without_g3_preconditions(self) -> None:
         cases = (
