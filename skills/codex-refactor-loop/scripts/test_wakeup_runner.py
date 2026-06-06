@@ -508,6 +508,60 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "actions": [action],
         }
 
+    def release_dispatch_action(self, **overrides) -> dict:
+        action = {
+            "kind": "release-gate-dispatch",
+            "action_id": "release-gate-dispatch:1.2.3-beta.4->1.2.3-beta.5",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+            ],
+            "source_artifact": ".refactor-loop/state/auto-release-signals.json",
+            "target_kind": None,
+            "target_number": None,
+            "target": None,
+            "controller_action": "dispatch_release_candidate",
+            "from_version": "1.2.3-beta.4",
+            "to_version": "1.2.3-beta.5",
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+        action.update(overrides)
+        return action
+
+    def write_release_dispatch_fixtures(self, *, auto_enable: bool = True) -> None:
+        host_env = self.repo / ".config/consensus-rnd/host.env"
+        with host_env.open("a", encoding="utf-8") as handle:
+            handle.write(f'export RELEASE_AUTO_ENABLE="{"true" if auto_enable else "false"}"\n')
+            handle.write('export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="ci"\n')
+            handle.write('export RELEASE_TARGET_REF="origin/dev"\n')
+        self.ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        (self.repo / ".version-bump.json").write_text(
+            json.dumps({"files": [{"path": "package.json", "field": "version"}]}),
+            encoding="utf-8",
+        )
+        (self.repo / "package.json").write_text(json.dumps({"version": "1.2.3-beta.4"}), encoding="utf-8")
+        signals = {
+            "signals": {
+                "required_checks_recent_green": {"passed": True},
+                "no_open_blocked_pr": {"passed": True},
+                "no_human_decision_label": {"passed": True},
+                "no_phase8_reject_churn": {"passed": True},
+                "p0_alert_streak_ok": {"passed": True},
+                "recent_pr_merges_min": {"passed": True},
+                "fresh_heartbeats": {"passed": True},
+                "no_unresolved_human_escalation": {"passed": True},
+            }
+        }
+        (self.repo / ".refactor-loop/state/auto-release-signals.json").write_text(json.dumps(signals), encoding="utf-8")
+        (self.repo / ".refactor-loop/state/release-commits.json").write_text(
+            json.dumps({"commits": [{"sha": "abc123", "subject": "fix: release blocker", "body": ""}]}),
+            encoding="utf-8",
+        )
+
     def batch_plan(self, actions: list[dict], *, dispatch_required: object, deficit: object, active: bool = True) -> dict:
         return {
             "schema": "wakeup-plan",
@@ -1947,6 +2001,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "close_managed_item_from_drop_marker",
             "review_gate",
             "auto_merge_release_rollup_pr_from_action",
+            "dispatch_release_candidate",
             "publish_release_candidate",
             "apply_issue_decomposition_plan",
         }
@@ -1960,6 +2015,30 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         ):
             with self.subTest(forbidden_runtime_abstraction=forbidden_runtime_abstraction):
                 self.assertNotIn(forbidden_runtime_abstraction, source)
+
+    def test_release_dispatch_writes_candidate_artifact_only(self) -> None:
+        self.write_release_dispatch_fixtures()
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(self.release_dispatch_action()), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [])
+        decision = json.loads((self.repo / ".refactor-loop/state/release-decision.json").read_text(encoding="utf-8"))
+        candidate = json.loads((self.repo / ".refactor-loop/state/release-candidate.json").read_text(encoding="utf-8"))
+        self.assertTrue(decision["ready"])
+        self.assertEqual(candidate["schema"], "decision-artifact-only/v2")
+        self.assertEqual(candidate["target_ref"], "origin/dev")
+        self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
+
+    def test_release_dispatch_fails_closed_without_host_opt_in(self) -> None:
+        self.write_release_dispatch_fixtures(auto_enable=False)
+
+        results = self.run_result(self.base_plan(self.release_dispatch_action()), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "release_auto_opt_in_missing")
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
 
     def test_nested_forbidden_fields_fail_closed(self) -> None:
         action = self.issue_decomposition_action(

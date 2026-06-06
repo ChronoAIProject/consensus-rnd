@@ -36,6 +36,7 @@ from .issue_decomposition import (
 )
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
+from .release.gate import AutoReleaseGate
 from .release.publish_preflight import ReleasePublishPreflight
 from .state import read_json
 from .work_items import extract_closing_issue_numbers
@@ -87,6 +88,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "close_managed_item_from_drop_marker",
     "review_gate",
     "auto_merge_release_rollup_pr_from_action",
+    "dispatch_release_candidate",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
 }
@@ -406,6 +408,8 @@ class WakeupRunner:
             return self._validate_safe_push(action)
         if controller_action == "review_gate":
             return self._validate_review_gate(action)
+        if controller_action == "dispatch_release_candidate":
+            return self._validate_release_dispatch(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
         if controller_action == "apply_issue_decomposition_plan":
@@ -571,6 +575,22 @@ class WakeupRunner:
         result = ReleasePublishPreflight(self.ctx.repo_root).validate(candidate_path=candidate_path, target_ref=target_ref)
         if not result.allowed:
             return "release_preflight_denied:" + ",".join(result.reasons)
+        return None
+
+    def _validate_release_dispatch(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "release_dispatch_missing_preconditions"
+        for required in ("release_auto_opt_in", "release_gate_ready", "decision_artifact_only"):
+            if required not in preconditions:
+                return f"release_dispatch_missing_precondition:{required}"
+        if self.ctx.host_env.get("RELEASE_AUTO_ENABLE") != "true":
+            return "release_auto_opt_in_missing"
+        candidate = self.ctx.paths.state / "release-candidate.json"
+        if candidate.exists():
+            return "release_candidate_already_exists"
+        if not str(action.get("from_version") or "").strip() or not str(action.get("to_version") or "").strip():
+            return "release_dispatch_version_missing"
         return None
 
     def _validate_issue_decomposition_apply(self, action: Mapping[str, Any]) -> str | None:
@@ -988,6 +1008,8 @@ class WakeupRunner:
                 f"WAKEUP_RUNNER_REVIEW_GATE_WAIT:{action.get('target_number')}:{decision['decision']}:{decision['reason']}"
             )
             return 3
+        if controller_action == "dispatch_release_candidate":
+            return self._dispatch_release_candidate(action)
         if controller_action == "publish_release_candidate":
             result = self.actions.publish_release_candidate(
                 candidate_path=str(action.get("candidate_path") or ".refactor-loop/state/release-candidate.json"),
@@ -999,6 +1021,33 @@ class WakeupRunner:
             return 0
         self._append_pending_event(f"WAKEUP_RUNNER_UNAPPLIED:{controller_action}:{action.get('action_id')}")
         return 0
+
+    def _dispatch_release_candidate(self, action: Mapping[str, Any]) -> int:
+        previous_env = os.environ.copy()
+        try:
+            os.environ.update(self.ctx.env_for_subprocess())
+            gate = AutoReleaseGate(self.ctx.repo_root)
+            stability = gate.compute_stability(
+                min_recent_merges=_release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_MERGES"), 1)
+            )
+            decision = gate.decide_release(
+                stability,
+                _release_int(self.ctx.host_env.get("RELEASE_AUTO_MIN_INTERVAL_HOURS"), 2),
+            )
+            if decision.get("ready") is not True:
+                self._append_pending_event("WAKEUP_RUNNER_RELEASE_DISPATCH_BLOCKED:not-ready")
+                return 3
+            if (
+                str(decision.get("from_version") or "") != str(action.get("from_version") or "")
+                or str(decision.get("to_version") or "") != str(action.get("to_version") or "")
+            ):
+                self._append_pending_event("WAKEUP_RUNNER_RELEASE_DISPATCH_BLOCKED:version-mismatch")
+                return 3
+            gate.dispatch_release(decision)
+            return 0
+        finally:
+            os.environ.clear()
+            os.environ.update(previous_env)
 
     def _spawn_codex(self, action: Mapping[str, Any]) -> int:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
@@ -1682,6 +1731,14 @@ def _positive_int(value: Any) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         return None
     return value
+
+
+def _release_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(str(value))
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
 
 
 def _run_once_with_periodic_heartbeat(
