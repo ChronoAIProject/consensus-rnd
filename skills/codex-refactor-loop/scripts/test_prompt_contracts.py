@@ -13,7 +13,10 @@ SKILL_ROOT = SCRIPT_DIR.parent
 PROMPTS_DIR = SKILL_ROOT / "prompts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN  # noqa: E402
+from codex_refactor_loop.prompt_contracts import (  # noqa: E402
+    GITHUB_POST_RULES_CONTRACT_TOKEN,
+    inline_prompt_contracts,
+)
 
 
 DIRECT_POST_PROMPTS = (
@@ -46,6 +49,17 @@ class PromptContractsTests(unittest.TestCase):
             tokens.update(re.findall(r"{{[A-Z0-9_]+_CONTRACT}}", path.read_text(encoding="utf-8")))
 
         self.assertEqual(tokens, {GITHUB_POST_RULES_CONTRACT_TOKEN})
+
+    def test_rendered_direct_post_prompts_ban_zsh_readonly_status_exit_variable(self) -> None:
+        for name in DIRECT_POST_PROMPTS:
+            with self.subTest(prompt=name):
+                body = (PROMPTS_DIR / name).read_text(encoding="utf-8")
+                rendered = inline_prompt_contracts(body, skill_root=SKILL_ROOT)
+
+                self.assertIn("zsh-safe 退出码变量", rendered)
+                self.assertIn("禁止**用 `status`", rendered)
+                self.assertIn("post_exit_code=$?", rendered)
+                self.assertNotIn("status=$?", rendered)
 
     def test_decomposition_apply_prompt_contract_requires_plan_level_judge_fields(self) -> None:
         meta_judge = (PROMPTS_DIR / "meta-judge.md").read_text(encoding="utf-8")
