@@ -2629,8 +2629,6 @@ def _release_rollup_auto_merge_wait_reason(ctx: LoopContext, item: GhItem, revie
         return "rollup_auto_merge_head_ref_stale"
     if live_head_sha != item.head_sha:
         return "rollup_auto_merge_head_stale"
-    if payload.get("isDraft") is True:
-        return "rollup_auto_merge_draft"
     merge_state = str(payload.get("mergeStateStatus") or "").strip().upper()
     mergeable = str(payload.get("mergeable") or "").strip().upper()
     if merge_state != "CLEAN":

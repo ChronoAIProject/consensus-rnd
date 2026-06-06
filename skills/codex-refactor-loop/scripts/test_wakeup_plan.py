@@ -743,6 +743,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   if [[ "$api_flag1" == "--paginate" && "$api_flag2" == "--slurp" ]]; then
                     if [[ "$fixture" == "ci_red" && "$api_path" == "repos/owner/repo/commits/ci-red-sha/check-runs" ]]; then
                       printf '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"failure","html_url":"https://checks/unit"},{"name":"lint","status":"completed","conclusion":"success","html_url":"https://checks/lint"}]}]\n'
+                    elif [[ ( "$fixture" == "draft_rollup_missing_snapshot_draft" || "$fixture" == "draft_rollup_only_missing_snapshot_draft" ) && ( "$api_path" == "repos/owner/repo/commits/integration-sha/check-runs" || "$api_path" == "repos/owner/repo/commits/integration-sha-2/check-runs" ) ]]; then
+                      printf '[{"check_runs":[{"name":"contract-tests","status":"completed","conclusion":"success","html_url":"https://checks/contract-tests"}]}]\n'
                     else
                       printf '[{"check_runs":[]}]\n'
                     fi
@@ -1258,6 +1260,17 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             if not line.strip().startswith(("AUDIT_FALLBACK_ENABLE=", "export AUDIT_FALLBACK_ENABLE="))
         ]
         lines.append(f'AUDIT_FALLBACK_ENABLE="{value}"')
+        host_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def set_host_env_value(self, key: str, value: str) -> None:
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        prefixes = (f"{key}=", f"export {key}=")
+        lines = [
+            line
+            for line in host_env.read_text(encoding="utf-8").splitlines()
+            if not line.strip().startswith(prefixes)
+        ]
+        lines.append(f'{key}="{value}"')
         host_env.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def run_plan(self, *, fixture: str = "empty", ps_count: int = 5, active_audit: bool = False) -> dict:
@@ -4152,6 +4165,45 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("review_gate", json.dumps(action))
         self.assertNotIn("status_only", action)
 
+    def test_rollup_auto_merge_draft_remains_executable_for_helper_ready_step(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=572,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="7834c9838f194c4dcf0b4989192bf3fdad15d0e7",
+        )
+        ctx = mock.Mock(
+            host_env={"REVIEW_BASE_BRANCH": "review", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests"},
+            gh_repo_slug="owner/repo",
+            repo_root=self.repo,
+        )
+
+        with (
+            mock.patch(
+                "codex_refactor_loop.wakeup_plan._release_rollup_live_pr_view",
+                return_value={
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": True,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+            ),
+            mock.patch("codex_refactor_loop.wakeup_plan.ReleaseRequiredChecksProjection") as checks_projection,
+        ):
+            checks_projection.return_value.check_ref.return_value = mock.Mock(passed=True, reason=None)
+            actions = release_rollup_auto_merge_actions(ctx, [item])
+
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual("release-rollup-auto-merge", action["kind"])
+        self.assertEqual("auto_merge_release_rollup_pr_from_action", action["controller_action"])
+        self.assertNotIn("status_only", action)
+        self.assertNotIn("suppressed_reason", action)
+
     def test_rollup_auto_merge_waits_when_live_preflight_is_not_mergeable(self) -> None:
         item = GhItem(
             kind="PR",
@@ -4168,20 +4220,6 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
 
         cases = [
-            (
-                "draft",
-                {
-                    "baseRefName": "review",
-                    "headRefName": "rollup/integration-sha",
-                    "headRefOid": item.head_sha,
-                    "isDraft": True,
-                    "mergeable": "MERGEABLE",
-                    "mergeStateStatus": "CLEAN",
-                },
-                True,
-                None,
-                "rollup_auto_merge_draft",
-            ),
             (
                 "blocked",
                 {
@@ -5514,9 +5552,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 2)
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
-    def test_live_draft_suppressed_rollup_is_not_expected_when_snapshot_draft_missing(self) -> None:
+    def test_live_draft_rollup_is_executable_when_snapshot_draft_missing(self) -> None:
+        self.set_host_env_value("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", "contract-tests")
         plan, _stdout = self.run_plan_with_env(
-            {"REVIEW_BASE_BRANCH": "review"},
+            {"REVIEW_BASE_BRANCH": "review", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests"},
             fixture="draft_rollup_missing_snapshot_draft",
             ps_count=5,
         )
@@ -5526,21 +5565,23 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             for action in plan["actions"]
             if action.get("kind") == "release-rollup-auto-merge" and action.get("target_number") == 572
         )
-        self.assertTrue(rollup_action["status_only"])
-        self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
+        self.assertNotIn("status_only", rollup_action)
+        self.assertEqual("auto_merge_release_rollup_pr_from_action", rollup_action["controller_action"])
         self.assertEqual(
             plan["concurrency"]["expected_breakdown"],
             [
+                {"expected": 1, "id": "#572", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
                 {"expected": 1, "id": "#573", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
                 {"expected": 1, "id": "#574", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
             ],
         )
-        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 2)
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 3)
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
-    def test_live_draft_suppressed_rollup_does_not_restore_expected_via_monitor_fallback(self) -> None:
+    def test_live_draft_rollup_only_action_remains_executable(self) -> None:
+        self.set_host_env_value("HOST_GITHUB_RELEASE_REQUIRED_CHECKS", "contract-tests")
         plan, stdout = self.run_plan_with_env(
-            {"REVIEW_BASE_BRANCH": "review"},
+            {"REVIEW_BASE_BRANCH": "review", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests"},
             fixture="draft_rollup_only_missing_snapshot_draft",
             ps_count=0,
         )
@@ -5550,12 +5591,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             for action in plan["actions"]
             if action.get("kind") == "release-rollup-auto-merge" and action.get("target_number") == 572
         )
-        self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
-        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
-        self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
-        self.assertFalse(plan["hard_gate"]["active"])
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
-        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+        self.assertNotIn("status_only", rollup_action)
+        self.assertEqual("auto_merge_release_rollup_pr_from_action", rollup_action["controller_action"])
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 1)
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [{"expected": 1, "id": "#572", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING}],
+        )
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")
