@@ -30,6 +30,7 @@ from codex_refactor_loop.controller_actions import (
     ISSUE_LABELS_REMOVE,
 )
 from codex_refactor_loop.git import Git
+from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
@@ -2892,24 +2893,33 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh_calls: list[list[str]] = []
+        comment_texts: list[str] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 501 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
+            if args[:2] == ["issue", "comment"]:
+                comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
             return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/403#issuecomment-1\n", stderr="")
 
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             created = self.actions.apply_issue_decomposition_plan(str(plan_path))
 
         self.assertEqual((502, "https://github.com/owner/repo/issues/502"), created[0])
-        self.assertEqual(3, len(gh_calls))
+        self.assertEqual(4, len(gh_calls))
+        self.assertEqual(["issue", "view", "403", "--json", "comments"], gh_calls[0])
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
         for create in creates:
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
-        self.assertEqual(["issue", "comment", "403", "--body-file", parent_comment], gh_calls[-1])
+        self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
+        self.assertIn("Parent issue: #403", comment_texts[-1])
+        self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
+        self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
 
@@ -2964,13 +2974,17 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh_calls: list[list[str]] = []
+        comment_texts: list[str] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 600 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
             if args[:2] == ["issue", "comment"]:
+                comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
                 return mock.Mock(returncode=1, stdout="", stderr="parent comment denied\n")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -2981,14 +2995,89 @@ class ControllerActionsTests(unittest.TestCase):
             ):
                 self.actions.apply_issue_decomposition_plan(str(plan_path))
 
-        self.assertEqual(3, len(gh_calls))
+        self.assertEqual(4, len(gh_calls))
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
-        self.assertEqual(["issue", "comment", "403", "--body-file", parent_comment], gh_calls[-1])
+        self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
+        self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
+        self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
         for create in creates:
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
+
+    def test_apply_issue_decomposition_plan_reuses_single_parent_digest_sentinel_and_fails_on_multiple(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.tmp / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/parent-comment.md"
+        (self.tmp / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent close",
+                            "body_artifact_path": write_child("child-one", "First bounded scope", "No parent close"),
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": write_child("child-two", "Second bounded scope", "No public issue factory"),
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+
+        for name, comments, expected in (
+            ("single", [{"body": f"IssueDecompositionPlan digest: {digest}"}], tuple()),
+            ("multiple", [{"body": f"IssueDecompositionPlan digest: {digest}"}] * 2, RuntimeError),
+        ):
+            with self.subTest(name=name):
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:3] == ["issue", "view", "403"]:
+                        return mock.Mock(returncode=0, stdout=json.dumps({"comments": comments}), stderr="")
+                    raise AssertionError(f"unexpected gh call: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    if expected is RuntimeError:
+                        with self.assertRaisesRegex(RuntimeError, "multiple parent digest sentinels"):
+                            self.actions.apply_issue_decomposition_plan(str(plan_path))
+                    else:
+                        self.assertEqual(expected, self.actions.apply_issue_decomposition_plan(str(plan_path)))
+                self.assertEqual([["issue", "view", "403", "--json", "comments"]], gh_calls)
 
     def test_apply_issue_decomposition_plan_is_active_controller_only_and_not_public_cli(self) -> None:
         decision = mock.Mock(
