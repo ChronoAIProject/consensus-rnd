@@ -1544,6 +1544,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "close_managed_item_from_drop_marker",
             "review_gate",
             "publish_release_candidate",
+            "apply_issue_decomposition_plan",
         }
 
         self.assertEqual(SUPPORTED_CONTROLLER_ACTIONS, expected_actions)
