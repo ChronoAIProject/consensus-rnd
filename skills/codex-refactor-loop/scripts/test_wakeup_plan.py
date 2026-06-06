@@ -816,6 +816,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_573": [issue(573, "same-round reflector drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_554": [issue(554, "reflector drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_449": [issue(449, "consensus target", [managed, label_catalog.PHASE_CONSENSUS_REACHED, auto])],
             "ci_red_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
@@ -2682,6 +2683,39 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target_kind"], "issue")
         self.assertEqual(action["target_number"], 554)
         self.assertEqual(action["target"], {"kind": "issue", "number": 554})
+        self.assertNotIn("status_only", action)
+
+    def test_phase9_same_round_reflector_drop_wins_over_newer_judge_log(self) -> None:
+        (self.logs / "phase9-issue573-r3-reflector.log").write_text(
+            "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        (self.logs / "phase9-issue573-r3-judge.log").write_text(
+            "META_JUDGE_DONE:converge:round-3\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        self.set_log_mtime("phase9-issue573-r3-reflector.log", 100.0)
+        self.set_log_mtime("phase9-issue573-r3-judge.log", 200.0)
+
+        plan = self.run_plan(fixture="open_issue_573")
+
+        actions = [item for item in plan["actions"] if str(item.get("action_id") or "").startswith("completed-marker:phase9-issue573")]
+        self.assertEqual(1, len(actions))
+        action = actions[0]
+        self.assertEqual(action["controller_action"], "close_managed_item_from_drop_marker")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(
+            action["preconditions"],
+            ["active_controller_owner", "clean_exit_source_marker", "live_open_target", "live_managed_target"],
+        )
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue573-r3-reflector.log")
+        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 573)
+        self.assertEqual(action["target"], {"kind": "issue", "number": 573})
         self.assertNotIn("status_only", action)
 
     def test_meta_resolved_drop_completed_marker_for_closed_target_is_status_only(self) -> None:
