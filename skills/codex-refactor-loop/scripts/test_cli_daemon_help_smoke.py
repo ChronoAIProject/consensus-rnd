@@ -12,12 +12,16 @@ Refactor (iter1/issue-160-phase4):
 """
 from __future__ import annotations
 
-import subprocess
+import io
 import sys
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
-CLI = Path(__file__).resolve().parent / "consensus-rnd-cli"
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
+
+from codex_refactor_loop import cli
 
 # Operations whose main() builds an arg parser / imports modules at entry.
 OPERATIONS = [
@@ -39,18 +43,22 @@ OPERATIONS = [
 
 
 class CliDaemonHelpSmokeTests(unittest.TestCase):
+    def run_help(self, op: str) -> tuple[int, str]:
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            try:
+                returncode = cli.main([op, "--help"])
+            except SystemExit as exc:
+                returncode = int(exc.code or 0) if isinstance(exc.code, int) else 1
+        return returncode, stdout.getvalue() + stderr.getvalue()
+
     def test_every_operation_help_parses_without_import_error(self) -> None:
         offenders = []
         for op in OPERATIONS:
-            result = subprocess.run(
-                [sys.executable, str(CLI), op, "--help"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            blob = result.stdout + result.stderr
-            if result.returncode != 0 or "usage:" not in blob or "NameError" in blob or "ImportError" in blob or "ModuleNotFoundError" in blob:
-                reason = blob.strip().splitlines()[-1] if blob.strip() else f"returncode={result.returncode}"
+            returncode, blob = self.run_help(op)
+            if returncode != 0 or "usage:" not in blob or "NameError" in blob or "ImportError" in blob or "ModuleNotFoundError" in blob:
+                reason = blob.strip().splitlines()[-1] if blob.strip() else f"returncode={returncode}"
                 offenders.append(f"{op}: {reason}")
         self.assertEqual(offenders, [], f"command main() import errors: {offenders}")
 
@@ -58,14 +66,8 @@ class CliDaemonHelpSmokeTests(unittest.TestCase):
         # Refactor (issue-303): controller docs invoke the Python CLI directly,
         # so keep the targeted `python3 consensus-rnd-cli peek --help` path
         # covered even if the broader operation list changes.
-        result = subprocess.run(
-            [sys.executable, str(CLI), "peek", "--help"],
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        blob = result.stdout + result.stderr
-        self.assertEqual(result.returncode, 0, blob)
+        returncode, blob = self.run_help("peek")
+        self.assertEqual(returncode, 0, blob)
         self.assertIn("usage:", blob)
         self.assertIn("peek", blob)
 
