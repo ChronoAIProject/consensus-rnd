@@ -119,7 +119,7 @@ decision: consensus | converge
 - Philosophy/CLAUDE.md/SPEC/Tier changes included: <none OR exact agreed clause/file changes from the winning plan>
 - Implementation owner: dispatch implement codex with cluster_id=${CLUSTER_ID}, design_decision_path=<this file>
 - Add `crnd:triage:resume-requested` label to issue ${ISSUE_NUMBER}
-- For large-issue decomposition consensus, the decision may authorize an `IssueDecompositionPlan` artifact and child body artifacts only. Do not authorize solver/judge/implement worker GitHub lifecycle calls, public issue factory commands, parent close/reopen/body-title edits, or `wakeup_plan.py` decompose projections.
+- For large-issue decomposition consensus, direction consensus may authorize an `IssueDecompositionPlan` artifact and child body artifacts only. To authorize the later #396 named apply projection, this plan-level judge artifact must carry structured fields `controller_action="apply_issue_decomposition_plan"`, `plan_level_design_consensus_judge_artifact`, `issue_decomposition_plan_path`, `issue_decomposition_plan_digest`, and `issue_decomposition_proof`; the first `META_JUDGE_DONE:consensus:decompose`, solver artifacts, prompt body, validator output, worker output, and `.refactor-loop/host.env` are not apply authorization. Do not authorize solver/judge/implement worker GitHub lifecycle calls, public issue factory commands, parent close/reopen/body-title edits, or generic `wakeup_plan.py` decompose projections.
 
 ## If converge
 - Convergence question (specific): <one sentence>
