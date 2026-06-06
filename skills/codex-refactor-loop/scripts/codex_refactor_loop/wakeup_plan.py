@@ -3627,6 +3627,8 @@ def _stale_publish_implementation_reason(
     )
     if _publish_recoverable_stale_base_implement(state):
         state = replace(state, status="publish_ready")
+    if state.redispatch and state.reason == "empty_scoped_diff":
+        return "implementation_noop_empty_scoped_diff"
     if state.redispatch:
         clear_redispatchable_implement_log(
             repo_root=repo_root,
