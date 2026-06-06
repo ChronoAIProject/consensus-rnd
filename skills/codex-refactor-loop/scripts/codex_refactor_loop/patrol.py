@@ -23,6 +23,7 @@ from .wakeup_plan import GhItem, load_github_items_with_status
 DEFAULT_INTERVAL_SECONDS = 7200
 DEFAULT_MAX_FINDINGS = 25
 STATE_FILE_NAME = "patrol-inspector.json"
+PATROL_DAEMON_NAME = "patrol_inspector_daemon"
 
 
 @dataclass(frozen=True)
@@ -321,6 +322,10 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+def _patrol_daemon_heartbeat_lease(ctx: LoopContext) -> DaemonHeartbeatLease:
+    return DaemonHeartbeatLease(PATROL_DAEMON_NAME, ctx.repo_root)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="run the patrol inspector")
     mode = parser.add_mutually_exclusive_group()
@@ -339,7 +344,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     inspector = PatrolInspector(ctx, config=config)
     if not args.daemon:
         return inspector.run_once()
-    lease = DaemonHeartbeatLease.from_env()
+    lease = _patrol_daemon_heartbeat_lease(ctx)
     while True:
         inspector.run_once(beat=lease.beat)
         lease.sleep_with_lease(config.interval_seconds)
