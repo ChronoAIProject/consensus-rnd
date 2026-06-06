@@ -2718,6 +2718,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["target"], {"kind": "issue", "number": 573})
         self.assertNotIn("status_only", action)
 
+    def test_phase9_reflector_final_drop_marker_tolerates_quoted_solver_artifact_marker(self) -> None:
+        log = self.logs / "phase9-issue573-r3-reflector.log"
+        log.write_text(
+            "context from solver artifact:\n"
+            "SOLVER_DONE:delete:abstain:no-current-deletion\n"
+            "reflector final decision follows\n"
+            "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        self.assertEqual(
+            "META_RESOLVED:drop:no-actionable-framing-after-3-rounds",
+            marker_from_completed_log(log),
+        )
+        actions = completed_marker_actions(self.repo, open_targets={("issue", 573)})
+
+        drop_actions = [
+            action
+            for action in actions
+            if action.get("controller_action") == "close_managed_item_from_drop_marker"
+        ]
+        self.assertEqual(1, len(drop_actions))
+        action = drop_actions[0]
+        self.assertEqual(action["source_artifact"], ".refactor-loop/logs/phase9-issue573-r3-reflector.log")
+        self.assertEqual(action["source_marker"], "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 573)
+        self.assertNotIn("status_only", action)
+
     def test_meta_resolved_drop_completed_marker_for_closed_target_is_status_only(self) -> None:
         (self.logs / "issue53-judge-drop.log").write_text(
             "raw prose is diagnostic only\n"

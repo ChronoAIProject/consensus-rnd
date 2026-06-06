@@ -183,6 +183,32 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(duplicate_marker.reason, "")
             self.assertEqual(read_worker_terminal_marker(conflict).reason, "duplicate_or_conflicting_log_marker")
 
+    def test_phase9_reflector_final_meta_resolved_tolerates_solver_context_marker_only_for_reflector_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            reflector = logs / "phase9-issue573-r3-reflector.log"
+            reflector.write_text(
+                "solver artifact excerpt\n"
+                "SOLVER_DONE:delete:abstain:no-current-deletion\n"
+                "META_RESOLVED:drop:no-actionable-framing-after-3-rounds\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            solver = logs / "phase9-issue573-r3-delete.log"
+            solver.write_text(
+                "solver artifact excerpt\n"
+                "META_JUDGE_DONE:converge:round-3\n"
+                "SOLVER_DONE:delete:abstain:no-current-deletion\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            reflector_marker = read_worker_terminal_marker(reflector)
+            self.assertTrue(reflector_marker.found)
+            self.assertEqual(reflector_marker.marker, "META_RESOLVED:drop:no-actionable-framing-after-3-rounds")
+            self.assertEqual(reflector_marker.reason, "")
+            self.assertEqual(read_worker_terminal_marker(solver).reason, "duplicate_or_conflicting_log_marker")
+
     def test_single_nonfinal_log_marker_is_not_terminal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)
