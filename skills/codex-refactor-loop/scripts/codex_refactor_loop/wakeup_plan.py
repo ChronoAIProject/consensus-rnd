@@ -112,6 +112,8 @@ RUNNER_NAMED_HELPER_ACTIONS = {
 RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
 RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
 RELEASE_ROLLUP_BODY_LOG = ".refactor-loop/logs/release-rollup-body.log"
+AUDIT_FALLBACK_TEMPLATE = "prompts/audit.md"
+AUDIT_ITER_RE = re.compile(r"audit-iter-([1-9][0-9]*)")
 
 
 def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
@@ -375,6 +377,88 @@ def _harness_spawn_intent_action(
         action.pop("runner_authority", None)
         action.pop("no_generic_command", None)
     return action
+
+
+def audit_fallback_action(ctx: LoopContext, concurrency: Mapping[str, Any], actions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    hard_gate = concurrency.get("hard_gate")
+    if not isinstance(hard_gate, Mapping) or hard_gate.get("active") is not True:
+        return None
+    dispatch_required = hard_gate.get("dispatch_required")
+    if not isinstance(dispatch_required, int) or dispatch_required <= 0:
+        return None
+    if hard_gate.get("reason") == "single_active_audit_in_flight":
+        return None
+    if has_dispatchable_action(actions):
+        return None
+
+    task_id = _next_audit_task_id(ctx)
+    prompt = ctx.paths.prompts / f"{task_id}.md"
+    log_path = ctx.paths.logs / f"{task_id}.log"
+    source_marker = _record_audit_fallback_source_marker(ctx, dispatch_required, task_id)
+    _render_audit_fallback_prompt(ctx, prompt, task_id)
+    return {
+        "priority": 9,
+        "kind": "harness-spawn-intent",
+        "action_id": f"audit-fallback:{task_id}",
+        "item": task_id,
+        "phase": "work-intake",
+        "actor": "controller",
+        "route": "audit-fallback",
+        "intent_id": f"audit-fallback:{task_id}",
+        "source": "wakeup-plan-hard-gate",
+        "command": "spawn-codex",
+        "controller_action": "spawn_codex_harness_background",
+        "cd": str(ctx.repo_root.resolve()),
+        "prompt": str(prompt.resolve()),
+        "log": str(log_path.resolve()),
+        "stall": 5400,
+        "run_in_background_required": True,
+        "no_lifecycle_authority": True,
+        "reason": "hard_gate_audit_fallback",
+        "evidence": source_marker,
+        "source_artifact": ".refactor-loop/.controller-pending-events.log",
+        "source_marker": source_marker,
+        "target_kind": "codex",
+        "target_number": None,
+        "target": {"kind": "codex", "task_id": task_id},
+        "preconditions": ["active_controller_owner", "source_artifact_contains_evidence", "target_log_absent"],
+        "runner_authority": RUNNER_AUTHORITY,
+        "no_generic_command": True,
+    }
+
+
+def _next_audit_task_id(ctx: LoopContext) -> str:
+    highest = 0
+    for path in [*ctx.paths.logs.glob("audit-iter-*.log"), *ctx.paths.prompts.glob("audit-iter-*.md"), *ctx.paths.runs.glob("audit-iter-*.md")]:
+        match = AUDIT_ITER_RE.search(path.name)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    return f"audit-iter-{highest + 1}"
+
+
+def _record_audit_fallback_source_marker(ctx: LoopContext, dispatch_required: int, task_id: str) -> str:
+    marker = f"HARD_GATE:dispatch_required={dispatch_required}:audit_fallback={task_id}"
+    pending = ctx.paths.pending_events
+    pending.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        text = pending.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    if marker not in text:
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write(marker + "\n")
+    return marker
+
+
+def _render_audit_fallback_prompt(ctx: LoopContext, prompt: Path, task_id: str) -> None:
+    iteration = task_id.removeprefix("audit-iter-").strip()
+    if not iteration:
+        raise ValueError(f"audit fallback task id missing iteration: {task_id!r}")
+    template = ctx.skill_root / AUDIT_FALLBACK_TEMPLATE
+    text = template.read_text(encoding="utf-8")
+    rendered = text.replace("${ITERATION}", iteration)
+    prompt.parent.mkdir(parents=True, exist_ok=True)
+    prompt.write_text(rendered, encoding="utf-8")
 
 
 def _harness_spawn_intent_log_suppresses_retry(log_path: Path) -> bool:
@@ -3499,6 +3583,9 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     suppress_publish_superseded_implementation_spawn_intents(actions)
+    fallback = audit_fallback_action(ctx, concurrency, actions)
+    if fallback is not None:
+        actions.append(fallback)
     actions.sort(key=action_priority_sort_key)
     serialize_conflicting_consensus_implementation_actions(actions)
     restore_hard_gate_for_dispatchable_actions(concurrency, actions)
