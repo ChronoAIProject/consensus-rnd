@@ -82,6 +82,39 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
             self.assertFalse(state.redispatch)
             self.assertEqual(state.reason, "stale_base")
 
+    def test_staged_only_worker_diff_is_publish_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self._repo(tmp)
+            repo = Path(tmp)
+            worktree = repo / ".worktrees" / "iter553-issue-553"
+            worktree.mkdir(parents=True)
+            log = logs / "implement-issue-553.log"
+            log.write_text("IMPLEMENT_DONE:issue-553:ok\nEXIT=0\n", encoding="utf-8")
+
+            def runner(command):
+                if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                    return subprocess.CompletedProcess(command, 0, "refactor/iter553-issue-553\n", "")
+                if command[-3:] == ["merge-base", "HEAD", "origin/integration"]:
+                    return subprocess.CompletedProcess(command, 0, "base\n", "")
+                if command[-2:] == ["--verify", "origin/integration"]:
+                    return subprocess.CompletedProcess(command, 0, "base\n", "")
+                if command[-2:] == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(command, 0, "M  staged.py\n", "")
+                if command[-2:] == ["diff", "--quiet"]:
+                    raise AssertionError("staged publish-ready output must not be classified from unstaged diff")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            state = classify_implement_attempt(
+                repo_root=repo,
+                action={"target_number": 553},
+                log_path=log,
+                integration_branch="integration",
+                command_runner=runner,
+            )
+
+            self.assertTrue(state.publish_ready)
+            self.assertFalse(state.redispatch)
+
 
 if __name__ == "__main__":
     unittest.main()

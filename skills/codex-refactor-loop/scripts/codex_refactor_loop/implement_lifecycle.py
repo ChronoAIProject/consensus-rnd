@@ -90,11 +90,15 @@ def classify_implement_attempt(
             return ImplementAttemptState("redispatch", "base_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
         if merge_base.stdout.strip() != current.stdout.strip():
             return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
-    diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
-    if diff.returncode == 0:
-        return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
-    if diff.returncode != 1:
+    status = runner(["git", "-C", str(worktree), "status", "--porcelain"])
+    if status.returncode != 0:
         return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
+    if not status.stdout.strip():
+        diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if diff.returncode == 0:
+            return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
+        if diff.returncode != 1:
+            return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
     return ImplementAttemptState("publish_ready", marker=marker, head_ref=head_ref, worktree=worktree)
 
 
