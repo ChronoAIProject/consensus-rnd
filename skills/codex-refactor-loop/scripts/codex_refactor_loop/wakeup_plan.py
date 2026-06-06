@@ -60,7 +60,7 @@ from codex_refactor_loop.workflow_stages import assert_stage_slug
 
 
 STALE_SECONDS = 90
-META_ESCALATION_DEFAULT_HOURS = 24.0
+META_ESCALATION_DEFAULT_HOURS = 3.0
 PHASE_TO_STAGE = {
     label_catalog.PHASE_DESIGN_SOLVING: "design-consensus",
     label_catalog.PHASE_IMPLEMENTING: "implementation",
