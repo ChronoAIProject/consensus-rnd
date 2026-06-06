@@ -99,6 +99,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "publish_implementation_output",
     "publish_worker_output_from_action",
     "dispatch_reviewers",
+    "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
     "commit_push_resolved_pr_rebase",
     "open_release_rollup_pr_from_action",
@@ -1721,6 +1722,8 @@ def phase_from_marker(marker: str) -> str:
         return "review-gate"
     if marker.startswith("FIX_DONE"):
         return "review-gate"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "ci-watch"
     if marker.startswith("TEST_ADD_DONE"):
         return "ci-watch"
     if marker.startswith("AUDIT_DONE"):
@@ -1747,6 +1750,7 @@ def route_from_marker(marker: str) -> str | None:
             "VERIFY_DONE",
             "REVIEW_DONE",
             "FIX_DONE",
+            "REMOTE_CI_FIX_DONE",
             "TEST_ADD_DONE",
         )
     ):
@@ -1763,6 +1767,8 @@ def actor_from_marker(marker: str) -> str:
         return "controller-or-fix-codex"
     if marker.startswith("FIX_DONE"):
         return "reviewer-codex"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "remote-ci-fix-codex"
     if marker.startswith("TEST_ADD_DONE"):
         return "controller"
     if marker.startswith("AUDIT_DONE"):
@@ -2226,32 +2232,42 @@ def ci_red_actions(repo_root: Path, items: list[GhItem]) -> list[dict[str, Any]]
         status = projection.check_pr(slug, item.number)
         if not status.ok:
             continue
-        fail_count = sum(1 for check in status.runs if check.bucket == "fail")
+        failed_checks = [check for check in status.runs if check.bucket == "fail"]
+        fail_count = len(failed_checks)
         if fail_count <= 0:
             continue
-        actions.append(
-            {
-                "priority": 4,
-                "kind": "ci-red",
-                "action_id": f"ci-red:{item.number}:{status.head_sha}",
-                "item": item.item,
-                "phase": "ci-watch",
-                "actor": "remote-ci-fix-codex",
-                "fail_count": fail_count,
-                "head_sha": status.head_sha,
-                "check_names": [check.name for check in status.runs if check.bucket == "fail"],
-                "source_artifact": "github-check-runs",
-                "source_marker": f"ci-red:{item.number}:{status.head_sha}",
-                "target_kind": "PR",
-                "target_number": item.number,
-                "target": {"kind": "PR", "number": item.number},
-                "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
-                "controller_action": "dispatch_remote_ci_fix",
-                "runner_authority": RUNNER_AUTHORITY,
-                "no_generic_command": True,
-            }
-        )
+        check_names = [check.name for check in failed_checks]
+        for check in failed_checks:
+            actions.append(
+                {
+                    "priority": 4,
+                    "kind": "ci-red",
+                    "action_id": f"ci-red:{item.number}:{status.head_sha}:{_ci_check_action_token(check.name)}",
+                    "item": item.item,
+                    "phase": "ci-watch",
+                    "actor": "remote-ci-fix-codex",
+                    "fail_count": fail_count,
+                    "head_sha": status.head_sha,
+                    "check_name": check.name,
+                    "check_names": check_names,
+                    "run_url": check.link,
+                    "source_artifact": "github-check-runs",
+                    "source_marker": f"ci-red:{item.number}:{status.head_sha}:{check.name}",
+                    "target_kind": "PR",
+                    "target_number": item.number,
+                    "target": {"kind": "PR", "number": item.number},
+                    "preconditions": ["active_controller_owner", "live_open_target", "checks_red"],
+                    "controller_action": "dispatch_remote_ci_fix",
+                    "runner_authority": RUNNER_AUTHORITY,
+                    "no_generic_command": True,
+                }
+            )
     return actions
+
+
+def _ci_check_action_token(check_name: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "-", check_name.strip()).strip("-")
+    return token or "check"
 
 
 def release_rollup_actions(repo_root: Path) -> list[dict[str, Any]]:
@@ -3000,6 +3016,8 @@ def controller_action_from_marker(marker: str) -> str:
         return "review_gate"
     if marker.startswith("FIX_DONE"):
         return "dispatch_reviewers"
+    if marker.startswith("REMOTE_CI_FIX_DONE"):
+        return "dispatch_remote_ci_fix"
     if marker.startswith("TEST_ADD_DONE"):
         return "dispatch_ci_watch"
     if marker.startswith("META_RESOLVED:drop:"):
