@@ -50,6 +50,14 @@ def valid_proof() -> dict[str, object]:
     }
 
 
+def replace_evidence(raw: dict[str, object], index: int, **updates: object) -> None:
+    evidence = list(raw["evidence"])
+    item = dict(evidence[index])
+    item.update(updates)
+    evidence[index] = item
+    raw["evidence"] = evidence
+
+
 class ConsensusGateProofTests(unittest.TestCase):
     def test_valid_proof_returns_typed_contract_without_authority_fields(self) -> None:
         raw = valid_proof()
@@ -72,24 +80,23 @@ class ConsensusGateProofTests(unittest.TestCase):
 
     def test_decision_producer_cannot_self_certify(self) -> None:
         raw = valid_proof()
-        evidence = list(raw["evidence"])  # type: ignore[arg-type]
-        first = dict(evidence[0])  # type: ignore[arg-type]
-        first["producer_id"] = raw["decision_producer_id"]
-        evidence[0] = first
-        raw["evidence"] = evidence
+        replace_evidence(raw, 0, producer_id=raw["decision_producer_id"])
 
         with self.assertRaisesRegex(ConsensusGateProofError, "producer_overlap"):
             validate_consensus_gate_proof(raw)
 
     def test_duplicate_evidence_producer_fails_closed(self) -> None:
         raw = valid_proof()
-        evidence = list(raw["evidence"])  # type: ignore[arg-type]
-        second = dict(evidence[1])  # type: ignore[arg-type]
-        second["producer_id"] = "solver-minimal-issue-579-r2"
-        evidence[1] = second
-        raw["evidence"] = evidence
+        replace_evidence(raw, 1, producer_id="solver-minimal-issue-579-r2")
 
         with self.assertRaisesRegex(ConsensusGateProofError, "duplicate evidence producer"):
+            validate_consensus_gate_proof(raw)
+
+    def test_duplicate_evidence_role_fails_closed(self) -> None:
+        raw = valid_proof()
+        replace_evidence(raw, 1, role="minimal")
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "duplicate evidence role: minimal"):
             validate_consensus_gate_proof(raw)
 
     def test_missing_required_role_fails_closed(self) -> None:
@@ -99,37 +106,41 @@ class ConsensusGateProofTests(unittest.TestCase):
         with self.assertRaisesRegex(ConsensusGateProofError, "missing_required_roles: delete"):
             validate_consensus_gate_proof(raw)
 
+    def test_unsupported_verdict_rule_fails_closed(self) -> None:
+        raw = valid_proof()
+        raw["verdict_rule"] = "majority"
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "unsupported verdict_rule: majority"):
+            validate_consensus_gate_proof(raw)
+
     def test_verdict_rule_rejects_non_positive_required_role(self) -> None:
         raw = valid_proof()
-        evidence = list(raw["evidence"])  # type: ignore[arg-type]
-        second = dict(evidence[1])  # type: ignore[arg-type]
-        second["verdict"] = "abstain"
-        evidence[1] = second
-        raw["evidence"] = evidence
+        replace_evidence(raw, 1, verdict="abstain")
 
         with self.assertRaisesRegex(ConsensusGateProofError, "verdict_rule_failed"):
             validate_consensus_gate_proof(raw)
 
     def test_review_style_rule_allows_comments_only_with_positive_and_no_reject(self) -> None:
         raw = valid_proof()
-        evidence = list(raw["evidence"])  # type: ignore[arg-type]
-        second = dict(evidence[1])  # type: ignore[arg-type]
-        second["verdict"] = "comment"
-        evidence[1] = second
-        raw["evidence"] = evidence
+        replace_evidence(raw, 1, verdict="comment")
         raw["verdict_rule"] = "reject_zero_approve_one"
 
         proof = validate_consensus_gate_proof(raw)
 
         self.assertEqual("reject_zero_approve_one", proof.verdict_rule)
 
+    def test_review_style_rule_rejects_all_comment_required_verdicts(self) -> None:
+        raw = valid_proof()
+        replace_evidence(raw, 0, verdict="comment")
+        replace_evidence(raw, 1, verdict="comment")
+        raw["verdict_rule"] = "reject_zero_approve_one"
+
+        with self.assertRaisesRegex(ConsensusGateProofError, "verdict_rule_failed: reject_zero_approve_one"):
+            validate_consensus_gate_proof(raw)
+
     def test_review_style_rule_rejects_explicit_reject(self) -> None:
         raw = valid_proof()
-        evidence = list(raw["evidence"])  # type: ignore[arg-type]
-        second = dict(evidence[1])  # type: ignore[arg-type]
-        second["verdict"] = "reject"
-        evidence[1] = second
-        raw["evidence"] = evidence
+        replace_evidence(raw, 1, verdict="reject")
         raw["verdict_rule"] = "reject_zero_approve_one"
 
         with self.assertRaisesRegex(ConsensusGateProofError, "verdict_rule_failed"):
