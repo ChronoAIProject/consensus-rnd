@@ -36,19 +36,37 @@ class ImplementArtifactMarkerFallbackTests(unittest.TestCase):
                 "IMPLEMENT_DONE:issue-421:ok",
             )
 
-    def test_partial_and_missing_and_non_implement_stay_redispatchable(self) -> None:
+    def test_artifact_partial_is_not_recovered_for_publish_ready(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, runs = self._repo(tmp)
-            # partial is NOT recovered (only :ok), so partial attempts still re-dispatch
             (runs / "implement-issue-777.md").write_text("IMPLEMENT_DONE:issue-777:partial\n", encoding="utf-8")
             (logs / "implement-issue-777.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "implement-issue-777.log"), "")
+
+    def test_missing_and_non_implement_stay_redispatchable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self._repo(tmp)
             # missing artifact -> empty (true-failure markerless still re-dispatches)
             (logs / "implement-issue-888.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "implement-issue-888.log"), "")
             # non-implement log -> empty (scope guard)
             (logs / "audit-iter-9.log").write_text("worker output\nEXIT=0\n", encoding="utf-8")
             self.assertEqual(_implement_run_artifact_done_marker(logs / "audit-iter-9.log"), "")
+
+    def test_clean_blocked_or_partial_marker_is_terminal_not_redispatch(self) -> None:
+        for status in ("blocked", "partial"):
+            with self.subTest(status=status), tempfile.TemporaryDirectory() as tmp:
+                logs, _runs = self._repo(tmp)
+                repo = Path(tmp)
+                log = logs / "implement-issue-537.log"
+                log.write_text(f"IMPLEMENT_DONE:issue-537:{status}\nEXIT=0\n", encoding="utf-8")
+
+                state = classify_implement_attempt(repo_root=repo, log_path=log)
+
+                self.assertTrue(state.terminal_non_ok)
+                self.assertFalse(state.redispatch)
+                self.assertFalse(state.publish_ready)
+                self.assertEqual(state.marker, f"IMPLEMENT_DONE:issue-537:{status}")
 
     def test_clean_ok_stale_base_is_refresh_needed_not_redispatch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
