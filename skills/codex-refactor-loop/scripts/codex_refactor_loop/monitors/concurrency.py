@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
@@ -362,7 +362,13 @@ class ConcurrencyMonitor:
             )
         return items
 
-    def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
+    def compute_expected(
+        self,
+        items: list[dict],
+        *,
+        integration_branch: str = "",
+        command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+    ) -> tuple[int, list[dict]]:
         breakdown = []
         total = 0
         for item in ManagedWorkProjection(items).effective_worker_items():
@@ -373,7 +379,12 @@ class ConcurrencyMonitor:
             phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""
             expected = label_catalog.phase_expected_workers(phase)
             if expected > 0:
-                if item.kind == "issue" and implement_attempt_suppresses_expected_worker(self.repo_root, item.number):
+                if item.kind == "issue" and implement_attempt_suppresses_expected_worker(
+                    self.repo_root,
+                    item.number,
+                    integration_branch=integration_branch,
+                    command_runner=command_runner,
+                ):
                     continue
                 breakdown.append({"id": f"#{item.number}", "kind": item.kind, "phase": phase, "expected": expected})
                 total += expected
@@ -703,8 +714,17 @@ def list_auto_loop_issues() -> list[dict]:
     return _default_monitor().list_auto_loop_issues()
 
 
-def compute_expected(items: list[dict]) -> tuple[int, list[dict]]:
-    return _default_monitor().compute_expected(items)
+def compute_expected(
+    items: list[dict],
+    *,
+    integration_branch: str = "",
+    command_runner: Callable[[Sequence[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> tuple[int, list[dict]]:
+    return _default_monitor().compute_expected(
+        items,
+        integration_branch=integration_branch,
+        command_runner=command_runner,
+    )
 
 
 def write_alert(msg: str, detail: dict) -> None:

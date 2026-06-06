@@ -919,6 +919,7 @@ def _exclude_draft_suppressed_release_rollups(
 def canonical_expected_from_active_tasks(
     monitor: Any | None,
     *,
+    repo_root: Path | None = None,
     release_rollup_actions: list[Mapping[str, Any]] | None = None,
 ) -> tuple[int, list[dict[str, Any]]]:
     if monitor is None:
@@ -926,7 +927,14 @@ def canonical_expected_from_active_tasks(
     try:
         items = monitor.list_auto_loop_issues()
         items = _exclude_draft_suppressed_release_rollups(items, release_rollup_actions)
-        expected, breakdown = monitor.compute_expected(items)
+        if repo_root is None:
+            expected, breakdown = monitor.compute_expected(items)
+        else:
+            expected, breakdown = monitor.compute_expected(
+                items,
+                integration_branch=_integration_branch_from_env(),
+                command_runner=lambda command: git_text(list(command), cwd=repo_root),
+            )
         return int(expected), list(breakdown)
     except Exception:
         return 0, []
@@ -1013,6 +1021,7 @@ def concurrency_plan(
     if expected == 0:
         expected, breakdown = canonical_expected_from_active_tasks(
             monitor,
+            repo_root=repo_root,
             release_rollup_actions=release_rollup_actions,
         )
     dispatch_queue_has_work = False

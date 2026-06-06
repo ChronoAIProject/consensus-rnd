@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -145,6 +146,49 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn('os.environ.get("CODEX_FLOOR"', source)
         self.assertNotIn("REMOTE_CODEX_FLOOR", source)
         self.assertNotIn("cross_device_floor", source)
+
+    def test_compute_expected_suppresses_empty_scoped_diff_implementation_completion(self) -> None:
+        (self.refactor_loop / "logs").mkdir(parents=True, exist_ok=True)
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        (self.refactor_loop / "logs" / "implement-issue-581.log").write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "body": "",
+                "head_ref": "",
+                "is_draft": False,
+                "state": "open",
+            }
+        ]
+
+        def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+            if command[-2:] == ["--abbrev-ref", "HEAD"]:
+                return subprocess.CompletedProcess(command, 0, "refactor/iter581-issue-581\n", "")
+            if command[-3:] == ["merge-base", "HEAD", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "old-base\n", "")
+            if command[-2:] == ["--verify", "origin/integration"]:
+                return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            if command[-2:] == ["status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            if command[-2:] == ["diff", "--quiet"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
+            return subprocess.CompletedProcess(command, 1, "", "unexpected command")
+
+        expected, breakdown = self.monitor.compute_expected(
+            items,
+            integration_branch="integration",
+            command_runner=runner,
+        )
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
 
     # Refactor (iter6/issue-133):
     #   Old pattern: concurrency_monitor passed queue payload[cd] straight to consensus-rnd-cli spawn-codex --cd, letting a mutable task run in the repo-root/main worktree
