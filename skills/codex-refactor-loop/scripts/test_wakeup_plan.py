@@ -4855,7 +4855,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(Path(action["prompt"]).name, "meta-reflector-repository-stalled.md")
         self.assertEqual(Path(action["log"]).name, "meta-reflector-repository-stalled.log")
         self.assertEqual(action["target"], {"kind": "codex", "task_id": "meta-reflector-repository-stalled"})
-        self.assertEqual(action["preconditions"], ["active_controller_owner", "live_open_targets", "long_stuck_threshold_exceeded", "recommendation_only"])
+        self.assertEqual(
+            action["preconditions"],
+            [
+                "active_controller_owner",
+                "live_open_targets",
+                "long_stuck_threshold_exceeded",
+                "target_log_absent",
+                "recommendation_only",
+            ],
+        )
         self.assertEqual([item["number"] for item in action["stalled_items"]], [506, 507, 536])
         pr_item = action["stalled_items"][2]
         self.assertEqual(pr_item["kind"], "PR")

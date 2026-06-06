@@ -2856,6 +2856,7 @@ def repository_stalled_meta_reflector_actions(
                 "active_controller_owner",
                 "live_open_targets",
                 "long_stuck_threshold_exceeded",
+                "target_log_absent",
                 "recommendation_only",
             ],
             "runner_authority": RUNNER_AUTHORITY,
