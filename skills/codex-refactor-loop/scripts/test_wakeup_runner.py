@@ -1525,6 +1525,83 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
         self.assertIn("WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:77:refactor/iter77-worker", pending)
 
+    def test_wakeup_runner_review_fix_worktree_gap_does_not_starve_later_ci_red_dispatch(self) -> None:
+        for role, verdict in (("architect", "approve"), ("tests", "reject"), ("quality", "comment")):
+            (self.repo / ".refactor-loop/prompts" / f"review-pr77-{role}-r1.md").write_text(
+                f"head_sha: {'a' * 40}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/runs" / f"review-pr77-{role}-r1.md").write_text(
+                f"---\nverdict: {verdict}\n---\nREVIEW_DONE:77:{role}:{verdict}\n",
+                encoding="utf-8",
+            )
+            (self.repo / ".refactor-loop/logs" / f"review-pr77-{role}-r1.log").write_text(
+                f"REVIEW_DONE:77:{role}:{verdict}\nEXIT=0\n",
+                encoding="utf-8",
+            )
+        blocked_gate = self.review_gate_action(action_id="review-gate:77:missing-fix-worktree-before-ci-red")
+        ci_red = self.remote_ci_fix_action(
+            action_id="ci-red:78:" + "b" * 40 + ":contract-tests",
+            target_number=78,
+            target={"kind": "PR", "number": 78},
+            head_sha="b" * 40,
+            source_marker="ci-red:78:" + "b" * 40 + ":contract-tests",
+        )
+        actions = FakeReviewFixActions(self.repo)
+
+        def command_runner(command):
+            repo_root = self.ctx.repo_root
+            if command[:2] == ["gh", "api"]:
+                endpoint = str(command[2]) if len(command) > 2 else ""
+                if endpoint in {"repos/owner/repo/pulls/77", "repos/owner/repo/pulls/78"}:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"state": "open", "head": {"sha": "a" * 40}}), "")
+                if endpoint == f"repos/owner/repo/commits/{'a' * 40}/check-runs":
+                    payload = [{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]
+                    return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+                return subprocess.CompletedProcess(command, 0, "{}", "")
+            if command[:3] == ["gh", "pr", "view"]:
+                target = command[3] if len(command) > 3 else ""
+                if "headRefName" in command and "--jq" not in command:
+                    branch = "refactor/iter77-worker" if target == "77" else "refactor/iter78-worker"
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"headRefName": branch}), "")
+                if ".headRefOid" in command:
+                    return subprocess.CompletedProcess(command, 0, "a" * 40 + "\n", "")
+                if "mergeable,isDraft" in command:
+                    return subprocess.CompletedProcess(command, 0, json.dumps({"mergeable": "MERGEABLE", "isDraft": False}), "")
+            if command == ["git", "-C", str(repo_root), "worktree", "list", "--porcelain"]:
+                return subprocess.CompletedProcess(
+                    command,
+                    0,
+                    f"worktree {repo_root}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {repo_root / '.worktrees' / 'iter78-worker'}\nbranch refs/heads/refactor/iter78-worker\n\n",
+                    "",
+                )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        runner = WakeupRunner(
+            self.ctx,
+            plan_loader=lambda _repo: self.batch_plan([blocked_gate, ci_red], dispatch_required=2, deficit=2),
+            actions=actions,
+            supervisor=self.supervisor,
+            command_runner=command_runner,
+        )
+
+        with mock.patch("codex_refactor_loop.wakeup_runner.launch_spawn_codex_supervisor", return_value=0) as launch:
+            results = runner.run_once()
+
+        self.assertEqual(
+            [(result.action_id, result.status, result.reason) for result in results],
+            [
+                ("review-gate:77:missing-fix-worktree-before-ci-red", "blocked", "helper_exit:3"),
+                ("ci-red:78:" + "b" * 40 + ":contract-tests", "applied", ""),
+            ],
+        )
+        self.assertEqual(actions.rendered, [(77, 1)])
+        launch.assert_called_once()
+        self.assertEqual(Path(launch.call_args.kwargs["cd"]).resolve(), (self.repo / ".worktrees" / "iter78-worker").resolve())
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn("WAKEUP_RUNNER_REVIEW_FIX_WORKTREE_MISSING:77:refactor/iter77-worker", pending)
+
     def test_wakeup_runner_skips_blocked_spawn_validation_and_scans_later_actions(self) -> None:
         first = self.spawn_action(action_id="spawn:first", log=str(self.repo / ".refactor-loop/logs/first.log"))
         blocked = self.spawn_action(action_id="spawn:blocked", log=str(self.repo / ".refactor-loop/logs/blocked.log"))

@@ -246,8 +246,9 @@ class WakeupRunner:
             if result.status != "applied":
                 if result.status in {"blocked", "skipped"} and not consumes_spawn_budget:
                     continue
-                if result.status == "blocked" and consumes_spawn_budget and not _spawn_launch_failure(result):
-                    continue
+                if result.status == "blocked" and consumes_spawn_budget:
+                    if not is_spawn_action or not _spawn_launch_failure(result):
+                        continue
                 break
             if consumes_spawn_budget:
                 applied_spawns += 1
