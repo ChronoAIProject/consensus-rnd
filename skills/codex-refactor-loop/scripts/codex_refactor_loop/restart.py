@@ -49,6 +49,12 @@ def restart_managed_daemon_names() -> tuple[str, ...]:
     return tuple(name for name, _command in DAEMON_COMMANDS)
 
 
+SUPERVISOR_DAEMON_COMMAND: tuple[str, tuple[str, ...]] = (
+    "controller_tick_supervisor",
+    ("python3", "-m", "codex_refactor_loop.supervisor", "--daemon"),
+)
+
+
 FORBIDDEN_LIFECYCLE_AUTHORITY = (
     "create/merge/close PR",
     "open/close issue",
@@ -355,6 +361,9 @@ class RestartDaemons:
             self._run_runtime_retention()
             for name, command in DAEMON_COMMANDS:
                 self.start_daemon(name, command)
+            if _truthy(self.ctx.host_env.get("CONTROLLER_TICK_SUPERVISOR_ENABLE")):
+                name, command = SUPERVISOR_DAEMON_COMMAND
+                self.start_daemon(name, command)
         finally:
             self._release_restart_lock()
         self._run_update_check()
@@ -569,6 +578,10 @@ def _positive_env_int(ctx: LoopContext, env_name: str, default: str) -> str:
     except ValueError:
         return default
     return str(parsed) if parsed > 0 else default
+
+
+def _truthy(value: object) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 WRAPPER_CODE = r'''
