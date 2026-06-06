@@ -92,6 +92,46 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
         self.assertEqual("unavailable", diagnostics.status)
         self.assertIn("bad credentials", diagnostics.error)
 
+    def test_diagnostics_runner_exception_is_unavailable_display_only_status(self) -> None:
+        commands: list[list[str]] = []
+
+        def failing_runner(cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+            commands.append(list(cmd))
+            raise OSError("network down")
+
+        diagnostics = GitHubAuthenticatedActor(self.ctx, runner=failing_runner).diagnostics()
+
+        self.assertEqual(commands, [["gh", "api", "user"]])
+        self.assertEqual("", diagnostics.current_github_login)
+        self.assertEqual("display-only", diagnostics.identity_authority)
+        self.assertEqual("unavailable", diagnostics.status)
+        self.assertIn("network down", diagnostics.error)
+
+    def test_diagnostics_invalid_user_json_is_invalid_display_only_status(self) -> None:
+        self.user = subprocess.CompletedProcess(["gh", "api", "user"], 0, "{not json", "")
+
+        diagnostics = GitHubAuthenticatedActor(self.ctx, runner=self.runner).diagnostics()
+
+        self.assertEqual(self.commands, [["gh", "api", "user"]])
+        self.assertEqual("", diagnostics.current_github_login)
+        self.assertEqual("display-only", diagnostics.identity_authority)
+        self.assertEqual("invalid", diagnostics.status)
+        self.assertIn("invalid gh api user JSON", diagnostics.error)
+
+    def test_diagnostics_missing_or_blank_login_is_missing_display_only_status(self) -> None:
+        for payload in ({}, {"login": " "}):
+            with self.subTest(payload=payload):
+                self.commands.clear()
+                self.user = subprocess.CompletedProcess(["gh", "api", "user"], 0, json.dumps(payload), "")
+
+                diagnostics = GitHubAuthenticatedActor(self.ctx, runner=self.runner).diagnostics()
+
+                self.assertEqual(self.commands, [["gh", "api", "user"]])
+                self.assertEqual("", diagnostics.current_github_login)
+                self.assertEqual("display-only", diagnostics.identity_authority)
+                self.assertEqual("missing", diagnostics.status)
+                self.assertIn("authenticated login missing", diagnostics.error)
+
     def test_diagnostics_helper_writes_rebuildable_local_status(self) -> None:
         diagnostics = write_github_actor_diagnostics_status(self.ctx, runner=self.runner)
 
