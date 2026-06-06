@@ -1229,8 +1229,8 @@ def _marker_mtime(log_path: Path) -> float:
 
 
 def _latest_completed_marker_candidates(candidates: list[CompletedMarkerCandidate]) -> list[CompletedMarkerCandidate]:
-    latest_keys: dict[tuple[Any, ...], tuple[int, float]] = {}
-    keyed: list[tuple[CompletedMarkerCandidate, tuple[Any, ...], tuple[int, float]] | None] = []
+    latest_keys: dict[tuple[Any, ...], tuple[Any, ...]] = {}
+    keyed: list[tuple[CompletedMarkerCandidate, tuple[Any, ...], tuple[Any, ...]] | None] = []
     for candidate in candidates:
         key = _completed_marker_latest_key(candidate)
         if key is None:
@@ -1276,11 +1276,17 @@ def _design_consensus_marker_issue_key(candidate: CompletedMarkerCandidate) -> t
     return ("design-consensus", "issue", issue)
 
 
-def _completed_marker_latest_rank(candidate: CompletedMarkerCandidate) -> tuple[int, float]:
+def _completed_marker_latest_rank(candidate: CompletedMarkerCandidate) -> tuple[Any, ...]:
     round_no = _design_consensus_marker_round(candidate)
     if round_no is not None:
-        return (round_no, candidate.mtime)
+        return (round_no, _design_consensus_terminal_marker_rank(candidate.marker), candidate.mtime)
     return (0, candidate.mtime)
+
+
+def _design_consensus_terminal_marker_rank(marker: str) -> int:
+    if marker.startswith("META_RESOLVED:drop:"):
+        return 1
+    return 0
 
 
 def _design_consensus_marker_round(candidate: CompletedMarkerCandidate) -> int | None:
