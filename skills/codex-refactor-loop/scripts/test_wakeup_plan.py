@@ -4092,6 +4092,40 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("runner_authority", waiting[0])
         self.assertFalse(by_issue[332].get("status_only"))
 
+    def test_hard_gate_audit_fallback_ignores_dispatch_actions_suppressed_before_fallback(self) -> None:
+        self.set_audit_fallback_enable("true")
+        self.write_consensus_artifact(issue=330, round_no=1)
+        self.write_completed_log("phase9-issue330-r1-judge.log", "META_JUDGE_DONE:consensus:structural")
+        (self.repo / ".worktrees" / "iter330-issue-330").mkdir(parents=True)
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:330",
+            task_id="implement-issue-330",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-330.log",
+        )
+        pending = self.repo / ".refactor-loop" / ".controller-pending-events.log"
+        with pending.open("a", encoding="utf-8") as handle:
+            handle.write("repository-stalled-meta-reflector already queued\n")
+        (self.logs / "implement-issue-330.log").write_text("worker running\n", encoding="utf-8")
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_issue_330", ps_count=0)
+
+        dispatch = next(
+            action
+            for action in plan["actions"]
+            if action.get("controller_action") == "dispatch_consensus_implementation"
+        )
+        self.assertTrue(dispatch["status_only"])
+        self.assertEqual(dispatch["suppressed_reason"], "in_flight_implement")
+        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        fallback = next(action for action in plan["actions"] if action.get("action_id") == "audit-fallback:audit-iter-1")
+        self.assertEqual(fallback["controller_action"], "spawn_codex_harness_background")
+        self.assertNotIn("status_only", fallback)
+        self.assertEqual(fallback["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(has_dispatchable_action(plan["actions"]))
+
     def test_consensus_projection_accepts_verdict_consensus_frontmatter(self) -> None:
         artifact = self.write_consensus_artifact(issue=451, round_no=3, frontmatter="verdict: consensus")
         self.write_completed_log("phase9-issue451-r3-judge.log", "META_JUDGE_DONE:consensus:structural")
