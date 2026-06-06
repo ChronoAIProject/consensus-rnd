@@ -599,10 +599,16 @@ class ConcurrencyMonitor:
                     self.write_pending_event(event)
                     log(event)
                     tick_action = f"blocked:single-active-audit deficit={deficit}"
-                elif owner_allowed:
+                elif owner_allowed and expected > 0:
                     self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     tick_action = f"blocked:dispatch-required deficit={deficit}"
+                elif owner_allowed:
+                    log(
+                        "HARD_GATE:noop:zero-expected "
+                        f"actual={actual} expected={expected} floor={floor} queue=0 deficit={deficit}"
+                    )
+                    tick_action = f"noop:zero-expected deficit={deficit}"
                 else:
                     log(
                         "active_controller=noop:not-owner "

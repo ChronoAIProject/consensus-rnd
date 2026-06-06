@@ -998,6 +998,7 @@ def concurrency_plan(
     monitor: Any | None = None,
     concurrency_module: Any | None = None,
     release_rollup_actions: list[Mapping[str, Any]] | None = None,
+    audit_fallback_eligible: bool = False,
 ) -> dict[str, Any]:
     if concurrency_module is None:
         concurrency_module = import_concurrency_monitor(repo_root)
@@ -1014,10 +1015,16 @@ def concurrency_plan(
             monitor,
             release_rollup_actions=release_rollup_actions,
         )
+    dispatch_queue_has_work = False
+    if monitor is not None:
+        try:
+            dispatch_queue_has_work = not bool(monitor.dispatch_queue_empty())
+        except Exception:
+            dispatch_queue_has_work = False
     floor = configured_floor()
     target = max(floor, expected)
     deficit = max(0, target - actual)
-    hard_gate_active = deficit > 0
+    hard_gate_active = deficit > 0 and (expected > 0 or dispatch_queue_has_work or audit_fallback_eligible)
     hard_gate_line = f"HARD_GATE:dispatch_required={deficit}" if hard_gate_active else None
     boundary = None
     if deficit > 0 and expected == 0 and concurrency_module is not None:
@@ -3447,6 +3454,20 @@ def has_dispatchable_action(actions: list[dict[str, Any]]) -> bool:
     )
 
 
+def has_hard_gate_dispatch_action(actions: list[dict[str, Any]]) -> bool:
+    return any(
+        not action.get("status_only")
+        and (
+            action.get("kind") == "existing-issue"
+            or (
+                action.get("kind") == "harness-spawn-intent"
+                and action.get("controller_action") == "spawn_codex_harness_background"
+            )
+        )
+        for action in close_projection_actions(actions)
+    )
+
+
 def action_priority_sort_key(action: dict[str, Any]) -> tuple[int, int]:
     return (action_priority_class(action), int(action.get("priority", 99)))
 
@@ -3753,20 +3774,18 @@ def _implementation_pr_artifact_invalid_reason(action: Mapping[str, Any], repo_r
 
 def restore_hard_gate_for_dispatchable_actions(concurrency: dict[str, Any], actions: list[dict[str, Any]]) -> None:
     hard_gate = concurrency.get("hard_gate", {})
-    if hard_gate.get("reason") != "single_active_audit_in_flight":
-        return
-    if not has_dispatchable_action(actions):
+    if not has_hard_gate_dispatch_action(actions):
         return
     deficit = int(concurrency.get("deficit", 0))
+    if deficit <= 0:
+        return
     hard_gate.update(
         {
-            "active": deficit > 0,
-            "dispatch_required": deficit if deficit > 0 else 0,
-            "line": f"HARD_GATE:dispatch_required={deficit}" if deficit > 0 else None,
+            "active": True,
+            "dispatch_required": deficit,
+            "line": f"HARD_GATE:dispatch_required={deficit}",
             "semantics": (
                 "controller must dispatch this many actionable managed issue/PR tasks or legal fallback issue production through audit before ending the wakeup"
-                if deficit > 0
-                else None
             ),
             "reason": None,
             "blocked_deficit": 0,
@@ -3865,6 +3884,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         monitor=monitor,
         concurrency_module=concurrency_module,
         release_rollup_actions=rollup_auto_merge_actions,
+        audit_fallback_eligible=audit_none_fixed_point and audit_fallback_enabled(ctx),
     )
 
     actions: list[dict[str, Any]] = []

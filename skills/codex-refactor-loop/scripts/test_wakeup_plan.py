@@ -53,6 +53,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     resolve_repo_root,
     stale_revival_seconds,
     suppress_stale_unexecutable_actions,
+    concurrency_plan,
 )
 from test_support.authorization_projection import project_python  # noqa: E402
 
@@ -2034,8 +2035,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             plan["concurrency"]["expected_breakdown"],
         )
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_partial_implement_without_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for name, mutate in (
@@ -2561,8 +2563,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             plan["concurrency"]["expected_breakdown"],
         )
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_stale_base_noop_implementation_done_is_status_only_and_not_expected_worker(self) -> None:
         (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
@@ -2595,7 +2598,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             plan["concurrency"]["expected_breakdown"],
         )
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
@@ -5475,8 +5480,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
         self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")
@@ -5569,8 +5575,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["floor"], 5)
         self.assertEqual(plan["concurrency"]["target"], 5)
         self.assertEqual(plan["concurrency"]["deficit"], 3)
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 3)
-        self.assertIn("HARD_GATE:dispatch_required=3", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_concurrency_plan_does_not_hard_gate_from_floor_when_expected_zero(self) -> None:
+        monitor = mock.Mock()
+        monitor.count_in_flight_codex.return_value = 0
+        monitor.list_auto_loop_issues.return_value = []
+        monitor.compute_expected.return_value = (0, [])
+
+        with mock.patch.dict(os.environ, {"CODEX_FLOOR": "4"}):
+            plan = concurrency_plan(
+                self.repo,
+                fixed_point=False,
+                gh_items=[],
+                monitor=monitor,
+                concurrency_module=None,
+            )
+
+        self.assertEqual(plan["expected_from_active_tasks"], 0)
+        self.assertEqual(plan["expected_breakdown"], [])
+        self.assertEqual(plan["floor"], 4)
+        self.assertEqual(plan["deficit"], 4)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
     def test_deficit_uses_expected_active_tasks_when_above_floor(self) -> None:
         plan, stdout = self.run_plan_with_stdout(fixture="many_active", ps_count=1)
@@ -5597,9 +5626,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan["concurrency"]["deficit"], 5)
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
-        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertFalse(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
         self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
         self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md").exists())
         pending = (self.repo / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
@@ -5658,10 +5688,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
-                self.assertTrue(plan["hard_gate"]["active"])
-                self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+                self.assertFalse(plan["hard_gate"]["active"])
+                self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
                 self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
-                self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+                self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
                 self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
                 self.assertFalse(prompt.exists())
                 self.assertNotIn("audit_fallback=", pending.read_text(encoding="utf-8"))
