@@ -17,9 +17,10 @@ from typing import Any, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
 from .. import labels as label_catalog
+from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
 from ..update_check import parse_time
 from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
@@ -47,7 +48,7 @@ _DEFAULT_MONITOR: ConcurrencyMonitor | None = None
 
 @dataclass(frozen=True)
 class Boundary:
-    """refactor helper, no behavior change"""
+    """Active audit task boundary used to avoid duplicate fallback dispatch."""
 
     task_id: str
     evidence: str
@@ -60,6 +61,10 @@ def utc_ts() -> str:
 def log(msg: str) -> None:
     ts = utc_ts()
     print(f"[{ts}] {msg}", flush=True)
+
+
+def log_tick_status(action: str) -> None:
+    log(f"concurrency: tick {action}")
 
 
 def _run(cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -125,6 +130,7 @@ class ConcurrencyMonitor:
         self.dispatch_dispatched = ctx.paths.dispatch_dispatched
         self.dispatch_rejected = ctx.paths.dispatch_rejected
         self.state_file = ctx.paths.refactor_loop / ".concurrency-monitor-state.json"
+        self._last_top_up_dispatches = 0
 
     def run(self, cmd: Sequence[str]) -> subprocess.CompletedProcess[str]:
         return _run(cmd)
@@ -295,61 +301,42 @@ class ConcurrencyMonitor:
     def count_in_flight_codex(self) -> int:
         return len(self.list_in_flight_codex_lines())
 
-    def _gh_list_by_label(self, kind: str, query_label: str) -> list[dict]:
-        cmd = ["gh", kind, "list"]
-        if self.gh_repo_slug:
-            cmd.extend(["--repo", self.gh_repo_slug])
-        json_fields = "number,labels,body" if kind == "pr" else "number,labels"
-        cmd.extend([
-            "--label",
-            query_label,
-            "--state",
-            "open",
-            "--json",
-            json_fields,
-            "--limit",
-            "100",
-        ])
-        result = self.run(cmd)
-        if result.returncode != 0:
-            return []
-        try:
-            rows = json.loads(result.stdout)
-        except Exception:
-            return []
-        return rows if isinstance(rows, list) else []
-
     def list_auto_loop_issues(self) -> list[dict]:
         items: list[dict] = []
         seen: set[tuple[str, int]] = set()
-        for kind in ("issue", "pr"):
-            rows: list[dict] = []
-            for query_label in label_catalog.query_labels_for(label_catalog.MANAGED):
-                rows.extend(self._gh_list_by_label(kind, query_label))
-            for entry in rows:
-                try:
-                    num = int(entry.get("number"))
-                except (TypeError, ValueError):
-                    continue
-                key = (kind, num)
-                if key in seen:
-                    continue
-                seen.add(key)
-                label_names = [label.get("name", "") for label in entry.get("labels", [])]
-                projection = label_catalog.normalize_label_set(label_names)
-                phase = projection.phase or ""
-                human = projection.human or ""
-                items.append(
-                    {
-                        "number": num,
-                        "kind": kind,
-                        "phase": phase,
-                        "human": human,
-                        "labels": label_names,
-                        "body": str(entry.get("body") or ""),
-                        "state": "open",
-                    }
-                )
+        snapshot = load_open_managed_work_snapshot(self.ctx)
+        if not snapshot.loaded_ok:
+            print(
+                snapshot.unavailable_diagnostic("concurrency-monitor.list-auto-loop-issues", target_context="expected-worker-count"),
+                file=sys.stderr,
+                flush=True,
+            )
+            return items
+        for entry in snapshot.items:
+            num = entry.number
+            raw_kind = entry.kind
+            kind = "pr" if raw_kind == "PR" else "issue"
+            key = (kind, num)
+            if key in seen:
+                continue
+            seen.add(key)
+            label_names = [str(label) for label in entry.labels if str(label)]
+            projection = label_catalog.normalize_label_set(label_names)
+            if label_catalog.MANAGED not in projection.canonical:
+                continue
+            phase = projection.phase or ""
+            human = projection.human or ""
+            items.append(
+                {
+                    "number": num,
+                    "kind": kind,
+                    "phase": phase,
+                    "human": human,
+                    "labels": label_names,
+                    "body": entry.body,
+                    "state": "open",
+                }
+            )
         return items
 
     def compute_expected(self, items: list[dict]) -> tuple[int, list[dict]]:
@@ -498,20 +485,24 @@ class ConcurrencyMonitor:
         return None
 
     def top_up_from_dispatch_queue(self, actual: int, floor: int) -> int:
+        self._last_top_up_dispatches = 0
         if actual >= floor:
             return actual
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
             self.write_pending_event("DISPATCH_BACKOFF:graphql-headroom-low")
-            log_graphql_backoff("concurrency-monitor")
+            log_tick_status("skip:graphql-backoff remaining=unknown")
             return actual
         max_dispatches = floor - actual
+        dispatched = 0
         for _ in range(max_dispatches):
             fired = self.dispatch_one_from_queue()
             if fired is None:
                 break
+            dispatched += 1
             actual = self.count_in_flight_codex()
             if actual >= floor:
                 break
+        self._last_top_up_dispatches = dispatched
         return actual
 
     def tick(self) -> None:
@@ -545,8 +536,14 @@ class ConcurrencyMonitor:
             }
             self.write_alert(f"P0 no-gap-violation: 0 codex with {expected} active task(s)", detail)
             log(f"P0 ALERT: 0 codex but {expected} active task(s);streak={zero_streak};see {self.alert_log}")
+            dispatched = 0
             if owner_allowed and not self.dispatch_queue_empty():
                 actual = self.top_up_from_dispatch_queue(actual, max(expected, self.configured_floor()))
+                dispatched = self._last_top_up_dispatches
+            if dispatched:
+                log_tick_status(f"dispatched {dispatched} spawn-intent")
+            else:
+                log_tick_status(f"blocked:p0-no-gap-violation expected={expected}")
             self.write_statusline_snapshot(
                 actual=actual,
                 expected=expected,
@@ -560,6 +557,7 @@ class ConcurrencyMonitor:
 
         state["zero_streak"] = 0
         target = max(expected, floor)
+        tick_action = "noop:at-or-above-floor"
         if actual < target:
             if self.dispatch_queue_empty():
                 deficit = target - actual
@@ -573,19 +571,26 @@ class ConcurrencyMonitor:
                     )
                     self.write_pending_event(event)
                     log(event)
+                    tick_action = f"blocked:single-active-audit deficit={deficit}"
                 elif owner_allowed:
                     self.write_pending_event(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
                     log(f"HARD_GATE:dispatch_required={deficit}:actual={actual} expected={expected} queue=0")
+                    tick_action = f"blocked:dispatch-required deficit={deficit}"
                 else:
                     log(
                         "active_controller=noop:not-owner "
                         f"action=concurrency-tick dispatch_required={deficit} owner={decision.owner_device}"
                     )
+                    tick_action = f"noop:not-owner deficit={deficit}"
             else:
                 if owner_allowed:
                     actual = self.top_up_from_dispatch_queue(actual, target)
+                    dispatched = self._last_top_up_dispatches
+                    tick_action = f"dispatched {dispatched} spawn-intent" if dispatched else "blocked:dispatch-queue-present-no-dispatch"
                 else:
                     log(f"active_controller=noop:not-owner action=concurrency-top-up owner={decision.owner_device}")
+                    tick_action = "noop:not-owner"
+        log_tick_status(tick_action)
 
         self.write_statusline_snapshot(
             actual=actual,

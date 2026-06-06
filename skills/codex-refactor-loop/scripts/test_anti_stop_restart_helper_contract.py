@@ -40,6 +40,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "No lifecycle authority",
             "STALE_CONTROLLER",
             "$REPO_ROOT",
+            "consensus-rnd-cli runtime-retention",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
@@ -47,7 +48,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
     def test_scheduler_docs_use_single_cli_entrypoint(self) -> None:
         self.assertIn("consensus-rnd-cli restart-daemons", self.skill)
         self.assertIn("consensus-rnd-cli daemon-status --json", self.skill)
-        self.assertIn("source .refactor-loop/host.env", self.skill)
+        self.assertIn('source "$CONSENSUS_RND_HOST_ENV"', self.skill)
+        self.assertIn("not a runtime fallback", self.skill)
         self.assertIn("cron/launchd-only", self.skill)
 
     def test_restart_module_contains_singleton_and_heartbeat_checks(self) -> None:
@@ -80,12 +82,13 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             ("phase9_router_daemon", "phase9-router"),
             ("closed_label_reconciler", "closed-label-reconciler"),
             ("wakeup_runner_daemon", "wakeup-runner"),
+            ("patrol_inspector_daemon", "patrol-inspector"),
         ):
             with self.subTest(name=name):
                 self.assertIn(name, self.restart)
                 self.assertIn('"consensus-rnd-cli"', self.restart)
                 self.assertIn(f'"{op}"', self.restart)
-        self.assertEqual(7, self.restart.count('"--daemon"'))
+        self.assertEqual(8, self.restart.count('"--daemon"'))
 
     def test_restart_module_has_no_controller_lifecycle_authority(self) -> None:
         for token in ("gh ", "git ", "pr merge", "issue close", "git tag", "gh release"):
@@ -118,6 +121,7 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
             "same resolved static allowlist command",
             "read-only daemon-status projection",
             "repair/reload remains restart-daemons",
+            "runs canonical RuntimeRetention before daemon freshness checks",
             "no host-defined daemon registry",
             "generic process supervisor",
             "GitHub/git lifecycle authority",

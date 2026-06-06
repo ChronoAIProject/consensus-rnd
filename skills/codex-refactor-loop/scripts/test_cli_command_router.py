@@ -23,6 +23,7 @@ CLI = SCRIPT_DIR / "consensus-rnd-cli"
 
 ALL_AUTHORITY_TOKENS = {
     "delete-log",
+    "delete-runtime",
     "gh-close",
     "gh-close-linked",
     "gh-comment",
@@ -68,11 +69,12 @@ DAEMON_COMMANDS = {
     "comment-monitor",
     "concurrency",
     "dev-sync",
-    "log-retention",
     "phase9-router",
+    "patrol-inspector",
     "progress-reporter",
     "release-gate",
     "restart-daemons",
+    "runtime-retention",
     "wakeup-runner",
 }
 
@@ -91,7 +93,9 @@ DAEMON_FORBIDDEN_LIFECYCLE_TOKENS = {
 
 DAEMON_LIFECYCLE_CARVEOUTS = {
     "dev-sync": {"git-fetch", "git-worktree", "git-merge", "git-push", "git-rebase", "git-reset"},
+    "runtime-retention": {"git-worktree"},
     "wakeup-runner": {"git-commit-worker-output", "git-push", "gh-open", "gh-merge", "gh-close-linked", "gh-label-owned"},
+    "patrol-inspector": {"gh-open", "gh-edit"},
 }
 
 LIFECYCLE_TOKENS = {
@@ -121,10 +125,12 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "closed-label-reconciler",
                 "daemon-status",
                 "gh-stats",
+                "holistic-status",
                 "labels",
+                "patrol-inspector",
                 "concurrency",
                 "dev-sync",
-                "log-retention",
+                "runtime-retention",
                 "spawn-codex",
                 "peek",
                 "pr-checks",
@@ -139,6 +145,7 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 "release-gate",
                 "release-required-checks",
                 "render-github-body",
+                "revive-implements",
                 "update-check",
             },
             set(COMMANDS),
@@ -181,11 +188,18 @@ class RuntimeCommandRouterTests(unittest.TestCase):
         self.assertNotIn("reconcile-labels", COMMANDS)
         for name, spec in COMMANDS.items():
             with self.subTest(command=name):
-                if name == "closed-label-reconciler":
+                if name in {"closed-label-reconciler", "patrol-inspector"}:
                     continue
                 self.assertNotIn("gh-label-closed-reconcile", spec.authority)
                 self.assertNotIn("gh-label", spec.authority)
                 self.assertNotIn("gh-edit", spec.authority)
+
+    def test_patrol_inspector_declares_only_patrol_issue_intake_authority(self) -> None:
+        self.assertEqual(
+            ("read-state", "read-log", "read-gh", "gh-open", "gh-edit", "write-state"),
+            COMMANDS["patrol-inspector"].authority,
+        )
+        self.assertFalse({"gh-close", "gh-label", "gh-merge", "git-push"} & set(COMMANDS["patrol-inspector"].authority))
 
     def test_unknown_command_exits_2(self) -> None:
         result = subprocess.run(
@@ -219,9 +233,47 @@ class RuntimeCommandRouterTests(unittest.TestCase):
                 self.assertFalse(hasattr(spec, "read_only"))
 
     def test_read_only_commands_have_only_read_authority(self) -> None:
-        for name in {"check-degradation", "check-manifest", "daemon-status", "gh-stats", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
+        for name in {"check-degradation", "check-manifest", "daemon-status", "gh-stats", "holistic-status", "peek", "pr-checks", "release-required-checks", "render-github-body", "statusline", "wakeup-plan"}:
             with self.subTest(command=name):
                 self.assertFalse(set(COMMANDS[name].authority) & MUTATION_TOKENS)
+
+    def test_check_degradation_remains_existing_private_read_surface(self) -> None:
+        self.assertEqual(("read-source", "read-state"), COMMANDS["check-degradation"].authority)
+        forbidden_authority = {
+            "read-gh",
+            "write-artifact",
+            "write-state",
+            "spawn",
+            "git-push",
+            "git-merge",
+            "git-reset",
+            "gh-open",
+            "gh-merge",
+            "gh-close",
+            "gh-label",
+        }
+        self.assertFalse(set(COMMANDS["check-degradation"].authority) & forbidden_authority)
+        for command in ("check-clean-room", "clean-room-smoke", "host-fixture-smoke"):
+            with self.subTest(command=command):
+                self.assertNotIn(command, COMMANDS)
+
+    def test_activity_is_not_a_public_command_and_peek_remains_status_lens(self) -> None:
+        self.assertNotIn("activity", COMMANDS)
+        self.assertIn("peek", COMMANDS)
+        self.assertEqual(("read-state", "read-gh"), COMMANDS["peek"].authority)
+        self.assertIn("read-only state sweep", COMMANDS["peek"].description)
+
+    def test_holistic_status_is_read_only_shared_projection_command(self) -> None:
+        self.assertEqual(("read-state", "read-process", "read-gh"), COMMANDS["holistic-status"].authority)
+        self.assertFalse(set(COMMANDS["holistic-status"].authority) & MUTATION_TOKENS)
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "cli.py").read_text(encoding="utf-8")
+        holistic = (SCRIPT_DIR / "codex_refactor_loop" / "holistic_status.py").read_text(encoding="utf-8")
+        self.assertIn('"holistic-status": CommandSpec(', source)
+        self.assertIn("render the shared read-only holistic status card", source)
+        self.assertIn("class HolisticStatusProjection", holistic)
+        for forbidden in ("dashboard-writer", "status-card-writer", "global-status-card", "write-holistic-status"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS)
 
     def test_daemon_status_is_read_only_status_projection(self) -> None:
         self.assertEqual(("read-state", "read-process"), COMMANDS["daemon-status"].authority)
@@ -276,7 +328,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             repo = Path(raw_tmp) / "repo"
             for rel in (".refactor-loop/locks", ".refactor-loop/heartbeats", ".refactor-loop/state"):
                 (repo / rel).mkdir(parents=True, exist_ok=True)
-            (repo / ".refactor-loop" / "host.env").write_text(
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True, exist_ok=True)
+            host_env.write_text(
                 f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="example/repo"\n',
                 encoding="utf-8",
             )
@@ -290,7 +344,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             result = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "--json"],
                 cwd=repo,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+                env={
+                    "PATH": os.environ.get("PATH", ""),
+                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                    "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                },
                 capture_output=True,
                 text=True,
                 check=False,
@@ -310,7 +368,11 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             unknown = subprocess.run(
                 [sys.executable, str(CLI), "daemon-status", "not-allowlisted"],
                 cwd=repo,
-                env={"PATH": os.environ.get("PATH", ""), "PYTHONPATH": os.environ.get("PYTHONPATH", "")},
+                env={
+                    "PATH": os.environ.get("PATH", ""),
+                    "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                    "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+                },
                 capture_output=True,
                 text=True,
                 check=False,
@@ -349,6 +411,9 @@ class RuntimeCommandRouterTests(unittest.TestCase):
             "sync-request",
             "release-publish",
             "publish-release",
+            "dashboard-writer",
+            "global-status-card",
+            "write-holistic-status",
             "apply-update",
             "check-update",
             "install-update",
@@ -367,6 +432,24 @@ class RuntimeCommandRouterTests(unittest.TestCase):
     def test_update_check_declares_exact_notify_only_authority(self) -> None:
         self.assertEqual(("read-source", "read-gh", "write-state"), COMMANDS["update-check"].authority)
         self.assertFalse(set(COMMANDS["update-check"].authority) & LIFECYCLE_TOKENS)
+
+    def test_runtime_retention_is_canonical_without_log_retention_alias(self) -> None:
+        self.assertEqual(("delete-runtime", "git-worktree"), COMMANDS["runtime-retention"].authority)
+        self.assertIn("canonical RuntimeRetention", COMMANDS["runtime-retention"].description)
+        removed_legacy_command = "log" + "-retention"
+        self.assertNotIn(removed_legacy_command, COMMANDS)
+        for forbidden in ("read-gh", "gh-close", "gh-edit", "gh-label", "gh-merge", "gh-open", "git-fetch", "git-push", "git-merge", "git-reset", "git-rebase"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, COMMANDS["runtime-retention"].authority)
+
+        result = subprocess.run(
+            [sys.executable, str(CLI), removed_legacy_command],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(2, result.returncode)
+        self.assertIn(f"unknown command: {removed_legacy_command}", result.stderr)
 
     def test_public_commands_expose_no_generic_lifecycle_authority_tokens(self) -> None:
         for name, spec in COMMANDS.items():

@@ -9,14 +9,14 @@ import signal
 import subprocess
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.processes import ProcessSupervisor, prompt_file_from_text
+from codex_refactor_loop.processes import ProcessSupervisor, launch_spawn_codex_supervisor, prompt_file_from_text
 
 
 class SpawnSupervisorTests(unittest.TestCase):
@@ -91,13 +91,46 @@ class SpawnSupervisorTests(unittest.TestCase):
         child_pid = int(marker.read_text(encoding="utf-8"))
         self.assert_process_dead(child_pid)
 
+    def test_launch_spawn_codex_supervisor_detaches_without_wait_or_poll(self) -> None:
+        repo = self.tmp_root
+        cli = repo / "skills" / "codex-refactor-loop" / "scripts" / "consensus-rnd-cli"
+        cli.parent.mkdir(parents=True, exist_ok=True)
+        cli.write_text("#!/bin/sh\n", encoding="utf-8")
+        fake_proc = mock.Mock()
+
+        with mock.patch("codex_refactor_loop.processes.subprocess.Popen", return_value=fake_proc) as popen:
+            exit_code = launch_spawn_codex_supervisor(
+                repo_root=repo,
+                cd=repo / ".worktrees" / "task",
+                prompt=self.prompt,
+                log=self.log,
+                stall=30,
+                env={"REPO_ROOT": str(repo.resolve()), "GH_REPO_SLUG": "owner/repo"},
+            )
+
+        self.assertEqual(exit_code, 0)
+        popen.assert_called_once()
+        args, kwargs = popen.call_args
+        command = args[0]
+        self.assertIn("spawn-codex", command)
+        self.assertIn(str(repo.resolve()), command[0])
+        self.assertEqual(kwargs["cwd"], str(repo.resolve()))
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertTrue(kwargs["start_new_session"])
+        self.assertEqual(kwargs["env"]["REPO_ROOT"], str(repo.resolve()))
+        self.assertEqual(kwargs["env"]["GH_REPO_SLUG"], "owner/repo")
+        fake_proc.wait.assert_not_called()
+        fake_proc.poll.assert_not_called()
+
+    def test_spawn_supervisor_source_preserves_claim_before_process_supervision(self) -> None:
+        source = (SCRIPT_DIR / "codex_refactor_loop" / "spawn.py").read_text(encoding="utf-8")
+        self.assertIn("TaskSpawnClaimStore(repo_root).acquire(task_id, log_path=log_path)", source)
+        self.assertIn("SPAWN_CLAIM_HELD:task=", source)
+        self.assertLess(source.index("TaskSpawnClaimStore(repo_root).acquire"), source.index("ProcessSupervisor().supervise"))
+
     def assert_process_dead(self, pid: int) -> None:
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            if not self.pid_alive(pid):
-                return
-            time.sleep(0.05)
-        self.fail(f"process still alive after process-group kill: {pid}")
+        self.assertFalse(self.pid_alive(pid), f"process still alive after process-group kill: {pid}")
 
     @staticmethod
     def pid_alive(pid: int) -> bool:

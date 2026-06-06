@@ -34,7 +34,7 @@ ${SCOPE_PATHS}
    3-5 行内；不是 changelog，是代码自我说明。The marker identity is exactly `Refactor (iter${ITERATION}/${CLUSTER_ID})`; do not replace it with issue-only identities such as `Refactor (issue1525)`. If `${CLUSTER_ID}` is missing, use `cluster-issue${ISSUE_NUMBER}` and record that fallback in the implementation summary.
    - missing/empty/default/`none`：MUST NOT add `Refactor (...)`, `Old pattern`, `New principle`, or `iterN/cluster` refactor-history source comments. Put the rationale in the implementation summary and include exactly: `refactor self-doc: not applicable (HOST_REFACTOR_COMMENT_POLICY=none)`.
 3. **不新增功能**：不引入新接口、新 flag、新模块；只清理违反点。新增极小辅助类型的注释也必须遵守 `${HOST_REFACTOR_COMMENT_POLICY}`：missing/empty/default/`none` 时不得写 `refactor helper`, `no behavior change`, `Old`, `New`, 或 `iterN` 等 refactor-history source comments；如确需源码注释，只写面向业务行为的准确英文说明。仅 explicit `self-doc-comment` 时才按第 2 条既有 Refactor self-documentation 格式写注释。
-4. **测试**：按 `verification_hints` 跑测试，必须通过；测试不足必须补；任何 `sleep/delay` 轮询测试必须改为确定性断言。
+4. **测试 ratchet**：按 `verification_hints` 跑测试，必须通过；测试不足必须补。凡改动触及模块行为、合同、prompt、helper 或守卫，必须同步推进该模块的相关测试为 fast / hermetic / behavior-first：优先使用 owner-local fact source、mock/fake/stub 外部进程与网络、断言可观察行为或 contract，而不是复述实现字面。任何 `sleep/delay` 轮询测试必须改为确定性断言；不得新增 suite-level host-wide process-table guard，例如用 `ps -eo pid=,command=` 扫描当前机器进程来判断 daemon leak / duplicate。daemon leak / duplicate 覆盖只能放在 helper-local fact source 或对应 helper 行为测试内。
 5. **架构守卫**：跑 host 配置的 `$CI_GUARDS`，必须通过。其它 cluster 特定守卫见 verification hints。
 6. **不依赖外部仓库**：禁止建议在 $EXTERNAL_REPOS/$EXTERNAL_REPOS 改动。
 7. **Schema/protocol**：如 `${HOST_PROTO_POLICY}` 非空或 diff / `$PROJECT_RULES` 显示改了 schema/protocol 文件，按 host policy 本地重生成/验证并确认编译通过。
@@ -57,7 +57,8 @@ ${SCOPE_PATHS}
    - 测试结果
    - deviation 记录
    - `SCOPE_EXTEND` 记录
-10. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
+10. 若 status 为 `ok`，同时写入 worker-authored PR artifacts：`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt` 与 `$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md`。title 必须是一行非占位中文标题，不得是 `实现 issue #N`；body 必须包含且只包含一个 `Closes #N`，包含 `## 修改文件`、`## 测试结果`、`## deviation 记录`，并以 sentinel 作为最终独立行。
+11. 末尾打印 `IMPLEMENT_DONE:${CLUSTER_ID}:<status>` 其中 status ∈ {ok, partial, blocked}。
 
 ## Marker emission allowlist(强制)
 
@@ -71,7 +72,7 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 ## 红线
 
-- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
+- 禁止改 worktree 外文件，**唯一例外**：可以写入 `$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md`（controller 期望的摘要输出位置）、`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt`、`$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md` 和 `$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log`（如有 SCOPE_EXTEND 记录）。除此之外 `.refactor-loop/` 一律禁改。
 - 禁止 `git commit` / `git push` / `git checkout <branch>`。
 - 禁止安装新依赖。
 - 禁止跳过测试或加 `[Skip]`。

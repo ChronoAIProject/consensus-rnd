@@ -17,9 +17,23 @@ from .active_controller import require_active_controller, write_active_controlle
 from . import labels
 from .banners import BannerRequest, build_status_banner, gh_comment_command
 from .context import LoopContext
+from .gh_invoke import build_gh_argv
+from .github_actor import GitHubAuthenticatedActor
 from .github_body import GitHubBodyError, validate_self_contained_github_body
-from .issue_decomposition import load_issue_decomposition_plan
-from .release.publisher import ReleasePublishResult, ReleasePublisher
+from .implementation_pr_artifacts import (
+    FINAL_SENTINEL,
+    implementation_cluster_id,
+    implementation_pr_body_path,
+    implementation_pr_title_path,
+    validate_implementation_pr_artifacts,
+)
+from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
+from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
+from .prompt_contracts import inline_prompt_contracts
+from .processes import launch_spawn_codex_supervisor
+from .release.publisher import ReleasePublisher
+from .release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
+from .git import Git
 from .review_fix_dispatch import (
     ReviewFixDispatchSpec,
     ReviewThreadCompletionEvidence,
@@ -27,31 +41,67 @@ from .review_fix_dispatch import (
 )
 from .triage import apply_decision, load_triage_apply_config
 from .work_items import extract_closing_issue_numbers
+from .wakeup_plan import consensus_implementation_suppressed_reason
 from .workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 
 
+# Removal sets list only canonical crnd:* labels that exist in the repository.
+# gh issue/pr edit --remove-label hard-fails the whole edit on any name absent
+# from the repo, and legacy emoji/alias labels are not maintained there, so they
+# are intentionally excluded; historical labels are not managed by the loop.
 PR_LABELS_REMOVE = (
     *labels.labels_for_group("phase"),
     labels.HUMAN_MAINTAINER_DECISION,
     labels.STUCK,
-    *labels.cleanup_aliases(),
 )
 ISSUE_LABELS_REMOVE = (
     *labels.labels_for_group("phase"),
     labels.HUMAN_AUTO,
     labels.HUMAN_MAINTAINER_DECISION,
     labels.STUCK,
-    *labels.cleanup_aliases(),
 )
 SAFE_WORKTREE_ITERATION_RE = re.compile(r"^[0-9]+$")
 SAFE_WORKTREE_CLUSTER_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 GITHUB_LIFECYCLE_TARGET_RE = re.compile(r"^[1-9][0-9]*$")
 BODY_CLOSING_ISSUE_TARGET_RE = re.compile(r"(?im)\bCloses\s+#([^\s,;:.)\]}\\]*)")
+REVIEW_ROLES = ("architect", "tests", "quality")
+PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT = 75
+MANAGED_PR_HEAD_RE = re.compile(r"^refactor/iter([1-9][0-9]*)-([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_DONE_RE = re.compile(r"^REBASE_RESOLVE_DONE:([1-9][0-9]*):([A-Za-z0-9._-]+)$")
+REBASE_RESOLVE_BLOCKED_RE = re.compile(
+    r"^REBASE_RESOLVE_BLOCKED:([1-9][0-9]*):(conflict|human-decision|build-broken|other):(.+)$"
+)
+ROLLUP_HEAD_PREFIX = "rollup/"
+ROLLUP_BODY_SENTINEL = "⟦AI:RELEASE-ROLLUP⟧"
+
+
+def _utf8_hex(hex_text: str) -> str:
+    return bytes.fromhex(hex_text).decode("utf-8")
+
+
+ROLLUP_TITLE_PREFIX = _utf8_hex("e58f91e5b88320726f6c6c75703a20696e746567726174696f6e20616865616420")
+ROLLUP_BODY_HEADING = _utf8_hex("232320e58f91e5b88320726f6c6c7570")
+ROLLUP_TARGET_LABEL = _utf8_hex("2d20e79baee6a0873a2060")
+ROLLUP_AHEAD_LABEL = _utf8_hex("2d20e99b86e68890e58886e694afe9a286e58588207265766965772d626173653a2060")
+ROLLUP_RANGE_LABEL = _utf8_hex("2d20e88c83e59bb43a2060")
+ROLLUP_ISSUES_LABEL = _utf8_hex("2d20e6b689e58f8a2069737375653a20")
+ROLLUP_COMMIT_SUMMARY_HEADING = _utf8_hex("232320636f6d6d697420e69198e8a681")
+ROLLUP_COMMIT_SUMMARY_UNAVAILABLE = _utf8_hex(
+    "2d20e69cace59cb020636f6d6d697420e69198e8a681e4b88de58fafe794a83be4bba520476974487562205052206469666620e4b8bae58786e38082"
+)
+ROLLUP_MERGE_POLICY_HEADING = _utf8_hex("232320e59088e5b9b6e7ad96e795a5")
+ROLLUP_AUTO_MERGE_POLICY_LINE = _utf8_hex(
+    "2d20726571756972656420636865636b7320e585a8e7bbbfe5908ee794b120636f6e74726f6c6c657220e887aae58aa820737175617368206d657267653b2060524f4c4c55505f4155544f5f4d455247453d6d616e75616c6020e697b6e7ad89e5be85e4babae5b7a5207265766965772f6d65726765e38082"
+)
+ROLLUP_SINGLETON_POLICY_LINE = _utf8_hex(
+    "2d20e8afa520505220e698af2072656c6561736520726f6c6c75702073696e676c65746f6e3be5b7b2e69c89206f70656e20726f6c6c757020e697b620636f6e74726f6c6c657220e58faae69bb4e696b0206865616420e5928c20626f64792ce4b88de5bc80e696b0205052e38082"
+)
 
 
 class ControllerActions:
-    def __init__(self, ctx: LoopContext) -> None:
+    def __init__(self, ctx: LoopContext, *, github_actor: GitHubAuthenticatedActor | None = None) -> None:
         self.ctx = ctx
+        self.github_actor = github_actor
         merged_env = {**os.environ, **ctx.host_env}
         self.integration_branch = str(merged_env.get("INTEGRATION_BRANCH", "")).strip()
         self.review_base_branch = str(merged_env.get("REVIEW_BASE_BRANCH", "")).strip()
@@ -69,13 +119,11 @@ class ControllerActions:
         return self.integration_branch, self.review_base_branch
 
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-        full = ["gh", *(str(a) for a in args)]
-        if self.ctx.gh_repo_slug:
-            insert_at = 4 if len(full) > 3 and not full[3].startswith("-") else min(3, len(full))
-            full[insert_at:insert_at] = ["--repo", self.ctx.gh_repo_slug]
+        argv = [str(a) for a in args]
+        full = build_gh_argv(self.ctx.gh_repo_slug, ["gh", *argv])
         result = subprocess.run(full, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
         if check and result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(args)} failed")
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or f"gh {' '.join(argv)} failed")
         return result
 
     def git(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -108,6 +156,8 @@ class ControllerActions:
             sys.stderr.write("ERROR: apply_human_label_or_skip requires META_RESOLVED:escalate-human marker source\n")
             return 2
 
+        if not self._require_github_actor_or_return("controller-label", code=3):
+            return 3
         result = self.gh(["pr", "edit", pr_target, "--add-label", labels.HUMAN_MAINTAINER_DECISION], check=False)
         return result.returncode
 
@@ -165,6 +215,7 @@ class ControllerActions:
         target = target_ref or os.environ.get("RELEASE_TARGET_REF", "")
         if not target:
             raise RuntimeError("publish_release_candidate: RELEASE_TARGET_REF is required")
+        self._require_github_actor_or_raise("publish-release")
         publisher = ReleasePublisher(self.ctx.repo_root)
         return publisher.publish(candidate_path=candidate_path, target_ref=target)
 
@@ -184,6 +235,7 @@ class ControllerActions:
             log=request.log,
             stall=request.stall,
         )
+        self._require_github_actor_or_raise("post-banner")
         body = build_status_banner(normalized)
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
             handle.write(body)
@@ -239,11 +291,18 @@ class ControllerActions:
         sys.stderr.write("\n".join(result.stderr.splitlines()[-2:]) + "\n")
         return wt_path, branch
 
+    def fresh_safe_worktree(self, iteration: str, cluster: str, base: str) -> tuple[Path, str]:
+        return Git(self.ctx.repo_root).fresh_safe_worktree(iteration, cluster, base)
+
     def _ensure_pr_ready_for_merge(self, pr_target: str) -> int:
         draft = self.gh(["pr", "view", pr_target, "--json", "isDraft", "--jq", ".isDraft"], check=False)
         if draft.returncode != 0:
             return draft.returncode
         if draft.stdout.strip() == "true":
+            if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+                self._append_pending_event(f"CONTROLLER_ACTION_BLOCKED:target-not-managed:merge-pr:pr:{pr_target}")
+                sys.stderr.write("merge_pr: live draft PR is not managed\n")
+                return 2
             ready = self.gh(["pr", "ready", pr_target], check=False)
             if ready.returncode != 0:
                 return ready.returncode
@@ -281,6 +340,8 @@ class ControllerActions:
                 if normalized is None:
                     return 1
                 issue_target = normalized
+        if not self._require_github_actor_or_return("merge-pr", code=3):
+            return 3
         ready = self._ensure_pr_ready_for_merge(pr_target)
         if ready != 0:
             return ready
@@ -315,6 +376,92 @@ class ControllerActions:
                 self.git(["worktree", "remove", str(wt), "--force"], check=False)
         return 0
 
+    def _rollup_auto_merge_enabled(self) -> bool | None:
+        raw = str(self.ctx.host_env.get("ROLLUP_AUTO_MERGE", "auto") or "auto").strip().lower()
+        if raw in {"", "auto", "true", "1", "yes", "on"}:
+            return True
+        if raw in {"manual", "false", "0", "no", "off"}:
+            return False
+        return None
+
+    def _rollup_required_checks_status(self, head_sha: str):
+        if not self.ctx.gh_repo_slug:
+            raise RuntimeError("rollup_auto_merge: missing GH_REPO_SLUG")
+
+        def runner(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+            argv = list(command)
+            if argv[:2] == ["gh", "api"]:
+                return self.gh(argv[1:], check=False)
+            return subprocess.run(argv, cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
+
+        return ReleaseRequiredChecksProjection(
+            runner=runner,
+            required_checks=required_release_checks(self.ctx.host_env),
+            env=self.ctx.host_env,
+        ).check_ref(self.ctx.gh_repo_slug, head_sha)
+
+    def auto_merge_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("rollup-auto-merge", code=3):
+            return 3
+        enabled = self._rollup_auto_merge_enabled()
+        pr_target = str(action.get("target_number") or action.get("pr_number") or "").strip()
+        if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(pr_target):
+            self._append_pending_event("ROLLUP_AUTO_MERGE_BLOCKED:invalid-pr-target")
+            return 2
+        if enabled is None:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:invalid-config")
+            return 3
+        if not enabled:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:manual-config")
+            return 3
+        self._require_branch_config()
+        view = self.gh(
+            [
+                "pr",
+                "view",
+                pr_target,
+                "--json",
+                "number,baseRefName,headRefName,headRefOid,isDraft",
+            ],
+            check=False,
+        )
+        if view.returncode != 0:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-failed")
+            return 3
+        try:
+            payload = json.loads(view.stdout or "{}")
+        except json.JSONDecodeError:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-invalid-json")
+            return 3
+        if not isinstance(payload, dict):
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:pr-view-invalid-json")
+            return 3
+        base = str(payload.get("baseRefName") or "")
+        head = str(payload.get("headRefName") or "")
+        head_sha = str(payload.get("headRefOid") or "")
+        if base != self.review_base_branch or not head.startswith(ROLLUP_HEAD_PREFIX):
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_BLOCKED:{pr_target}:not-rollup-pr:{base}:{head}")
+            return 2
+        action_head = str(action.get("head_sha") or "").strip()
+        if action_head and action_head != head_sha:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:stale-action-head:{action_head}:{head_sha}")
+            return 3
+        status = self._rollup_required_checks_status(head_sha)
+        if not status.passed:
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:checks-not-green:{status.reason or 'unknown'}:{head_sha}")
+            return 3
+        if payload.get("isDraft") is True:
+            ready = self.gh(["pr", "ready", pr_target], check=False)
+            if ready.returncode != 0:
+                self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:ready-failed")
+                return 3
+        merge = self.gh(["pr", "merge", pr_target, "--squash", "--delete-branch"], check=False)
+        if merge.returncode != 0:
+            reason = (merge.stderr.strip() or merge.stdout.strip() or "merge-failed").replace("\n", " ")[:240]
+            self._append_pending_event(f"ROLLUP_AUTO_MERGE_WAIT:{pr_target}:branch-protection-or-host-policy:{reason}")
+            return 3
+        return 0
+
     def open_pr_with_label(self, title: str, body_file: str, base: str | None = None, head: str = "") -> tuple[int, str]:
         self._require_owner_or_raise("open-pr")
         base = base or self._require_branch_config()[0]
@@ -330,6 +477,7 @@ class ControllerActions:
                 action="open-pr",
                 source="body-link",
             )
+        self._require_github_actor_or_raise("open-pr")
         created = self.gh(["pr", "create", "--draft", "--base", base, "--head", head, "--title", title, "--body-file", body_file], check=False)
         output = created.stdout + created.stderr
         match = re.search(r"https://github\.com/[^/]+/[^/]+/pull/([0-9]+)", output)
@@ -369,6 +517,7 @@ class ControllerActions:
         if not title.strip():
             raise RuntimeError("open_design_issue_with_labels: title required")
         self._validate_design_issue_body_file(body_file)
+        self._require_github_actor_or_raise("open-design-issue")
         created = self.gh(
             [
                 "issue",
@@ -391,28 +540,64 @@ class ControllerActions:
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
         self._require_owner_or_raise("apply-issue-decomposition-plan")
         plan = load_issue_decomposition_plan(self.ctx, plan_path)
-        created: list[tuple[int, str]] = []
-        for child in plan.children:
-            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        self._require_github_actor_or_raise("apply-issue-decomposition-plan")
         parent_target = self._normalize_lifecycle_target_or_raise(
             plan.parent_issue,
             kind="issue",
             action="apply-issue-decomposition-plan",
             source="plan.parent_issue",
         )
-        result = self.gh(
-            [
-                "issue",
-                "comment",
-                parent_target,
-                "--body-file",
-                plan.parent_comment_artifact_path,
-            ],
-            check=False,
-        )
+        sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
+        if sentinel_count == 1:
+            return tuple()
+        if sentinel_count > 1:
+            raise RuntimeError("apply_issue_decomposition_plan: multiple parent digest sentinels")
+        created: list[tuple[int, str]] = []
+        for child in plan.children:
+            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        parent_comment = (self.ctx.repo_root / plan.parent_comment_artifact_path).read_text(encoding="utf-8")
+        final_sentinel = f"\n{FINAL_SENTINEL}\n"
+        if not parent_comment.endswith(final_sentinel):
+            raise RuntimeError("apply_issue_decomposition_plan: parent comment missing final sentinel")
+        parent_comment = parent_comment[: -len(final_sentinel)].rstrip() + f"\n\nIssueDecompositionPlan digest: {digest}{final_sentinel}"
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+            handle.write(parent_comment)
+            comment_file = handle.name
+        try:
+            result = self.gh(
+                [
+                    "issue",
+                    "comment",
+                    parent_target,
+                    "--body-file",
+                    comment_file,
+                ],
+                check=False,
+            )
+        finally:
+            Path(comment_file).unlink(missing_ok=True)
         if result.returncode != 0:
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
         return tuple(created)
+
+    def _issue_decomposition_parent_sentinel_count(self, parent_target: str, digest: str) -> int:
+        result = self.gh(["issue", "view", parent_target, "--json", "comments"], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"apply_issue_decomposition_plan: parent comments unavailable: {result.stderr.strip() or result.stdout.strip()}")
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("apply_issue_decomposition_plan: parent comments invalid JSON") from exc
+        comments = payload.get("comments") if isinstance(payload, dict) else None
+        if not isinstance(comments, list):
+            raise RuntimeError("apply_issue_decomposition_plan: parent comments invalid JSON")
+        sentinel = f"IssueDecompositionPlan digest: {digest}"
+        return sum(
+            1
+            for comment in comments
+            if isinstance(comment, dict) and isinstance(comment.get("body"), str) and sentinel in comment["body"]
+        )
 
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)
@@ -438,6 +623,146 @@ class ControllerActions:
             body_path = self.ctx.repo_root / body_path
         return body_path.read_text(encoding="utf-8")
 
+    def _body_path(self, body_file: str) -> Path:
+        body_path = Path(body_file)
+        if not body_path.is_absolute():
+            body_path = self.ctx.repo_root / body_path
+        return body_path
+
+    def _release_rollup_summary(self, event: Mapping[str, object]) -> dict[str, object]:
+        integration_branch = str(event.get("integration_branch") or self.integration_branch).strip()
+        review_base_branch = str(event.get("review_base_branch") or self.review_base_branch).strip()
+        integration_sha = str(event.get("integration_sha") or "").strip()
+        review_base_sha = str(event.get("review_base_sha") or "").strip()
+        ahead_count = str(event.get("ahead_count") or "").strip()
+        range_expr = f"{review_base_sha}..{integration_sha}" if review_base_sha and integration_sha else ""
+        subjects: list[str] = []
+        issues: list[str] = []
+        if range_expr:
+            log = self.git(["log", "--no-merges", "--format=%s", "--max-count=25", range_expr], check=False)
+            if log.returncode == 0:
+                subjects = [line.strip() for line in log.stdout.splitlines() if line.strip()]
+                seen_issues: set[str] = set()
+                for subject in subjects:
+                    for issue in re.findall(r"#([1-9][0-9]*)", subject):
+                        if issue not in seen_issues:
+                            seen_issues.add(issue)
+                            issues.append(issue)
+        return {
+            "integration_branch": integration_branch,
+            "review_base_branch": review_base_branch,
+            "integration_sha": integration_sha,
+            "review_base_sha": review_base_sha,
+            "ahead_count": ahead_count,
+            "subjects": subjects,
+            "issues": issues,
+        }
+
+    def _release_rollup_title(self, summary: Mapping[str, object]) -> str:
+        ahead = str(summary.get("ahead_count") or "?")
+        integration_sha = str(summary.get("integration_sha") or "")
+        short_sha = integration_sha[:12] if integration_sha else "unknown"
+        return f"{ROLLUP_TITLE_PREFIX}{ahead} commits ({short_sha})"
+
+    def _write_release_rollup_body(self, body_file: str, event: Mapping[str, object]) -> None:
+        summary = self._release_rollup_summary(event)
+        subjects = [str(item) for item in summary.get("subjects", []) if str(item)]
+        issues = [str(item) for item in summary.get("issues", []) if str(item)]
+        ahead = str(summary.get("ahead_count") or "?")
+        integration_branch = str(summary.get("integration_branch") or "")
+        review_base_branch = str(summary.get("review_base_branch") or "")
+        integration_sha = str(summary.get("integration_sha") or "")
+        review_base_sha = str(summary.get("review_base_sha") or "")
+        body_lines = [
+            ROLLUP_BODY_HEADING,
+            "",
+            f"{ROLLUP_TARGET_LABEL}{integration_branch}` -> `{review_base_branch}`",
+            f"{ROLLUP_AHEAD_LABEL}{ahead}` commits",
+            f"{ROLLUP_RANGE_LABEL}{review_base_sha[:12] or 'unknown'}..{integration_sha[:12] or 'unknown'}`",
+        ]
+        if issues:
+            body_lines.append(f"{ROLLUP_ISSUES_LABEL}{', '.join('#' + issue for issue in issues[:20])}")
+        body_lines.extend(["", ROLLUP_COMMIT_SUMMARY_HEADING, ""])
+        if subjects:
+            body_lines.extend(f"- {subject}" for subject in subjects[:25])
+        else:
+            body_lines.append(ROLLUP_COMMIT_SUMMARY_UNAVAILABLE)
+        body_lines.extend(
+            [
+                "",
+                ROLLUP_MERGE_POLICY_HEADING,
+                "",
+                ROLLUP_AUTO_MERGE_POLICY_LINE,
+                ROLLUP_SINGLETON_POLICY_LINE,
+                "",
+                ROLLUP_BODY_SENTINEL,
+                "⟦AI:AUTO-LOOP⟧",
+                "",
+            ]
+        )
+        body_path = self._body_path(body_file)
+        body_path.parent.mkdir(parents=True, exist_ok=True)
+        body_path.write_text("\n".join(body_lines), encoding="utf-8")
+
+    def _open_rollup_prs(self, review_base_branch: str) -> list[dict[str, object]]:
+        result = self.gh(
+            [
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--base",
+                review_base_branch,
+                "--limit",
+                "100",
+                "--json",
+                "number,headRefName,baseRefName,headRefOid",
+            ],
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "open rollup PR query failed")
+        try:
+            payload = json.loads(result.stdout or "[]")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("open rollup PR query returned invalid JSON") from exc
+        if not isinstance(payload, list):
+            raise RuntimeError("open rollup PR query returned non-list JSON")
+        rollups: list[dict[str, object]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("baseRefName") or review_base_branch) != review_base_branch:
+                continue
+            head = str(item.get("headRefName") or "")
+            if not head.startswith(ROLLUP_HEAD_PREFIX):
+                continue
+            number = item.get("number")
+            if not isinstance(number, int):
+                continue
+            rollups.append(item)
+        return rollups
+
+    def _update_existing_release_rollup_pr(
+        self,
+        pr: Mapping[str, object],
+        *,
+        integration_sha: str,
+        body_file: str,
+        title: str,
+    ) -> tuple[int, str]:
+        pr_target = str(pr.get("number") or "").strip()
+        head = str(pr.get("headRefName") or "").strip()
+        if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(pr_target) or not head.startswith(ROLLUP_HEAD_PREFIX):
+            raise RuntimeError("update release rollup singleton: invalid live rollup PR")
+        pushed = self.git(["push", "--force-with-lease", "origin", f"{integration_sha}:refs/heads/{head}"], check=False)
+        if pushed.returncode != 0:
+            raise RuntimeError(pushed.stderr.strip() or pushed.stdout.strip() or f"failed to update {head}")
+        edited = self.gh(["pr", "edit", pr_target, "--title", title, "--body-file", body_file], check=False)
+        if edited.returncode != 0:
+            raise RuntimeError(edited.stderr.strip() or edited.stdout.strip() or f"failed to refresh rollup PR #{pr_target}")
+        return int(pr_target), head
+
     def open_release_rollup_pr_from_pending_event(
         self,
         event_json: str,
@@ -460,6 +785,7 @@ class ControllerActions:
             raise RuntimeError("open_release_rollup_pr_from_pending_event: missing integration branch, review base, or integration sha")
         if not re.fullmatch(r"[0-9A-Za-z._-]+", integration_sha):
             raise RuntimeError("open_release_rollup_pr_from_pending_event: unsafe integration sha for rollup branch")
+        self._write_release_rollup_body(body_file, event)
         self._validate_pr_body_file(body_file)
 
         remote = self.git(["ls-remote", "--exit-code", "--heads", "origin", integration_branch], check=False)
@@ -470,6 +796,16 @@ class ControllerActions:
             raise RuntimeError(
                 "open_release_rollup_pr_from_pending_event: stale integration sha "
                 f"{integration_sha}; origin/{integration_branch} is {remote_sha}"
+            )
+
+        title = self._release_rollup_title(self._release_rollup_summary(event)) if title == "Release rollup" else title
+        open_rollups = self._open_rollup_prs(review_base_branch)
+        if open_rollups:
+            return self._update_existing_release_rollup_pr(
+                open_rollups[0],
+                integration_sha=integration_sha,
+                body_file=body_file,
+                title=title,
             )
 
         rollup_head = f"rollup/{integration_sha}"
@@ -561,7 +897,13 @@ class ControllerActions:
             sys.stderr.write("apply_triage_decision_marker: invalid marker\n")
             return 2
         issue, verdict, rel_path = match.groups()
-        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=self.ctx.env_for_subprocess(), cwd=self.ctx.repo_root)
+        if not self._require_github_actor_or_return("apply-triage", code=3):
+            return 3
+        triage_env = dict(self.ctx.host_env)
+        triage_env["REPO_ROOT"] = str(self.ctx.repo_root)
+        if self.ctx.gh_repo_slug:
+            triage_env["GH_REPO_SLUG"] = self.ctx.gh_repo_slug
+        config = load_triage_apply_config(repo_root=self.ctx.repo_root, env=triage_env, cwd=self.ctx.repo_root)
         return apply_decision(config, self.ctx.repo_root / rel_path, issue_number=int(issue), verdict=verdict)
 
     def publish_worker_output_from_action(self, action: Mapping[str, object]) -> int:
@@ -620,31 +962,184 @@ class ControllerActions:
         if not self._live_target_has_managed_label(kind="issue", target=issue_target):
             sys.stderr.write("publish_implementation_output: linked issue is not managed\n")
             return 2
-        if self._open_pr_exists_for_head(head_ref):
-            sys.stderr.write("publish_implementation_output: duplicate open PR for head_ref\n")
+        identity_error = self._validate_publish_implementation_identity(action, issue_target, head_ref, worktree)
+        if identity_error:
+            sys.stderr.write(f"publish_implementation_output: {identity_error}\n")
             return 2
+        diff_ready = self._require_publish_implementation_diff(worktree)
+        if diff_ready != 0:
+            return diff_ready
+        title_error = self._implementation_pr_title_error(action, issue_target)
+        if title_error:
+            sys.stderr.write(f"publish_implementation_output: {title_error}\n")
+            return 2
+        body_error = self._implementation_pr_body_error(action, issue_target)
+        if body_error:
+            sys.stderr.write(f"publish_implementation_output: {body_error}\n")
+            return 2
+        pr_error, pr_target = self._matching_implementation_pr(head_ref, issue_target)
+        if pr_error:
+            sys.stderr.write(f"publish_implementation_output: {pr_error}\n")
+            return 2
+        committed = self._commit_publish_implementation_diff(action, issue_target, head_ref, worktree)
+        if committed != 0:
+            return committed
+        base_error = self._recover_publish_implementation_base(worktree)
+        if base_error:
+            return self._delegate_publish_implementation_fallback(action, issue_target, head_ref, worktree, base_error)
         if self._run_host_command("BUILD_CMD", worktree) != 0:
             return 3
         if self._run_host_command("TEST_CMD", worktree) != 0:
             return 3
-        if self._git_in(worktree, ["diff", "--quiet"], check=False).returncode == 0:
-            sys.stderr.write("publish_implementation_output: empty scoped diff\n")
-            return 2
-        add = self._git_in(worktree, ["add", "-A"], check=False)
-        if add.returncode != 0:
-            return add.returncode
-        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
-        if commit.returncode != 0:
-            if commit.stderr:
-                sys.stderr.write(commit.stderr)
-            return commit.returncode
         pushed = self.safe_push(branch=head_ref, worktree=worktree)
         if pushed != 0:
             return pushed
-        body_file = self._implementation_pr_body_file(action, issue_target)
-        title = str(action.get("title") or f"实现 issue #{issue_target}")
-        pr_target, _url = self.open_pr_with_label(title, str(body_file), base=self.integration_branch, head=head_ref)
+        if pr_target is None:
+            pr_target, _url = self.open_pr_with_label(
+                self._implementation_pr_title(action, issue_target),
+                str(self._implementation_pr_body_file(action, issue_target)),
+                base=self.integration_branch,
+                head=head_ref,
+            )
         return self.dispatch_reviewers({"target_kind": "PR", "target_number": pr_target})
+
+    def _validate_publish_implementation_identity(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+    ) -> str | None:
+        marker = str(action.get("source_marker") or "")
+        marker_id = marker.removeprefix("IMPLEMENT_DONE:").removesuffix(":ok").strip(":")
+        candidate = marker_id.replace("_", "-").strip("-") or f"issue-{issue_target}"
+        expected_head = f"refactor/iter{issue_target}-{candidate}"
+        expected_worktree = (self.ctx.repo_root / ".worktrees" / f"iter{issue_target}-{candidate}").resolve()
+        if head_ref != expected_head or worktree.resolve() != expected_worktree:
+            return "noncanonical identity"
+        branch = self._git_in(worktree, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        if branch.returncode != 0 or branch.stdout.strip() != head_ref:
+            return "noncanonical branch"
+        return None
+
+    def _require_publish_implementation_diff(self, worktree: Path) -> int:
+        diff = self._git_in(worktree, ["diff", "HEAD", "--quiet"], check=False)
+        if diff.returncode == 1:
+            return 0
+        if diff.returncode != 0:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        committed_delta = self._has_committed_implementation_delta(worktree)
+        if committed_delta is None:
+            sys.stderr.write("publish_implementation_output: publish_diff_unavailable\n")
+            return 2
+        if committed_delta:
+            return 0
+        sys.stderr.write("publish_implementation_output: implementation_produced_no_diff\n")
+        return 2
+
+    def _has_committed_implementation_delta(self, worktree: Path) -> bool | None:
+        integration, _review_base = self._require_branch_config()
+        for ref in (f"origin/{integration}", integration):
+            current = self._git_in(worktree, ["rev-parse", "--verify", ref], check=False)
+            if current.returncode != 0:
+                continue
+            merge_base = self._git_in(worktree, ["merge-base", "HEAD", ref], check=False)
+            if merge_base.returncode != 0:
+                return None
+            base_sha = merge_base.stdout.strip()
+            if not base_sha:
+                return None
+            # A committed implementation diff is a valid publish input; compare merge-base..HEAD.
+            diff = self._git_in(worktree, ["diff", "--quiet", base_sha, "HEAD"], check=False)
+            if diff.returncode == 0:
+                return False
+            if diff.returncode == 1:
+                return True
+            return None
+        return None
+
+    def _commit_publish_implementation_diff(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+    ) -> int:
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        if status.returncode != 0:
+            if status.stderr:
+                sys.stderr.write(status.stderr)
+            sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+            return 2
+        if not status.stdout.strip():
+            return 0
+        add = self._git_in(worktree, ["add", "-A"], check=False)
+        if add.returncode != 0:
+            sys.stderr.write("publish_implementation_output: publish_add_failed\n")
+            return 2
+        commit = self._git_in(worktree, ["commit", "-m", f"实现 issue #{issue_target}"], check=False)
+        if commit.returncode == 0:
+            return 0
+        if commit.stderr:
+            sys.stderr.write(commit.stderr)
+        sys.stderr.write("publish_implementation_output: publish_commit_failed\n")
+        return 2
+
+    def _recover_publish_implementation_base(self, worktree: Path) -> str | None:
+        integration, _review_base = self._require_branch_config()
+        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
+        if fetch.returncode != 0:
+            return "publish_stale_base_fetch_failed"
+        merge_base = self._git_in(worktree, ["merge-base", "HEAD", f"origin/{integration}"], check=False)
+        current = self._git_in(worktree, ["rev-parse", "--verify", f"origin/{integration}"], check=False)
+        if merge_base.returncode != 0 or current.returncode != 0:
+            return "publish_stale_base_unavailable"
+        if merge_base.stdout.strip() != current.stdout.strip():
+            merge = self._git_in(worktree, ["merge", "--no-edit", f"origin/{integration}"], check=False)
+            if merge.returncode != 0:
+                return "publish_stale_base_merge_conflict"
+        return None
+
+    def _delegate_publish_implementation_fallback(
+        self,
+        action: Mapping[str, object],
+        issue_target: str,
+        head_ref: str,
+        worktree: Path,
+        reason: str,
+    ) -> int:
+        prompt = self.ctx.paths.prompts / f"publish-implementation-fallback-{issue_target}.md"
+        log = self.ctx.paths.logs / f"publish-implementation-fallback-{issue_target}.log"
+        output = self.ctx.paths.runs / f"publish-implementation-fallback-{issue_target}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "publish-implementation-fallback.md"),
+            str(prompt),
+            env={
+                "ISSUE_NUMBER": issue_target,
+                "WORKTREE_PATH": str(worktree),
+                "BRANCH": head_ref,
+                "BASE_BRANCH": self.integration_branch,
+                "FALLBACK_REASON": reason,
+                "PUBLISH_FALLBACK_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
+                "SOURCE_MARKER": str(action.get("source_marker") or ""),
+            },
+        )
+        self._append_harness_spawn_intent(
+            intent_id=f"publish-implementation-fallback:{issue_target}",
+            task_id=f"publish-implementation-fallback-{issue_target}",
+            route="publish-implementation-fallback",
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            reason=f"publish implementation fallback for issue #{issue_target}: {reason}",
+        )
+        sys.stderr.write(f"publish_implementation_output: delegated fallback resolver: {reason}\n")
+        return PUBLISH_IMPLEMENTATION_FALLBACK_DELEGATED_EXIT
 
     def dispatch_consensus_implementation(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-consensus-implementation", code=3):
@@ -676,9 +1171,18 @@ class ControllerActions:
         if str(action.get("design_decision_path")) != str(action.get("consensus_artifact")):
             sys.stderr.write("dispatch_consensus_implementation: design_decision_path must match consensus_artifact\n")
             return 2
+        readiness_reason = consensus_implementation_suppressed_reason(dict(action), self.ctx.repo_root)
+        if readiness_reason:
+            sys.stderr.write(f"dispatch_consensus_implementation: target not ready: {readiness_reason}\n")
+            return 2
+        phase_result = self._move_issue_to_implementing_phase(number)
+        if phase_result != 0:
+            return phase_result
         cluster_id = str(action["cluster_id"])
         iteration = str(action["iteration"])
-        worktree, branch = self.safe_worktree(iteration, cluster_id, self.integration_branch)
+        worktree, branch = self.fresh_safe_worktree(iteration, cluster_id, self.integration_branch)
+        log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
+        self._clear_stale_implement_log_for_fresh_dispatch(log, action)
         prompt = self.ctx.paths.prompts / f"implement-{cluster_id}.md"
         prompt.parent.mkdir(parents=True, exist_ok=True)
         self.render_template(
@@ -698,7 +1202,6 @@ class ControllerActions:
                 "VERIFICATION_HINTS": str(action.get("verification_hints") or ""),
             },
         )
-        log = self.ctx.paths.logs / f"implement-{cluster_id}.log"
         self._append_harness_spawn_intent(
             intent_id=f"dispatch-consensus-implementation:{number}",
             task_id=f"implement-{cluster_id}",
@@ -711,6 +1214,77 @@ class ControllerActions:
         )
         return 0
 
+    def _move_issue_to_implementing_phase(self, issue_target: str) -> int:
+        add_labels = (labels.MANAGED, labels.PHASE_IMPLEMENTING, labels.HUMAN_AUTO)
+        remove_labels = ISSUE_LABELS_REMOVE
+        args = ["issue", "edit", issue_target]
+        for label in remove_labels:
+            args.extend(["--remove-label", label])
+        args.extend(["--add-label", ",".join(add_labels)])
+        result = self.gh(args, check=False)
+        if result.returncode != 0:
+            self._write_phase_transition_blocked_event(
+                issue_target=issue_target,
+                result=result,
+                add_labels=add_labels,
+                remove_labels=remove_labels,
+            )
+        return result.returncode
+
+    def _write_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        result: subprocess.CompletedProcess[str],
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> None:
+        line = self._format_phase_transition_blocked_event(
+            issue_target=issue_target,
+            gh_rc=result.returncode,
+            gh_stderr=result.stderr,
+            add_labels=add_labels,
+            remove_labels=remove_labels,
+        )
+        self._append_pending_event(line)
+        sys.stderr.write(f"{line}\n")
+
+    def _format_phase_transition_blocked_event(
+        self,
+        *,
+        issue_target: str,
+        gh_rc: int,
+        gh_stderr: str,
+        add_labels: Sequence[str],
+        remove_labels: Sequence[str],
+    ) -> str:
+        prefix = f"CONTROLLER_ACTION_BLOCKED:phase-transition:dispatch-consensus-implementation:issue:{issue_target}"
+        fields: Mapping[str, object] = {
+            "controller_action": "dispatch-consensus-implementation",
+            "action": "move-to-implementing",
+            "target_kind": "issue",
+            "target_number": issue_target,
+            "issue": issue_target,
+            "helper": "gh",
+            "gh_rc": gh_rc,
+            "gh_stderr": _single_line(gh_stderr),
+            "add_labels": ",".join(add_labels),
+            "remove_labels": ",".join(remove_labels),
+        }
+        return f"{prefix} {_format_key_value_suffix(fields)}"
+
+    def _clear_stale_implement_log_for_fresh_dispatch(self, log: Path, action: Mapping[str, object] | None = None) -> None:
+        clear_redispatchable_implement_log(
+            repo_root=self.ctx.repo_root,
+            action=action,
+            log_path=log,
+            integration_branch=self.integration_branch,
+            command_runner=lambda command: self._git_lifecycle_command(command),
+        )
+
+    def _git_lifecycle_command(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(list(command), capture_output=True, text=True, check=False)
+
     def dispatch_reviewers(self, action: Mapping[str, object]) -> int:
         if not self._require_owner_or_return("dispatch-reviewers", code=3):
             return 3
@@ -722,7 +1296,7 @@ class ControllerActions:
         )
         if pr_target is None:
             return 2
-        pr = self.gh(["pr", "view", pr_target, "--json", "title,baseRefName,headRefName"], check=False)
+        pr = self.gh(["pr", "view", pr_target, "--json", "title,baseRefName,headRefName,headRefOid"], check=False)
         if pr.returncode != 0:
             return pr.returncode
         try:
@@ -731,11 +1305,22 @@ class ControllerActions:
             return 2
         base = str(facts.get("baseRefName") or self.integration_branch)
         head = str(facts.get("headRefName") or "")
+        head_sha = str(facts.get("headRefOid") or "")
         title = str(facts.get("title") or f"PR {pr_target}")
-        if not head:
+        if not head or not head_sha:
             return 2
-        for role in ("architect", "tests", "quality"):
-            prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r1.md"
+        stale_roles = action.get("stale_review_roles")
+        if isinstance(stale_roles, list):
+            roles = tuple(role for role in REVIEW_ROLES if role in {str(item) for item in stale_roles})
+            if not roles:
+                return 2
+        else:
+            roles = REVIEW_ROLES
+        for role in roles:
+            round_number = self._next_review_round(pr_target, role)
+            if self._pending_review_spawn_exists(pr_target, role, round_number):
+                continue
+            prompt = self.ctx.paths.prompts / f"review-pr{pr_target}-{role}-r{round_number}.md"
             template = self.ctx.skill_root / "prompts" / f"reviewer-{role}.md"
             self.render_template(
                 str(template),
@@ -745,20 +1330,364 @@ class ControllerActions:
                     "PR_TITLE": title,
                     "BASE_BRANCH": base,
                     "HEAD_BRANCH": head,
-                    "REVIEW_OUTPUT_PATH": f".refactor-loop/runs/review-pr{pr_target}-{role}-r1.md",
+                    "HEAD_SHA": head_sha,
+                    "REVIEW_OUTPUT_PATH": f".refactor-loop/runs/review-pr{pr_target}-{role}-r{round_number}.md",
                 },
             )
             self._append_harness_spawn_intent(
-                intent_id=f"dispatch-reviewers:{pr_target}:{role}:r1",
-                task_id=f"review-pr{pr_target}-{role}-r1",
+                intent_id=f"dispatch-reviewers:{pr_target}:{role}:r{round_number}",
+                task_id=f"review-pr{pr_target}-{role}-r{round_number}",
                 route="dispatch-reviewers",
                 cd=self.ctx.repo_root,
                 prompt=prompt,
-                log=self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r1.log",
+                log=self.ctx.paths.logs / f"review-pr{pr_target}-{role}-r{round_number}.log",
                 stall=5400,
                 reason=f"review PR #{pr_target} as {role}",
             )
         return 0
+
+    def _next_review_round(self, pr_target: str, role: str) -> int:
+        rounds: list[int] = []
+        pattern = re.compile(rf"^review-pr{re.escape(pr_target)}-{re.escape(role)}-r([1-9][0-9]*)\.(?:md|log)$")
+        for directory in (self.ctx.paths.prompts, self.ctx.paths.runs, self.ctx.paths.logs):
+            for path in directory.glob(f"review-pr{pr_target}-{role}-r*.*"):
+                match = pattern.match(path.name)
+                if match:
+                    rounds.append(int(match.group(1)))
+        return (max(rounds) if rounds else 0) + 1
+
+    def _pending_review_spawn_exists(self, pr_target: str, role: str, round_number: int) -> bool:
+        try:
+            lines = self.ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return False
+        intent_id = f"dispatch-reviewers:{pr_target}:{role}:r{round_number}"
+        for line in lines:
+            if " HARNESS_SPAWN_INTENT " not in line:
+                continue
+            try:
+                intent = json.loads(line.split(" HARNESS_SPAWN_INTENT ", 1)[1])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(intent, dict) and intent.get("intent_id") == intent_id:
+                return True
+        return False
+
+    def dispatch_pr_rebase_resolve(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("dispatch-pr-rebase-resolve", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="dispatch-pr-rebase-resolve")
+        if pr_target is None:
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = facts["head_ref"]
+        if not self._canonical_managed_head(head_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            sys.stderr.write("dispatch_pr_rebase_resolve: live PR is not managed\n")
+            return 2
+        worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree branch mismatch\n")
+            return 2
+        if self._worktree_has_unrelated_dirty_state(worktree):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("dispatch_pr_rebase_resolve: worktree dirty before merge\n")
+            return 2
+        fetch = self._git_in(worktree, ["fetch", "origin"], check=False)
+        if fetch.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: fetch failed: {_single_line(fetch.stderr or fetch.stdout)}\n")
+            return 2
+        base_ref = f"origin/{self.integration_branch}"
+        if not self._branch_is_base_behind(worktree, base_ref):
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: branch already contains {base_ref}; noop\n")
+            return 0
+        merge = self._git_in(worktree, ["merge", "--no-commit", "--no-ff", base_ref], check=False)
+        if merge.returncode == 0:
+            return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+        unmerged = self._unmerged_paths(worktree)
+        if not unmerged:
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(
+                "dispatch_pr_rebase_resolve: merge failed without unmerged paths: "
+                f"{_single_line(merge.stderr or merge.stdout)}\n"
+            )
+            return 2
+        round_number = self._next_rebase_resolve_round(pr_target)
+        prompt = self.ctx.paths.prompts / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        output = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}.md"
+        log = self.ctx.paths.logs / f"rebase-resolve-pr{pr_target}-r{round_number}.log"
+        context_path = self.ctx.paths.runs / f"rebase-resolve-pr{pr_target}-r{round_number}-context.json"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        log.parent.mkdir(parents=True, exist_ok=True)
+        context_path.write_text(
+            json.dumps(
+                {
+                    "pr_number": pr_target,
+                    "base_branch": self.integration_branch,
+                    "head_branch": head_ref,
+                    "worktree_path": str(worktree),
+                    "unmerged_paths": unmerged,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "rebase-resolve.md"),
+            str(prompt),
+            env={
+                "PR_NUMBER": pr_target,
+                "BASE_BRANCH": self.integration_branch,
+                "HEAD_BRANCH": head_ref,
+                "BRANCH": head_ref,
+                "WORKTREE_PATH": str(worktree),
+                "REBASE_CONTEXT_PATH": self.ctx.durable_artifact_path(context_path),
+                "REBASE_RESOLVE_OUTPUT_PATH": self.ctx.durable_artifact_path(output),
+            },
+        )
+        self._replace_rebase_resolve_shell_defaults(prompt)
+        self._ensure_rebase_resolve_prompt_fully_rendered(prompt)
+        return launch_spawn_codex_supervisor(
+            repo_root=self.ctx.repo_root,
+            cd=worktree,
+            prompt=prompt,
+            log=log,
+            stall=5400,
+            add_dirs=(self.ctx.repo_root,),
+            env=self.ctx.env_for_subprocess(),
+        )
+
+    def commit_push_resolved_pr_rebase(self, action: Mapping[str, object]) -> int:
+        if not self._require_owner_or_return("commit-push-resolved-pr-rebase", code=3):
+            return 3
+        pr_target = self._managed_pr_target(action, action_name="commit-push-resolved-pr-rebase")
+        if pr_target is None:
+            return 2
+        marker = str(action.get("source_marker") or action.get("marker") or "")
+        blocked = REBASE_RESOLVE_BLOCKED_RE.fullmatch(marker)
+        if blocked:
+            if blocked.group(1) != pr_target:
+                sys.stderr.write("commit_push_resolved_pr_rebase: blocked marker PR mismatch\n")
+                return 2
+            worktree = self._worktree_from_rebase_action(action, pr_target)
+            if worktree is not None:
+                self._abort_merge_if_present(worktree)
+            self._append_pending_event(
+                f"REBASE_RESOLVE_BLOCKED:{pr_target}:{blocked.group(2)}:{_single_line(blocked.group(3))}"
+            )
+            return 3
+        done = REBASE_RESOLVE_DONE_RE.fullmatch(marker)
+        if marker and done is None:
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid source marker\n")
+            return 2
+        if done is not None and done.group(1) != pr_target:
+            sys.stderr.write("commit_push_resolved_pr_rebase: done marker PR mismatch\n")
+            return 2
+        facts = self._pr_rebase_facts(pr_target)
+        if facts is None:
+            return 2
+        head_ref = str(action.get("head_ref") or facts["head_ref"]).strip()
+        if head_ref != facts["head_ref"]:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: stale head_ref {head_ref!r}\n")
+            return 2
+        worktree = self._worktree_from_rebase_action(action, pr_target)
+        if worktree is None:
+            worktree = self._ensure_managed_pr_worktree(head_ref)
+        if worktree is None:
+            return 2
+        return self._commit_push_resolved_pr_rebase(pr_target=pr_target, head_ref=head_ref, worktree=worktree)
+
+    def _commit_push_resolved_pr_rebase(self, *, pr_target: str, head_ref: str, worktree: Path) -> int:
+        if not self._canonical_managed_head(head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: noncanonical head_ref {head_ref!r}\n")
+            return 2
+        if not self._live_target_has_managed_label(kind="pr", target=pr_target):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: live PR is not managed\n")
+            return 2
+        if not self._worktree_under_controller_root(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree outside controller-owned .worktrees\n")
+            return 2
+        if not self._worktree_is_on_branch(worktree, head_ref):
+            self._abort_merge_if_present(worktree)
+            sys.stderr.write("commit_push_resolved_pr_rebase: worktree branch mismatch\n")
+            return 2
+        if not self._merge_in_progress(worktree):
+            sys.stderr.write("commit_push_resolved_pr_rebase: merge not in progress\n")
+            return 2
+        unmerged = self._unmerged_paths(worktree)
+        if unmerged:
+            sys.stderr.write(f"commit_push_resolved_pr_rebase: unresolved conflicts: {','.join(unmerged)}\n")
+            return 2
+        commit = self._git_in(worktree, ["commit", "--no-edit"], check=False)
+        if commit.returncode != 0:
+            sys.stderr.write(
+                "commit_push_resolved_pr_rebase: merge commit failed: "
+                f"{_single_line(commit.stderr or commit.stdout or 'nothing-to-commit')}\n"
+            )
+            return 2
+        return self.safe_push(branch=head_ref, worktree=worktree)
+
+    def _managed_pr_target(self, action: Mapping[str, object], *, action_name: str) -> str | None:
+        target = self._normalize_lifecycle_target_or_block(
+            action.get("target_number"),
+            kind="pr",
+            action=action_name,
+            source="wakeup-runner-action",
+        )
+        if target is None:
+            return None
+        if action.get("target_kind") != "PR":
+            sys.stderr.write(f"{action_name.replace('-', '_')}: target_kind must be PR\n")
+            return None
+        return target
+
+    def _pr_rebase_facts(self, pr_target: str) -> dict[str, str] | None:
+        result = self.gh(
+            ["pr", "view", pr_target, "--json", "baseRefName,headRefName,headRefOid"],
+            check=False,
+        )
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR metadata unavailable: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            sys.stderr.write("dispatch_pr_rebase_resolve: invalid PR metadata JSON\n")
+            return None
+        head_ref = str(payload.get("headRefName") or "").strip()
+        base_ref = str(payload.get("baseRefName") or "").strip()
+        if base_ref != self.integration_branch:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: PR base mismatch {base_ref!r}\n")
+            return None
+        if not head_ref:
+            sys.stderr.write("dispatch_pr_rebase_resolve: missing head_ref\n")
+            return None
+        return {"head_ref": head_ref, "head_sha": str(payload.get("headRefOid") or ""), "base_ref": base_ref}
+
+    def _ensure_managed_pr_worktree(self, head_ref: str) -> Path | None:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: invalid managed head_ref {head_ref!r}\n")
+            return None
+        existing = self._worktree_for_branch(head_ref)
+        if existing is not None:
+            resolved = existing.resolve()
+            if self._worktree_under_controller_root(resolved):
+                return resolved
+            sys.stderr.write("dispatch_pr_rebase_resolve: existing worktree outside controller-owned .worktrees\n")
+            return None
+        wt_path = self.ctx.repo_root / ".worktrees" / f"iter{match.group(1)}-{match.group(2)}"
+        (self.ctx.repo_root / ".worktrees").mkdir(parents=True, exist_ok=True)
+        result = self.git(["worktree", "add", str(wt_path), head_ref], check=False)
+        if result.returncode != 0:
+            sys.stderr.write(f"dispatch_pr_rebase_resolve: worktree add failed: {_single_line(result.stderr or result.stdout)}\n")
+            return None
+        return wt_path.resolve()
+
+    def _canonical_managed_head(self, head_ref: str) -> bool:
+        match = MANAGED_PR_HEAD_RE.fullmatch(head_ref)
+        if match is None:
+            return False
+        try:
+            _validate_safe_worktree_fields(match.group(1), match.group(2))
+        except ValueError:
+            return False
+        return head_ref not in {self.integration_branch, self.review_base_branch}
+
+    def _worktree_under_controller_root(self, worktree: Path) -> bool:
+        if not worktree.is_absolute() or not worktree.is_dir():
+            return False
+        try:
+            worktree.resolve().relative_to((self.ctx.repo_root / ".worktrees").resolve())
+        except ValueError:
+            return False
+        return True
+
+    def _worktree_is_on_branch(self, worktree: Path, head_ref: str) -> bool:
+        branch = self._git_in(worktree, ["rev-parse", "--abbrev-ref", "HEAD"], check=False)
+        return branch.returncode == 0 and branch.stdout.strip() == head_ref
+
+    def _worktree_has_unrelated_dirty_state(self, worktree: Path) -> bool:
+        if self._merge_in_progress(worktree):
+            return True
+        status = self._git_in(worktree, ["status", "--porcelain"], check=False)
+        return status.returncode != 0 or bool(status.stdout.strip())
+
+    def _merge_in_progress(self, worktree: Path) -> bool:
+        git_dir = self._git_in(worktree, ["rev-parse", "--git-dir"], check=False)
+        if git_dir.returncode != 0 or not git_dir.stdout.strip():
+            return False
+        path = Path(git_dir.stdout.strip())
+        if not path.is_absolute():
+            path = worktree / path
+        return (path / "MERGE_HEAD").exists()
+
+    def _unmerged_paths(self, worktree: Path) -> list[str]:
+        result = self._git_in(worktree, ["diff", "--name-only", "--diff-filter=U"], check=False)
+        if result.returncode != 0:
+            return []
+        return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+    def _branch_is_base_behind(self, worktree: Path, base_ref: str) -> bool:
+        merge_base = self._git_in(worktree, ["merge-base", "HEAD", base_ref], check=False)
+        base = self._git_in(worktree, ["rev-parse", "--verify", base_ref], check=False)
+        return merge_base.returncode == 0 and base.returncode == 0 and merge_base.stdout.strip() != base.stdout.strip()
+
+    def _abort_merge_if_present(self, worktree: Path) -> None:
+        if self._merge_in_progress(worktree):
+            abort = self._git_in(worktree, ["merge", "--abort"], check=False)
+            if abort.returncode != 0:
+                sys.stderr.write(f"rebase_resolve: merge_abort_failed:{_single_line(abort.stderr or abort.stdout)}\n")
+
+    def _next_rebase_resolve_round(self, pr_target: str) -> int:
+        rounds: list[int] = []
+        pattern = re.compile(rf"^rebase-resolve-pr{re.escape(pr_target)}-r([1-9][0-9]*)\.(?:md|log)$")
+        for directory in (self.ctx.paths.prompts, self.ctx.paths.runs, self.ctx.paths.logs):
+            for path in directory.glob(f"rebase-resolve-pr{pr_target}-r*.*"):
+                match = pattern.match(path.name)
+                if match:
+                    rounds.append(int(match.group(1)))
+        return (max(rounds) if rounds else 0) + 1
+
+    def _worktree_from_rebase_action(self, action: Mapping[str, object], pr_target: str) -> Path | None:
+        raw = str(action.get("worktree") or "").strip()
+        if raw:
+            candidate = Path(raw)
+            if candidate.is_absolute() and self._worktree_under_controller_root(candidate):
+                return candidate.resolve()
+            sys.stderr.write("commit_push_resolved_pr_rebase: invalid worktree path\n")
+            return None
+        head_ref = str(action.get("head_ref") or "").strip()
+        if head_ref:
+            return self._worktree_for_branch(head_ref)
+        for path in sorted((self.ctx.repo_root / ".worktrees").glob(f"iter{pr_target}-*")):
+            if path.is_dir():
+                return path.resolve()
+        return None
+
+    def _ensure_rebase_resolve_prompt_fully_rendered(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"rebase-resolve prompt render left unresolved placeholders: {', '.join(unresolved)}")
+
+    def _replace_rebase_resolve_shell_defaults(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", "CLAUDE.md")
+        prompt_path.write_text(text, encoding="utf-8")
 
     def open_release_rollup_pr_from_action(self, action: Mapping[str, object]) -> int:
         event = action.get("event")
@@ -767,6 +1696,22 @@ class ControllerActions:
         title = str(action.get("title") or "Release rollup")
         self.open_release_rollup_pr_from_pending_event(event_json, body_file, title=title)
         return 0
+
+    def render_release_rollup_body_prompt(self, action: Mapping[str, object]) -> Path:
+        event = action.get("event")
+        event_json = json.dumps(event, ensure_ascii=False, sort_keys=True) if isinstance(event, dict) else str(action.get("event_json") or "")
+        body_file = str(action.get("body_file") or ".refactor-loop/runs/release-rollup-pr-body.md")
+        prompt = self.ctx.paths.prompts / "release-rollup-body.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "release-rollup-body.md"),
+            str(prompt),
+            env={
+                "RELEASE_ROLLUP_EVENT_JSON": event_json,
+                "RELEASE_ROLLUP_BODY_OUTPUT_PATH": body_file,
+            },
+        )
+        return prompt
 
     def _append_harness_spawn_intent(
         self,
@@ -788,7 +1733,7 @@ class ControllerActions:
             "priority": "p1",
             "command": "spawn-codex",
             "controller_action": "spawn_codex_harness_background",
-            "cd": self.ctx.durable_artifact_path(cd),
+            "cd": str(cd.resolve()),
             "prompt": self.ctx.durable_artifact_path(prompt),
             "log": self.ctx.durable_artifact_path(log),
             "stall": stall,
@@ -826,6 +1771,8 @@ class ControllerActions:
             )
             sys.stderr.write("close_managed_item_from_drop_marker: live target is not managed\n")
             return 2
+        if not self._require_github_actor_or_return("close-managed-drop", code=3):
+            return 3
         comment = "Closed from drop marker.\n\n⟦AI:AUTO-LOOP⟧"
         if kind == "pr":
             pr_target = issue_target
@@ -848,15 +1795,42 @@ class ControllerActions:
         names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
         return labels.MANAGED in labels.normalize_label_set(names).canonical
 
-    def _open_pr_exists_for_head(self, head_ref: str) -> bool:
-        result = self.gh(["pr", "list", "--state", "open", "--head", head_ref, "--json", "number"], check=False)
+    def _matching_implementation_pr(self, head_ref: str, issue_target: str) -> tuple[str | None, int | None]:
+        result = self.gh(
+            ["pr", "list", "--state", "open", "--head", head_ref, "--json", "number,baseRefName,headRefName,labels,body"],
+            check=False,
+        )
         if result.returncode != 0:
-            return True
+            return "matching_pr_unavailable", None
         try:
             payload = json.loads(result.stdout or "[]")
         except json.JSONDecodeError:
-            return True
-        return isinstance(payload, list) and len(payload) > 0
+            return "matching_pr_invalid_json", None
+        if not isinstance(payload, list):
+            return "matching_pr_invalid_json", None
+        if len(payload) == 0:
+            return None, None
+        if len(payload) > 1:
+            return "multiple_matching_open_pr", None
+        pr = payload[0]
+        if not isinstance(pr, dict):
+            return "matching_pr_invalid_json", None
+        number = pr.get("number")
+        if not isinstance(number, int) or number <= 0:
+            return "matching_pr_invalid_json", None
+        if str(pr.get("headRefName") or "") != head_ref:
+            return "matching_pr_head_mismatch", None
+        if str(pr.get("baseRefName") or "") != self.integration_branch:
+            return "matching_pr_base_mismatch", None
+        raw_labels = pr.get("labels")
+        if not isinstance(raw_labels, list):
+            return "matching_pr_not_managed", None
+        names = [item.get("name") for item in raw_labels if isinstance(item, dict)]
+        if labels.MANAGED not in labels.normalize_label_set(names).canonical:
+            return "matching_pr_not_managed", None
+        if _single_linked_issue(str(pr.get("body") or "")) != issue_target:
+            return "matching_pr_issue_mismatch", None
+        return None, number
 
     def _run_host_command(self, name: str, cwd: Path) -> int:
         command = str(self.ctx.env_for_subprocess().get(name) or "").strip()
@@ -878,19 +1852,25 @@ class ControllerActions:
         return result.returncode
 
     def _implementation_pr_body_file(self, action: Mapping[str, object], issue_target: str) -> Path:
-        raw = str(action.get("body_file") or "").strip()
-        if raw:
-            path = Path(raw)
-            return path if path.is_absolute() else self.ctx.repo_root / path
-        path = self.ctx.paths.runs / f"implementation-pr-{issue_target}-body.md"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            f"## 🤖 实现 issue #{issue_target}\n\n"
-            f"Closes #{issue_target}\n\n"
-            "⟦AI:AUTO-LOOP⟧\n",
-            encoding="utf-8",
-        )
-        return path
+        return implementation_pr_body_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title_file(self, action: Mapping[str, object], issue_target: str) -> Path:
+        return implementation_pr_title_path(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+
+    def _implementation_pr_title(self, action: Mapping[str, object], issue_target: str) -> str:
+        return self._implementation_pr_title_file(action, issue_target).read_text(encoding="utf-8", errors="replace").strip()
+
+    def _implementation_pr_title_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_title_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
+
+    def _implementation_pr_body_error(self, action: Mapping[str, object], issue_target: str) -> str | None:
+        validation = validate_implementation_pr_artifacts(self.ctx.repo_root, self.ctx.paths.runs, action, issue_target)
+        if validation.reason and validation.reason.startswith("implementation_pr_body_"):
+            return _controller_implementation_pr_error(validation.reason, validation.detail)
+        return None
 
     def render_template(self, input_path: str, output_path: str, env: Mapping[str, str] | None = None) -> None:
         values = dict(os.environ)
@@ -911,8 +1891,69 @@ class ControllerActions:
         template = template_path.read_text(encoding="utf-8")
         for key, value in aliases.items():
             template = template.replace("{{" + key + "}}", value)
-        rendered = Template(template).safe_substitute(values)
+        rendered = inline_prompt_contracts(Template(template).safe_substitute(values), skill_root=self.ctx.skill_root)
         Path(output_path).write_text(rendered, encoding="utf-8")
+
+    def _review_fix_pr_facts(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
+        required = ("PR_TITLE", "HEAD_BRANCH", "BASE_BRANCH")
+        if all(str(existing.get(key) or "") for key in required):
+            return {key: str(existing.get(key) or "") for key in required}
+        pr_target = _normalize_lifecycle_target(pr_number, kind="pr", action="render-review-fix", source="argument")
+        result = self.gh(["pr", "view", pr_target, "--json", "title,headRefName,baseRefName"])
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"review-fix prompt render: invalid PR metadata for {pr_target}") from exc
+        return {
+            "PR_TITLE": str(payload.get("title") or f"PR {pr_target}"),
+            "HEAD_BRANCH": str(payload.get("headRefName") or ""),
+            "BASE_BRANCH": str(payload.get("baseRefName") or ""),
+        }
+
+    def _review_fix_review_paths(self, pr_number: str, existing: Mapping[str, str]) -> dict[str, str]:
+        keys = tuple(f"REVIEW_{role.upper()}_PATH" for role in REVIEW_ROLES)
+        if all(str(existing.get(key) or "") for key in keys):
+            return {key: str(existing.get(key) or "") for key in keys}
+        latest = self._latest_review_fix_round_paths(pr_number)
+        result: dict[str, str] = {}
+        for role in REVIEW_ROLES:
+            key = f"REVIEW_{role.upper()}_PATH"
+            result[key] = latest.get(role, "")
+        return result
+
+    def _latest_review_fix_round_paths(self, pr_number: str) -> dict[str, str]:
+        by_round: dict[int, dict[str, str]] = {}
+        artifact_keys: set[tuple[str, int]] = set()
+        artifact_re = re.compile(rf"^review-pr{re.escape(pr_number)}-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.md$")
+        log_re = re.compile(rf"^review-pr{re.escape(pr_number)}-([A-Za-z][A-Za-z0-9_-]*)-r([1-9][0-9]*)\.log$")
+        for path in sorted(self.ctx.paths.runs.glob(f"review-pr{pr_number}-*-r*.md")):
+            match = artifact_re.match(path.name)
+            if not match:
+                continue
+            role = match.group(1)
+            if role not in REVIEW_ROLES:
+                continue
+            round_number = int(match.group(2))
+            log_path = self.ctx.paths.logs / f"review-pr{pr_number}-{role}-r{round_number}.log"
+            if not _review_fix_log_has_exit_zero(log_path):
+                continue
+            by_round.setdefault(round_number, {})[role] = self.ctx.durable_artifact_path(path)
+            artifact_keys.add((role, round_number))
+        for path in sorted(self.ctx.paths.logs.glob(f"review-pr{pr_number}-*-r*.log")):
+            match = log_re.match(path.name)
+            if not match:
+                continue
+            role = match.group(1)
+            if role not in REVIEW_ROLES:
+                continue
+            round_number = int(match.group(2))
+            if (role, round_number) in artifact_keys or not _review_fix_log_has_exit_zero(path):
+                continue
+            by_round.setdefault(round_number, {})[role] = self.ctx.durable_artifact_path(path)
+        complete_rounds = [round_number for round_number, paths in by_round.items() if all(role in paths for role in REVIEW_ROLES)]
+        if not complete_rounds:
+            return {}
+        return by_round[max(complete_rounds)]
 
     def render_review_fix_prompt(
         self,
@@ -921,7 +1962,18 @@ class ControllerActions:
         env: Mapping[str, str] | None = None,
     ) -> ReviewFixDispatchSpec:
         spec = ReviewFixDispatchSpec.for_round(pr_number, round_number)
-        render_env = dict(env or {})
+        render_env = {
+            "AUDIT_PATH": "",
+            "IMPLEMENT_SUMMARY_PATH": "",
+            "CLUSTER_ID": "",
+            "ISSUE_NUMBER": "",
+            "ITERATION": "",
+            "PROJECT_RULES": "CLAUDE.md",
+            "HOST_REFACTOR_COMMENT_POLICY": "none",
+        }
+        render_env.update(env or {})
+        render_env.update(self._review_fix_pr_facts(spec.pr_number, render_env))
+        render_env.update(self._review_fix_review_paths(spec.pr_number, render_env))
         render_env.update(spec.as_render_env())
         prompt_path = self.ctx.repo_root / spec.prompt_path
         prompt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -930,8 +1982,21 @@ class ControllerActions:
             str(prompt_path),
             env=render_env,
         )
+        self._replace_review_fix_shell_defaults(prompt_path, render_env)
+        self._ensure_review_fix_prompt_fully_rendered(prompt_path)
         self._write_review_thread_completion_seed(pr_number)
         return spec
+
+    def _replace_review_fix_shell_defaults(self, prompt_path: Path, render_env: Mapping[str, str]) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        text = text.replace("${PROJECT_RULES:-CLAUDE.md}", render_env.get("PROJECT_RULES") or "CLAUDE.md")
+        prompt_path.write_text(text, encoding="utf-8")
+
+    def _ensure_review_fix_prompt_fully_rendered(self, prompt_path: Path) -> None:
+        text = prompt_path.read_text(encoding="utf-8")
+        unresolved = sorted(set(re.findall(r"\$\{[^}]+\}", text)))
+        if unresolved:
+            raise RuntimeError(f"review-fix prompt render left unresolved placeholders: {', '.join(unresolved)}")
 
     def _write_review_thread_completion_seed(self, pr_number: int) -> None:
         state_dir = self.ctx.repo_root / ".refactor-loop" / "state" / "review-thread-completion"
@@ -1057,16 +2122,29 @@ class ControllerActions:
     def _require_owner_or_return(self, action: str, *, code: int) -> bool:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
-        if decision.allowed:
-            return True
-        sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
-        return False
+        if not decision.allowed:
+            sys.stderr.write(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}\n")
+            return False
+        return True
 
     def _require_owner_or_raise(self, action: str) -> None:
         decision = require_active_controller(self.ctx, action)
         write_active_controller_status(self.ctx, decision)
         if not decision.allowed:
             raise RuntimeError(f"active_controller=noop:not-owner action={action} owner={decision.owner_device}")
+
+    def _require_github_actor_or_return(self, action: str, *, code: int) -> bool:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        try:
+            actor.require_admission(action)
+        except RuntimeError as exc:
+            sys.stderr.write(str(exc) + "\n")
+            return False
+        return True
+
+    def _require_github_actor_or_raise(self, action: str) -> None:
+        actor = self.github_actor or GitHubAuthenticatedActor(self.ctx)
+        actor.require_admission(action)
 
     def _normalize_lifecycle_target_or_block(self, value: object, *, kind: str, action: str, source: str) -> str | None:
         try:
@@ -1121,7 +2199,7 @@ def _parse_time(value: object) -> datetime | None:
 
 
 def _normalize_lifecycle_target(value: object, *, kind: str, action: str, source: str) -> str:
-    """refactor helper, no behavior change except rejecting unsafe GitHub target ids."""
+    """Return a canonical positive GitHub issue or PR number."""
     target = "" if value is None else str(value)
     if not GITHUB_LIFECYCLE_TARGET_RE.fullmatch(target):
         raise ValueError(f"{action}: invalid {kind} target from {source}: {target!r}")
@@ -1137,13 +2215,52 @@ def _body_closing_issue_targets(body: str) -> tuple[str, ...]:
     return tuple(match.group(1) for match in BODY_CLOSING_ISSUE_TARGET_RE.finditer(body or ""))
 
 
+def _single_line(value: str) -> str:
+    return " ".join(str(value or "").splitlines())
+
+
+def _format_key_value_suffix(fields: Mapping[str, object]) -> str:
+    return " ".join(f"{key}={json.dumps(str(value), ensure_ascii=False)}" for key, value in fields.items())
+
+
 def _validate_safe_worktree_fields(iteration: str, cluster: str) -> None:
-    """refactor helper, no behavior change except rejecting unsafe path fields."""
+    """Validate worktree identity fields before constructing local paths."""
     if not SAFE_WORKTREE_ITERATION_RE.fullmatch(iteration):
         raise ValueError(f"safe_worktree iteration must be digits only: {iteration!r}")
     if not SAFE_WORKTREE_CLUSTER_RE.fullmatch(cluster):
         raise ValueError(f"safe_worktree cluster must match [A-Za-z0-9._-]+: {cluster!r}")
 
 
+def _review_fix_log_has_exit_zero(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    return any(line.strip() == "EXIT=0" for line in lines)
+
+
 def _safe_branch_name(value: str) -> bool:
     return bool(value) and not value.startswith("-") and not any(ch.isspace() or ord(ch) < 32 for ch in value)
+
+
+def _implementation_cluster_id(action: Mapping[str, object], issue_target: str) -> str:
+    return implementation_cluster_id(action, issue_target)
+
+
+def _controller_implementation_pr_error(reason: str, detail: str = "") -> str:
+    messages = {
+        "implementation_pr_title_artifact_invalid_path": "implementation PR title artifact outside runs",
+        "implementation_pr_title_artifact_missing": "implementation PR title artifact missing",
+        "implementation_pr_title_artifact_invalid": "implementation PR title must be exactly one non-empty line",
+        "implementation_pr_title_placeholder": "implementation PR title is placeholder",
+        "implementation_pr_title_contains_body_content": "implementation PR title contains body-only content",
+        "implementation_pr_body_artifact_invalid_path": "implementation PR body artifact outside runs",
+        "implementation_pr_body_artifact_missing": "implementation PR body artifact missing",
+        "implementation_pr_body_sentinel_missing": "implementation PR body sentinel must be final standalone line",
+        "implementation_pr_body_closes_mismatch": "implementation PR body must contain exactly one matching Closes link",
+        "implementation_pr_body_required_section_missing": "implementation PR body missing required section",
+        "implementation_pr_body_placeholder": "implementation PR body is placeholder",
+        "implementation_pr_body_github_body_invalid": "implementation PR body invalid",
+    }
+    message = messages.get(reason, reason)
+    return f"{message}: {detail}" if detail else message

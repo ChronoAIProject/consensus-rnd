@@ -12,6 +12,7 @@ SCRIPT_PATH = Path(__file__)
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 SKILL_MD = SKILL_ROOT / "SKILL.md"
 HOST_ENV_EXAMPLE = SKILL_ROOT / "host.env.example"
+IMPLEMENT_PROMPT = SKILL_ROOT / "prompts" / "implement.md"
 WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus-rnd-cli wakeup-plan"
 PACKAGE_WAKEUP_PLAN = SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py"
@@ -107,12 +108,37 @@ class SkillEntrypointContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, self.skill)
 
+    def test_zero_codex_has_no_observe_mode_exemption(self) -> None:
+        required = (
+            "无观察模式豁免(强制,airtight)",
+            "必须在同一 turn 内立即派出真实下一步 codex",
+            "维持 floor 是 controller 不可让渡、不可暂缓的职责",
+            "`actual == 0 + active work` 永远是必须当 turn 修复的 P0,不是可观察的状态",
+        )
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, self.skill)
+
+    def test_implement_prompt_redline_allows_required_pr_artifacts(self) -> None:
+        prompt = read(IMPLEMENT_PROMPT)
+        required = (
+            "$REPO_ROOT/.refactor-loop/runs/implement-${CLUSTER_ID}.md",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-title.txt",
+            "$REPO_ROOT/.refactor-loop/runs/implementation-pr-${CLUSTER_ID}-body.md",
+            "$REPO_ROOT/.refactor-loop/runs/scope-extend-${CLUSTER_ID}.log",
+            "除此之外 `.refactor-loop/` 一律禁改",
+        )
+
+        for needle in required:
+            with self.subTest(needle=needle):
+                self.assertIn(needle, prompt)
+
     def test_milestone_priority_contract_is_in_skill_entrypoint(self) -> None:
         required = (
             "## Milestone priority",
             "crnd:milestone:current",
             "orthogonal third axis",
-            "Legacy milestone labels are migration aliases only",
+            "Historical non-`crnd:*` milestone labels are unmanaged residue",
             "Before any non-milestone existing-issue work or ordinary audit fallback",
             "bootstrap failure / missing wake source, maintainer comment, completed marker same-wakeup route, CI red, and no-gap violation",
             "milestone members = GitHub `crnd:milestone:current` as declared by `codex_refactor_loop.labels`",
@@ -130,7 +156,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
         )
         self.assertTrue(phase0)
         obligations = (
-            'source "${CONSENSUS_RND_HOST_ENV:-.refactor-loop/host.env}"',
+            'test -n "${CONSENSUS_RND_HOST_ENV:-}" && source "$CONSENSUS_RND_HOST_ENV"',
             "fail closed",
             "ProjectRulesFixedPointProbe",
             "consensus-rnd-cli check-project-rules",
@@ -518,7 +544,17 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "git branch -D",
         )
         allowed_history = "must not run `gh pr create`"
-        skill_without_forbidden_history = self.skill.replace(allowed_history, "")
+        runtime_retention = section_between(
+            self.skill,
+            r"^## Named runtime exception - RuntimeRetention\(per #437\)$",
+            r"^## Large issue decomposition",
+        )
+        skill_without_forbidden_history = self.skill.replace(allowed_history, "").replace(runtime_retention, "")
+        skill_without_forbidden_history = re.sub(
+            r"(?m)^.*(?:RuntimeRetention|runtime-retention).*\n?",
+            "",
+            skill_without_forbidden_history,
+        )
         for needle in forbidden:
             with self.subTest(needle=needle):
                 self.assertNotIn(needle, skill_without_forbidden_history)
@@ -598,6 +634,32 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "Host command strings must be executed via bash -lc, not as bare lines",
         )
 
+    def test_implement_and_verify_prompts_lock_touched_module_test_ratchet(self) -> None:
+        implement = read(SKILL_ROOT / "prompts" / "implement.md")
+        verify = read(SKILL_ROOT / "prompts" / "verify.md")
+        combined = "\n".join((self.skill, implement, verify))
+
+        for needle in (
+            "Touched-module test ratchet",
+            "测试 ratchet",
+            "fast / hermetic / behavior-first",
+            "owner-local fact source",
+            "mock/fake/stub",
+            "behavior",
+            "contract",
+            "sleep/delay",
+            "suite-level host-wide process-table guard",
+            "ps -eo pid=,command=",
+            "daemon leak / duplicate",
+            "helper-local fact source",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, combined)
+
+    def test_daemon_leak_suite_guard_no_longer_scans_host_process_table(self) -> None:
+        guard = SKILL_ROOT / "scripts" / "test_zz_daemon_leak_guard.py"
+        self.assertFalse(guard.exists())
+
     def test_host_env_surface_matrix_entrypoint_contract(self) -> None:
         host_config = section_between(
             self.skill,
@@ -625,7 +687,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "$CONSENSUS_RND_HOST_ENV",
             "locates the host-owned `host.env` loop runtime injection file",
             "not host production configuration schema",
-            "legacy `.refactor-loop/host.env`",
+            "no `.refactor-loop/host.env` fallback is read",
             "`.refactor-loop/` is the skill-private runtime home",
             "Host production facts, branch topology, durable ledger authority, and host-owned config SSOT must live in host-owned config/rules/artifacts, not in `.refactor-loop/`.",
         ):
@@ -668,7 +730,7 @@ class SkillEntrypointContractTests(unittest.TestCase):
             "PROMPT_ALLOWLISTS",
             "PROMPT_ARTIFACT_PROFILES",
             "review-pr<N>-<role>-r<R>.md` frontmatter `verdict: approve|comment|reject`",
-            "fall back to clean log-tail `REVIEW_DONE` markers",
+            "`REVIEW_DONE` is only clean worker completion/routing evidence read through `codex_refactor_loop.worker_markers`",
             "consensus-rnd-cli restart-daemons",
             "must not hand-kill daemon processes",
             "probe process lists as liveness authority",
@@ -679,6 +741,26 @@ class SkillEntrypointContractTests(unittest.TestCase):
         for token in forbidden:
             with self.subTest(token=token):
                 self.assertNotIn(token, self.skill)
+
+    def test_worker_terminal_marker_reader_contract_is_local_fact_source(self) -> None:
+        section = section_between(
+            self.skill,
+            r"^### Consensus rules$",
+            r"^### Fix-retry loop",
+        )
+        self.assertTrue(section)
+        for needle in (
+            "codex_refactor_loop.worker_markers",
+            "detection, runner revalidation, implement readiness, and review completion evidence",
+            "standalone allowlisted terminal markers only after clean `EXIT=0`",
+            "same-stem `.refactor-loop/runs/<stem>.md` companion artifact",
+            "Duplicate, malformed, or conflicting marker evidence fails closed",
+            "Implement readiness recognizes `IMPLEMENT_DONE:*:ok`",
+            "Review-gate verdict authority remains artifact-frontmatter-first",
+            "`REVIEW_DONE` does not override frontmatter verdicts",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
 
     def test_spawn_contract_isolates_background_spawns_from_fallible_calls(self) -> None:
         # Old pattern: a spawn-codex background task batched with a fallible probe

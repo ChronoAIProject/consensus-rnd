@@ -479,7 +479,7 @@ class IntegrationSyncDaemon:
                 continue
             head = str(row.get("headRefName") or "")
             head_sha = str(row.get("headRefOid") or "")
-            if head == self.integration or (head.startswith("rollup/") and head_sha == integration_sha):
+            if head == self.integration or head.startswith("rollup/"):
                 return True
         return False
 
@@ -706,11 +706,13 @@ class IntegrationSyncDaemon:
         return True
 
     def tick(self) -> None:
+        tick_action = "noop:up-to-date"
         if self.context is not None:
             decision = require_active_controller(self.context, "dev-sync")
             write_active_controller_status(self.context, decision)
             if not decision.allowed:
                 self.log(f"active_controller=noop:not-owner action=dev-sync owner={decision.owner_device}")
+                self.log(f"dev-sync: tick noop:not-owner:{decision.status}")
                 return
         cwd = self.worktree
         if not remote_branch_exists(
@@ -720,17 +722,21 @@ class IntegrationSyncDaemon:
             logger=self.log,
         ):
             self.append_pending_event("missing-integration-branch", self.integration)
+            self.log("dev-sync: tick blocked:missing-integration-branch")
             return
         if not cwd.exists():
             self.log(f"worktree {cwd} missing, attempting create")
             if not self.ensure_worktree():
+                self.log("dev-sync: tick blocked:worktree-create-failed")
                 return
+            tick_action = "dispatched ensure-worktree"
 
         self.run(["git", "fetch", "origin", "--quiet"], cwd=cwd)
 
         if self.merge_in_progress(cwd):
             if self.codex_resolve_in_flight():
                 self.log("skip: merge in progress + codex resolving")
+                self.log("dev-sync: tick noop:merge-resolution-in-flight")
             else:
                 unresolved = self.run(["git", "diff", "--name-only", "--diff-filter=U"], cwd=cwd)
                 if unresolved.returncode == 0 and not unresolved.stdout.strip():
@@ -738,6 +744,7 @@ class IntegrationSyncDaemon:
                     expected = self.remote_integration_sha(cwd)
                     if head.returncode != 0 or not expected:
                         self.append_pending_event("continue-merge-ambiguous", "missing-head-or-remote")
+                        self.log("dev-sync: tick blocked:continue-merge-ambiguous")
                     else:
                         self.execute_sync_operation(
                             IntegrationSyncOperation(
@@ -749,27 +756,38 @@ class IntegrationSyncDaemon:
                                 evidence={"reason": "resolved-merge-continuation"},
                             )
                         )
+                        self.log("dev-sync: tick dispatched continue-resolved-merge")
                 else:
                     self.log("WARN: merge in progress but no codex running - dispatching")
                     self.dispatch_codex_resolve()
+                    self.log("dev-sync: tick dispatched conflict-resolver")
             return
 
         if self.working_tree_dirty(cwd):
             self.log("skip: worktree dirty (no merge in progress)")
+            self.log("dev-sync: tick blocked:worktree-dirty")
             return
 
         if self.execute_clean_local_ahead(cwd):
+            self.log("dev-sync: tick dispatched clean-local-ahead")
             return
 
         rollup = self.detect_merged_rollup(cwd)
         if rollup and rollup.status == "adopt" and rollup.adoption:
             if self.execute_merged_rollup_adoption(cwd, rollup.adoption):
+                self.log("dev-sync: tick dispatched merged-rollup-adoption")
                 return
 
         if self.execute_reset_to_remote(cwd):
+            self.log("dev-sync: tick dispatched reset-to-remote")
             return
 
+        before_events = self.pending_events_file.stat().st_size if self.pending_events_file.exists() else 0
         self.execute_forward_sync_review_base(cwd)
+        after_events = self.pending_events_file.stat().st_size if self.pending_events_file.exists() else 0
+        if after_events > before_events:
+            tick_action = "dispatched forward-sync-or-release-rollup"
+        self.log(f"dev-sync: tick {tick_action}")
 
 
 def local_ahead_count(cwd: Path, config: DevSyncConfig | None = None) -> int:

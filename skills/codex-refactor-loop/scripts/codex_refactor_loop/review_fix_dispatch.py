@@ -17,6 +17,8 @@ _ESCALATION_EVIDENCE_RE = re.compile(r"^META_RESOLVED:escalate-human:[A-Za-z0-9.
 class ReviewFixDispatchSpec:
     """Canonical review-fix prompt, log, and output artifact paths."""
 
+    pr_number: str
+    round_number: str
     prompt_path: str
     log_path: str
     fix_output_path: str
@@ -27,13 +29,20 @@ class ReviewFixDispatchSpec:
         round_no = _validate_positive_int(round_number, "round_number")
         fix_output_path = f".refactor-loop/runs/fix-pr{pr}-round-{round_no}-report.md"
         return cls(
+            pr_number=pr,
+            round_number=round_no,
             prompt_path=f".refactor-loop/prompts/fixes/fix-pr{pr}-round-{round_no}.md",
             log_path=f".refactor-loop/logs/fix-pr{pr}-round-{round_no}.log",
             fix_output_path=cls.validate_fix_output_path(fix_output_path),
         )
 
     def as_render_env(self) -> Mapping[str, str]:
-        return {"FIX_OUTPUT_PATH": self.fix_output_path}
+        return {
+            "PR_NUMBER": self.pr_number,
+            "FIX_ROUND": self.round_number,
+            "MAX_FIX_ROUNDS": "3",
+            "FIX_OUTPUT_PATH": self.fix_output_path,
+        }
 
     @staticmethod
     def validate_fix_output_path(path: str) -> str:

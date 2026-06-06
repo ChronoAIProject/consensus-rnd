@@ -52,12 +52,24 @@ def copy_repo_fixture() -> tempfile.TemporaryDirectory[str]:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
     (repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
-    (repo / ".refactor-loop/host.env").write_text(
+    (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+    (repo / ".config/consensus-rnd/host.env").write_text(
         'export GH_REPO_SLUG="owner/repo"\n'
         'export HOST_GITHUB_RELEASE_REQUIRED_CHECKS="contract-tests,manifest-version-sync,skill-degradation"\n',
         encoding="utf-8",
     )
     return tmp
+
+
+def release_env():
+    return mock.patch.dict(
+        os.environ,
+        {
+            "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
+            "ACTIVE_CONTROLLER_DEVICE_ID": "device-a",
+        },
+        clear=False,
+    )
 
 
 class FakePreflight:
@@ -257,7 +269,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=preflight, runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(
@@ -278,7 +291,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(runner.commands, expected_success_commands())
@@ -289,7 +303,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
-            publisher.publish(target_ref="abc123")
+            with release_env():
+                publisher.publish(target_ref="abc123")
 
             serialized = [" ".join(command) for command in runner.commands]
             forbidden_exact = {
@@ -323,7 +338,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             check_index = runner.commands.index(expected_check_runs_command("bumpcommit456"))
@@ -345,8 +361,10 @@ class ReleasePublisherTests(unittest.TestCase):
                 runner.check_status = check_status
                 publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
-                with self.assertRaisesRegex(RuntimeError, reason):
-                    publisher.publish(target_ref="abc123")
+                with release_env():
+                    with self.assertRaisesRegex(RuntimeError, reason):
+                        with release_env():
+                            publisher.publish(target_ref="abc123")
 
                 self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
                 self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
@@ -365,7 +383,8 @@ class ReleasePublisherTests(unittest.TestCase):
                 now=lambda: NOW,
             )
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "bumpcommit456")
@@ -391,7 +410,8 @@ class ReleasePublisherTests(unittest.TestCase):
                 now=lambda: NOW,
             )
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(result.target_ref, "bumpcommit456")
@@ -411,7 +431,8 @@ class ReleasePublisherTests(unittest.TestCase):
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
             with self.assertRaisesRegex(RuntimeError, "stale_required_checks"):
-                publisher.publish(target_ref="abc123")
+                with release_env():
+                    publisher.publish(target_ref="abc123")
 
             self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
             self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
@@ -430,7 +451,8 @@ class ReleasePublisherTests(unittest.TestCase):
                 now=lambda: NOW,
             )
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertFalse(result.published)
             self.assertEqual(result.reasons, ("manifest_version_mismatch", "host_opt_in_not_true"))
@@ -447,14 +469,16 @@ class ReleasePublisherTests(unittest.TestCase):
             publisher = ReleasePublisher(repo, preflight=preflight, runner=pending_runner, now=lambda: NOW)
 
             with self.assertRaisesRegex(RuntimeError, "pending_required_checks"):
-                publisher.publish(target_ref="abc123")
+                with release_env():
+                    publisher.publish(target_ref="abc123")
 
             self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in pending_runner.commands))
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
 
             green_runner = FakeRunner()
             retry = ReleasePublisher(repo, preflight=preflight, runner=green_runner, now=lambda: NOW)
-            result = retry.publish(target_ref="abc123")
+            with release_env():
+                result = retry.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(green_runner.commands, expected_reentry_success_commands())
@@ -473,7 +497,8 @@ class ReleasePublisherTests(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(RuntimeError, "ci_red"):
-                publisher.publish(target_ref="abc123")
+                with release_env():
+                    publisher.publish(target_ref="abc123")
 
             self.assertIn(expected_check_runs_command("bumpcommit456"), runner.commands)
             self.assertFalse(any(command[:3] == ["gh", "release", "create"] for command in runner.commands))
@@ -491,7 +516,8 @@ class ReleasePublisherTests(unittest.TestCase):
                 now=lambda: NOW,
             )
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertFalse(result.published)
             self.assertEqual(result.reasons, ("manifest_version_mismatch",))
@@ -511,7 +537,8 @@ class ReleasePublisherTests(unittest.TestCase):
                 now=lambda: NOW,
             )
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertFalse(result.published)
             self.assertEqual(result.reasons, ("manifest_version_mismatch",))
@@ -522,13 +549,15 @@ class ReleasePublisherTests(unittest.TestCase):
     def test_publisher_requires_repo_slug_for_fresh_commit_check_gate(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
-            (repo / ".refactor-loop/host.env").write_text("", encoding="utf-8")
+            (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+            (repo / ".config/consensus-rnd/host.env").write_text("", encoding="utf-8")
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
             with mock.patch.dict(os.environ, {"GH_REPO_SLUG": ""}, clear=False):
                 with self.assertRaisesRegex(RuntimeError, "GH_REPO_SLUG is required"):
-                    publisher.publish(target_ref="abc123")
+                    with release_env():
+                        publisher.publish(target_ref="abc123")
 
             self.assertIn(["git", "push", "origin", "HEAD"], runner.commands)
             self.assertFalse(any(command[:2] == ["gh", "api"] for command in runner.commands))
@@ -542,7 +571,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=preflight, runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(result.tag, "v2.0.0-beta.4")
@@ -579,7 +609,8 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=preflight, runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertTrue(result.published)
             self.assertEqual(result.tag, "v1.0.0")
@@ -603,12 +634,25 @@ class ReleasePublisherTests(unittest.TestCase):
             runner = FakeRunner()
             publisher = ReleasePublisher(repo, preflight=FakePreflight(denied), runner=runner, now=lambda: NOW)
 
-            result = publisher.publish(target_ref="abc123")
+            with release_env():
+                result = publisher.publish(target_ref="abc123")
 
             self.assertFalse(result.published)
             self.assertEqual(result.reasons, ("host_opt_in_not_true",))
             self.assertEqual(runner.commands, [])
             self.assertFalse((repo / ".refactor-loop/state/release-publish-result.json").exists())
+
+    def test_publisher_does_not_define_github_actor_or_write_permit_authority(self) -> None:
+        source = (SCRIPT_PATH.parent / "codex_refactor_loop" / "release" / "publisher.py").read_text(encoding="utf-8")
+        for forbidden in (
+            "GitHubAuthenticatedActor",
+            "ControllerWritePermit",
+            "GitHubWritePermit",
+            "author.login",
+            "updatedAt",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
     def test_publisher_refuses_when_release_commit_is_behind_origin_head(self) -> None:
         with copy_repo_fixture() as tmp:
@@ -618,7 +662,8 @@ class ReleasePublisherTests(unittest.TestCase):
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
             with self.assertRaisesRegex(RuntimeError, "safe push refused"):
-                publisher.publish(target_ref="abc123")
+                with release_env():
+                    publisher.publish(target_ref="abc123")
 
             self.assertEqual(
                 runner.commands,
@@ -648,7 +693,8 @@ class ReleasePublisherTests(unittest.TestCase):
             publisher = ReleasePublisher(repo, preflight=FakePreflight(allowed_result(repo)), runner=runner, now=lambda: NOW)
 
             with self.assertRaisesRegex(RuntimeError, "add failed"):
-                publisher.publish(target_ref="abc123")
+                with release_env():
+                    publisher.publish(target_ref="abc123")
 
             self.assertEqual(runner.commands, expected_success_commands()[:2])
             self.assertNotIn(expected_violating_pre_bump_tag_command(), runner.commands)

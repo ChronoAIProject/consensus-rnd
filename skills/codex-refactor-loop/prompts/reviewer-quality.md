@@ -5,7 +5,7 @@ Artifact profile: phase8-reviewer
 <!--
 Refactor (iter1/issue-126):
   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
-  New principle: 按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus 逐条:删除 prompt 硬编码 host 文本,复用现有 host.env surface;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
+  New principle: Host-agnostic prompt text is owned by the host.env surface matrix, GH_REPO_SLUG, MAINTAINER_WHITELIST, HOST_REFACTOR_COMMENT_POLICY, test_refactor_comment_policy_prompt_contract.py, and this prompt's checklist; no hardcoded host placeholder text or separate REFERENCE.md dependency.
 -->
 
 You are reviewing PR **${PR_NUMBER}** (`${PR_TITLE}`) against `${BASE_BRANCH}` from a **code quality** perspective: readability, naming, simplicity, complexity, dead code.
@@ -43,6 +43,7 @@ Write `${REVIEW_OUTPUT_PATH}`:
 ---
 pr: ${PR_NUMBER}
 role: quality
+head_sha: ${HEAD_SHA}
 verdict: approve | comment | reject
 ---
 
@@ -80,17 +81,14 @@ Only the markers listed above are valid role-routing markers for this prompt. Do
 
 - Open the actual files, not just hunks.
 - "I don't like this style" without an objective heuristic = approve (taste is the author's, not yours).
-- You DO post to GitHub directly per `prompts/_github-post-rules.md` (controller no longer relays — see "GitHub post" section below).
+- You DO post to GitHub directly per the rendered shared GitHub post rules (controller no longer relays — see "GitHub post" section below).
 - No bilingual requirement (internal artifact).
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
 
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:<role>:<issue-or-pr>:<URL>:<headline>` 或 `POST_FAILED:...`
+{{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---

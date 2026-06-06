@@ -3,7 +3,7 @@
 <!--
 Refactor (iter1/issue-126):
   Old pattern: 跨平台 prompt 含 '该项目'/'该项目AI' 等硬编码 host 占位文本,违反 host-agnostic;应复用 host.env surface(GH_REPO_SLUG / MAINTAINER_WHITELIST)。
-  New principle: 按 .refactor-loop/runs/phase9-issue126-r3-judge.md consensus 逐条:删除 prompt 硬编码 host 文本,复用现有 host.env surface;硬约束:(1) 不重建 REFERENCE.md(单文件 SKILL.md);(2) refactor self-doc 注释必须自含 Old/New,禁止 'see issue #X' placeholder;(3) 严格按 design decision Implement plan,不超范围。
+  New principle: Host-agnostic prompt text is owned by the host.env surface matrix, GH_REPO_SLUG, MAINTAINER_WHITELIST, HOST_REFACTOR_COMMENT_POLICY, test_refactor_comment_policy_prompt_contract.py, this prompt's checklist, and render-time shared post rules for direct-post behavior.
 -->
 
 issue: ${ISSUE_URL}
@@ -76,7 +76,7 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 5. **输出**：
    - 把回复内容写到 `$REPO_ROOT/.refactor-loop/runs/design-issue-${ISSUE_NUMBER}-reply-$(date +%s).md`
-   - 写完 archive 后直接按 `prompts/_github-post-rules.md` post GitHub 回复
+   - 写完 archive 后直接按渲染期内联的共享规则 post GitHub 回复
    - 成功打印 `POSTED:design-reply:${ISSUE_NUMBER}:<URL>:<headline>`；失败打印 `POST_FAILED:design-reply:${ISSUE_NUMBER}:<reason>`
 
 ## 红线
@@ -90,12 +90,9 @@ NyxId API keys / secrets / 内部 URL 之类敏感信息绝对禁止出现在 re
 
 ## GitHub post(强制)
 
-写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循 `prompts/_github-post-rules.md`(本 skill 的 `prompts/_github-post-rules.md`)所有规则:
+写完内部 artifact 后,**自己调 `gh` post 中文 GitHub 评论/PR body**。遵循渲染期内联的共享规则:
 
-- body 第一行 `## 🤖 <headline>`(comment-monitor 据此识别)
-- 中文 TL;DR ≤ 6 行 + 详细说明 + raw artifact 折叠 `<details>`
-- 若 situation context 给了 `original_authors:` 列表,加 `📢 cc 原作者:@h1 @h2`
-- Post 后打印 `POSTED:design-reply:${ISSUE_NUMBER}:<URL>:<headline>` 或 `POST_FAILED:design-reply:${ISSUE_NUMBER}:<reason>`
+{{GITHUB_POST_RULES_CONTRACT}}
 
 
 ---

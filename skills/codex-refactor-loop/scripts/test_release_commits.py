@@ -39,7 +39,7 @@ def git_ok(repo: Path, *args: str) -> str:
 
 
 def run_cli(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "REPO_ROOT": str(repo)}
+    env = {**os.environ, "REPO_ROOT": str(repo), "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
     return subprocess.run(
         [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), *args],
         cwd=repo,
@@ -51,12 +51,35 @@ def run_cli(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def write_host_env(repo: Path, review_base: str = "dev", integration: str = "integration") -> None:
-    env_path = repo / ".refactor-loop" / "host.env"
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(
         f"export REPO_ROOT={repo}\n"
         f"export REVIEW_BASE_BRANCH={review_base}\n"
         f"export INTEGRATION_BRANCH={integration}\n",
+        encoding="utf-8",
+    )
+
+
+def write_release_gate_host_env(repo: Path, *, release_auto_enable: str = "true") -> Path:
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        f"export RELEASE_AUTO_ENABLE={release_auto_enable}\n"
+        "export REVIEW_BASE_BRANCH=dev\n"
+        "export INTEGRATION_BRANCH=integration\n"
+        "export GH_REPO_SLUG=owner/repo\n",
+        encoding="utf-8",
+    )
+    return env_path
+
+
+def write_host_env_without_review_base(repo: Path) -> None:
+    env_path = repo / ".config" / "consensus-rnd" / "host.env"
+    env_path.parent.mkdir(parents=True, exist_ok=True)
+    env_path.write_text(
+        f"export REPO_ROOT={repo}\n"
+        "export INTEGRATION_BRANCH=integration\n",
         encoding="utf-8",
     )
 
@@ -243,6 +266,7 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
     def test_release_commits_cli_fails_closed_without_review_base_branch_env(self) -> None:
         with init_repo() as tmp:
             repo = Path(tmp) / "repo"
+            write_host_env_without_review_base(repo)
             fixture_path, fixture = write_stale_release_commits(repo)
 
             result = run_cli(repo, "release-commits", "--no-fetch-tags")
@@ -271,21 +295,15 @@ class ReleaseCommitsProducerTests(unittest.TestCase):
             fixture = {"commits": [{"sha": "fixture", "subject": "fix: keep gate consumer only", "body": ""}]}
             fixture_path.parent.mkdir(parents=True, exist_ok=True)
             fixture_path.write_text(json.dumps(fixture), encoding="utf-8")
-            (repo / "host.env").write_text(
-                "export RELEASE_AUTO_ENABLE=true\n"
-                "export REVIEW_BASE_BRANCH=dev\n"
-                "export INTEGRATION_BRANCH=integration\n"
-                "export GH_REPO_SLUG=owner/repo\n",
-                encoding="utf-8",
-            )
+            host_env = write_release_gate_host_env(repo)
             commit(repo, "fix: should not be projected by release-gate")
 
             score = run_cli(repo, "release-gate", "--score-only")
             self.assertEqual(0, score.returncode, score.stderr)
             self.assertEqual(fixture, read_json(fixture_path))
 
-            no_opt_in_env = (repo / "host.env").read_text(encoding="utf-8").replace("RELEASE_AUTO_ENABLE=true", "RELEASE_AUTO_ENABLE=false")
-            (repo / "host.env").write_text(no_opt_in_env, encoding="utf-8")
+            no_opt_in_env = host_env.read_text(encoding="utf-8").replace("RELEASE_AUTO_ENABLE=true", "RELEASE_AUTO_ENABLE=false")
+            host_env.write_text(no_opt_in_env, encoding="utf-8")
             noop = run_cli(repo, "release-gate")
             self.assertEqual(0, noop.returncode, noop.stderr)
             self.assertEqual(fixture, read_json(fixture_path))

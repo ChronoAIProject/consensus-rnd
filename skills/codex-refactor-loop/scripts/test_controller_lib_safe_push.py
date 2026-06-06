@@ -70,7 +70,15 @@ class SafePushHelperTests(unittest.TestCase):
 
     def _run_helper(self, fn_call: str) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
-        env.update({"REPO_ROOT": str(self.local)})
+        host_env = self.local / ".refactor-loop" / "host.env"
+        host_env.parent.mkdir(parents=True, exist_ok=True)
+        host_env.write_text(f"export REPO_ROOT={self.local}\n", encoding="utf-8")
+        env.update(
+            {
+                "REPO_ROOT": str(self.local),
+                "CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env",
+            }
+        )
         parts = fn_call.split()
         stdout = StringIO()
         stderr = StringIO()

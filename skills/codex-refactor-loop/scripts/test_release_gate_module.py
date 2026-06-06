@@ -187,7 +187,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
             self.assertIn(label_catalog.HUMAN_MAINTAINER_DECISION, labels)
             heartbeat_signal = stability.signals["fresh_heartbeats"]
             self.assertEqual(heartbeat_signal["source"], "heartbeats/*.ts")
-            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 7)
+            self.assertEqual(sum(1 for value in heartbeat_signal["heartbeats"].values() if value), 8)
             self.assertTrue(heartbeat_signal["heartbeats"]["closed_label_reconciler"])
             self.assertTrue(heartbeat_signal["heartbeats"]["wakeup_runner_daemon"])
 
@@ -228,13 +228,13 @@ class ReleaseGateModuleTests(unittest.TestCase):
                 )
                 self.assertFalse(any(cmd[:2] == ["gh", "api"] for cmd in runner.commands))
 
-    def test_release_gate_blocks_on_legacy_blocked_and_human_labels(self) -> None:
+    def test_release_gate_blocks_on_canonical_blocked_and_human_labels(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             write_live_state(repo)
             runner = FakeRunner()
-            runner.label_results["⏸️ phase:blocked"] = [{"number": 10}]
-            runner.label_results["👤 human:需-maintainer-决策"] = [{"number": 11}]
+            runner.label_results[label_catalog.PHASE_BLOCKED] = [{"number": 10}]
+            runner.label_results[label_catalog.HUMAN_MAINTAINER_DECISION] = [{"number": 11}]
             release_gate = gate.AutoReleaseGate(repo, now=lambda: NOW, runner=runner)
             old_env = {key: gate.os.environ.get(key) for key in ("GH_REPO_SLUG", "REVIEW_BASE_BRANCH", "INTEGRATION_BRANCH", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS")}
             try:
@@ -254,26 +254,26 @@ class ReleaseGateModuleTests(unittest.TestCase):
             blocked_signal = stability.signals["no_open_blocked_pr"]
             human_signal = stability.signals["no_human_decision_label"]
             self.assertFalse(blocked_signal["passed"])
-            self.assertEqual(blocked_signal["reason"], "no_open_blocked_pr:label_present:⏸️ phase:blocked")
+            self.assertEqual(blocked_signal["reason"], f"no_open_blocked_pr:label_present:{label_catalog.PHASE_BLOCKED}")
             self.assertFalse(human_signal["passed"])
             self.assertEqual(human_signal["reason"], "no_human_decision_label:failed")
-            self.assertEqual(human_signal["issue"]["reason"], "label_present:👤 human:需-maintainer-决策")
+            self.assertEqual(human_signal["issue"]["reason"], f"label_present:{label_catalog.HUMAN_MAINTAINER_DECISION}")
 
-    def test_host_env_reads_canonical_refactor_loop_file_and_ignores_root(self) -> None:
+    def test_host_env_reads_explicit_host_owned_file_and_ignores_root(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
             (repo / "host.env").write_text(
                 "export RELEASE_AUTO_ENABLE=false\nexport REVIEW_BASE_BRANCH=root-review\n",
                 encoding="utf-8",
             )
-            nested = repo / ".refactor-loop/host.env"
-            nested.parent.mkdir(parents=True, exist_ok=True)
-            nested.write_text(
+            explicit = repo / ".config/consensus-rnd/host.env"
+            explicit.parent.mkdir(parents=True, exist_ok=True)
+            explicit.write_text(
                 "export RELEASE_AUTO_ENABLE=true\nexport INTEGRATION_BRANCH=integration\n",
                 encoding="utf-8",
             )
 
-            loaded = gate.load_host_env(repo)
+            loaded = gate.load_host_env(repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
 
             self.assertEqual(loaded["RELEASE_AUTO_ENABLE"], "true")
             self.assertNotIn("REVIEW_BASE_BRANCH", loaded)
@@ -361,7 +361,7 @@ class ReleaseGateModuleTests(unittest.TestCase):
         self.assertEqual(gate.REQUIRED_CHECKS({"HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests,manifest-version-sync,skill-degradation"}), ("contract-tests", "manifest-version-sync", "skill-degradation"))
         self.assertEqual(gate.HEARTBEAT_FRESH_SECONDS, 90)
         self.assertEqual(gate.DAEMON_NAMES, restart.restart_managed_daemon_names())
-        self.assertEqual(7, len(gate.DAEMON_NAMES))
+        self.assertEqual(8, len(gate.DAEMON_NAMES))
         self.assertIn("closed_label_reconciler", gate.DAEMON_NAMES)
         self.assertIn("wakeup_runner_daemon", gate.DAEMON_NAMES)
 

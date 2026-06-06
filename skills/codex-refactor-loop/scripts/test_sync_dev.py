@@ -140,6 +140,9 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.repo = Path(self.tmp.name)
         self.worktree = self.repo / "wt"
         self.worktree.mkdir()
+        self.host_env = self.repo / ".refactor-loop" / "host.env"
+        self.host_env.parent.mkdir(parents=True, exist_ok=True)
+        self.host_env.write_text(f"export REPO_ROOT={self.repo}\n", encoding="utf-8")
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -409,7 +412,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertEqual([], self.pending_events())
         self.assertEqual([], self.operation_jsons())
 
-    def test_release_rollup_open_stale_throwaway_head_does_not_suppress_event(self) -> None:
+    def test_release_rollup_open_stale_throwaway_head_suppresses_new_event_for_singleton(self) -> None:
         fake = FakeGit(
             merge_base_adopted=True,
             release_ahead=3,
@@ -419,7 +422,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         )
         self.daemon(fake, release_rollup_min_commits=1).tick()
 
-        self.assertTrue(self.pending_events()[0].startswith("DEV_SYNC_PENDING:release-rollup-needed:"))
+        self.assertEqual([], self.pending_events())
         self.assertEqual([], self.operation_jsons())
 
     def test_release_rollup_open_pr_query_nonzero_appends_ambiguous_event_and_suppresses_rollup(self) -> None:
@@ -487,7 +490,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
     # or pending-event mutation.
     def test_non_owner_dev_sync_does_not_touch_worktree_git_or_pending_events(self) -> None:
         fake = FakeGit(ahead=2)
-        ctx = LoopContext.load(repo_root=self.repo)
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"})
         decision = mock.Mock(allowed=False, owner_device="device-a", status="not-owner", action="dev-sync", lease_id="", expires_at="")
 
         with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
@@ -499,7 +502,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
 
     def test_owner_dev_sync_keeps_existing_git_allowlist_path(self) -> None:
         fake = FakeGit(ahead=1)
-        ctx = LoopContext.load(repo_root=self.repo)
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"})
         decision = mock.Mock(allowed=True, owner_device="device-b", status="owner", action="dev-sync", lease_id="lease", expires_at="")
 
         with mock.patch("codex_refactor_loop.sync.dev.require_active_controller", return_value=decision):
@@ -559,7 +562,11 @@ class SyncDevBehaviorTests(unittest.TestCase):
         popen_calls: list[list[str]] = []
         logger_lines: list[str] = []
 
-        with mock.patch("codex_refactor_loop.sync.dev.time.time", return_value=1234), mock.patch(
+        with mock.patch("codex_refactor_loop.sync.dev.time.time", return_value=1234), mock.patch.dict(
+            "os.environ",
+            {"CONSENSUS_RND_HOST_ENV": ".refactor-loop/host.env"},
+            clear=False,
+        ), mock.patch(
             "codex_refactor_loop.sync.dev.subprocess.Popen",
             side_effect=lambda argv, **_kwargs: popen_calls.append(argv),
         ):
@@ -591,8 +598,9 @@ class SyncDevBehaviorTests(unittest.TestCase):
         self.assertTrue(Path(argv[argv.index("--prompt") + 1]).is_absolute())
 
     def test_load_dev_sync_config_ignores_legacy_aliases_and_derives_worktree(self) -> None:
-        (self.repo / ".refactor-loop").mkdir(parents=True, exist_ok=True)
-        (self.repo / ".refactor-loop" / "host.env").write_text(
+        host_env = self.repo / ".config" / "consensus-rnd" / "host.env"
+        host_env.parent.mkdir(parents=True, exist_ok=True)
+        host_env.write_text(
             "export INTEGRATION_BRANCH=canonical-integration\nexport REVIEW_BASE_BRANCH=canonical-review\n",
             encoding="utf-8",
         )
@@ -600,6 +608,7 @@ class SyncDevBehaviorTests(unittest.TestCase):
         config = load_dev_sync_config(
             env={
                 "REPO_ROOT": str(self.repo),
+                "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env",
                 "INTEGRATION": "legacy-integration",
                 "REVIEW_BASE": "legacy-review",
                 "WORKTREE": str(self.repo / "legacy-wt"),

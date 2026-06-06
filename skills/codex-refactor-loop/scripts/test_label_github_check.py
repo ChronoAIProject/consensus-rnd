@@ -53,15 +53,14 @@ class LabelGithubCheckTests(unittest.TestCase):
 
         self.assertEqual(plan.unknown_crnd, ("crnd:phase:not-registered",))
 
-    def test_legacy_aliases_are_reported_as_migrations(self) -> None:
+    def test_historical_non_crnd_labels_are_unmanaged_residue_not_migrations(self) -> None:
         plan = labels.migration_plan(self.live_catalog() + [{"name": "auto-loop"}, {"name": "phase9-auto-solve"}])
 
-        migrations = {step.live_label: step.add_labels for step in plan.alias_migrations}
-        self.assertEqual(migrations["auto-loop"], (labels.MANAGED,))
-        self.assertEqual(
-            set(migrations["phase9-auto-solve"]),
-            {labels.MANAGED, labels.PHASE_DESIGN_SOLVING, labels.HUMAN_AUTO},
-        )
+        payload = plan.as_dict()
+        self.assertEqual(set(payload), {"create", "update", "unknown_crnd", "external_defaults"})
+        self.assertEqual(plan.create, ())
+        self.assertEqual(plan.update, ())
+        self.assertEqual(plan.unknown_crnd, ())
 
     def run_main_with_live_labels(self, argv: list[str], live: list[dict[str, str]]) -> tuple[int, dict[str, object]]:
         with mock.patch("codex_refactor_loop.labels._load_gh_labels", return_value=live) as load:
@@ -109,13 +108,13 @@ class LabelGithubCheckTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            refactor_loop = repo / ".refactor-loop"
-            refactor_loop.mkdir()
-            (refactor_loop / "host.env").write_text(
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True)
+            host_env.write_text(
                 f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
                 encoding="utf-8",
             )
-            source_env = {"PATH": "/usr/bin"}
+            source_env = {"PATH": "/usr/bin", "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             with mock.patch("codex_refactor_loop.labels.subprocess.run", return_value=completed) as run:
                 with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
                     with mock.patch("codex_refactor_loop.labels.os.environ", source_env):
@@ -133,10 +132,10 @@ class LabelGithubCheckTests(unittest.TestCase):
     def test_load_gh_labels_fails_closed_when_repo_slug_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             repo = Path(tmp)
-            refactor_loop = repo / ".refactor-loop"
-            refactor_loop.mkdir()
-            (refactor_loop / "host.env").write_text(f'export REPO_ROOT="{repo}"\n', encoding="utf-8")
-            source_env = {"PATH": "/usr/bin"}
+            host_env = repo / ".config" / "consensus-rnd" / "host.env"
+            host_env.parent.mkdir(parents=True)
+            host_env.write_text(f'export REPO_ROOT="{repo}"\n', encoding="utf-8")
+            source_env = {"PATH": "/usr/bin", "CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"}
             with mock.patch("codex_refactor_loop.labels.subprocess.run") as run:
                 with mock.patch("codex_refactor_loop.labels.os.getcwd", return_value=str(repo)):
                     with mock.patch("codex_refactor_loop.labels.os.environ", source_env):

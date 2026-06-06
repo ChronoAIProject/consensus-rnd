@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotItem, ManagedWorkSnapshotResult
 from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
 from codex_refactor_loop.phase9.router import (
     Phase9Router,
@@ -21,25 +23,54 @@ from codex_refactor_loop.phase9.router import (
     main,
     parse_phase9_log_identity,
 )
+from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_ROUTER = REPO_ROOT / "skills" / "codex-refactor-loop" / "scripts" / "codex_refactor_loop" / "phase9" / "router.py"
 
 
+def managed_snapshot(rows: list[dict[str, object]]) -> ManagedWorkSnapshotResult:
+    items = []
+    for row in rows:
+        labels = [
+            label.get("name", "")
+            for label in row.get("labels", [])  # type: ignore[union-attr]
+            if isinstance(label, dict) and label.get("name")
+        ]
+        items.append(
+            ManagedWorkSnapshotItem(
+                kind="issue",
+                number=int(row.get("number", 0)),
+                title=str(row.get("title", "")),
+                labels=tuple(labels),
+            )
+        )
+    return ManagedWorkSnapshotResult(tuple(items), True, "cache:fresh")
+
+
 class Phase9RouterPackageTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.original_host_env_locator = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.tmp = tempfile.TemporaryDirectory()
         self.repo = Path(self.tmp.name)
         (self.repo / ".refactor-loop" / "logs").mkdir(parents=True)
+        self.old_env = os.environ.copy()
+        os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         self.commands: list[dict[str, object]] = []
-        self.ctx = LoopContext.load(repo_root=self.repo)
+        self.ctx = LoopContext.load(repo_root=self.repo, env={})
         self.router = Phase9Router(ctx=self.ctx, command_runner=self.commands.append)
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = lambda: []  # type: ignore[method-assign]
 
     def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self.old_env)
         self.tmp.cleanup()
+        if self.original_host_env_locator is None:
+            os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
+        else:
+            os.environ["CONSENSUS_RND_HOST_ENV"] = self.original_host_env_locator
 
     def write_log(self, name: str, *lines: str, exit_zero: bool = True) -> Path:
         path = self.repo / ".refactor-loop" / "logs" / name
@@ -139,10 +170,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
@@ -182,10 +210,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
         self.router._read_source_issue_decision = self.open_source_issue_decision  # type: ignore[method-assign]
         self.router._open_design_consensus_issues = self.router.__class__._open_design_consensus_issues.__get__(self.router)  # type: ignore[method-assign]
 
-        with mock.patch(
-            "codex_refactor_loop.phase9.router.subprocess.run",
-            return_value=mock.Mock(returncode=0, stdout=json.dumps(rows), stderr=""),
-        ):
+        with mock.patch("codex_refactor_loop.phase9.router.load_open_managed_work_snapshot", return_value=managed_snapshot(rows)):
             self.router.tick()
 
         self.assertEqual(len(self.commands), 3)
@@ -197,7 +222,7 @@ class Phase9RouterPackageTests(unittest.TestCase):
             f"--prompt {self.repo.resolve()}/{command['prompt']} "
             f"--log {self.repo.resolve()}/{command['log']}\n"
         )
-        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo))
+        monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo, env={}))
         with mock.patch.object(monitor, "run", return_value=mock.Mock(stdout=fake_ps, returncode=0)):
             self.assertEqual(monitor.count_in_flight_codex(), 1)
 
@@ -284,9 +309,71 @@ class Phase9RouterPackageTests(unittest.TestCase):
         for needle in required:
             with self.subTest(needle=needle):
                 self.assertIn(needle, prompt)
+        self.assertIn("# GitHub post rules", prompt)
+        self.assertNotIn(GITHUB_POST_RULES_CONTRACT_TOKEN, prompt)
+        self.assertNotIn("prompts/_github-post-rules.md", prompt)
         router_header = prompt.split("## Issue source snapshot", 1)[0]
         self.assertNotIn("$REPO_ROOT/.refactor-loop/runs/audit-iter-${ITERATION}.md", router_header)
         self.assertNotIn("cluster spec", router_header)
+
+    def test_peer_reference_check_excludes_issue_source_snapshot(self) -> None:
+        # A solver prompt whose injected issue source snapshot quotes a peer
+        # solver's prior-round audit-trail log path is NOT an isolation breach:
+        # the snapshot is issue-author content (a prior round's consensus record
+        # echoed onto the GitHub issue), and blocking judge dispatch on it wedges
+        # every design-consensus whose issue body echoes a prior round.
+        issue, round_no = "777", 1
+        peer_token = f".refactor-loop/logs/phase9-issue{issue}-r{round_no}-minimal.log"
+        for role in sorted(self.router._solver_roles()):
+            path = self.router._solver_prompt_path(issue, round_no, role)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if role == "delete":
+                body = (
+                    "# design-consensus delete solver\n\n"
+                    f"Issue: #{issue}\nRole: delete\n\n"
+                    "## Issue source snapshot\n\n"
+                    f"source: gh-issue-{issue}\n\n"
+                    "## Round audit trail (links to local artifacts)\n"
+                    f"- solver-minimal: {peer_token}\n\n"
+                    "## Full solver template\n\n"
+                    "# Role: Solver - delete framing\nDo your own analysis.\n"
+                )
+            else:
+                body = (
+                    f"# {role} solver\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            path.write_text(body, encoding="utf-8")
+        self.assertIsNone(self.router._peer_solver_reference_violation(issue, round_no))
+
+    def test_peer_reference_check_flags_router_controlled_region(self) -> None:
+        # A peer reference leaked into a router-controlled region (before the
+        # snapshot) is still a real isolation violation and must block dispatch.
+        issue, round_no = "778", 1
+        peer_token = f".refactor-loop/logs/phase9-issue{issue}-r{round_no}-minimal.log"
+        for role in sorted(self.router._solver_roles()):
+            path = self.router._solver_prompt_path(issue, round_no, role)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if role == "delete":
+                body = (
+                    "# design-consensus delete solver\n"
+                    f"leaked peer evidence: {peer_token}\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            else:
+                body = (
+                    f"# {role} solver\n\n"
+                    "## Issue source snapshot\n\n(clean)\n\n"
+                    "## Full solver template\n\nclean\n"
+                )
+            path.write_text(body, encoding="utf-8")
+        violation = self.router._peer_solver_reference_violation(issue, round_no)
+        self.assertIsNotNone(violation)
+        self.assertEqual(violation["role"], "delete")
+        self.assertEqual(violation["peer_role"], "minimal")
+        self.assertEqual(violation["matched_token"], peer_token)
 
     def test_package_router_unknown_marker_appends_existing_format_fallback_event_only_once(self) -> None:
         self.write_log("phase9-issue160-r1-judge.log", "SOMETHING_DONE:surprise:payload")

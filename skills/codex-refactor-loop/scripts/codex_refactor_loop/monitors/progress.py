@@ -17,8 +17,10 @@ from typing import Mapping, Sequence
 
 from ..active_controller import require_active_controller, write_active_controller_status
 from ..context import LoopContext, LoopContextError
-from ..github_budget import graphql_headroom_ok, log_graphql_backoff
+from ..github_budget import graphql_headroom_ok
 from ..heartbeat import DaemonHeartbeatLease
+from ..holistic_status import collect as collect_holistic_status
+from ..holistic_status import render_markdown as render_holistic_markdown
 
 
 AI_SENTINEL = "⟦AI:AUTO-LOOP⟧"
@@ -73,13 +75,91 @@ class ProgressReporter:
 
     def tick(self) -> None:
         if not graphql_headroom_ok(cwd=self.ctx.repo_root, env=self.ctx.env_for_subprocess()):
-            log_graphql_backoff("progress-reporter")
+            self.log_tick_status("skip:graphql-backoff remaining=unknown")
             return
         for log in sorted(self.log_dir.glob("*.log")):
             base = log.stem
             if base.startswith("audit-iter-") or base.startswith("remote-ci-"):
                 continue
             self.post_or_update(base, log)
+        self.sync_global_status_card()
+
+    def sync_global_status_card(self) -> None:
+        config = self._global_status_config()
+        if not config["enabled"]:
+            self.log_msg(f"global-dashboard-status-card=noop:{config['reason']}")
+            return
+        decision = require_active_controller(self.ctx, "global-dashboard-status-card")
+        write_active_controller_status(self.ctx, decision)
+        if not decision.allowed:
+            self.log_msg(f"global-dashboard-status-card=noop:not-owner owner={decision.owner_device}")
+            return
+        state = self._state()
+        key = "__global_dashboard_status_card__"
+        item = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+        now = int(time.time())
+        interval = int(config["interval_seconds"])
+        last_synced_at = _safe_int(item.get("last_synced_at"))
+        if last_synced_at is not None and now - last_synced_at < interval:
+            self.log_msg("global-dashboard-status-card=noop:interval")
+            return
+        body = self.build_global_status_body()
+        cur_md5 = hash_body(body)
+        if cur_md5 == str(item.get("last_md5") or ""):
+            self._state_set_global_status(
+                key,
+                target=str(config["issue_number"]),
+                cid=str(config["comment_id"]),
+                md5=cur_md5,
+                synced_at=now,
+            )
+            self.log_msg("global-dashboard-status-card=noop:same-hash")
+            return
+        with temp_body_file(body) as body_file:
+            patch = self.gh_api(
+                ["-X", "PATCH", f"repos/{self.repo}/issues/comments/{config['comment_id']}", "-F", f"body=@{body_file}"],
+                check=False,
+            )
+        if patch.returncode == 0:
+            self._state_set_global_status(
+                key,
+                target=str(config["issue_number"]),
+                cid=str(config["comment_id"]),
+                md5=cur_md5,
+                synced_at=now,
+            )
+            self.log_msg(
+                "global-dashboard-status-card=patched "
+                f"issue=#{config['issue_number']} comment_id={config['comment_id']}"
+            )
+        else:
+            self.log_msg(f"global-dashboard-status-card=FAIL patch comment_id={config['comment_id']}")
+
+    def build_global_status_body(self) -> str:
+        markdown = render_holistic_markdown(collect_holistic_status(self.ctx)).rstrip()
+        return f"{markdown}\n\n🤖 controller global dashboard status card\n\n{AI_SENTINEL}\n"
+
+    def _global_status_config(self) -> dict[str, object]:
+        env = self.ctx.env_for_subprocess()
+        enabled = _truthy(env.get("HOST_HOLISTIC_STATUS_ENABLE", "false"))
+        issue_number = str(env.get("HOST_HOLISTIC_STATUS_ISSUE_NUMBER", "")).strip()
+        comment_id = str(env.get("HOST_HOLISTIC_STATUS_COMMENT_ID", "")).strip()
+        interval = _safe_int(env.get("HOST_HOLISTIC_STATUS_INTERVAL_SECONDS"))
+        if interval is None or interval <= 0:
+            interval = 600
+        if not enabled:
+            return {"enabled": False, "reason": "disabled", "interval_seconds": interval}
+        if not issue_number or not issue_number.isdigit():
+            return {"enabled": False, "reason": "missing-issue-number", "interval_seconds": interval}
+        if not comment_id or not comment_id.isdigit():
+            return {"enabled": False, "reason": "missing-comment-id", "interval_seconds": interval}
+        return {
+            "enabled": True,
+            "reason": "enabled",
+            "issue_number": int(issue_number),
+            "comment_id": int(comment_id),
+            "interval_seconds": interval,
+        }
 
     def parse_target(self, base: str) -> str:
         for pattern in (PROGRESS_REVIEW_TARGET_RE, PROGRESS_FIX_TARGET_RE, PROGRESS_PHASE9_TARGET_RE):
@@ -237,6 +317,19 @@ Raw log tail is intentionally omitted while the worker is still running."""
         tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp, self.state_file)
 
+    def _state_set_global_status(self, key: str, *, target: str, cid: str, md5: str, synced_at: int) -> None:
+        state = self._state()
+        state[key] = {
+            "target": target,
+            "kind": "issue-comment",
+            "comment_id": cid,
+            "last_md5": md5,
+            "last_synced_at": synced_at,
+        }
+        tmp = self.state_file.with_name(f".{self.state_file.name}.tmp.{os.getpid()}")
+        tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, self.state_file)
+
     def gh(self, args: Sequence[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
         return _run(["gh", *args, "--repo", self.repo], self.ctx.repo_root, check=check)
 
@@ -247,6 +340,11 @@ Raw log tail is intentionally omitted while the worker is still running."""
     def log_msg(message: str) -> None:
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         print(f"[{ts}] {message}", file=sys.stderr)
+
+    @staticmethod
+    def log_tick_status(action: str) -> None:
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        print(f"[{ts}] progress-reporter: tick {action}", flush=True)
 
 
 @contextmanager
@@ -276,6 +374,17 @@ def _comment_id(url: str) -> str:
 
 def url_for_kind(url: str, kind: str) -> bool:
     return f"/{'pull' if kind == 'pr' else 'issues'}/" in url
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
 
 
 def main(argv: Sequence[str] | None = None) -> int:
