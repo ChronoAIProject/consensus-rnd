@@ -98,7 +98,16 @@ def next_release_version(version: str, bump_type: str) -> str:
     return f"{current.major}.{current.minor}.{current.patch}-{stage}.{int(index) + 1}"
 
 
-def validate_release_version_coordinate(from_version: str, to_version: str, bump_type: str | None) -> str | None:
+def validate_release_version_coordinate(
+    from_version: str,
+    to_version: str,
+    bump_type: str | None,
+    coordinate_policy: Any = None,
+) -> str | None:
+    if coordinate_policy is not None:
+        from .coordinates import validate_coordinate_policy
+
+        return validate_coordinate_policy(from_version, to_version, bump_type, coordinate_policy)
     if not isinstance(bump_type, str) or not bump_type:
         return "release_coordinate_off_ladder"
     try:

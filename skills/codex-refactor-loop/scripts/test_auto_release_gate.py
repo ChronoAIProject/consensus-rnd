@@ -294,7 +294,6 @@ def classify_expected_patch(version: str) -> str:
 
 
 def set_mapped_version(repo: Path, version: str) -> None:
-    # refactor helper, no behavior change
     mapping = read_json(repo / ".version-bump.json")
     assert isinstance(mapping, dict)
     for item in mapping["files"]:
@@ -951,13 +950,13 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             self.assertEqual(candidate["to_version"], decision["to_version"])
             self.assertEqual((repo / "package.json").read_text(encoding="utf-8"), before)
 
-    def test_dispatch_from_beta_base_writes_beta_next_candidate(self) -> None:
+    def test_dispatch_from_beta_base_writes_coordinate_policy_candidate(self) -> None:
         cases = (
-            ("fix: fixture", "", "patch"),
-            ("feat: fixture", "", "minor"),
-            ("feat!: fixture", "", "major"),
+            ("fix: fixture", "", "patch", "1.0.0-beta.4", "same_stage_prerelease"),
+            ("feat: fixture", "", "minor", "1.1.0-beta.1", "beta_core_promotion"),
+            ("feat!: fixture", "", "major", "2.0.0-beta.1", "beta_core_promotion"),
         )
-        for subject, body, expected_bump in cases:
+        for subject, body, expected_bump, expected_version, expected_transition in cases:
             with self.subTest(expected_bump=expected_bump), copy_repo_fixture() as tmp:
                 repo = Path(tmp) / "repo"
                 write_opt_in(repo)
@@ -986,10 +985,13 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
                 assert isinstance(decision, dict)
                 assert isinstance(candidate, dict)
                 self.assertEqual(decision["from_version"], "1.0.0-beta.3")
-                self.assertEqual(decision["to_version"], "1.0.0-beta.4")
+                self.assertEqual(decision["to_version"], expected_version)
                 self.assertEqual(decision["bump_type"], expected_bump)
-                self.assertEqual(candidate["to_version"], "1.0.0-beta.4")
-                self.assertNotIn(decision["to_version"], {"1.0.1", "1.0.0"})
+                self.assertEqual(candidate["to_version"], expected_version)
+                self.assertEqual(candidate["coordinate_policy"], decision["coordinate_policy"])
+                self.assertEqual(expected_transition, candidate["coordinate_policy"]["transition"])
+                self.assertEqual(expected_bump, candidate["coordinate_policy"]["bump_type"])
+                self.assertEqual(expected_version, candidate["coordinate_policy"]["to_version"])
 
     def test_score_only_cli_prints_stability_no_decision_write(self) -> None:
         """--score-only path prints stability summary, does not write decision.json or bump."""
