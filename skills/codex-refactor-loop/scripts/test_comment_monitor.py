@@ -289,6 +289,25 @@ class CommentMonitorTests(unittest.TestCase):
         self.assertEqual(sum(call.endswith("/comments?per_page=20") for call in calls), 1)
         self.assertEqual(state["_item_updated"]["42"], "2026-05-30T00:00:00Z")
 
+    def test_tick_status_summary_is_comment_monitor_local_projection(self) -> None:
+        monitor = CommentMonitor(self.ctx, interval=1)
+        output = StringIO()
+
+        with (
+            mock.patch.object(monitor, "_poll_once", return_value={"targets": 2, "fetched": 1, "comments": 3}),
+            redirect_stdout(output),
+        ):
+            monitor.tick()
+
+        line = output.getvalue().strip()
+        self.assertRegex(
+            line,
+            r"^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] "
+            r"comment-monitor: tick noop:poll-complete targets=2 fetched=1 comments=3$",
+        )
+        self.assertNotIn("TickOutcome", line)
+        self.assertNotIn("registry", line)
+
     def test_last_updated_at_persists_and_reload_skips_unchanged_item(self) -> None:
         calls: list[str] = []
 
