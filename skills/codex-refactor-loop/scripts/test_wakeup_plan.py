@@ -2602,6 +2602,49 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
+    def test_monitor_fallback_suppresses_empty_scoped_diff_expected_worker(self) -> None:
+        from codex_refactor_loop.wakeup_plan import canonical_expected_from_active_tasks
+
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        (self.logs / "implement-issue-581.log").write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        class Monitor:
+            def list_auto_loop_issues(inner_self) -> list[dict[str, object]]:
+                return [
+                    {
+                        "number": 581,
+                        "kind": "issue",
+                        "phase": label_catalog.PHASE_IMPLEMENTING,
+                        "human": label_catalog.HUMAN_AUTO,
+                        "labels": [label_catalog.MANAGED, label_catalog.PHASE_IMPLEMENTING, label_catalog.HUMAN_AUTO],
+                        "body": "",
+                        "head_ref": "",
+                        "is_draft": False,
+                        "state": "open",
+                    }
+                ]
+
+            def compute_expected(inner_self, items, **kwargs):
+                from codex_refactor_loop.monitors.concurrency import ConcurrencyMonitor
+
+                monitor = ConcurrencyMonitor(LoopContext.load(repo_root=self.repo))
+                return monitor.compute_expected(items, **kwargs)
+
+        env = {
+            "INTEGRATION_BRANCH": "auto-refact-dev",
+            "PATH": f"{self.fakebin}{os.pathsep}{os.environ.get('PATH', '')}",
+            "WAKEUP_PLAN_GH_FIXTURE": "local_iter_branch_issue581_stale_base_noop",
+        }
+        with mock.patch.dict(os.environ, env, clear=False):
+            expected, breakdown = canonical_expected_from_active_tasks(Monitor(), repo_root=self.repo)
+
+        self.assertEqual(expected, 0)
+        self.assertEqual(breakdown, [])
+
     def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
         self.write_implementation_pr_artifacts()
