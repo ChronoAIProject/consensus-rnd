@@ -2602,6 +2602,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
         self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
+    def test_stale_spawn_intent_for_noop_implementation_does_not_reopen_hard_gate(self) -> None:
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        log = self.logs / "implement-issue-581.log"
+        log.write_text(
+            "worker artifact: 0 LOC scope closeout\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:581",
+            task_id="implement-issue-581",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-581.log",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue581_stale_base_noop", ps_count=0)
+
+        self.assertFalse(
+            [
+                item
+                for item in plan["actions"]
+                if item.get("kind") == "harness-spawn-intent"
+                and item.get("intent_id") == "dispatch-consensus-implementation:581"
+            ]
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
     def test_monitor_fallback_suppresses_empty_scoped_diff_expected_worker(self) -> None:
         from codex_refactor_loop.wakeup_plan import canonical_expected_from_active_tasks
 
