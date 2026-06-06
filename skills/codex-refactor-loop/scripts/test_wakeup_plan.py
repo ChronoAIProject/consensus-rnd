@@ -3496,9 +3496,28 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             head_ref="rollup/integration-sha",
             head_sha="integration-sha",
         )
-        ctx = mock.Mock(host_env={"REVIEW_BASE_BRANCH": "review"})
+        ctx = mock.Mock(
+            host_env={"REVIEW_BASE_BRANCH": "review", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests"},
+            gh_repo_slug="owner/repo",
+            repo_root=self.repo,
+        )
 
-        actions = release_rollup_auto_merge_actions(ctx, [item])
+        with (
+            mock.patch(
+                "codex_refactor_loop.wakeup_plan._release_rollup_live_pr_view",
+                return_value={
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": "integration-sha",
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+            ),
+            mock.patch("codex_refactor_loop.wakeup_plan.ReleaseRequiredChecksProjection") as checks_projection,
+        ):
+            checks_projection.return_value.check_ref.return_value = mock.Mock(passed=True, reason=None)
+            actions = release_rollup_auto_merge_actions(ctx, [item])
 
         self.assertEqual(1, len(actions))
         action = actions[0]
@@ -3509,6 +3528,126 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("required_checks_green_exact_head", action["preconditions"])
         self.assertNotIn("dispatch_reviewers", json.dumps(action))
         self.assertNotIn("review_gate", json.dumps(action))
+        self.assertNotIn("status_only", action)
+
+    def test_rollup_auto_merge_waits_when_live_preflight_is_not_mergeable(self) -> None:
+        item = GhItem(
+            kind="PR",
+            number=572,
+            title="发布 rollup",
+            labels=(label_catalog.MANAGED, label_catalog.PHASE_REVIEWING),
+            head_ref="rollup/integration-sha",
+            head_sha="7834c9838f194c4dcf0b4989192bf3fdad15d0e7",
+        )
+        ctx = mock.Mock(
+            host_env={"REVIEW_BASE_BRANCH": "review", "HOST_GITHUB_RELEASE_REQUIRED_CHECKS": "contract-tests"},
+            gh_repo_slug="owner/repo",
+            repo_root=self.repo,
+        )
+
+        cases = [
+            (
+                "draft",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": True,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+                True,
+                None,
+                "rollup_auto_merge_draft",
+            ),
+            (
+                "blocked",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "BLOCKED",
+                },
+                True,
+                None,
+                "rollup_auto_merge_merge_state_blocked",
+            ),
+            (
+                "stale-head",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": "new-head",
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+                True,
+                None,
+                "rollup_auto_merge_head_stale",
+            ),
+            (
+                "checks-failed",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+                False,
+                "ci_red",
+                "rollup_auto_merge_checks_ci_red",
+            ),
+            (
+                "checks-pending",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+                False,
+                "pending_required_checks",
+                "rollup_auto_merge_checks_pending_required_checks",
+            ),
+            (
+                "checks-missing",
+                {
+                    "baseRefName": "review",
+                    "headRefName": "rollup/integration-sha",
+                    "headRefOid": item.head_sha,
+                    "isDraft": False,
+                    "mergeable": "MERGEABLE",
+                    "mergeStateStatus": "CLEAN",
+                },
+                False,
+                "missing_required_checks_recent_green",
+                "rollup_auto_merge_checks_missing_required_checks_recent_green",
+            ),
+        ]
+        for name, live_view, checks_passed, checks_reason, expected_reason in cases:
+            with self.subTest(name=name):
+                with (
+                    mock.patch("codex_refactor_loop.wakeup_plan._release_rollup_live_pr_view", return_value=live_view),
+                    mock.patch("codex_refactor_loop.wakeup_plan.ReleaseRequiredChecksProjection") as checks_projection,
+                ):
+                    checks_projection.return_value.check_ref.return_value = mock.Mock(
+                        passed=checks_passed,
+                        reason=checks_reason,
+                    )
+                    actions = release_rollup_auto_merge_actions(ctx, [item])
+
+                self.assertEqual(1, len(actions))
+                action = actions[0]
+                self.assertTrue(action["status_only"])
+                self.assertEqual(expected_reason, action["suppressed_reason"])
+                self.assertEqual("auto_merge_release_rollup_pr_from_action", action["controller_action"])
 
     def test_consensus_marker_after_exit_zero_with_harness_done_at_projects_implementation(self) -> None:
         artifact = self.write_consensus_artifact(issue=449, round_no=2)

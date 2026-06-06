@@ -37,6 +37,7 @@ from codex_refactor_loop.issue_decomposition import (
 )
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
+from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
@@ -2429,6 +2430,7 @@ def release_rollup_auto_merge_actions(ctx: LoopContext, items: list[GhItem]) -> 
         head_ref = safe_head_ref(item.head_ref or "")
         if not head_ref or not item.head_sha:
             continue
+        suppressed_reason = _release_rollup_auto_merge_wait_reason(ctx, item, review_base, head_ref)
         actions.append(
             {
                 "priority": 3,
@@ -2458,9 +2460,66 @@ def release_rollup_auto_merge_actions(ctx: LoopContext, items: list[GhItem]) -> 
                 "controller_action": "auto_merge_release_rollup_pr_from_action",
                 "runner_authority": RUNNER_AUTHORITY,
                 "no_generic_command": True,
+                **(
+                    {
+                        "status_only": True,
+                        "suppressed_reason": suppressed_reason,
+                    }
+                    if suppressed_reason
+                    else {}
+                ),
             }
         )
     return actions
+
+
+def _release_rollup_auto_merge_wait_reason(ctx: LoopContext, item: GhItem, review_base: str, head_ref: str) -> str | None:
+    payload = _release_rollup_live_pr_view(ctx.repo_root, item.number)
+    if payload is None:
+        return "rollup_auto_merge_pr_view_unavailable"
+    base = str(payload.get("baseRefName") or "").strip()
+    live_head = str(payload.get("headRefName") or "").strip()
+    live_head_sha = str(payload.get("headRefOid") or "").strip()
+    if base != review_base:
+        return "rollup_auto_merge_base_mismatch"
+    if live_head != head_ref:
+        return "rollup_auto_merge_head_ref_stale"
+    if live_head_sha != item.head_sha:
+        return "rollup_auto_merge_head_stale"
+    if payload.get("isDraft") is True:
+        return "rollup_auto_merge_draft"
+    merge_state = str(payload.get("mergeStateStatus") or "").strip().upper()
+    mergeable = str(payload.get("mergeable") or "").strip().upper()
+    if merge_state != "CLEAN":
+        if not merge_state:
+            return "rollup_auto_merge_merge_state_missing"
+        return f"rollup_auto_merge_merge_state_{merge_state.lower()}"
+    if mergeable != "MERGEABLE":
+        if not mergeable:
+            return "rollup_auto_merge_mergeable_missing"
+        return f"rollup_auto_merge_mergeable_{mergeable.lower()}"
+    status = ReleaseRequiredChecksProjection(
+        required_checks=required_release_checks(ctx.host_env),
+        env=ctx.host_env,
+    ).check_ref(ctx.gh_repo_slug, item.head_sha)
+    if not status.passed:
+        return f"rollup_auto_merge_checks_{status.reason or 'not_green'}"
+    return None
+
+
+def _release_rollup_live_pr_view(repo_root: Path, pr_number: int) -> dict[str, Any] | None:
+    result = run_json(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "number,baseRefName,headRefName,headRefOid,isDraft,mergeable,mergeStateStatus",
+        ],
+        cwd=repo_root,
+    )
+    return result if isinstance(result, dict) else None
 
 
 def _ci_check_action_token(check_name: str) -> str:
