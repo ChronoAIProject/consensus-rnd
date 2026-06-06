@@ -28,6 +28,7 @@ FORBIDDEN_LIFECYCLE_AUTHORITY = (
     "host production SSOT",
     "GitHub/git lifecycle authority",
 )
+NON_ACTION_HANDLER_STATUSES = frozenset({"backoff", "noop"})
 
 
 class TickHandler(Protocol):
@@ -111,7 +112,12 @@ class ControllerTickSupervisor:
                 skipped.append(result)
                 _log_tick_skip(result, processed_count=len(processed), skipped_count=len(skipped), drained_count=len(drained))
                 continue
-            processed.append(handler.handle(item=item, projection=projection))
+            result = handler.handle(item=item, projection=projection)
+            if result.status in NON_ACTION_HANDLER_STATUSES:
+                skipped.append(result)
+                _log_tick_skip(result, processed_count=len(processed), skipped_count=len(skipped), drained_count=len(drained))
+                continue
+            processed.append(result)
         return ControllerTickResult(tuple(processed), tuple(skipped))
 
 
