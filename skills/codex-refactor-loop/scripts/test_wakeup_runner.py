@@ -1093,6 +1093,18 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         # and the per-status counts for the whole tick
         self.assertIn("[applied=3,blocked=1]", action)
 
+    def test_wakeup_runner_tick_action_is_runner_local_summary_not_shared_envelope(self) -> None:
+        action = _wakeup_tick_action(
+            [
+                RunnerResult("spawn:1", "applied", ""),
+                RunnerResult("spawn:2", "skipped", "duplicate"),
+            ]
+        )
+
+        self.assertEqual(action, "dispatched spawn:1 | skipped:duplicate(spawn:2) [applied=1,skipped=1]")
+        self.assertNotIn("TickOutcome", action)
+        self.assertNotIn("registry", action)
+
     def test_wakeup_runner_blocked_non_spawn_can_continue_to_one_later_lifecycle_action(self) -> None:
         blocked = self.implementation_output_action(
             action_id="publish-implementation:missing-verified-head-before-close",
