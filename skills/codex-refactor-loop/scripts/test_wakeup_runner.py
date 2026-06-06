@@ -2547,13 +2547,6 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 1,
                 None,
             ),
-            (
-                "empty-diff",
-                self.implementation_output_action(action_id="publish-implementation:empty-diff"),
-                "publish_implementation_empty_scoped_diff",
-                0,
-                None,
-            ),
         )
         for name, action, reason, git_diff_code, duplicate_prs in cases:
             with self.subTest(name=name):
@@ -2568,6 +2561,32 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                     actions=actions,
                 )
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
+
+    def test_publish_implementation_empty_scoped_diff_is_skipped_not_hard_gate(self) -> None:
+        actions = FakeActions()
+        action = self.implementation_output_action(action_id="publish-implementation:empty-diff")
+
+        results = self.run_result(
+            self.base_plan(action),
+            git_diff_code=0,
+            implementation_status="",
+            actions=actions,
+        )
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "publish_implementation_empty_scoped_diff")
+        self.assertEqual(actions.calls, [])
+        pending_path = self.repo / ".refactor-loop/.controller-pending-events.log"
+        pending = pending_path.read_text(encoding="utf-8") if pending_path.exists() else ""
+        self.assertNotIn("WAKEUP_RUNNER_BLOCKED:publish-implementation:empty-diff", pending)
+        ledger_rows = [
+            json.loads(line)
+            for line in (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        ]
+        self.assertEqual(ledger_rows[-1]["status"], "skipped")
+        self.assertEqual(ledger_rows[-1]["reason"], "publish_implementation_empty_scoped_diff")
 
     def test_publish_implementation_output_blocks_before_helper_without_worker_pr_artifacts(self) -> None:
         actions = FakeActions()

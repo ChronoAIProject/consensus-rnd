@@ -371,7 +371,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                         printf '[]\n'
                       fi
                       ;;
-                    closing_pr_issue20|local_iter_branch_issue20|remote_iter_branch_issue20)
+                    closing_pr_issue20|local_iter_branch_issue20|local_iter_branch_issue20_noop|remote_iter_branch_issue20)
                       if [[ "$label" == "crnd:lifecycle:managed" ]]; then
                         printf '[{"number":20,"title":"open target","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
                       else
@@ -837,6 +837,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "local_iter_branch_issue20_stale_base": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto, label_catalog.MILESTONE_CURRENT])],
             "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue20_noop": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "remote_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_331": [issue(331, "different open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issues_330_331_332": [
@@ -1044,7 +1045,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/pr77\nbranch refs/heads/impl/pr77\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
-                  if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
+                  if [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" ]]; then
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
@@ -1065,11 +1066,11 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf 'local-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'local-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
@@ -1112,6 +1113,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"rev-parse --abbrev-ref HEAD"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"merge-base HEAD origin/auto-refact-dev"* ]]; then
@@ -1119,7 +1121,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'old-base\n'
                     exit 0
                   fi
-                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'fresh-base\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
@@ -1127,7 +1129,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'new-base\n'
                     exit 0
                   fi
-                  [[ "$fixture" == "local_iter_branch_issue20" ]] && printf 'fresh-base\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
@@ -1139,7 +1141,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   exit 0
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter20-issue-20..HEAD"* ]]; then
-                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" ]] && printf '2\n' && exit 0
+                  [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf '2\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"diff"* && "$*" == *"--quiet"* ]]; then
@@ -2467,6 +2469,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_noop_implementation_done_empty_scoped_diff_is_status_only_not_hard_gate(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        log = self.logs / "implement-issue20.log"
+        log.write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20_noop")
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_noop_empty_scoped_diff")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+        self.assertTrue(log.exists())
+        self.assertFalse(
+            [
+                item
+                for item in plan["actions"]
+                if item.get("controller_action") == "publish_implementation_output"
+                and item.get("target_number") == 20
+                and not item.get("status_only")
+            ]
+        )
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
     def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
