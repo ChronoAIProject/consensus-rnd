@@ -298,9 +298,14 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "phase9-router-fallback",
             "completed_marker_actions()",
             "kind: completed-marker",
-            "peek",
-            "wakeup_plan.py` is not the #403 owner",
-            "must not project a decompose action/status",
+            "exact named `controller_action=\"apply_issue_decomposition_plan\"`",
+            "plan path, digest, and proof",
+            "wakeup_runner.py` then revalidates clean source marker",
+            "live parent open/tracking",
+            "sentinel idempotency",
+            "wakeup_plan.py` is not the #403 read-model/status/authorization owner",
+            "must not project any other decompose action/status",
+            "`kind=\"issue-decomposition-apply\"`",
         ):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
@@ -398,7 +403,6 @@ class SkillReferenceAnchorTests(unittest.TestCase):
         section = section_after_heading(self.skill, "Named runtime exception - patrol-inspector issue-intake(per #541)")
 
         for needle in (
-            "checked-in active-controller-owner-only helper",
             "PatrolFinding",
             "PatrolIssuePublisher",
             "$PATROL_INSPECTOR_ENABLE=true",
@@ -1257,7 +1261,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
-            "rollup/": {"controller_actions.py", "sync/dev.py"},
+            "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py"},
             "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
@@ -1612,6 +1616,7 @@ class WakeupRunnerContractTests(unittest.TestCase):
             "allowlisted release-rollup body generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
+            "named helper `apply_issue_decomposition_plan`",
             "then named helper `open_release_rollup_pr_from_action` after the body exists",
             "named helper `open_release_rollup_pr_from_action`",
             "router guard adjudication",

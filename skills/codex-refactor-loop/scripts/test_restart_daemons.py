@@ -189,6 +189,8 @@ class RestartDaemonsBehaviorTests(unittest.TestCase):
 
         self.assertEqual(tuple(commands_by_name), DAEMON_NAMES)
         self.assertEqual(7, len(commands_by_name))
+        self.assertIn("closed_label_reconciler", DAEMON_NAMES)
+        self.assertIn("wakeup_runner_daemon", DAEMON_NAMES)
         self.assertNotIn("patrol_inspector_daemon", commands_by_name)
         for name, command in commands_by_name.items():
             joined = " ".join(command)

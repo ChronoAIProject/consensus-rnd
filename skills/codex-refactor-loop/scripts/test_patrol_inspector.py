@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.patrol import PatrolInspector, PatrolInspectorConfig
+from codex_refactor_loop.patrol import PatrolInspector, PatrolInspectorConfig, _patrol_daemon_heartbeat_lease, main
 
 
 class FakePublisher:
@@ -195,6 +195,38 @@ class PatrolInspectorTests(unittest.TestCase):
         state = json.loads((self.tmp / ".refactor-loop" / "state" / "patrol-inspector.json").read_text(encoding="utf-8"))
         self.assertEqual("failed", state["status"])
         self.assertIn(".refactor-loop/state/peek.json", state["reason"])
+
+    def test_daemon_heartbeat_lease_uses_restart_helper_name_and_context_root(self) -> None:
+        lease = _patrol_daemon_heartbeat_lease(self.ctx)
+
+        self.assertEqual("patrol_inspector_daemon", lease.name)
+        self.assertEqual(self.ctx.repo_root / ".refactor-loop" / "heartbeats" / "patrol_inspector_daemon.ts", lease.heartbeat_file)
+
+    def test_daemon_main_constructs_context_bound_heartbeat_lease(self) -> None:
+        class FakeLease:
+            def __init__(self) -> None:
+                self.beats = 0
+
+            def beat(self) -> None:
+                self.beats += 1
+
+            def sleep_with_lease(self, _seconds: int) -> None:
+                raise KeyboardInterrupt()
+
+        fake_lease = FakeLease()
+        decisions = type(
+            "Decision",
+            (),
+            {"allowed": False, "owner_device": "other", "status": "not-owner", "action": "patrol-inspector", "lease_id": "", "expires_at": ""},
+        )()
+        with patch("codex_refactor_loop.patrol.require_active_controller", return_value=decisions):
+            with patch("codex_refactor_loop.patrol._patrol_daemon_heartbeat_lease", return_value=fake_lease) as lease_factory:
+                with patch("codex_refactor_loop.patrol.LoopContext.load", return_value=self.ctx):
+                    with self.assertRaises(KeyboardInterrupt):
+                        main(["--daemon", "--interval-seconds", "1"])
+
+        lease_factory.assert_called_once()
+        self.assertEqual(self.ctx.repo_root, lease_factory.call_args.args[0].repo_root)
 
 
 if __name__ == "__main__":

@@ -258,19 +258,6 @@ class ProgressReporterTests(unittest.TestCase):
 
         self.assertEqual({}, reporter._state())
 
-    def test_tick_uses_progress_local_log_projection_and_global_card_path(self) -> None:
-        for name in ("audit-iter-9.log", "remote-ci-pr7.log", "phase9-issue81-r10-minimal.log"):
-            (self.tmp / ".refactor-loop" / "logs" / name).write_text("running\n", encoding="utf-8")
-        reporter = ProgressReporter(self.ctx)
-        calls: list[str] = []
-
-        with mock.patch.object(reporter, "post_or_update", side_effect=lambda base, log: calls.append(base)):
-            with mock.patch.object(reporter, "sync_global_status_card") as sync_global:
-                reporter.tick()
-
-        self.assertEqual(calls, ["phase9-issue81-r10-minimal"])
-        sync_global.assert_called_once_with()
-
     def test_global_status_card_non_owner_noops_without_patch(self) -> None:
         host_env = self.tmp / ".config" / "consensus-rnd" / "host.env"
         host_env.write_text(

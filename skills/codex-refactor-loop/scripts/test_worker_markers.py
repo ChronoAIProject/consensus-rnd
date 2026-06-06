@@ -157,6 +157,48 @@ class WorkerMarkerReaderTests(unittest.TestCase):
             self.assertEqual(duplicate_marker.reason, "")
             self.assertEqual(read_worker_terminal_marker(conflict).reason, "duplicate_or_conflicting_log_marker")
 
+    def test_identical_nonfinal_log_markers_are_valid_but_conflicts_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            duplicate = logs / "remote-ci-fix-pr558-contract-tests.log"
+            duplicate.write_text(
+                "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+                "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+                "tokens used\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+            conflict = logs / "remote-ci-fix-pr558-contract-tests-conflict.log"
+            conflict.write_text(
+                "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
+                "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+                "tokens used\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            duplicate_marker = read_worker_terminal_marker(duplicate)
+            self.assertTrue(duplicate_marker.found)
+            self.assertEqual(duplicate_marker.marker, "REMOTE_CI_FIX_DONE:contract-tests:ok")
+            self.assertEqual(duplicate_marker.reason, "")
+            self.assertEqual(read_worker_terminal_marker(conflict).reason, "duplicate_or_conflicting_log_marker")
+
+    def test_single_nonfinal_log_marker_is_not_terminal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logs, _runs = self.repo(tmp)
+            log = logs / "remote-ci-fix-pr558-contract-tests.log"
+            log.write_text(
+                "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+                "tokens used\n"
+                "EXIT=0\n",
+                encoding="utf-8",
+            )
+
+            marker = read_worker_terminal_marker(log)
+
+            self.assertFalse(marker.found)
+            self.assertEqual(marker.reason, "duplicate_or_conflicting_log_marker")
+
     def test_repeated_review_log_marker_copies_are_valid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             logs, _runs = self.repo(tmp)

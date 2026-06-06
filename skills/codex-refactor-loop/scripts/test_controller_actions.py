@@ -30,6 +30,7 @@ from codex_refactor_loop.controller_actions import (
     ISSUE_LABELS_REMOVE,
 )
 from codex_refactor_loop.git import Git
+from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop.prompt_contracts import GITHUB_POST_RULES_CONTRACT_TOKEN
 from codex_refactor_loop.release.publisher import ReleasePublishResult
 from codex_refactor_loop.wakeup_plan import harness_spawn_intent_actions
@@ -168,6 +169,7 @@ class ControllerActionsTests(unittest.TestCase):
             "def publish_implementation_output",
             "def render_release_rollup_body_prompt",
             "def open_release_rollup_pr_from_action",
+            "def auto_merge_release_rollup_pr_from_action",
             "HARNESS_SPAWN_INTENT",
         ):
             with self.subTest(helper=helper):
@@ -234,6 +236,158 @@ class ControllerActionsTests(unittest.TestCase):
         self.assertEqual("canonical-review", pr_creates[1][pr_creates[1].index("--base") + 1])
         self.assertIn(["ls-remote", "--exit-code", "--heads", "origin", "canonical-integration"], git_calls)
         self.assertFalse(any("legacy-" in " ".join(call) for call in gh_calls + git_calls))
+
+    def test_release_rollup_singleton_updates_existing_pr_and_refreshes_detailed_body(self) -> None:
+        body = self.tmp / ".refactor-loop" / "runs" / "release-rollup-pr-body.md"
+        event = {
+            "integration_branch": "canonical-integration",
+            "review_base_branch": "canonical-review",
+            "integration_sha": "abc123",
+            "review_base_sha": "def456",
+            "ahead_count": 3,
+        }
+        gh_calls: list[list[str]] = []
+        git_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "list"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([{"number": 88, "baseRefName": "canonical-review", "headRefName": "rollup/old-sha", "headRefOid": "old-sha"}]),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        def fake_git(args: list[str], *, check: bool = True) -> mock.Mock:
+            git_calls.append(args)
+            if args[:3] == ["ls-remote", "--exit-code", "--heads"]:
+                return mock.Mock(returncode=0, stdout="abc123\trefs/heads/canonical-integration\n", stderr="")
+            if args[:4] == ["log", "--no-merges", "--format=%s", "--max-count=25"]:
+                return mock.Mock(returncode=0, stdout="Fix #12 rollup singleton\nUpdate release gate #13\n", stderr="")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "_require_owner_or_raise", return_value=None):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh), mock.patch.object(self.actions, "git", side_effect=fake_git):
+                pr_number, head = self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(body))
+
+        self.assertEqual((88, "rollup/old-sha"), (pr_number, head))
+        self.assertIn(["push", "--force-with-lease", "origin", "abc123:refs/heads/rollup/old-sha"], git_calls)
+        self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls))
+        edit_call = next(call for call in gh_calls if call[:2] == ["pr", "edit"])
+        self.assertEqual("88", edit_call[2])
+        self.assertIn("--body-file", edit_call)
+        text = body.read_text(encoding="utf-8")
+        self.assertIn("集成分支领先 review-base: `3` commits", text)
+        self.assertIn("Fix #12 rollup singleton", text)
+        self.assertIn("涉及 issue: #12, #13", text)
+        self.assertIn("⟦AI:RELEASE-ROLLUP⟧", text)
+
+    def test_rollup_auto_merge_squashes_only_live_rollup_with_green_required_checks(self) -> None:
+        gh_calls: list[list[str]] = []
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            gh_calls.append(args)
+            if args[:2] == ["pr", "view"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "number": 88,
+                            "baseRefName": "canonical-review",
+                            "headRefName": "rollup/abc123",
+                            "headRefOid": "abc123",
+                            "isDraft": False,
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:2] == ["api", "repos/owner/repo/commits/abc123/check-runs"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]),
+                    stderr="",
+                )
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        self.actions.ctx.host_env["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = "ci"
+        with mock.patch.object(self.actions, "_require_owner_or_return", return_value=True):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                rc = self.actions.auto_merge_release_rollup_pr_from_action({"target_number": 88, "head_sha": "abc123"})
+
+        self.assertEqual(0, rc)
+        self.assertIn(["pr", "merge", "88", "--squash", "--delete-branch"], gh_calls)
+
+    def test_rollup_auto_merge_manual_or_non_green_waits_without_merge(self) -> None:
+        cases = (
+            ("manual", "manual", [{"name": "ci", "status": "completed", "conclusion": "success"}]),
+            ("pending", "auto", [{"name": "ci", "status": "queued", "conclusion": ""}]),
+        )
+        for name, mode, check_runs in cases:
+            with self.subTest(name=name):
+                gh_calls: list[list[str]] = []
+                self.actions.ctx.host_env["ROLLUP_AUTO_MERGE"] = mode
+                self.actions.ctx.host_env["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = "ci"
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:2] == ["pr", "view"]:
+                        return mock.Mock(
+                            returncode=0,
+                            stdout=json.dumps(
+                                {
+                                    "baseRefName": "canonical-review",
+                                    "headRefName": "rollup/abc123",
+                                    "headRefOid": "abc123",
+                                    "isDraft": False,
+                                }
+                            ),
+                            stderr="",
+                        )
+                    if args[:2] == ["api", "repos/owner/repo/commits/abc123/check-runs"]:
+                        return mock.Mock(returncode=0, stdout=json.dumps([{"check_runs": check_runs}]), stderr="")
+                    return mock.Mock(returncode=0, stdout="", stderr="")
+
+                with mock.patch.object(self.actions, "_require_owner_or_return", return_value=True):
+                    with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                        rc = self.actions.auto_merge_release_rollup_pr_from_action({"target_number": 88, "head_sha": "abc123"})
+
+                self.assertEqual(3, rc)
+                self.assertFalse(any(call[:3] == ["pr", "merge", "88"] for call in gh_calls))
+
+    def test_rollup_auto_merge_branch_protection_failure_waits_for_human(self) -> None:
+        self.actions.ctx.host_env["HOST_GITHUB_RELEASE_REQUIRED_CHECKS"] = "ci"
+
+        def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+            if args[:2] == ["pr", "view"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "baseRefName": "canonical-review",
+                            "headRefName": "rollup/abc123",
+                            "headRefOid": "abc123",
+                            "isDraft": False,
+                        }
+                    ),
+                    stderr="",
+                )
+            if args[:2] == ["api", "repos/owner/repo/commits/abc123/check-runs"]:
+                return mock.Mock(
+                    returncode=0,
+                    stdout=json.dumps([{"check_runs": [{"name": "ci", "status": "completed", "conclusion": "success"}]}]),
+                    stderr="",
+                )
+            if args[:3] == ["pr", "merge", "88"]:
+                return mock.Mock(returncode=1, stdout="", stderr="review required")
+            return mock.Mock(returncode=0, stdout="", stderr="")
+
+        with mock.patch.object(self.actions, "_require_owner_or_return", return_value=True):
+            with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                rc = self.actions.auto_merge_release_rollup_pr_from_action({"target_number": 88, "head_sha": "abc123"})
+
+        self.assertEqual(3, rc)
+        self.assertIn("ROLLUP_AUTO_MERGE_WAIT:88:branch-protection-or-host-policy:review required", self.pending_events())
 
     def pending_events(self) -> str:
         path = self.tmp / ".refactor-loop" / ".controller-pending-events.log"
@@ -2663,14 +2817,13 @@ class ControllerActionsTests(unittest.TestCase):
                 self.assertFalse(any(call[:1] == ["push"] for call in git_calls), git_calls)
                 self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
 
-    def test_open_release_rollup_pr_rejects_bad_body_before_git_push_or_pr_create(self) -> None:
+    def test_open_release_rollup_pr_rejects_missing_remote_before_git_push_or_pr_create(self) -> None:
         event = {
             "integration_branch": "auto-refact-dev",
             "review_base_branch": "dev",
             "integration_sha": "abc123",
         }
-        bad_body = self.tmp / "bad-rollup-body.md"
-        bad_body.write_text("## 🤖 rollup\n\nAuthority: .refactor-loop/runs/phase9-issue192-r1-judge.md\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        body = self.tmp / "rollup-body.md"
         git_calls: list[list[str]] = []
         gh_calls: list[list[str]] = []
 
@@ -2683,8 +2836,8 @@ class ControllerActionsTests(unittest.TestCase):
             return mock.Mock(returncode=0, stdout="", stderr="")
 
         with mock.patch.object(self.actions, "git", side_effect=fake_git), mock.patch.object(self.actions, "gh", side_effect=fake_gh):
-            with self.assertRaisesRegex(RuntimeError, "local .refactor-loop artifact path"):
-                self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(bad_body))
+            with self.assertRaisesRegex(RuntimeError, "missing remote integration branch"):
+                self.actions.open_release_rollup_pr_from_pending_event(json.dumps(event), str(body))
 
         self.assertFalse(any(call[:1] == ["push"] for call in git_calls), git_calls)
         self.assertFalse(any(call[:2] == ["pr", "create"] for call in gh_calls), gh_calls)
@@ -2892,24 +3045,33 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh_calls: list[list[str]] = []
+        comment_texts: list[str] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 501 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
+            if args[:2] == ["issue", "comment"]:
+                comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
             return mock.Mock(returncode=0, stdout="https://github.com/owner/repo/issues/403#issuecomment-1\n", stderr="")
 
         with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
             created = self.actions.apply_issue_decomposition_plan(str(plan_path))
 
         self.assertEqual((502, "https://github.com/owner/repo/issues/502"), created[0])
-        self.assertEqual(3, len(gh_calls))
+        self.assertEqual(4, len(gh_calls))
+        self.assertEqual(["issue", "view", "403", "--json", "comments"], gh_calls[0])
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
         for create in creates:
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
-        self.assertEqual(["issue", "comment", "403", "--body-file", parent_comment], gh_calls[-1])
+        self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
+        self.assertIn("Parent issue: #403", comment_texts[-1])
+        self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
+        self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
 
@@ -2964,13 +3126,17 @@ class ControllerActionsTests(unittest.TestCase):
             encoding="utf-8",
         )
         gh_calls: list[list[str]] = []
+        comment_texts: list[str] = []
 
         def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
             gh_calls.append(args)
+            if args[:3] == ["issue", "view", "403"]:
+                return mock.Mock(returncode=0, stdout=json.dumps({"comments": []}), stderr="")
             if args[:2] == ["issue", "create"]:
                 number = 600 + len([call for call in gh_calls if call[:2] == ["issue", "create"]])
                 return mock.Mock(returncode=0, stdout=f"https://github.com/owner/repo/issues/{number}\n", stderr="")
             if args[:2] == ["issue", "comment"]:
+                comment_texts.append(Path(args[args.index("--body-file") + 1]).read_text(encoding="utf-8"))
                 return mock.Mock(returncode=1, stdout="", stderr="parent comment denied\n")
             return mock.Mock(returncode=0, stdout="", stderr="")
 
@@ -2981,14 +3147,89 @@ class ControllerActionsTests(unittest.TestCase):
             ):
                 self.actions.apply_issue_decomposition_plan(str(plan_path))
 
-        self.assertEqual(3, len(gh_calls))
+        self.assertEqual(4, len(gh_calls))
         creates = [call for call in gh_calls if call[:2] == ["issue", "create"]]
         self.assertEqual(2, len(creates))
-        self.assertEqual(["issue", "comment", "403", "--body-file", parent_comment], gh_calls[-1])
+        self.assertEqual(["issue", "comment", "403", "--body-file"], gh_calls[-1][:4])
+        self.assertIn("IssueDecompositionPlan digest:", comment_texts[-1])
+        self.assertTrue(comment_texts[-1].endswith("\n⟦AI:AUTO-LOOP⟧\n"))
         for create in creates:
             self.assertEqual(",".join(labels.design_issue_label_bundle()), create[create.index("--label") + 1])
         forbidden_calls = {("issue", "close"), ("issue", "reopen"), ("issue", "edit")}
         self.assertFalse(any(tuple(call[:2]) in forbidden_calls for call in gh_calls), gh_calls)
+
+    def test_apply_issue_decomposition_plan_reuses_single_parent_digest_sentinel_and_fails_on_multiple(self) -> None:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.tmp / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)
+        (self.tmp / consensus).write_text("consensus artifact\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.tmp / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/parent-comment.md"
+        (self.tmp / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = self.tmp / ".refactor-loop" / "runs" / "decomposition-plan.json"
+        plan_path.write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent close",
+                            "body_artifact_path": write_child("child-one", "First bounded scope", "No parent close"),
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": write_child("child-two", "Second bounded scope", "No public issue factory"),
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.actions.ctx, str(plan_path))
+
+        for name, comments, expected in (
+            ("single", [{"body": f"IssueDecompositionPlan digest: {digest}"}], tuple()),
+            ("multiple", [{"body": f"IssueDecompositionPlan digest: {digest}"}] * 2, RuntimeError),
+        ):
+            with self.subTest(name=name):
+                gh_calls: list[list[str]] = []
+
+                def fake_gh(args: list[str], *, check: bool = True) -> mock.Mock:
+                    gh_calls.append(args)
+                    if args[:3] == ["issue", "view", "403"]:
+                        return mock.Mock(returncode=0, stdout=json.dumps({"comments": comments}), stderr="")
+                    raise AssertionError(f"unexpected gh call: {args}")
+
+                with mock.patch.object(self.actions, "gh", side_effect=fake_gh):
+                    if expected is RuntimeError:
+                        with self.assertRaisesRegex(RuntimeError, "multiple parent digest sentinels"):
+                            self.actions.apply_issue_decomposition_plan(str(plan_path))
+                    else:
+                        self.assertEqual(expected, self.actions.apply_issue_decomposition_plan(str(plan_path)))
+                self.assertEqual([["issue", "view", "403", "--json", "comments"]], gh_calls)
 
     def test_apply_issue_decomposition_plan_is_active_controller_only_and_not_public_cli(self) -> None:
         decision = mock.Mock(
