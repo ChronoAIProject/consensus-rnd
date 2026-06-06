@@ -53,6 +53,7 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     resolve_repo_root,
     stale_revival_seconds,
     suppress_stale_unexecutable_actions,
+    concurrency_plan,
 )
 from test_support.authorization_projection import project_python  # noqa: E402
 
@@ -835,6 +836,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         issue_rows: dict[str, list[dict[str, object]]] = {
             "open_issue_330": [issue(330, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
+            "local_iter_branch_issue581_stale_base_noop": [
+                issue(581, "noop implementation target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])
+            ],
             "local_iter_branch_issue20_stale_base": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto, label_catalog.MILESTONE_CURRENT])],
             "local_iter_branch_issue20": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "local_iter_branch_issue20_noop": [issue(20, "open target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
@@ -1049,6 +1053,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     printf 'worktree %s/.worktrees/iter20-issue-20\nbranch refs/heads/refactor/iter20-issue-20\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
                   fi
+                  if [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]]; then
+                    printf 'worktree %s/.worktrees/iter581-issue-581\nbranch refs/heads/refactor/iter581-issue-581\n\n' "$WAKEUP_PLAN_REPO_ROOT"
+                    exit 0
+                  fi
                   if [[ "$fixture" == "stale_base_done_clean" || "$fixture" == "stale_base_done_resolved_merge" || "$fixture" == "stale_base_done_unmerged" ]]; then
                     printf 'worktree %s/.worktrees/iter177-stale\nbranch refs/heads/refactor/iter177-stale\n\n' "$WAKEUP_PLAN_REPO_ROOT"
                     exit 0
@@ -1069,8 +1077,16 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'local-iter-sha\n' && exit 0
                   exit 1
                 fi
+                if [[ "$*" == *"rev-parse --verify refs/heads/refactor/iter581-issue-581"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf 'local-iter-sha\n' && exit 0
+                  exit 1
+                fi
                 if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter20-issue-20"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" || "$fixture" == "remote_iter_branch_issue20" ]] && printf 'remote-iter-sha\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-parse --verify refs/remotes/origin/refactor/iter581-issue-581"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf 'remote-iter-sha\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-parse --verify origin/refactor/iter177-stale"* ]]; then
@@ -1116,6 +1132,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'refactor/iter20-issue-20\n' && exit 0
                   exit 1
                 fi
+                if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"rev-parse --abbrev-ref HEAD"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf 'refactor/iter581-issue-581\n' && exit 0
+                  exit 1
+                fi
                 if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"merge-base HEAD origin/auto-refact-dev"* ]]; then
                   if [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
                     printf 'old-base\n'
@@ -1124,12 +1144,20 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'fresh-base\n' && exit 0
                   exit 1
                 fi
+                if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"merge-base HEAD origin/auto-refact-dev"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf 'old-base\n' && exit 0
+                  exit 1
+                fi
                 if [[ "$*" == *".worktrees/iter20-issue-20"* && "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
                   if [[ "$fixture" == "local_iter_branch_issue20_stale_base" ]]; then
                     printf 'new-base\n'
                     exit 0
                   fi
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf 'fresh-base\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *".worktrees/iter581-issue-581"* && "$*" == *"rev-parse --verify origin/auto-refact-dev"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf 'new-base\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter77-worker..HEAD"* ]]; then
@@ -1142,6 +1170,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 fi
                 if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter20-issue-20..HEAD"* ]]; then
                   [[ "$fixture" == "local_iter_branch_issue20" || "$fixture" == "local_iter_branch_issue20_stale_base" || "$fixture" == "local_iter_branch_issue20_noop" ]] && printf '2\n' && exit 0
+                  exit 1
+                fi
+                if [[ "$*" == *"rev-list --count refs/remotes/origin/refactor/iter581-issue-581..HEAD"* ]]; then
+                  [[ "$fixture" == "local_iter_branch_issue581_stale_base_noop" ]] && printf '0\n' && exit 0
                   exit 1
                 fi
                 if [[ "$*" == *"diff"* && "$*" == *"--quiet"* ]]; then
@@ -1992,6 +2024,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 ]
                 self.assertEqual(publish, [])
 
+    def test_terminal_non_ok_implement_result_does_not_count_expected_worker(self) -> None:
+        self.write_consensus_artifact(issue=537, round_no=5)
+        self.write_implement_result(issue=537, status="partial")
+
+        plan, stdout = self.run_plan_with_stdout(fixture="open_issue_537", ps_count=0)
+
+        self.assertNotIn(
+            {"expected": 1, "id": "#537", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
     def test_partial_implement_without_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
         for name, mutate in (
             ("missing", lambda: None),
@@ -2499,6 +2546,61 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         self.assertFalse(plan["hard_gate"]["active"])
         self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+
+    def test_noop_implementation_done_empty_scoped_diff_does_not_count_expected_worker(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        log = self.logs / "implement-issue20.log"
+        log.write_text(
+            "no code change required\nIMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue20_noop", ps_count=0)
+
+        self.assertNotIn(
+            {"expected": 1, "id": "#20", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_stale_base_noop_implementation_done_is_status_only_and_not_expected_worker(self) -> None:
+        (self.repo / ".worktrees" / "iter581-issue-581").mkdir(parents=True)
+        self.write_implementation_pr_artifacts(issue=581, cluster="issue-581")
+        log = self.logs / "implement-issue-581.log"
+        log.write_text(
+            "worker artifact: 0 LOC 收口，没有修改任何仓库源码\nIMPLEMENT_DONE:issue-581:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan, stdout = self.run_plan_with_stdout(fixture="local_iter_branch_issue581_stale_base_noop", ps_count=0)
+
+        action = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue-581"))
+        self.assertEqual(action["controller_action"], "publish_implementation_output")
+        self.assertTrue(action["status_only"])
+        self.assertEqual(action["suppressed_reason"], "implementation_noop_empty_scoped_diff")
+        self.assertNotIn("runner_authority", action)
+        self.assertNotIn("no_generic_command", action)
+        self.assertFalse(
+            [
+                item
+                for item in plan["actions"]
+                if item.get("controller_action") == "publish_implementation_output"
+                and item.get("target_number") == 581
+                and not item.get("status_only")
+            ]
+        )
+        self.assertNotIn(
+            {"expected": 1, "id": "#581", "kind": "issue", "phase": label_catalog.PHASE_IMPLEMENTING},
+            plan["concurrency"]["expected_breakdown"],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
@@ -4580,8 +4682,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_source_locks_clean_ok_stale_base_publish_recovery_not_redispatch(self) -> None:
         projection = wakeup_plan_projection()
         self.assertIn("_publish_recoverable_stale_base_implement", projection.function_names)
+        self.assertIn("implement_attempt_is_terminal_or_noop_completion", projection.imported_names)
         self.assertIn("stale_base", projection.string_literals)
-        self.assertIn("publish_ready", projection.string_literals)
+        self.assertIn("empty_scoped_diff", projection.string_literals)
 
     def test_wakeup_plan_source_locks_terminal_design_consensus_gate(self) -> None:
         projection = wakeup_plan_projection()
@@ -5377,8 +5480,9 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(rollup_action["suppressed_reason"], "rollup_auto_merge_draft")
         self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 0)
         self.assertEqual(plan["concurrency"]["expected_breakdown"], [])
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")
@@ -5471,8 +5575,31 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["concurrency"]["floor"], 5)
         self.assertEqual(plan["concurrency"]["target"], 5)
         self.assertEqual(plan["concurrency"]["deficit"], 3)
-        self.assertEqual(plan["hard_gate"]["dispatch_required"], 3)
-        self.assertIn("HARD_GATE:dispatch_required=3", stdout)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
+
+    def test_concurrency_plan_does_not_hard_gate_from_floor_when_expected_zero(self) -> None:
+        monitor = mock.Mock()
+        monitor.count_in_flight_codex.return_value = 0
+        monitor.list_auto_loop_issues.return_value = []
+        monitor.compute_expected.return_value = (0, [])
+
+        with mock.patch.dict(os.environ, {"CODEX_FLOOR": "4"}):
+            plan = concurrency_plan(
+                self.repo,
+                fixed_point=False,
+                gh_items=[],
+                monitor=monitor,
+                concurrency_module=None,
+            )
+
+        self.assertEqual(plan["expected_from_active_tasks"], 0)
+        self.assertEqual(plan["expected_breakdown"], [])
+        self.assertEqual(plan["floor"], 4)
+        self.assertEqual(plan["deficit"], 4)
+        self.assertFalse(plan["hard_gate"]["active"])
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
     def test_deficit_uses_expected_active_tasks_when_above_floor(self) -> None:
         plan, stdout = self.run_plan_with_stdout(fixture="many_active", ps_count=1)
@@ -5499,9 +5626,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual(plan["concurrency"]["deficit"], 5)
         self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
-        self.assertTrue(plan["hard_gate"]["active"])
+        self.assertFalse(plan["hard_gate"]["active"])
         self.assertIsNone(plan["hard_gate"]["reason"])
-        self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
+        self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
         self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
         self.assertFalse((self.repo / ".refactor-loop" / "prompts" / "audit-iter-9.md").exists())
         pending = (self.repo / ".refactor-loop" / ".controller-pending-events.log").read_text(encoding="utf-8")
@@ -5560,10 +5688,10 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
                 plan, stdout = self.run_plan_with_stdout(ps_count=0)
 
-                self.assertTrue(plan["hard_gate"]["active"])
-                self.assertEqual(plan["hard_gate"]["dispatch_required"], 5)
+                self.assertFalse(plan["hard_gate"]["active"])
+                self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
                 self.assertEqual(plan["recommendation"], "RECOMMEND:audit")
-                self.assertIn("HARD_GATE:dispatch_required=5", stdout)
+                self.assertNotIn("HARD_GATE:dispatch_required=", stdout)
                 self.assertFalse(any(str(action.get("action_id", "")).startswith("audit-fallback:") for action in plan["actions"]))
                 self.assertFalse(prompt.exists())
                 self.assertNotIn("audit_fallback=", pending.read_text(encoding="utf-8"))
@@ -5965,6 +6093,8 @@ class StaleRevivalTests(unittest.TestCase):
                 return subprocess.CompletedProcess(command, 0, "old-base\n", "")
             if command == ["git", "-C", str(worktree), "rev-parse", "--verify", "origin/auto-refact-dev"]:
                 return subprocess.CompletedProcess(command, 0, "new-base\n", "")
+            if command == ["git", "-C", str(worktree), "status", "--porcelain"]:
+                return subprocess.CompletedProcess(command, 0, "", "")
             if command == ["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]:
                 return subprocess.CompletedProcess(command, 1, "", "")
             return subprocess.CompletedProcess(command, 1, "", "unexpected")

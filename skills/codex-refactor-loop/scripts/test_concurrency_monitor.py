@@ -342,15 +342,14 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         remaining = list((self.refactor_loop / "dispatch-queue" / "p1").glob("*.dispatch.json"))
         self.assertEqual(len(remaining), 5)
 
-    def test_monitor_emits_hard_gate_when_queue_empty(self) -> None:
+    def test_monitor_does_not_emit_hard_gate_when_expected_zero_and_queue_empty(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
-    def test_tick_empty_queue_writes_owner_local_status_snapshot_and_pending_event_only(self) -> None:
+    def test_tick_empty_queue_zero_expected_writes_owner_local_status_snapshot_only(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
                 self.monitor.tick()
@@ -364,8 +363,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertEqual(snapshot["p0_streak"], 0)
         self.assertFalse((self.refactor_loop / "state.json").exists())
         self.assertFalse((self.refactor_loop / "controller-runtime-registry.json").exists())
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=2:actual=0 expected=0 queue=0", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_queue_empty_active_audit_writes_wait_event(self) -> None:
         active_audit = (
@@ -385,15 +383,13 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         )
         self.assertNotIn("HARD_GATE:dispatch_required=1", events)
 
-    def test_tick_queue_empty_no_active_audit_still_writes_positive_hard_gate(self) -> None:
+    def test_tick_queue_empty_zero_expected_no_active_audit_does_not_write_hard_gate(self) -> None:
         with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=[]):
             with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=1):
                 with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[]):
                     self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
-        self.assertNotIn("WAIT:single-active-audit", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_actionable_work_bypasses_single_active_audit_wait(self) -> None:
         active_audit = (
@@ -421,6 +417,30 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
         self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=1 queue=0", events)
         self.assertNotIn("WAIT:single-active-audit", events)
 
+    def test_tick_terminal_implement_result_does_not_trigger_no_gap_expected_worker(self) -> None:
+        items = [
+            {
+                "number": 581,
+                "kind": "issue",
+                "phase": self.labels.PHASE_IMPLEMENTING,
+                "human": self.labels.HUMAN_AUTO,
+                "labels": [self.labels.MANAGED, self.labels.PHASE_IMPLEMENTING, self.labels.HUMAN_AUTO],
+                "state": "open",
+            }
+        ]
+        logs = self.refactor_loop / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        (logs / "implement-issue-581.log").write_text(
+            "worker completed no-op\nIMPLEMENT_DONE:issue-581:partial\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(self.monitor, "list_auto_loop_issues", return_value=items):
+            with mock.patch.object(self.monitor, "count_in_flight_codex", return_value=0):
+                self.monitor.tick()
+
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
+
     def test_tick_zero_expected_actionable_work_bypasses_single_active_audit_wait(self) -> None:
         active_audit = (
             f"python3 /skill/consensus-rnd-cli spawn-codex --cd {self.repo} "
@@ -443,9 +463,7 @@ class ConcurrencyMonitorDispatchQueueTests(unittest.TestCase):
                 with mock.patch.object(self.monitor, "list_in_flight_codex_lines", return_value=[active_audit]):
                     self.monitor.tick()
 
-        events = (self.refactor_loop / ".controller-pending-events.log").read_text(encoding="utf-8")
-        self.assertIn("HARD_GATE:dispatch_required=1:actual=1 expected=0 queue=0", events)
-        self.assertNotIn("WAIT:single-active-audit", events)
+        self.assertFalse((self.refactor_loop / ".controller-pending-events.log").exists())
 
     def test_tick_queued_work_bypasses_single_active_audit_wait_and_consumes_queue(self) -> None:
         active_audit = (
