@@ -478,8 +478,12 @@ class IntegrationSyncDaemon:
             if not isinstance(row, dict):
                 continue
             head = str(row.get("headRefName") or "")
-            head_sha = str(row.get("headRefOid") or "")
-            if head == self.integration or head.startswith("rollup/"):
+            if head != self.integration and not head.startswith("rollup/"):
+                continue
+            head_sha = str(row.get("headRefOid") or "").strip()
+            if not head_sha:
+                return ambiguous("missing-headRefOid")
+            if head_sha == integration_sha:
                 return True
         return False
 
