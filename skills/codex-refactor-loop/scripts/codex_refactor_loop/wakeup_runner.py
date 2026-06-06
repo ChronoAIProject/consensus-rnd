@@ -23,6 +23,11 @@ from .github_budget import graphql_headroom_ok
 from .heartbeat import DaemonHeartbeatLease
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log, is_implement_log
 from .implementation_pr_artifacts import validate_implementation_pr_artifacts
+from .issue_decomposition import (
+    IssueDecompositionError,
+    issue_decomposition_plan_file_digest,
+    load_issue_decomposition_plan,
+)
 from .pr_checks import PrChecksProjection
 from .processes import ProcessSupervisor, launch_spawn_codex_supervisor
 from .release.publish_preflight import ReleasePublishPreflight
@@ -74,6 +79,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
+    "apply_issue_decomposition_plan",
 }
 # Worker-dispatch (non-lifecycle) controller actions that may batch up to the
 # per-tick spawn budget. Both directly spawn codex workers and carry no
@@ -258,6 +264,8 @@ class WakeupRunner:
             return self._record(RunnerResult(action_id, "skipped", "duplicate"), action)
         error = self._validate_action(action)
         if error:
+            if error == "issue_decomposition_duplicate_sentinel":
+                return self._record(RunnerResult(action_id, "skipped", error), action)
             return self._blocked(action, error)
         if self.dry_run:
             return self._record(RunnerResult(action_id, "dry-run"), action)
@@ -289,7 +297,7 @@ class WakeupRunner:
         return None
 
     def _validate_action(self, action: Mapping[str, Any]) -> str | None:
-        forbidden = sorted(FORBIDDEN_ACTION_FIELDS.intersection(action))
+        forbidden = _forbidden_action_field_paths(action)
         if forbidden:
             return "forbidden_fields:" + ",".join(forbidden)
         if "target_ref" in action and action.get("controller_action") != "publish_release_candidate":
@@ -377,6 +385,8 @@ class WakeupRunner:
             return self._validate_review_gate(action)
         if controller_action == "publish_release_candidate":
             return self._validate_release(action)
+        if controller_action == "apply_issue_decomposition_plan":
+            return self._validate_issue_decomposition_apply(action)
         if controller_action == "dispatch_consensus_implementation":
             return self._validate_consensus_implementation(action)
         if controller_action == "publish_implementation_output":
@@ -494,6 +504,74 @@ class WakeupRunner:
         result = ReleasePublishPreflight(self.ctx.repo_root).validate(candidate_path=candidate_path, target_ref=target_ref)
         if not result.allowed:
             return "release_preflight_denied:" + ",".join(result.reasons)
+        return None
+
+    def _validate_issue_decomposition_apply(self, action: Mapping[str, Any]) -> str | None:
+        kind = action.get("kind")
+        if kind not in (None, "completed-marker"):
+            return f"unsupported_kind:{kind}"
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "issue_decomposition_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "durable_consensus_artifact",
+            "issue_decomposition_plan_digest_match",
+            "live_parent_open_tracking",
+            "github_sentinel_idempotency_owner",
+        ):
+            if required not in preconditions:
+                return f"issue_decomposition_missing_precondition:{required}"
+        target = action.get("target_number")
+        if action.get("target_kind") != "issue" or not isinstance(target, int):
+            return "issue_decomposition_parent_target_missing"
+        if not self._live_target_has_managed_label("issue", target):
+            return "issue_decomposition_parent_not_managed"
+        plan_path = str(action.get("issue_decomposition_plan_path") or "")
+        if not plan_path:
+            return "issue_decomposition_plan_path_missing"
+        try:
+            plan = load_issue_decomposition_plan(self.ctx, plan_path)
+            digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        except IssueDecompositionError as exc:
+            return f"issue_decomposition_plan_invalid:{exc}"
+        if plan.parent_issue != target:
+            return "issue_decomposition_parent_mismatch"
+        if digest != str(action.get("issue_decomposition_plan_digest") or ""):
+            return "issue_decomposition_digest_mismatch"
+        consensus_artifact = str(action.get("consensus_artifact") or "")
+        if not consensus_artifact or plan.source_consensus_artifact != consensus_artifact:
+            return "issue_decomposition_consensus_artifact_mismatch"
+        proof = str(action.get("issue_decomposition_proof") or "")
+        if digest not in proof or plan_path not in proof:
+            return "issue_decomposition_proof_mismatch"
+        sentinel_error = self._issue_decomposition_sentinel_error(plan.parent_issue, digest)
+        if sentinel_error:
+            return sentinel_error
+        return None
+
+    def _issue_decomposition_sentinel_error(self, parent_issue: int, digest: str) -> str | None:
+        parent_result = self.command_runner(["gh", "issue", "view", str(parent_issue), "--json", "comments"])
+        if parent_result.returncode != 0:
+            return "issue_decomposition_parent_comments_unavailable"
+        try:
+            payload = json.loads(parent_result.stdout or "{}")
+        except json.JSONDecodeError:
+            return "issue_decomposition_parent_comments_invalid_json"
+        comments = payload.get("comments") if isinstance(payload, dict) else None
+        if not isinstance(comments, list):
+            return "issue_decomposition_parent_comments_invalid_json"
+        hits = [
+            comment
+            for comment in comments
+            if isinstance(comment, dict)
+            and isinstance(comment.get("body"), str)
+            and f"IssueDecompositionPlan digest: {digest}" in comment["body"]
+        ]
+        if len(hits) == 1:
+            return "issue_decomposition_duplicate_sentinel"
+        if len(hits) > 1:
+            return "issue_decomposition_multiple_sentinels"
         return None
 
     def _validate_consensus_implementation(self, action: Mapping[str, Any]) -> str | None:
@@ -764,6 +842,9 @@ class WakeupRunner:
                 target_ref=str(action.get("target_ref") or ""),
             )
             return 0 if result.published else 3
+        if controller_action == "apply_issue_decomposition_plan":
+            self.actions.apply_issue_decomposition_plan(str(action.get("issue_decomposition_plan_path") or ""))
+            return 0
         self._append_pending_event(f"WAKEUP_RUNNER_UNAPPLIED:{controller_action}:{action.get('action_id')}")
         return 0
 
@@ -1380,6 +1461,20 @@ def _wakeup_tick_action(results: Sequence[RunnerResult]) -> str:
         more = f"+{len(notable) - 1}" if len(notable) > 1 else ""
         return f"{detail}{more} [{counts}]"
     return f"noop:{first.status} [{counts}]"
+
+
+def _forbidden_action_field_paths(value: Any, prefix: str = "") -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            key_path = f"{prefix}.{key}" if prefix else str(key)
+            if key in FORBIDDEN_ACTION_FIELDS:
+                paths.append(key_path)
+            paths.extend(_forbidden_action_field_paths(child, key_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            paths.extend(_forbidden_action_field_paths(child, f"{prefix}[{index}]"))
+    return sorted(paths)
 
 
 def _log_tick_status(daemon: str, action: str) -> None:

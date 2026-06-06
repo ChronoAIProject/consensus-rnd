@@ -28,7 +28,7 @@ from .implementation_pr_artifacts import (
     validate_implementation_pr_artifacts,
 )
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
-from .issue_decomposition import load_issue_decomposition_plan
+from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
 from .prompt_contracts import inline_prompt_contracts
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
@@ -428,29 +428,64 @@ class ControllerActions:
     def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
         self._require_owner_or_raise("apply-issue-decomposition-plan")
         plan = load_issue_decomposition_plan(self.ctx, plan_path)
+        digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
         self._require_github_actor_or_raise("apply-issue-decomposition-plan")
-        created: list[tuple[int, str]] = []
-        for child in plan.children:
-            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
         parent_target = self._normalize_lifecycle_target_or_raise(
             plan.parent_issue,
             kind="issue",
             action="apply-issue-decomposition-plan",
             source="plan.parent_issue",
         )
-        result = self.gh(
-            [
-                "issue",
-                "comment",
-                parent_target,
-                "--body-file",
-                plan.parent_comment_artifact_path,
-            ],
-            check=False,
-        )
+        sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
+        if sentinel_count == 1:
+            return tuple()
+        if sentinel_count > 1:
+            raise RuntimeError("apply_issue_decomposition_plan: multiple parent digest sentinels")
+        created: list[tuple[int, str]] = []
+        for child in plan.children:
+            created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        parent_comment = (self.ctx.repo_root / plan.parent_comment_artifact_path).read_text(encoding="utf-8")
+        final_sentinel = f"\n{FINAL_SENTINEL}\n"
+        if not parent_comment.endswith(final_sentinel):
+            raise RuntimeError("apply_issue_decomposition_plan: parent comment missing final sentinel")
+        parent_comment = parent_comment[: -len(final_sentinel)].rstrip() + f"\n\nIssueDecompositionPlan digest: {digest}{final_sentinel}"
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as handle:
+            handle.write(parent_comment)
+            comment_file = handle.name
+        try:
+            result = self.gh(
+                [
+                    "issue",
+                    "comment",
+                    parent_target,
+                    "--body-file",
+                    comment_file,
+                ],
+                check=False,
+            )
+        finally:
+            Path(comment_file).unlink(missing_ok=True)
         if result.returncode != 0:
             raise RuntimeError(f"apply_issue_decomposition_plan: parent comment failed: {result.stderr.strip() or result.stdout.strip()}")
         return tuple(created)
+
+    def _issue_decomposition_parent_sentinel_count(self, parent_target: str, digest: str) -> int:
+        result = self.gh(["issue", "view", parent_target, "--json", "comments"], check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"apply_issue_decomposition_plan: parent comments unavailable: {result.stderr.strip() or result.stdout.strip()}")
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("apply_issue_decomposition_plan: parent comments invalid JSON") from exc
+        comments = payload.get("comments") if isinstance(payload, dict) else None
+        if not isinstance(comments, list):
+            raise RuntimeError("apply_issue_decomposition_plan: parent comments invalid JSON")
+        sentinel = f"IssueDecompositionPlan digest: {digest}"
+        return sum(
+            1
+            for comment in comments
+            if isinstance(comment, dict) and isinstance(comment.get("body"), str) and sentinel in comment["body"]
+        )
 
     def _validate_pr_body_file(self, body_file: str) -> None:
         body_path = Path(body_file)

@@ -30,6 +30,10 @@ from codex_refactor_loop.implementation_pr_artifacts import (
     implementation_cluster_id,
     validate_implementation_pr_artifacts,
 )
+from codex_refactor_loop.issue_decomposition import (
+    IssueDecompositionError,
+    issue_decomposition_plan_file_digest,
+)
 from codex_refactor_loop.managed_work_snapshot import load_open_managed_work_snapshot
 from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.gate import decide_release_artifact
@@ -100,6 +104,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "close_managed_item_from_drop_marker",
     "review_gate",
     "publish_release_candidate",
+    "apply_issue_decomposition_plan",
 }
 RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
 RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
@@ -924,6 +929,26 @@ def completed_marker_actions(
             if head_sha:
                 action["head_sha"] = head_sha
         if marker.startswith("META_JUDGE_DONE:consensus"):
+            decomposition_fields = issue_decomposition_apply_fields(repo_root, log_path, item)
+            if decomposition_fields:
+                action.update(decomposition_fields)
+                action["preconditions"] = [
+                    "active_controller_owner",
+                    "clean_exit_source_marker",
+                    "durable_consensus_artifact",
+                    "issue_decomposition_plan_digest_match",
+                    "live_parent_open_tracking",
+                    "github_sentinel_idempotency_owner",
+                ]
+                candidates.append(
+                    CompletedMarkerCandidate(
+                        log_path=log_path,
+                        marker=marker,
+                        action=action,
+                        mtime=_marker_mtime(log_path),
+                    )
+                )
+                continue
             consensus_fields = consensus_implementation_fields(repo_root, log_path, item)
             if consensus_fields:
                 action.update(consensus_fields)
@@ -1370,7 +1395,15 @@ def _extract_implementation_owner(section: str) -> tuple[str, str] | None:
 
 
 def _extract_structured_consensus_field(section: str, field: str) -> str:
-    field_names = {"scope_paths", "old_pattern", "new_principle", "verification_hints"}
+    field_names = {
+        "scope_paths",
+        "old_pattern",
+        "new_principle",
+        "verification_hints",
+        "issue_decomposition_plan_path",
+        "issue_decomposition_plan_digest",
+        "issue_decomposition_proof",
+    }
     lines = section.splitlines()
     start_re = re.compile(rf"^\s*(?:-\s*)?{re.escape(field)}\s*:\s*(.*)$")
     other_re = re.compile(
@@ -1420,6 +1453,65 @@ def _consensus_projection_from_artifact(repo_root: Path, artifact: Path, issue: 
         "old_pattern": facts["old_pattern"],
         "new_principle": facts["new_principle"],
         "verification_hints": facts.get("verification_hints", ""),
+    }
+
+
+def issue_decomposition_apply_fields(repo_root: Path, log_path: Path, item: str | None) -> dict[str, Any]:
+    log_match = CONSENSUS_JUDGE_LOG_RE.fullmatch(log_path.name)
+    if log_match is None:
+        return {}
+    issue, round_no = (int(log_match.group(1)), int(log_match.group(2)))
+    if item and _target_number_from_item(item) != issue:
+        return {}
+    artifact = repo_root / ".refactor-loop" / "runs" / f"phase9-issue{issue}-r{round_no}-judge.md"
+    if not artifact.is_file() or not _consensus_artifact_has_marker(artifact):
+        return {}
+    return _issue_decomposition_apply_projection_from_artifact(repo_root, artifact, issue, round_no)
+
+
+def _issue_decomposition_apply_projection_from_artifact(
+    repo_root: Path,
+    artifact: Path,
+    issue: int,
+    round_no: int,
+) -> dict[str, Any]:
+    try:
+        text = artifact.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    if not _frontmatter_is_consensus(text):
+        return {}
+    section = _extract_section_text(text, "If consensus")
+    if not section or 'controller_action="apply_issue_decomposition_plan"' not in section:
+        return {}
+    plan_path = _extract_structured_consensus_field(section, "issue_decomposition_plan_path")
+    plan_digest = _extract_structured_consensus_field(section, "issue_decomposition_plan_digest")
+    proof = _extract_structured_consensus_field(section, "issue_decomposition_proof")
+    if not plan_path or not plan_digest or not proof:
+        return {}
+    try:
+        digest = issue_decomposition_plan_file_digest(
+            LoopContext.load(repo_root=repo_root, env=_repo_local_context_env(repo_root, os.environ), cwd=repo_root, read_only=True),
+            plan_path,
+        )
+    except (IssueDecompositionError, RuntimeError, ValueError):
+        return {}
+    if digest != plan_digest.strip():
+        return {}
+    rel = artifact.relative_to(repo_root).as_posix()
+    return {
+        "route": "apply-issue-decomposition-plan",
+        "controller_action": "apply_issue_decomposition_plan",
+        "target_kind": "issue",
+        "target_number": issue,
+        "target": {"kind": "issue", "number": issue},
+        "consensus_artifact": rel,
+        "design_decision_path": rel,
+        "consensus_issue": issue,
+        "consensus_round": round_no,
+        "issue_decomposition_plan_path": plan_path,
+        "issue_decomposition_plan_digest": plan_digest.strip(),
+        "issue_decomposition_proof": proof,
     }
 
 
