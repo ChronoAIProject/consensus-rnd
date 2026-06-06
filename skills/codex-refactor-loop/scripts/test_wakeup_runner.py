@@ -316,6 +316,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         gh_labels: list[str] | None = None,
         gh_head_ref: str = "refactor/iter77-worker",
         git_diff_code: int = 0,
+        implementation_status: str | None = None,
         duplicate_prs: list[dict] | None = None,
         implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
@@ -375,6 +376,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if git_cwd == (self.repo / ".worktrees" / "pr77").resolve():
                 return subprocess.CompletedProcess(command, git_diff_code, "", "")
             if git_cwd == (self.repo / ".worktrees" / "iter77-issue-77").resolve():
+                if command[3:] == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(command, 0, implementation_status or "", "")
                 if command[3:] == ["diff", "HEAD", "--quiet"]:
                     return subprocess.CompletedProcess(command, git_diff_code, "", "")
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
@@ -1743,7 +1746,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = self.run_result(
             self.base_plan(self.implementation_output_action()),
-            git_diff_code=1,
+            git_diff_code=0,
+            implementation_status="M  staged.py\n",
             actions=actions,
         )
 
@@ -1803,6 +1807,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(
                     self.base_plan(action),
                     git_diff_code=git_diff_code,
+                    implementation_status="M  staged.py\n" if name != "empty-diff" else "",
                     duplicate_prs=duplicate_prs,
                     gh_labels=gh_labels,
                     actions=actions,
@@ -1817,7 +1822,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             body_file=".refactor-loop/runs/missing-body.md",
         )
 
-        results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+        results = self.run_result(self.base_plan(action), git_diff_code=1, implementation_status="M  staged.py\n", actions=actions)
 
         self.assert_blocked_before_dispatch(
             results,
@@ -1861,7 +1866,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 action = self.implementation_output_action(action_id=f"publish-implementation:{name}", **overrides)
                 if mutate is not None:
                     mutate()
-                results = self.run_result(self.base_plan(action), git_diff_code=1, actions=actions)
+                results = self.run_result(
+                    self.base_plan(action),
+                    git_diff_code=1,
+                    implementation_status="M  staged.py\n",
+                    actions=actions,
+                )
                 self.assert_blocked_before_dispatch(results, action["action_id"], reason, actions)
 
     def test_publish_implementation_output_allows_existing_open_pr_for_helper_reuse(self) -> None:
@@ -1871,6 +1881,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         results = self.run_result(
             self.base_plan(action),
             git_diff_code=1,
+            implementation_status="M  staged.py\n",
             duplicate_prs=[
                 {
                     "number": 99,
@@ -1893,7 +1904,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertNotIn("publish_implementation_stale_base", publish_validator + worktree_validator)
         self.assertNotIn("merge-base", publish_validator + worktree_validator)
         self.assertNotIn("def _validate_no_duplicate_open_pr", source)
-        self.assertIn('["git", "-C", str(worktree), "diff", "HEAD", "--quiet"]', worktree_validator)
+        self.assertIn('["git", "-C", str(worktree), "status", "--porcelain"]', worktree_validator)
 
     def test_dispatch_consensus_implementation_revalidates_durable_artifact_before_helper(self) -> None:
         actions = FakeActions()
@@ -2137,7 +2148,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
     def test_publish_ready_implementation_routes_to_publish_helper(self) -> None:
         actions = FakeActions()
 
-        results = self.run_result(self.base_plan(self.implementation_output_action()), actions=actions, git_diff_code=1)
+        results = self.run_result(
+            self.base_plan(self.implementation_output_action()),
+            actions=actions,
+            git_diff_code=1,
+            implementation_status="M  staged.py\n",
+        )
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_implementation_output")
@@ -2149,6 +2165,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             self.base_plan(self.implementation_output_action()),
             actions=actions,
             git_diff_code=1,
+            implementation_status="M  staged.py\n",
             implementation_base=("old-base", "new-base"),
         )
 
@@ -2171,8 +2188,10 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             if command[:3] == ["git", "-C", str(self.repo / ".worktrees" / "iter77-issue-77")]:
                 if command[3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
                     return subprocess.CompletedProcess(command, 0, "refactor/iter77-issue-77\n", "")
+                if command[3:] == ["status", "--porcelain"]:
+                    return subprocess.CompletedProcess(command, 0, "M  staged.py\n", "")
                 if command[3:] == ["diff", "HEAD", "--quiet"]:
-                    return subprocess.CompletedProcess(command, 1, "", "")
+                    return subprocess.CompletedProcess(command, 0, "", "")
             return subprocess.CompletedProcess(command, 0, "", "")
 
         runner = WakeupRunner(

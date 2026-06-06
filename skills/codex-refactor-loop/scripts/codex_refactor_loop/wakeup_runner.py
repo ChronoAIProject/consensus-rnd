@@ -700,6 +700,11 @@ class WakeupRunner:
         identity_error = self._validate_canonical_implementation_identity(action, worktree, head_ref)
         if identity_error:
             return identity_error
+        status = self.command_runner(["git", "-C", str(worktree), "status", "--porcelain"])
+        if status.returncode != 0:
+            return "publish_implementation_diff_unavailable"
+        if status.stdout.strip():
+            return None
         diff = self.command_runner(["git", "-C", str(worktree), "diff", "HEAD", "--quiet"])
         if diff.returncode == 0:
             return "publish_implementation_empty_scoped_diff"
