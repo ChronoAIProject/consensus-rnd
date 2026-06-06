@@ -99,6 +99,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
+    "publish_review_fix_output_from_action",
     "dispatch_reviewers",
     "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
@@ -1106,6 +1107,7 @@ def completed_marker_actions(
                 action.pop("runner_authority", None)
                 action.pop("no_generic_command", None)
         if marker.startswith("FIX_DONE"):
+            _apply_fix_done_publish_route(repo_root, gh_items or [], action)
             _apply_fix_done_review_thread_gate(repo_root, ctx, action)
         candidates.append(
             CompletedMarkerCandidate(
@@ -1339,6 +1341,32 @@ def _apply_fix_done_review_thread_gate(repo_root: Path, ctx: LoopContext, action
             *action.get("preconditions", []),
             "review_thread_completion_evidence",
         ]
+
+
+def _apply_fix_done_publish_route(repo_root: Path, gh_items: list[GhItem], action: dict[str, Any]) -> None:
+    pr_number = action.get("target_number")
+    if action.get("target_kind") != "PR" or not isinstance(pr_number, int):
+        return
+    item = next((candidate for candidate in gh_items if candidate.kind == "PR" and candidate.number == pr_number), None)
+    if item is None:
+        return
+    head_ref = safe_head_ref(item.head_ref)
+    if not head_ref:
+        return
+    worktree = _worktree_for_head_ref(repo_root, head_ref)
+    if worktree is None or not _worktree_has_non_empty_diff(worktree):
+        return
+    action["phase"] = "publish"
+    action["actor"] = "controller"
+    action["route"] = "publish-review-fix-output"
+    action["controller_action"] = "publish_review_fix_output_from_action"
+    action["head_ref"] = head_ref
+    action["worktree"] = str(worktree)
+    preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
+    for required in ("verified_pr_head", "dirty_fix_worktree", "clean_scoped_diff_after_publish"):
+        if required not in preconditions:
+            preconditions.append(required)
+    action["preconditions"] = preconditions
 
 
 def _review_thread_completion_evidence(repo_root: Path, ctx: LoopContext, pr_number: int) -> ReviewThreadCompletionEvidence:
@@ -2125,6 +2153,8 @@ def _worktree_for_head_ref(repo_root: Path, head_ref: str) -> Path | None:
         return None
     worktree = parse_worktree_branches(listed.stdout).get(head_ref)
     if worktree is None:
+        return None
+    if not worktree.is_dir():
         return None
     try:
         worktree.resolve().relative_to((repo_root / ".worktrees").resolve())

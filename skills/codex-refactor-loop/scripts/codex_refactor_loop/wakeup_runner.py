@@ -77,6 +77,7 @@ SUPPORTED_CONTROLLER_ACTIONS = {
     "dispatch_consensus_implementation",
     "publish_implementation_output",
     "publish_worker_output_from_action",
+    "publish_review_fix_output_from_action",
     "dispatch_reviewers",
     "dispatch_remote_ci_fix",
     "dispatch_pr_rebase_resolve",
@@ -402,6 +403,8 @@ class WakeupRunner:
             return self._validate_consensus_implementation(action)
         if controller_action == "publish_implementation_output":
             return self._validate_publish_implementation(action)
+        if controller_action == "publish_review_fix_output_from_action":
+            return self._validate_publish_review_fix_output(action)
         if controller_action == "dispatch_reviewers":
             return self._validate_dispatch_reviewers(action)
         if controller_action == "dispatch_remote_ci_fix":
@@ -680,6 +683,14 @@ class WakeupRunner:
             return "dispatch_reviewers_target_missing"
         return None
 
+    def _validate_publish_review_fix_output(self, action: Mapping[str, Any]) -> str | None:
+        if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
+            return "publish_review_fix_output_target_missing"
+        marker = str(action.get("source_marker") or "")
+        if not marker.startswith("FIX_DONE:"):
+            return "publish_review_fix_output_marker_missing"
+        return None
+
     def _validate_dispatch_remote_ci_fix(self, action: Mapping[str, Any]) -> str | None:
         if action.get("target_kind") != "PR" or not isinstance(action.get("target_number"), int):
             return "dispatch_remote_ci_fix_target_missing"
@@ -881,6 +892,11 @@ class WakeupRunner:
             return self.actions.publish_implementation_output(dict(action))
         if controller_action == "publish_worker_output_from_action":
             return self.actions.publish_worker_output_from_action(dict(action))
+        if controller_action == "publish_review_fix_output_from_action":
+            fix_publish_rc = self._commit_and_push_review_fix_output(action)
+            if fix_publish_rc != 0:
+                return fix_publish_rc
+            return self.actions.dispatch_reviewers(dict(action))
         if controller_action == "dispatch_reviewers":
             if str(action.get("source_marker") or "").startswith("FIX_DONE"):
                 fix_publish_rc = self._commit_and_push_review_fix_output(action)

@@ -1766,6 +1766,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "dispatch_consensus_implementation",
             "publish_implementation_output",
             "publish_worker_output_from_action",
+            "publish_review_fix_output_from_action",
             "dispatch_reviewers",
             "dispatch_remote_ci_fix",
             "dispatch_pr_rebase_resolve",
@@ -2269,6 +2270,33 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "publish_worker_output_from_action")
+
+    def test_publish_review_fix_output_action_commits_pushes_then_dispatches_reviewers(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "pr", "view"]:
+                return subprocess.CompletedProcess(cmd, 0, '{"headRefName": "refactor/iter77-issue-77"}', "")
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, actions=actions, command_runner=command_runner)
+        action = self.reviewer_dispatch_action(controller_action="publish_review_fix_output_from_action", target_number=77)
+        with mock.patch.object(runner, "_review_fix_worktree", return_value=worktree):
+            rc = runner._dispatch("publish_review_fix_output_from_action", action)
+
+        self.assertEqual(rc, 0)
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(actions.calls[0][0], "safe_push")
+        self.assertEqual(actions.calls[-1][0], "dispatch_reviewers")
 
     def test_publish_implementation_output_routes_to_named_helper(self) -> None:
         actions = FakeActions()
