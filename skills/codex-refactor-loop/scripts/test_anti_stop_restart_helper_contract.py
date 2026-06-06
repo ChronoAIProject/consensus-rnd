@@ -90,6 +90,8 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn(needle, self.restart)
 
     def test_restart_daemon_allowlist_uses_cli_daemon_commands(self) -> None:
+        # Fix (remote-ci/contract-tests): parse the checked-in restart source
+        # so unittest discovery cannot inherit a patched runtime allowlist.
         daemon_commands = restart_source_daemon_commands(self.restart)
         for name, command in daemon_commands:
             with self.subTest(name=name):
@@ -97,8 +99,6 @@ class AntiStopRestartHelperContractTests(unittest.TestCase):
                 self.assertIn('"consensus-rnd-cli"', self.restart)
                 self.assertIn(f'"{command[2]}"', self.restart)
 
-        # Fix (remote-ci/contract-tests): parse the checked-in restart source
-        # so unittest discovery cannot inherit a patched runtime allowlist.
         # The opt-in supervisor command also uses --daemon, but it must not
         # become part of the canonical legacy daemon allowlist.
         supervisor_command = restart_source_assignment(self.restart, "SUPERVISOR_DAEMON_COMMAND")
