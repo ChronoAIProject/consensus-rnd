@@ -435,6 +435,54 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, section)
 
+    def test_issue_579_consensus_gate_proof_anchor_and_boundaries(self) -> None:
+        section = section_after_anchor(self.skill, "consensus-gate-proof")
+
+        for needle in (
+            "ConsensusGateProof",
+            "scripts/codex_refactor_loop/consensus_gate.py",
+            "skills/codex-refactor-loop/authorizations/runtime-exceptions.md#consensus-gate-proof-579",
+            "controller-private pure proof-validity contract",
+            "not a public CLI",
+            "not a public CLI, runtime exception, wakeup action, proof-ticket/resume system, command bus, or lifecycle authority",
+            "target_kind",
+            "target_ref",
+            "target_digest",
+            "decision_producer_id",
+            "producer_id",
+            "role",
+            "artifact",
+            "artifact_digest",
+            "verdict",
+            "required_roles",
+            "verdict_rule",
+            "scope_paths",
+            "single-worker self-certification",
+            "target digest mismatch",
+            "missing required roles",
+            "duplicate or overlapping producers",
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "args",
+            "controller_action",
+            "proof_ticket",
+            "resume_ticket",
+            "does not authorize GitHub, git, file lifecycle",
+            "#191 active-controller owner gate",
+            "helper-specific preconditions",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, section)
+
     # Refactor (iter364/issue364):
     #   Old pattern: Path-A solvers dispatched with --cd $REPO_ROOT (integration checkout) can't see work-unit source when the issue references files on a divergent non-integration branch, emitting spurious no-plan and wasting rounds.
     #   New principle: Contract-only source locator: SKILL solver source contract + 3 solver prompts document a read-only source-locator recipe (git show <ref>:<path> / raw URL / gh api / host.env), classify missing/invalid locator as source-location-missing-or-invalid; NO new projection/parser/header/module.

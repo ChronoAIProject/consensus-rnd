@@ -7,6 +7,20 @@ the only checked-in runtime authorization evidence mirror. It is not a runtime
 API, loader, schema, or source of new authority. The executable contract remains
 in `SKILL.md` and the tests.
 
+<a id="consensus-gate-proof-579"></a>
+## ConsensusGateProof(per #579)
+
+- surface: `controller-private ConsensusGateProof`
+- source_issue: `#579`
+- source_round: `r2`
+- source_marker: `META_JUDGE_DONE:consensus:minimal:ConsensusGateProof pure validator/anchor first, no same-round wakeup/effect runtime migration`
+- skill_anchor: `#consensus-gate-proof`
+- allowed: validate proof validity only with `target_kind`, stable `target_ref`, `target_digest`, `decision_producer_id`, `evidence[]` entries containing `producer_id`, `role`, `artifact`, `artifact_digest`, and `verdict`, `required_roles`, `verdict_rule`, and optional repo-relative `scope_paths`; reject single-worker self-certification, target digest mismatch, missing required roles, duplicate roles, duplicate or overlapping producers, unsupported verdict rules, and recursive lifecycle or command fields.
+- forbidden: no GitHub/git/file lifecycle authority, no route/post/label/spawn/merge/apply side effects, no public CLI, no wakeup-plan action projection, no wakeup-runner action, no IssueDecompositionPlan apply migration in this issue, no proof-ticket/resume system, no command bus, and no `cmd`, `argv`, `shell`, `command_line`, `commands`, `env`, `git`, `gh`, `executor`, `lifecycle_authority`, `lifecycle_owner`, `args`, `controller_action`, `proof_ticket`, or `resume_ticket` fields.
+- fact_source: proof JSON supplied by a future helper integration plus the target artifact digest passed by that helper; the validator does not read GitHub, git, host.env, `.refactor-loop/` runtime ledgers, prompt bodies, or local process state.
+- verification: `test_consensus_gate.py`, `test_runtime_exception_authorization_sources.py`, `test_skill_reference_anchors.py`
+- no_new_runtime_authority: This mirror documents a controller-private pure validator only. Later route/post/label/spawn/merge/apply-validated-proof integrations must add their own consensus, #191 active-controller owner gate, live state, and helper-specific preconditions.
+
 <a id="maintainer-directive-concurrency-auto-topup"></a>
 ## maintainer-directive-concurrency-auto-topup
 

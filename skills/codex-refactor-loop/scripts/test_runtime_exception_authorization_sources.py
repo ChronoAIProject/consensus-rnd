@@ -45,6 +45,7 @@ TARGET_ANCHORS = {
     "repository-stalled-meta-reflector-506": "Repository-stalled meta-reflector(per #506)",
     "global-dashboard-status-card-504": "## Named runtime exception - global-dashboard-status-card(per #504)",
     "patrol-inspector-issue-intake-541": "## Named runtime exception - patrol-inspector issue-intake(per #541)",
+    "consensus-gate-proof-579": "## ConsensusGateProof contract",
 }
 
 MAINTAINER_DIRECTIVE_ANCHORS = {
@@ -177,6 +178,73 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
                 self.assertIn(anchor, mirror_projection.anchors)
                 for field in REQUIRED_FIELDS:
                     self.assertIn(field, project_markdown(entry).bullet_fields)
+
+    def test_issue_579_consensus_gate_proof_is_pure_validator_not_authority(self) -> None:
+        entry = mirror_entry(self.mirror, "consensus-gate-proof-579")
+        section = self.skill[self.skill.index("## ConsensusGateProof contract") :]
+        source = read(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "consensus_gate.py")
+
+        for needle in (
+            "controller-private ConsensusGateProof",
+            "#579",
+            "target_kind",
+            "target_ref",
+            "target_digest",
+            "decision_producer_id",
+            "producer_id",
+            "role",
+            "artifact",
+            "artifact_digest",
+            "verdict",
+            "required_roles",
+            "verdict_rule",
+            "scope_paths",
+            "single-worker self-certification",
+            "target digest mismatch",
+            "missing required roles",
+            "duplicate or overlapping producers",
+            "recursive lifecycle or command fields",
+            "test_consensus_gate.py",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, entry)
+                self.assertIn(needle, section)
+        for forbidden in (
+            "no GitHub/git/file lifecycle authority",
+            "no route/post/label/spawn/merge/apply side effects",
+            "no public CLI",
+            "no wakeup-plan action projection",
+            "no wakeup-runner action",
+            "no IssueDecompositionPlan apply migration in this issue",
+            "no proof-ticket/resume system",
+            "no command bus",
+            "cmd",
+            "argv",
+            "shell",
+            "command_line",
+            "commands",
+            "env",
+            "git",
+            "gh",
+            "executor",
+            "lifecycle_authority",
+            "lifecycle_owner",
+            "args",
+            "controller_action",
+            "proof_ticket",
+            "resume_ticket",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertIn(forbidden, entry)
+                self.assertIn(forbidden, section)
+
+        self.assertIn("class ConsensusGateProof", source)
+        self.assertIn("def validate_consensus_gate_proof", source)
+        self.assertIn("FORBIDDEN_CONSENSUS_PROOF_FIELDS", source)
+        self.assertNotIn("subprocess", source)
+        self.assertNotIn("requests", source)
+        self.assertNotIn("from .github", source)
+        self.assertNotIn("from .git", source)
 
     def test_issue_403_decomposition_allowlist_excludes_wakeup_plan_public_projection(self) -> None:
         entry = mirror_entry(self.mirror, "issue-decomposition-403")
