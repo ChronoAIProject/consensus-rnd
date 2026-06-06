@@ -2403,6 +2403,44 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["suppressed_reason"], "implementation_pr_title_artifact_missing")
         self.assertNotIn("runner_authority", action)
 
+    def test_missing_implementation_pr_artifacts_project_bounded_repair_worker(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        (self.logs / "implement-issue20.log").write_text(
+            "IMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        self.write_run_artifact("implement-issue20", "implementation summary", "IMPLEMENT_DONE:issue-20:ok")
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20")
+
+        publish = next(item for item in plan["actions"] if item["action_id"].startswith("completed-marker:implement-issue20"))
+        self.assertTrue(publish["status_only"])
+        self.assertEqual(publish["suppressed_reason"], "implementation_pr_title_artifact_missing")
+        repair = next(
+            item
+            for item in plan["actions"]
+            if item.get("controller_action") == "spawn_codex_harness_background"
+            and item.get("capability") == "implementation-pr-artifact-repair"
+        )
+        self.assertEqual(repair["route"], "implementation-pr-artifact-repair")
+        self.assertEqual(repair["source_artifact"], ".refactor-loop/logs/implement-issue20.log")
+        self.assertEqual(repair["source_marker"], "IMPLEMENT_DONE:issue-20:ok")
+        self.assertEqual(repair["target"], {"kind": "codex", "task_id": "implementation-pr-artifacts-issue-20"})
+        self.assertEqual(repair["target_kind"], "codex")
+        self.assertIsNone(repair["target_number"])
+        self.assertEqual(repair["issue_number"], 20)
+        self.assertEqual(repair["cluster_id"], "issue-20")
+        self.assertEqual(repair["title_file"], ".refactor-loop/runs/implementation-pr-issue-20-title.txt")
+        self.assertEqual(repair["body_file"], ".refactor-loop/runs/implementation-pr-issue-20-body.md")
+        self.assertEqual(repair["implementation_summary"], ".refactor-loop/runs/implement-issue20.md")
+        self.assertEqual(Path(repair["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        self.assertEqual(repair["head_ref"], "refactor/iter20-issue-20")
+        self.assertIn("implementation_pr_artifacts_missing_or_invalid", repair["preconditions"])
+        self.assertEqual(repair["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(repair["no_generic_command"])
+        for forbidden in ("argv", "shell", "cmd", "commands", "env", "git", "gh", "executor"):
+            self.assertNotIn(forbidden, repair)
+
     def test_publish_implementation_marker_with_malformed_pr_artifacts_is_status_only(self) -> None:
         worktree = self.repo / ".worktrees" / "iter20-issue-20"
         worktree.mkdir(parents=True)

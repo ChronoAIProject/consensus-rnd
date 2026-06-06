@@ -283,6 +283,8 @@ class WakeupRunner:
             return self._record(RunnerResult(action_id, "dry-run"), action)
         if action.get("capability") == "release-rollup-body":
             self._prepare_release_rollup_body_prompt(action)
+        if action.get("capability") == "implementation-pr-artifact-repair":
+            self._prepare_implementation_pr_artifact_repair_prompt(action)
 
         controller_action = str(action.get("controller_action") or "")
         try:
@@ -429,6 +431,10 @@ class WakeupRunner:
             body_error = self._validate_release_rollup_body_spawn(action)
             if body_error:
                 return body_error
+        if action.get("capability") == "implementation-pr-artifact-repair":
+            repair_error = self._validate_implementation_pr_artifact_repair_spawn(action)
+            if repair_error:
+                return repair_error
         log = Path(str(action.get("log") or ""))
         if self._spawn_log_suppresses_retry(log):
             return "target_log_exists"
@@ -459,6 +465,40 @@ class WakeupRunner:
 
     def _prepare_release_rollup_body_prompt(self, action: Mapping[str, Any]) -> None:
         self.actions.render_release_rollup_body_prompt(action)
+
+    def _validate_implementation_pr_artifact_repair_spawn(self, action: Mapping[str, Any]) -> str | None:
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list):
+            return "implementation_pr_artifact_repair_missing_preconditions"
+        for required in (
+            "clean_exit_source_marker",
+            "implementation_pr_artifacts_missing_or_invalid",
+            "publish_implementation_output_status_only",
+        ):
+            if required not in preconditions:
+                return f"implementation_pr_artifact_repair_missing_precondition:{required}"
+        issue = action.get("issue_number")
+        if not isinstance(issue, int) or issue <= 0:
+            return "implementation_pr_artifact_repair_issue_missing"
+        cluster_id = str(action.get("cluster_id") or "")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", cluster_id):
+            return "implementation_pr_artifact_repair_cluster_invalid"
+        for field, suffix in (("title_file", "-title.txt"), ("body_file", "-body.md")):
+            artifact = self.ctx.repo_root / str(action.get(field) or "")
+            try:
+                artifact.resolve().relative_to(self.ctx.paths.runs.resolve())
+            except ValueError:
+                return f"implementation_pr_artifact_repair_{field}_outside_runs"
+            if not artifact.name.startswith(f"implementation-pr-{cluster_id}") or not artifact.name.endswith(suffix):
+                return f"implementation_pr_artifact_repair_{field}_mismatch"
+        prompt = Path(str(action.get("prompt") or ""))
+        expected_prompt = self.ctx.paths.prompts / f"implementation-pr-artifacts-{cluster_id}.md"
+        if prompt.resolve() != expected_prompt.resolve():
+            return "implementation_pr_artifact_repair_prompt_mismatch"
+        return None
+
+    def _prepare_implementation_pr_artifact_repair_prompt(self, action: Mapping[str, Any]) -> None:
+        self.actions.render_implementation_pr_artifact_repair_prompt(action)
 
     def _validate_safe_push(self, action: Mapping[str, Any]) -> str | None:
         preconditions = action.get("preconditions")

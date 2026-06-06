@@ -1713,6 +1713,27 @@ class ControllerActions:
         )
         return prompt
 
+    def render_implementation_pr_artifact_repair_prompt(self, action: Mapping[str, object]) -> Path:
+        cluster_id = str(action.get("cluster_id") or "").strip()
+        prompt = self.ctx.paths.prompts / f"implementation-pr-artifacts-{cluster_id}.md"
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        self.render_template(
+            str(self.ctx.skill_root / "prompts" / "implementation-pr-artifact-repair.md"),
+            str(prompt),
+            env={
+                "ISSUE_NUMBER": str(action.get("issue_number") or ""),
+                "CLUSTER_ID": cluster_id,
+                "IMPLEMENTATION_LOG": str(action.get("implementation_log") or action.get("source_artifact") or ""),
+                "IMPLEMENTATION_SUMMARY": str(action.get("implementation_summary") or ""),
+                "IMPLEMENTATION_WORKTREE": str(action.get("worktree") or ""),
+                "IMPLEMENTATION_HEAD_REF": str(action.get("head_ref") or ""),
+                "IMPLEMENTATION_PR_TITLE_OUTPUT_PATH": str(action.get("title_file") or ""),
+                "IMPLEMENTATION_PR_BODY_OUTPUT_PATH": str(action.get("body_file") or ""),
+                "SUPPRESSED_REASON": str(action.get("suppressed_reason") or ""),
+            },
+        )
+        return prompt
+
     def _append_harness_spawn_intent(
         self,
         *,

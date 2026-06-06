@@ -119,6 +119,8 @@ RUNNER_NAMED_HELPER_ACTIONS = {
 RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
 RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
 RELEASE_ROLLUP_BODY_LOG = ".refactor-loop/logs/release-rollup-body.log"
+IMPLEMENTATION_PR_ARTIFACT_REPAIR_PROMPT_TEMPLATE = ".refactor-loop/prompts/implementation-pr-artifacts-{cluster_id}.md"
+IMPLEMENTATION_PR_ARTIFACT_REPAIR_LOG_TEMPLATE = ".refactor-loop/logs/implementation-pr-artifacts-{cluster_id}.log"
 AUDIT_FALLBACK_TEMPLATE = "prompts/audit.md"
 AUDIT_FALLBACK_ENABLE_ENV = "AUDIT_FALLBACK_ENABLE"
 TRUE_LIKE_VALUES = {"true", "1", "yes", "on"}
@@ -2995,6 +2997,85 @@ def suppress_publish_superseded_implementation_spawn_intents(actions: list[dict[
         action.pop("no_generic_command", None)
 
 
+def implementation_pr_artifact_repair_actions(actions: list[dict[str, Any]], repo_root: Path) -> list[dict[str, Any]]:
+    repair_actions: list[dict[str, Any]] = []
+    for action in actions:
+        if action.get("controller_action") != "publish_implementation_output":
+            continue
+        if action.get("status_only") is not True:
+            continue
+        reason = str(action.get("suppressed_reason") or "")
+        if not _implementation_pr_artifact_repairable_reason(reason):
+            continue
+        target = _action_target_key(action)
+        if target is None or target[0] != "issue":
+            continue
+        source_artifact = str(action.get("source_artifact") or "")
+        source_marker = str(action.get("source_marker") or "")
+        if not source_artifact or not source_marker.startswith("IMPLEMENT_DONE:") or not source_marker.endswith(":ok"):
+            continue
+        cluster_id = _implementation_cluster_id(action, target[1])
+        prompt = IMPLEMENTATION_PR_ARTIFACT_REPAIR_PROMPT_TEMPLATE.format(cluster_id=cluster_id)
+        log = IMPLEMENTATION_PR_ARTIFACT_REPAIR_LOG_TEMPLATE.format(cluster_id=cluster_id)
+        if _harness_spawn_intent_log_suppresses_retry(repo_root / log):
+            continue
+        repair_actions.append(
+            {
+                "priority": 3,
+                "kind": "harness-spawn-intent",
+                "action_id": f"implementation-pr-artifacts:{cluster_id}:{reason}",
+                "item": f"implementation PR artifacts for issue #{target[1]}",
+                "phase": "implementation",
+                "actor": "implementation-pr-artifact-repair",
+                "route": "implementation-pr-artifact-repair",
+                "source_artifact": source_artifact,
+                "source_marker": source_marker,
+                "target_kind": "codex",
+                "target_number": None,
+                "target": {"kind": "codex", "task_id": f"implementation-pr-artifacts-{cluster_id}"},
+                "preconditions": [
+                    "active_controller_owner",
+                    "clean_exit_source_marker",
+                    "target_log_absent",
+                    "implementation_pr_artifacts_missing_or_invalid",
+                    "publish_implementation_output_status_only",
+                ],
+                "controller_action": "spawn_codex_harness_background",
+                "capability": "implementation-pr-artifact-repair",
+                "cd": str(repo_root.resolve()),
+                "prompt": str((repo_root / prompt).resolve()),
+                "log": str((repo_root / log).resolve()),
+                "stall": 1800,
+                "issue_number": target[1],
+                "cluster_id": cluster_id,
+                "title_file": str(action.get("title_file") or ""),
+                "body_file": str(action.get("body_file") or ""),
+                "implementation_summary": _implementation_summary_path(repo_root, source_artifact, cluster_id),
+                "implementation_log": source_artifact,
+                "worktree": str(action.get("worktree") or ""),
+                "head_ref": str(action.get("head_ref") or ""),
+                "suppressed_reason": reason,
+                "runner_authority": RUNNER_AUTHORITY,
+                "no_generic_command": True,
+                "no_lifecycle_authority": True,
+            }
+        )
+    return repair_actions
+
+
+def _implementation_pr_artifact_repairable_reason(reason: str) -> bool:
+    return reason.startswith("implementation_pr_title_") or reason.startswith("implementation_pr_body_")
+
+
+def _implementation_summary_path(repo_root: Path, source_artifact: str, cluster_id: str) -> str:
+    log_path = repo_root / source_artifact
+    candidate = repo_root / ".refactor-loop" / "runs" / (log_path.stem + ".md")
+    if candidate.is_file():
+        return candidate.relative_to(repo_root).as_posix()
+    fallback = repo_root / ".refactor-loop" / "runs" / f"implement-{cluster_id}.md"
+    return fallback.relative_to(repo_root).as_posix()
+
+
 def _normalized_consensus_scope_paths(raw_scope_paths: Any) -> tuple[str, ...]:
     paths: set[str] = set()
     for raw_line in str(raw_scope_paths or "").splitlines():
@@ -3548,14 +3629,14 @@ def _stale_publish_implementation_reason(
         return f"implementation_redispatch:{state.reason}"
     if state.in_flight:
         return "in_flight_implement"
+    action["head_ref"] = head_ref
+    action["worktree"] = str(worktree)
     artifact_reason = _implementation_pr_artifact_invalid_reason(action, repo_root)
     if artifact_reason:
         return artifact_reason
     match_error = _matching_open_pr_error(action, target, gh_items=gh_items, head_ref=head_ref)
     if match_error:
         return match_error
-    action["head_ref"] = head_ref
-    action["worktree"] = str(worktree)
     preconditions = list(action.get("preconditions") if isinstance(action.get("preconditions"), list) else [])
     for required in (
         "canonical_implementation_identity",
@@ -3792,6 +3873,7 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
+    actions.extend(implementation_pr_artifact_repair_actions(actions, repo_root))
     suppress_publish_superseded_implementation_spawn_intents(actions)
     if gh_items_loaded and not has_dispatchable_action(actions):
         actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
