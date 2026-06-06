@@ -87,6 +87,24 @@ class SharedControllerProjectionTests(unittest.TestCase):
         self.assertEqual({"actual": 2, "floor": 5}, dict(projection.statusline))
         self.assertEqual(("phase9-router:issue/553",), projection.workqueue_keys)
 
+        payload = projection.to_json()
+        self.assertEqual(projection.repo_root, payload["repo_root"])
+        self.assertTrue(payload["request"]["include_managed_work"])
+        self.assertTrue(payload["request"]["include_daemon_status"])
+        self.assertTrue(payload["request"]["include_statusline"])
+        self.assertTrue(payload["request"]["include_workqueue_keys"])
+        self.assertEqual("all", payload["request"]["daemon_target"])
+        self.assertEqual(1, payload["managed_work"]["open_issue_count"])
+        self.assertEqual(1, payload["managed_work"]["open_pr_count"])
+        self.assertEqual("cache:fresh", payload["managed_work"]["source"])
+        self.assertEqual(2, payload["daemon_fleet"]["total"])
+        self.assertEqual(1, payload["daemon_fleet"]["running"])
+        self.assertEqual(1, payload["daemon_fleet"]["stale"])
+        self.assertEqual({"actual": 2, "floor": 5}, payload["statusline"])
+        self.assertEqual(["phase9-router:issue/553"], payload["workqueue_keys"])
+        self.assertTrue(payload["no_lifecycle_authority"])
+        self.assertTrue(payload["not_host_production_ssot"])
+
     def test_request_can_disable_expensive_sources(self) -> None:
         def failing_managed_loader(_ctx: LoopContext) -> ManagedWorkSnapshotResult:
             raise AssertionError("managed work loader should not run")
@@ -106,6 +124,37 @@ class SharedControllerProjectionTests(unittest.TestCase):
         self.assertIsNone(projection.daemon_fleet)
         self.assertEqual({}, dict(projection.statusline))
         self.assertEqual(("comment-monitor:issue/553",), projection.workqueue_keys)
+
+    def test_request_can_omit_workqueue_keys_from_projection_and_json(self) -> None:
+        projection = collect_shared_controller_projection(
+            self.ctx,
+            ProjectionRequest(
+                include_managed_work=False,
+                include_daemon_status=False,
+                include_statusline=False,
+                include_workqueue_keys=False,
+            ),
+            workqueue_keys=("comment-monitor:issue/553",),
+        )
+
+        self.assertEqual((), projection.workqueue_keys)
+        self.assertEqual([], projection.to_json()["workqueue_keys"])
+        self.assertFalse(projection.to_json()["request"]["include_workqueue_keys"])
+
+    def test_malformed_statusline_snapshot_emits_diagnostic_before_empty_projection(self) -> None:
+        self.ctx.paths.statusline_snapshot.parent.mkdir(parents=True, exist_ok=True)
+        self.ctx.paths.statusline_snapshot.write_text("{bad json", encoding="utf-8")
+
+        with mock.patch("sys.stderr") as stderr:
+            projection = collect_shared_controller_projection(
+                self.ctx,
+                ProjectionRequest(include_managed_work=False, include_daemon_status=False),
+            )
+
+        self.assertEqual({}, dict(projection.statusline))
+        stderr.write.assert_called_once()
+        self.assertIn("SHARED_PROJECTION_STATUSLINE_READ_FAILED", stderr.write.call_args.args[0])
+        self.assertIn("json-error:line=1:column=2", stderr.write.call_args.args[0])
 
 
 if __name__ == "__main__":

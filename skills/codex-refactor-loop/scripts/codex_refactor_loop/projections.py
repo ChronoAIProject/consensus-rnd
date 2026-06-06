@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,9 +157,23 @@ def _daemon_fleet_summary(report: DaemonStatusReport) -> DaemonFleetSummary:
 def _read_json_object(path: Path) -> Mapping[str, Any]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except FileNotFoundError:
+        _log_statusline_read_issue(path, "missing-optional-statusline-snapshot")
         return {}
-    return payload if isinstance(payload, dict) else {}
+    except OSError as exc:
+        _log_statusline_read_issue(path, f"read-error:{type(exc).__name__}")
+        return {}
+    except json.JSONDecodeError as exc:
+        _log_statusline_read_issue(path, f"json-error:line={exc.lineno}:column={exc.colno}")
+        return {}
+    if not isinstance(payload, dict):
+        _log_statusline_read_issue(path, f"not-json-object:type={type(payload).__name__}")
+        return {}
+    return payload
+
+
+def _log_statusline_read_issue(path: Path, reason: str) -> None:
+    sys.stderr.write(f"SHARED_PROJECTION_STATUSLINE_READ_FAILED path={path} reason={reason}\n")
 
 
 def _utc_now() -> str:
