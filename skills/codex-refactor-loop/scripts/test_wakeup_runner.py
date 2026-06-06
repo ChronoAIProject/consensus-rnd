@@ -2620,6 +2620,25 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
+    def test_issue_decomposition_apply_accepts_partial_implement_source_marker(self) -> None:
+        actions = FakeActions()
+        action = self.issue_decomposition_action(
+            action_id="completed-marker:implement-issue-403.log:IMPLEMENT_DONE:issue-403:partial:apply_issue_decomposition_plan",
+            source_artifact=".refactor-loop/logs/implement-issue-403.log",
+            source_marker="IMPLEMENT_DONE:issue-403:partial",
+        )
+        (self.repo / action["source_artifact"]).write_text(
+            "worker wrote a validated IssueDecompositionPlan\n"
+            "IMPLEMENT_DONE:issue-403:partial\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
     def test_issue_decomposition_private_kind_dialect_fails_closed(self) -> None:
         cases = (
             ("issue-decomposition-apply", "unsupported_kind:issue-decomposition-apply"),

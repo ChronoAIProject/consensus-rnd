@@ -70,6 +70,14 @@ def completed_marker_action(plan: dict, prefix: str) -> dict:
     )
 
 
+def issue_decomposition_apply_actions(plan: dict) -> list[dict]:
+    return [
+        action
+        for action in plan["actions"]
+        if action.get("controller_action") == "apply_issue_decomposition_plan"
+    ]
+
+
 class WakeupPlanBehaviorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -838,6 +846,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             ],
             "open_issue_453": [issue(453, "solver target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_403": [issue(403, "decompose target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
+            "open_issue_537": [issue(537, "decompose handoff target", [managed, label_catalog.PHASE_IMPLEMENTING, auto])],
             "open_issue_53": [issue(53, "drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_54": [issue(54, "judge target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
             "open_issue_573": [issue(573, "same-round reflector drop target", [managed, label_catalog.PHASE_DESIGN_SOLVING, auto])],
@@ -1392,6 +1401,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         )
         return plan_path, digest
 
+    def write_issue_decomposition_plan_artifacts(self, *, issue: int = 537, round_no: int = 6) -> tuple[str, str]:
+        plan_path, _digest = self.write_issue_decomposition_artifacts(issue=issue, round_no=round_no)
+        target = f".refactor-loop/runs/issue-{issue}-decomposition/plan.json"
+        target_path = self.repo / target
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text((self.repo / plan_path).read_text(encoding="utf-8"), encoding="utf-8")
+        (self.repo / plan_path).unlink()
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        return target, issue_decomposition_plan_file_digest(ctx, target)
+
+    def write_implement_result(self, *, issue: int = 537, status: str = "partial") -> None:
+        self.append_harness_spawn_intent(
+            intent_id=f"dispatch-consensus-implementation:{issue}",
+            task_id=f"implement-issue-{issue}",
+            route="dispatch-consensus-implementation",
+            log=f".refactor-loop/logs/implement-issue-{issue}.log",
+        )
+        (self.logs / f"implement-issue-{issue}.log").write_text(
+            "worker wrote a decomposition handoff result\n"
+            f"IMPLEMENT_DONE:issue-{issue}:{status}\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
     def write_markerless_clean_log(self, name: str) -> Path:
         path = self.logs / name
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
@@ -1933,6 +1966,90 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 plan = self.run_plan(fixture="open_issue_20")
 
                 self.assertEqual(self.harness_spawn_actions(plan), [])
+
+    def test_terminal_non_ok_implement_with_valid_decomposition_plan_projects_existing_apply_action(self) -> None:
+        for status in ("partial", "blocked"):
+            with self.subTest(status=status):
+                self.tmp.cleanup()
+                self.setUp()
+                plan_path, digest = self.write_issue_decomposition_plan_artifacts(issue=537)
+                self.write_consensus_artifact(issue=537, round_no=5)
+                self.write_implement_result(issue=537, status=status)
+
+                plan = self.run_plan(fixture="open_issue_537")
+
+                apply_actions = issue_decomposition_apply_actions(plan)
+                self.assertEqual(1, len(apply_actions))
+                apply_action = apply_actions[0]
+                self.assertEqual("completed-marker", apply_action["kind"])
+                self.assertEqual("issue", apply_action["target_kind"])
+                self.assertEqual(537, apply_action["target_number"])
+                self.assertEqual(plan_path, apply_action["issue_decomposition_plan_path"])
+                self.assertEqual(digest, apply_action["issue_decomposition_plan_digest"])
+                self.assertEqual(f"IMPLEMENT_DONE:issue-537:{status}", apply_action["source_marker"])
+                self.assertIn("apply_issue_decomposition_plan", apply_action["action_id"])
+                self.assertFalse(apply_action.get("status_only", False))
+
+                publish = [
+                    action
+                    for action in plan["actions"]
+                    if action.get("source_marker") == f"IMPLEMENT_DONE:issue-537:{status}"
+                    and action.get("controller_action") == "publish_implementation_output"
+                    and not action.get("status_only")
+                ]
+                self.assertEqual(publish, [])
+
+    def test_partial_implement_without_valid_decomposition_plan_does_not_project_apply_action(self) -> None:
+        for name, mutate in (
+            ("missing", lambda: None),
+            (
+                "invalid",
+                lambda: (
+                    (self.repo / ".refactor-loop/runs/issue-537-decomposition").mkdir(parents=True, exist_ok=True),
+                    (self.repo / ".refactor-loop/runs/issue-537-decomposition/plan.json").write_text(
+                        '{"schema": "IssueDecompositionPlan", "cmd": "echo unsafe"}',
+                        encoding="utf-8",
+                    ),
+                ),
+            ),
+        ):
+            with self.subTest(name=name):
+                self.tmp.cleanup()
+                self.setUp()
+                mutate()
+                self.write_implement_result(issue=537, status="partial")
+
+                plan = self.run_plan(fixture="open_issue_537")
+
+                self.assertEqual(issue_decomposition_apply_actions(plan), [])
+
+    def test_ok_implement_marker_keeps_publish_ready_path_not_decomposition_apply_fallback(self) -> None:
+        self.write_issue_decomposition_plan_artifacts(issue=537)
+        self.write_consensus_artifact(issue=537, round_no=5)
+        self.write_implement_result(issue=537, status="ok")
+
+        plan = self.run_plan(fixture="open_issue_537")
+
+        self.assertEqual(issue_decomposition_apply_actions(plan), [])
+        publish = [
+            action
+            for action in plan["actions"]
+            if action.get("source_marker") == "IMPLEMENT_DONE:issue-537:ok"
+            and action.get("controller_action") == "publish_implementation_output"
+        ]
+        self.assertEqual(1, len(publish))
+        self.assertEqual("publish-or-review-gate", publish[0]["route"])
+
+    def test_partial_implement_with_parent_mismatched_decomposition_plan_does_not_project_apply_action(self) -> None:
+        source_plan, _digest = self.write_issue_decomposition_plan_artifacts(issue=538)
+        target = self.repo / ".refactor-loop/runs/issue-537-decomposition/plan.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text((self.repo / source_plan).read_text(encoding="utf-8"), encoding="utf-8")
+        self.write_implement_result(issue=537, status="partial")
+
+        plan = self.run_plan(fixture="open_issue_537")
+
+        self.assertEqual(issue_decomposition_apply_actions(plan), [])
 
     def test_harness_spawn_intent_suppresses_when_open_managed_read_model_is_empty(self) -> None:
         self.append_harness_spawn_intent(
