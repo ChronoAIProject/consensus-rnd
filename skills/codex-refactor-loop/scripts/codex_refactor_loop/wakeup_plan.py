@@ -3790,10 +3790,10 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
         actions.extend(host_actions)
     actions.extend(release_countdown_actions(repo_root, gh_items))
     actions.extend(existing_issue_actions(gh_items, repo_root))
-    if gh_items_loaded and not has_dispatchable_action(actions):
-        actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     suppress_stale_unexecutable_actions(actions, repo_root=repo_root, gh_items=gh_items, gh_items_loaded=gh_items_loaded)
     suppress_publish_superseded_implementation_spawn_intents(actions)
+    if gh_items_loaded and not has_dispatchable_action(actions):
+        actions.extend(repository_stalled_meta_reflector_actions(repo_root, ctx, gh_items, monitor))
     fallback = audit_fallback_action(ctx, concurrency, actions)
     if fallback is not None:
         actions.append(fallback)
