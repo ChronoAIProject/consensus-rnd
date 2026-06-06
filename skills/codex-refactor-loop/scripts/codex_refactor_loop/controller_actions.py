@@ -29,6 +29,7 @@ from .implementation_pr_artifacts import (
 )
 from .implement_lifecycle import classify_implement_attempt, clear_redispatchable_implement_log
 from .issue_decomposition import issue_decomposition_plan_file_digest, load_issue_decomposition_plan
+from .managed_work_snapshot import invalidate_open_managed_work_snapshot
 from .prompt_contracts import inline_prompt_contracts
 from .processes import launch_spawn_codex_supervisor
 from .release.publisher import ReleasePublisher
@@ -550,12 +551,15 @@ class ControllerActions:
         )
         sentinel_count = self._issue_decomposition_parent_sentinel_count(parent_target, digest)
         if sentinel_count == 1:
+            invalidate_open_managed_work_snapshot(self.ctx)
             return tuple()
         if sentinel_count > 1:
             raise RuntimeError("apply_issue_decomposition_plan: multiple parent digest sentinels")
         created: list[tuple[int, str]] = []
         for child in plan.children:
             created.append(self.open_design_issue_with_labels(child.title, child.body_artifact_path))
+        if created:
+            invalidate_open_managed_work_snapshot(self.ctx)
         parent_comment = (self.ctx.repo_root / plan.parent_comment_artifact_path).read_text(encoding="utf-8")
         final_sentinel = f"\n{FINAL_SENTINEL}\n"
         if not parent_comment.endswith(final_sentinel):
