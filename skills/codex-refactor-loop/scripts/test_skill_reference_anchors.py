@@ -1263,6 +1263,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
                 "phase9/router.py",
                 "wakeup_plan.py",
                 "wakeup_runner.py",
+                "worker_markers.py",
             },
             "solver-issue": {"monitors/concurrency.py", "phase9/router.py"},
             "meta-judge-issue": {"monitors/concurrency.py", "phase9/router.py"},
@@ -1270,7 +1271,7 @@ class SkillReferenceAnchorTests(unittest.TestCase):
             "fix-pr": {"monitors/progress.py", "monitors/concurrency.py", "review_fix_dispatch.py", "wakeup_runner.py"},
             "crnd:": {"labels.py", "triage.py"},
             "refactor/iter": {"controller_actions.py", "git.py", "implement_lifecycle.py", "wakeup_runner.py"},
-            "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py"},
+            "rollup/": {"controller_actions.py", "sync/dev.py", "wakeup_plan.py", "wakeup_runner.py", "work_items.py"},
             "COMMANDS": {"cli.py", "restart.py", "gh_accounting.py", "gh_invoke.py"},
             "WorkflowStage": {"workflow_stages.py", "workflow_spec.py"},
         }
