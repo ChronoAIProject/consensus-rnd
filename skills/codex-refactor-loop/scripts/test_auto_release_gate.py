@@ -225,6 +225,14 @@ def run_gate_cli(repo: Path, bin_dir: Path | None = None, *extra: str) -> subpro
     )
 
 
+def env_without_explicit_host_env(repo: Path) -> dict[str, str]:
+    # Fix (remote-ci/contract-tests): subprocess tests for no explicit host
+    # opt-in must not inherit a controller machine's host.env locator.
+    env = {**os.environ, "REPO_ROOT": str(repo)}
+    env.pop("CONSENSUS_RND_HOST_ENV", None)
+    return env
+
+
 def assert_no_release_artifacts(test: unittest.TestCase, repo: Path) -> None:
     test.assertFalse((repo / ".refactor-loop/state/release-decision.json").exists())
     test.assertFalse((repo / ".refactor-loop/state/release-candidate.json").exists())
@@ -308,7 +316,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
     def test_no_opt_in_exits_noop(self) -> None:
         with copy_repo_fixture() as tmp:
             repo = Path(tmp) / "repo"
-            env = {**os.environ, "REPO_ROOT": str(repo)}
+            env = env_without_explicit_host_env(repo)
             result = subprocess.run(
                 [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--min-recent-merges", "0"],
                 cwd=repo,
@@ -989,7 +997,7 @@ class AutoReleaseGateBehaviorTests(unittest.TestCase):
             repo = Path(tmp) / "repo"
             write_green_signals(repo)
             before = (repo / "package.json").read_text(encoding="utf-8")
-            env = {**os.environ, "REPO_ROOT": str(repo)}
+            env = env_without_explicit_host_env(repo)
             result = subprocess.run(
                 [sys.executable, str(SCRIPT_PATH.with_name("consensus-rnd-cli")), "release-gate", "--score-only"],
                 cwd=repo,
