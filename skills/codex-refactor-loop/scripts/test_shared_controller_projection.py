@@ -225,6 +225,58 @@ class SharedControllerProjectionTests(unittest.TestCase):
         self.assertEqual(640.0, managed_freshness["age_seconds"])
         self.assertEqual(0.0, managed_freshness["next_retry_after_seconds"])
 
+    def test_failed_managed_work_snapshot_reports_failure_and_immediate_retry(self) -> None:
+        def managed_loader(_ctx: LoopContext) -> ManagedWorkSnapshotResult:
+            return ManagedWorkSnapshotResult((), False, "github:error", "rate-limit", None)
+
+        projection = collect_shared_controller_projection(
+            self.ctx,
+            ProjectionRequest(include_daemon_status=False, include_statusline=False, include_workqueue_keys=False),
+            managed_work_loader=managed_loader,
+        )
+
+        freshness = projection.to_json()["freshness"]
+        self.assertFalse(freshness["overall_loaded_ok"])
+        self.assertEqual(1, freshness["failed_source_count"])
+        self.assertEqual(0, freshness["stale_source_count"])
+        managed_freshness = {row["source"]: row for row in freshness["sources"]}["managed_work_snapshot"]
+        self.assertFalse(managed_freshness["loaded_ok"])
+        self.assertFalse(managed_freshness["stale"])
+        self.assertEqual("rate-limit", managed_freshness["reason"])
+        self.assertIsNone(managed_freshness["age_seconds"])
+        self.assertEqual(0.0, managed_freshness["next_retry_after_seconds"])
+
+    def test_not_owner_daemon_status_reports_diagnostic_without_stale_retry(self) -> None:
+        def daemon_collector(*_args, **_kwargs) -> DaemonStatusReport:
+            return DaemonStatusReport(
+                repo_root=str(self.repo),
+                active_controller="noop:not-owner:other-device",
+                generated_at="2026-06-06T00:00:00Z",
+                daemons=(
+                    DaemonStatusProjection("comment-monitor", "not-owner", None, None, False, False, 0, "other-device"),
+                ),
+            )
+
+        projection = collect_shared_controller_projection(
+            self.ctx,
+            ProjectionRequest(include_managed_work=False, include_statusline=False, include_workqueue_keys=False),
+            daemon_status_collector=daemon_collector,
+        )
+
+        self.assertEqual(1, projection.daemon_fleet.not_owner)
+        self.assertEqual(0, projection.daemon_fleet.stale)
+        self.assertEqual(0, projection.daemon_fleet.dead)
+        freshness = projection.to_json()["freshness"]
+        self.assertTrue(freshness["overall_loaded_ok"])
+        self.assertEqual(0, freshness["failed_source_count"])
+        self.assertEqual(0, freshness["stale_source_count"])
+        daemon_freshness = {row["source"]: row for row in freshness["sources"]}["daemon_status"]
+        self.assertTrue(daemon_freshness["loaded_ok"])
+        self.assertFalse(daemon_freshness["stale"])
+        self.assertEqual("daemon-not-owner:1", daemon_freshness["reason"])
+        self.assertEqual(0.0, daemon_freshness["age_seconds"])
+        self.assertIsNone(daemon_freshness["next_retry_after_seconds"])
+
 
 if __name__ == "__main__":
     unittest.main()
