@@ -1,4 +1,4 @@
-"""Read-only GitHub authenticated-actor admission checks."""
+"""Read-only GitHub authenticated-actor admission and diagnostics checks."""
 
 from __future__ import annotations
 
@@ -34,6 +34,24 @@ class GitHubActorAdmission:
 
 
 @dataclass(frozen=True)
+class GitHubActorDiagnostics:
+    current_github_login: str
+    identity_authority: str
+    status: str
+    error: str = ""
+
+    def to_status_fields(self) -> dict[str, str]:
+        fields = {
+            "current_github_login": self.current_github_login,
+            "identity_authority": self.identity_authority,
+            "github_login_status": self.status,
+        }
+        if self.error:
+            fields["github_login_error"] = self.error
+        return fields
+
+
+@dataclass(frozen=True)
 class GitHubAuthenticatedActor:
     ctx: LoopContext
     runner: Runner | None = None
@@ -49,6 +67,46 @@ class GitHubAuthenticatedActor:
                 f"for {self.ctx.gh_repo_slug}"
             )
         return GitHubActorAdmission(login=login, repo_slug=self.ctx.gh_repo_slug, permission=permission)
+
+    def diagnostics(self) -> GitHubActorDiagnostics:
+        try:
+            result = self._run(["gh", "api", "user"])
+        except (OSError, subprocess.SubprocessError, TypeError, ValueError) as exc:
+            return GitHubActorDiagnostics(
+                current_github_login="",
+                identity_authority="display-only",
+                status="unavailable",
+                error=f"github-authenticated-actor:diagnostics: gh api user failed: {exc}",
+            )
+        if result.returncode != 0:
+            return GitHubActorDiagnostics(
+                current_github_login="",
+                identity_authority="display-only",
+                status="unavailable",
+                error=_failure("diagnostics", "gh api user", result),
+            )
+        try:
+            data = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError:
+            return GitHubActorDiagnostics(
+                current_github_login="",
+                identity_authority="display-only",
+                status="invalid",
+                error="github-authenticated-actor:diagnostics: invalid gh api user JSON",
+            )
+        login = str(data.get("login") or "").strip()
+        if not login:
+            return GitHubActorDiagnostics(
+                current_github_login="",
+                identity_authority="display-only",
+                status="missing",
+                error="github-authenticated-actor:diagnostics: authenticated login missing",
+            )
+        return GitHubActorDiagnostics(
+            current_github_login=login,
+            identity_authority="display-only",
+            status="ok",
+        )
 
     def _authenticated_login(self, action: str) -> str:
         result = self._run(["gh", "api", "user"])
@@ -84,6 +142,25 @@ class GitHubAuthenticatedActor:
         if self.runner is not None:
             return self.runner(cmd, self.ctx.repo_root)
         return subprocess.run(list(cmd), cwd=str(self.ctx.repo_root), capture_output=True, text=True, check=False)
+
+
+def write_github_actor_diagnostics_status(
+    ctx: LoopContext,
+    *,
+    runner: Runner | None = None,
+) -> GitHubActorDiagnostics:
+    diagnostics = GitHubAuthenticatedActor(ctx, runner=runner).diagnostics()
+    path = ctx.paths.state / "active-controller-status.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.update(diagnostics.to_status_fields())
+    path.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+    return diagnostics
 
 
 def _failure(action: str, label: str, result: subprocess.CompletedProcess[str]) -> str:

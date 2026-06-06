@@ -16,7 +16,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from codex_refactor_loop.context import LoopContext
-from codex_refactor_loop.github_actor import GitHubAuthenticatedActor
+from codex_refactor_loop.github_actor import GitHubAuthenticatedActor, write_github_actor_diagnostics_status
 
 
 class GitHubAuthenticatedActorTests(unittest.TestCase):
@@ -64,6 +64,42 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
         self.assertEqual(admission.permission, "write")
         self.assertEqual(admission.source, "gh-api")
         self.assertFalse(any(command[1:3] in (["issue", "view"], ["pr", "view"], ["issue", "edit"], ["pr", "edit"]) for command in self.commands))
+
+    def test_diagnostics_reads_login_without_repo_permission_or_authority(self) -> None:
+        diagnostics = GitHubAuthenticatedActor(self.ctx, runner=self.runner).diagnostics()
+
+        self.assertEqual(self.commands, [["gh", "api", "user"]])
+        self.assertEqual("controller-bot", diagnostics.current_github_login)
+        self.assertEqual("display-only", diagnostics.identity_authority)
+        self.assertEqual("ok", diagnostics.status)
+        self.assertEqual(
+            {
+                "current_github_login": "controller-bot",
+                "identity_authority": "display-only",
+                "github_login_status": "ok",
+            },
+            diagnostics.to_status_fields(),
+        )
+
+    def test_diagnostics_failure_is_local_status_not_admission_failure(self) -> None:
+        self.user = subprocess.CompletedProcess(["gh", "api", "user"], 1, "", "bad credentials")
+
+        diagnostics = GitHubAuthenticatedActor(self.ctx, runner=self.runner).diagnostics()
+
+        self.assertEqual(self.commands, [["gh", "api", "user"]])
+        self.assertEqual("", diagnostics.current_github_login)
+        self.assertEqual("display-only", diagnostics.identity_authority)
+        self.assertEqual("unavailable", diagnostics.status)
+        self.assertIn("bad credentials", diagnostics.error)
+
+    def test_diagnostics_helper_writes_rebuildable_local_status(self) -> None:
+        diagnostics = write_github_actor_diagnostics_status(self.ctx, runner=self.runner)
+
+        payload = json.loads((self.tmp / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("controller-bot", diagnostics.current_github_login)
+        self.assertEqual("controller-bot", payload["current_github_login"])
+        self.assertEqual("display-only", payload["identity_authority"])
+        self.assertEqual("ok", payload["github_login_status"])
 
     def test_admission_fails_closed_without_authenticated_login(self) -> None:
         self.user = subprocess.CompletedProcess(["gh", "api", "user"], 0, "{}", "")
@@ -134,6 +170,8 @@ class GitHubAuthenticatedActorTests(unittest.TestCase):
             "lifecycle_owner",
             "author.login",
             "updatedAt",
+            "owner" + "_login",
+            "GitHubActorIdentityProjection",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, source)

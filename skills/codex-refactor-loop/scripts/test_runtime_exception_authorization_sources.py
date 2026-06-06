@@ -1404,6 +1404,15 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "action-specific lifecycle authorization",
             "generic lifecycle actor",
             "bypass for #191/#238/#322/#396/#403",
+            "Same-repo multi-GitHub-user handling is HOLD-collapse",
+            "display/admission/accounting/routing/status metadata only",
+            "forbidden as partition key",
+            "lifecycle owner",
+            "lifecycle authority",
+            "diagnostics-only helper",
+            "`current_github_login`",
+            '`identity_authority="display-only"`',
+            "must not enter durable lease state or executable action authority",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, entry)
@@ -1449,6 +1458,22 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         assert mirror_allowlist is not None
         assert skill_allowlist is not None
         self.assertEqual(mirror_allowlist.group(0), skill_allowlist.group(0))
+
+    def test_active_controller_code_keeps_github_login_out_of_durable_lease(self) -> None:
+        source = read(ACTIVE_CONTROLLER)
+        tree = ast.parse(source)
+        fields: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == "ActiveControllerLease":
+                for child in node.body:
+                    if isinstance(child, ast.AnnAssign) and isinstance(child.target, ast.Name):
+                        fields.add(child.target.id)
+
+        self.assertEqual(
+            fields,
+            {"owner_device", "lease_id", "acquired_at", "expires_at", "renewed_at", "repo", "reason", "source_issue"},
+        )
+        self.assertNotIn("owner" + "_login", source)
 
     def test_banner_public_cli_removed_and_controller_action_owner_gated(self) -> None:
         cli_projection = python_projection(SKILL_ROOT / "scripts" / "codex_refactor_loop" / "cli.py")

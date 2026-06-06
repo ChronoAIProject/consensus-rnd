@@ -35,6 +35,8 @@ class DaemonStatusProjection:
     fingerprint_current: bool
     duplicate_canonical_wrappers: int
     active_controller: str
+    current_github_login: str = ""
+    identity_authority: str = "display-only"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -46,6 +48,8 @@ class DaemonStatusProjection:
             "fingerprint_current": self.fingerprint_current,
             "duplicate_canonical_wrappers": self.duplicate_canonical_wrappers,
             "active_controller": self.active_controller,
+            "current_github_login": self.current_github_login,
+            "identity_authority": self.identity_authority,
         }
 
 
@@ -55,11 +59,15 @@ class DaemonStatusReport:
     active_controller: str
     generated_at: str
     daemons: tuple[DaemonStatusProjection, ...]
+    current_github_login: str = ""
+    identity_authority: str = "display-only"
 
     def to_json(self) -> dict[str, Any]:
         return {
             "repo_root": self.repo_root,
             "active_controller": self.active_controller,
+            "current_github_login": self.current_github_login,
+            "identity_authority": self.identity_authority,
             "generated_at": self.generated_at,
             "daemons": [daemon.to_json() for daemon in self.daemons],
         }
@@ -68,15 +76,17 @@ class DaemonStatusReport:
 def collect(target: str = "all", *, repo_root: str | Path | None = None, skill_root: str | Path | None = None) -> DaemonStatusReport:
     ctx = LoopContext.load(repo_root=repo_root, skill_root=skill_root, read_only=True, allow_git_root_fallback=True)
     config = RestartConfig()
-    active_controller = _cached_active_controller_status(ctx.paths.state / "active-controller-status.json")
+    active_status = _cached_active_controller_status(ctx.paths.state / "active-controller-status.json")
     inventory = DaemonProcessInventory.collect()
     projections = tuple(
-        _project_target(ctx, config, inventory, daemon, active_controller)
+        _project_target(ctx, config, inventory, daemon, active_status)
         for daemon in daemon_targets(ctx, target)
     )
     return DaemonStatusReport(
         repo_root=str(ctx.repo_root),
-        active_controller=active_controller,
+        active_controller=active_status["active_controller"],
+        current_github_login=active_status["current_github_login"],
+        identity_authority=active_status["identity_authority"],
         generated_at=_utc_now(),
         daemons=projections,
     )
@@ -87,7 +97,7 @@ def _project_target(
     config: RestartConfig,
     inventory: DaemonProcessInventory,
     target: DaemonTarget,
-    active_controller: str,
+    active_status: dict[str, str],
 ) -> DaemonStatusProjection:
     pid = read_daemon_pid(target)
     heartbeat_age = read_heartbeat_age_seconds(target)
@@ -104,7 +114,7 @@ def _project_target(
     )
     duplicate_count = max(0, len(live_wrappers) - 1)
     running = pid is not None and pid_alive(pid) and heartbeat_fresh and fingerprint_current and duplicate_count == 0
-    status = _daemon_status(active_controller, pid, running, heartbeat_fresh, fingerprint_current, duplicate_count)
+    status = _daemon_status(active_status["active_controller"], pid, running, heartbeat_fresh, fingerprint_current, duplicate_count)
     return DaemonStatusProjection(
         name=target.name,
         status=status,
@@ -113,7 +123,9 @@ def _project_target(
         heartbeat_fresh=heartbeat_fresh,
         fingerprint_current=fingerprint_current,
         duplicate_canonical_wrappers=duplicate_count,
-        active_controller=active_controller,
+        active_controller=active_status["active_controller"],
+        current_github_login=active_status["current_github_login"],
+        identity_authority=active_status["identity_authority"],
     )
 
 
@@ -138,13 +150,21 @@ def _daemon_status(
     return "stale"
 
 
-def _cached_active_controller_status(path: Path) -> str:
+def _cached_active_controller_status(path: Path) -> dict[str, str]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return "unknown"
-    value = payload.get("active_controller") if isinstance(payload, dict) else None
-    return value if isinstance(value, str) and value else "unknown"
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    active_controller = payload.get("active_controller")
+    current_login = payload.get("current_github_login")
+    identity_authority = payload.get("identity_authority")
+    return {
+        "active_controller": active_controller if isinstance(active_controller, str) and active_controller else "unknown",
+        "current_github_login": current_login if isinstance(current_login, str) else "",
+        "identity_authority": identity_authority if isinstance(identity_authority, str) and identity_authority else "display-only",
+    }
 
 
 def _utc_now() -> str:

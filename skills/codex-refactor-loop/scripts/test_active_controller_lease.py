@@ -16,7 +16,11 @@ import sys
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR))
 
-from codex_refactor_loop.active_controller import ActiveControllerLeaseStore, DEFAULT_ACTIVE_CONTROLLER_REF
+from codex_refactor_loop.active_controller import (
+    ActiveControllerLeaseStore,
+    DEFAULT_ACTIVE_CONTROLLER_REF,
+    write_active_controller_status,
+)
 from codex_refactor_loop.context import LoopContext
 
 
@@ -238,6 +242,7 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
         )
 
         previous = os.environ.get("REPO_ROOT")
+        previous_host_env = os.environ.pop("CONSENSUS_RND_HOST_ENV", None)
         os.environ["REPO_ROOT"] = str(repo)
         try:
             store = ActiveControllerLeaseStore.from_context(LoopContext.load(repo_root=repo, skill_root=self.tmp))
@@ -246,6 +251,8 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
                 os.environ.pop("REPO_ROOT", None)
             else:
                 os.environ["REPO_ROOT"] = previous
+            if previous_host_env is not None:
+                os.environ["CONSENSUS_RND_HOST_ENV"] = previous_host_env
 
         self.assertEqual(DEFAULT_ACTIVE_CONTROLLER_REF, store.lease_ref)
         self.assertNotEqual("refs/heads/crnd/per-work-split", store.lease_ref)
@@ -261,6 +268,34 @@ class ActiveControllerLeaseStoreTests(unittest.TestCase):
         )
         self.assertEqual("device-a", data["owner_device"])
         self.assertEqual("191", data["source_issue"])
+        self.assertNotIn("owner_login", data)
+        self.assertNotIn("current_github_login", data)
+
+    def test_active_controller_status_may_include_display_only_github_login(self) -> None:
+        repo = self.a
+        (repo / ".config" / "consensus-rnd").mkdir(parents=True, exist_ok=True)
+        (repo / ".config" / "consensus-rnd" / "host.env").write_text(
+            f'export REPO_ROOT="{repo}"\nexport GH_REPO_SLUG="owner/repo"\n',
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        decision = self.store(repo, "device-a").try_acquire("device-a", 1800)
+
+        write_active_controller_status(
+            ctx,
+            decision,
+            github_diagnostics={
+                "current_github_login": "octocat",
+                "identity_authority": "display-only",
+                "github_login_status": "ok",
+            },
+        )
+
+        payload = json.loads((repo / ".refactor-loop" / "state" / "active-controller-status.json").read_text(encoding="utf-8"))
+        self.assertEqual("device-a", payload["owner_device"])
+        self.assertEqual("octocat", payload["current_github_login"])
+        self.assertEqual("display-only", payload["identity_authority"])
+        self.assertNotIn("owner_login", payload)
 
 
 if __name__ == "__main__":
