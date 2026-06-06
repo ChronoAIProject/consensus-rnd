@@ -20,6 +20,7 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop.workflow_spec import FORBIDDEN_FIELD_NAMES  # noqa: E402
 from codex_refactor_loop.workflow_stages import WORKFLOW_STAGES, format_stage  # noqa: E402
+from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 
 
 def read(path: Path) -> str:
@@ -1788,11 +1789,65 @@ class WakeupRunnerContractTests(unittest.TestCase):
             with self.subTest(needle=needle):
                 self.assertIn(needle, combined)
 
-    def test_restart_managed_daemon_list_mentions_eighth_daemon(self) -> None:
-        self.assertIn("All eight daemon command bodies", self.skill)
-        self.assertIn("patrol_inspector_daemon", self.skill)
-        self.assertIn("wakeup_runner_daemon", self.skill)
+    def test_restart_managed_daemon_list_projects_owner_local_command_surface(self) -> None:
+        self.assertIn("restart.py::DAEMON_COMMANDS", self.skill)
+        for daemon_name in restart_managed_daemon_names():
+            with self.subTest(daemon_name=daemon_name):
+                self.assertIn(daemon_name, self.skill)
         self.assertIn("`consensus-rnd-cli wakeup-runner`", self.skill)
+        daemon_bodies = section_after_heading(self.skill, "Daemon command bodies")
+        self.assertNotIn("patrol_inspector_daemon", daemon_bodies)
+
+    def test_restart_daemon_contract_uses_restart_owner_local_command_surface(self) -> None:
+        self.assertIn("restart.py::DAEMON_COMMANDS", self.skill)
+        for stale in (
+            "all 7 restart-helper-managed daemons",
+            "7 restart-helper-managed daemons",
+            "eight restart-helper-managed write daemons",
+            "eight write daemons",
+            "All eight daemon command bodies",
+            "8 个长跑 daemon",
+            "全部 8 个 daemon",
+            "fewer than the six required restart-helper-managed daemons",
+            "one of the six required daemons",
+            "6-daemon restart-helper-managed",
+        ):
+            with self.subTest(stale=stale):
+                self.assertNotIn(stale, self.skill)
+
+    def test_no_shared_controller_runtime_registry_or_tick_envelope_scaffold(self) -> None:
+        package_root = SKILL_ROOT / "scripts" / "codex_refactor_loop"
+        forbidden_path_names = {
+            "controller_runtime_scaffold.py",
+            "controller_runtime_capabilities.py",
+            "tick_outcome.py",
+            "tick_outcomes.py",
+            "daemon_registry.json",
+            "daemon_registry.yaml",
+            "daemon_registry.yml",
+            "controller_runtime_registry.json",
+            "controller_runtime_registry.yaml",
+            "controller_runtime_registry.yml",
+        }
+        forbidden_paths = tuple(path for path in package_root.rglob("*") if path.name in forbidden_path_names)
+        for path in forbidden_paths:
+            with self.subTest(path=path.relative_to(SKILL_ROOT)):
+                self.assertFalse(path.exists())
+
+        package_sources = "\n".join(path.read_text(encoding="utf-8") for path in package_root.rglob("*.py"))
+        for token in (
+            "class TickOutcome",
+            "TickOutcome(",
+            "ControllerRuntimeScaffold",
+            "ControllerRuntimeCapabilities",
+            "ControllerRuntimeRegistry",
+            "DaemonRegistry",
+        ):
+            with self.subTest(token=token):
+                self.assertNotIn(token, package_sources)
+        for token in ('".refactor-loop/state.json"', "'/.refactor-loop/state.json'", '"/.refactor-loop/state.json"'):
+            with self.subTest(token=token):
+                self.assertNotIn(token, package_sources)
 
 
 if __name__ == "__main__":
