@@ -113,7 +113,12 @@ RELEASE_ROLLUP_BODY_FILE = ".refactor-loop/runs/release-rollup-pr-body.md"
 RELEASE_ROLLUP_BODY_PROMPT = ".refactor-loop/prompts/release-rollup-body.md"
 RELEASE_ROLLUP_BODY_LOG = ".refactor-loop/logs/release-rollup-body.log"
 AUDIT_FALLBACK_TEMPLATE = "prompts/audit.md"
+AUDIT_FALLBACK_ENABLE_ENV = "AUDIT_FALLBACK_ENABLE"
+TRUE_LIKE_VALUES = {"true", "1", "yes", "on"}
 AUDIT_ITER_RE = re.compile(r"audit-iter-([1-9][0-9]*)")
+AUDIT_FALLBACK_PENDING_RE = re.compile(
+    r"^HARD_GATE:dispatch_required=([1-9][0-9]*):audit_fallback=(audit-iter-[1-9][0-9]*)$"
+)
 
 
 def _contained_execution_cd(ctx: LoopContext, text: str) -> Path:
@@ -380,6 +385,8 @@ def _harness_spawn_intent_action(
 
 
 def audit_fallback_action(ctx: LoopContext, concurrency: Mapping[str, Any], actions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    if not audit_fallback_enabled(ctx):
+        return None
     hard_gate = concurrency.get("hard_gate")
     if not isinstance(hard_gate, Mapping) or hard_gate.get("active") is not True:
         return None
@@ -391,10 +398,16 @@ def audit_fallback_action(ctx: LoopContext, concurrency: Mapping[str, Any], acti
     if has_dispatchable_action(actions):
         return None
 
-    task_id = _next_audit_task_id(ctx)
+    pending = _pending_audit_fallback(ctx)
+    if pending is not None:
+        task_id, source_marker, reusable = pending
+        if not reusable:
+            return None
+    else:
+        task_id = _next_audit_task_id(ctx)
+        source_marker = _record_audit_fallback_source_marker(ctx, dispatch_required, task_id)
     prompt = ctx.paths.prompts / f"{task_id}.md"
     log_path = ctx.paths.logs / f"{task_id}.log"
-    source_marker = _record_audit_fallback_source_marker(ctx, dispatch_required, task_id)
     _render_audit_fallback_prompt(ctx, prompt, task_id)
     return {
         "priority": 9,
@@ -427,6 +440,10 @@ def audit_fallback_action(ctx: LoopContext, concurrency: Mapping[str, Any], acti
     }
 
 
+def audit_fallback_enabled(ctx: LoopContext) -> bool:
+    return str(ctx.host_env.get(AUDIT_FALLBACK_ENABLE_ENV, "") or "").strip().lower() in TRUE_LIKE_VALUES
+
+
 def _next_audit_task_id(ctx: LoopContext) -> str:
     highest = 0
     for path in [*ctx.paths.logs.glob("audit-iter-*.log"), *ctx.paths.prompts.glob("audit-iter-*.md"), *ctx.paths.runs.glob("audit-iter-*.md")]:
@@ -434,6 +451,37 @@ def _next_audit_task_id(ctx: LoopContext) -> str:
         if match:
             highest = max(highest, int(match.group(1)))
     return f"audit-iter-{highest + 1}"
+
+
+def _pending_audit_fallback(ctx: LoopContext) -> tuple[str, str, bool] | None:
+    try:
+        lines = ctx.paths.pending_events.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        marker = line.strip()
+        match = AUDIT_FALLBACK_PENDING_RE.fullmatch(marker)
+        if not match:
+            continue
+        task_id = match.group(2)
+        return task_id, marker, _audit_fallback_target_reusable(ctx.paths.logs / f"{task_id}.log")
+    return None
+
+
+def _audit_fallback_target_reusable(log_path: Path) -> bool:
+    if not log_path.exists():
+        return True
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return False
+    for line in reversed(lines[-30:]):
+        stripped = line.strip()
+        if stripped == "EXIT=0":
+            return False
+        if stripped.startswith("EXIT="):
+            return True
+    return False
 
 
 def _record_audit_fallback_source_marker(ctx: LoopContext, dispatch_required: int, task_id: str) -> str:
