@@ -112,6 +112,7 @@ class RunnerResult:
 class WakeupApplyBudget:
     spawn_budget: int
     source: str
+    hard_gate_active: bool
 
     @classmethod
     def from_plan(cls, plan: Mapping[str, Any]) -> "WakeupApplyBudget":
@@ -129,11 +130,11 @@ class WakeupApplyBudget:
         deficit = _positive_int(concurrency.get("deficit"))
         if dispatch_required is None or deficit is None:
             return cls.legacy()
-        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit")
+        return cls(min(dispatch_required, deficit), "hard_gate.dispatch_required/concurrency.deficit", True)
 
     @classmethod
     def legacy(cls) -> "WakeupApplyBudget":
-        return cls(1, "legacy-single-apply")
+        return cls(1, "legacy-single-apply", False)
 
     def is_spawn_action(self, action: Mapping[str, Any]) -> bool:
         return action.get("controller_action") in SPAWN_BATCH_CONTROLLER_ACTIONS
@@ -234,11 +235,14 @@ class WakeupRunner:
         budget = WakeupApplyBudget.from_plan(plan)
         results: list[RunnerResult] = []
         applied_spawns = 0
+        worker_top_up_only = False
         for action in plan.get("actions", []):
             if not isinstance(action, dict) or action.get("status_only") is True:
                 continue
             is_spawn_action = budget.is_spawn_action(action)
             consumes_spawn_budget = is_spawn_action or self._uses_spawn_budget(action)
+            if worker_top_up_only and not consumes_spawn_budget:
+                continue
             if consumes_spawn_budget and applied_spawns >= budget.spawn_budget:
                 continue
             result = self.apply_action(action)
@@ -254,6 +258,9 @@ class WakeupRunner:
                 break
             if consumes_spawn_budget:
                 applied_spawns += 1
+                continue
+            if budget.hard_gate_active and applied_spawns < budget.spawn_budget:
+                worker_top_up_only = True
                 continue
             break
         return results
