@@ -4848,8 +4848,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(action["no_lifecycle_authority"])
         self.assertTrue(action["no_generic_command"])
         self.assertEqual(action["source_artifact"], "github-open-managed-items")
-        self.assertEqual(action["source_marker"], "meta-escalation-long-stuck:24")
-        self.assertEqual(action["threshold_hours"], "24")
+        self.assertEqual(action["source_marker"], "meta-escalation-long-stuck:3")
+        self.assertEqual(action["threshold_hours"], "3")
         self.assertEqual(action["stale_revival_hours"], "3")
         self.assertTrue(action["run_in_background_required"])
         self.assertEqual(Path(action["prompt"]).name, "meta-reflector-repository-stalled.md")
@@ -4905,6 +4905,21 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
 
         self.assertEqual([action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"], [])
         self.assertEqual([action["intent_id"] for action in self.harness_spawn_actions(plan)], ["specific-work"])
+
+    def test_repository_stalled_meta_reflector_ignores_actions_suppressed_after_projection(self) -> None:
+        (self.logs / "implement-issue507.log").write_text(
+            "IMPLEMENT_DONE:issue-507:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="repository_stalled")
+
+        suppressed = next(action for action in plan["actions"] if action["action_id"].startswith("completed-marker:implement-issue507"))
+        self.assertTrue(suppressed["status_only"])
+        self.assertEqual(suppressed["suppressed_reason"], "implementation_worktree_missing")
+        self.assertNotIn("runner_authority", suppressed)
+        reflector_actions = [action for action in plan["actions"] if action["kind"] == "repository-stalled-meta-reflector"]
+        self.assertEqual(len(reflector_actions), 1)
 
     def write_transition_assessment(self, number: int, transition_type: str, confidence: float) -> None:
         path = self.repo / ".refactor-loop" / "runs" / "transition-assessments" / f"issue-{number}.json"
