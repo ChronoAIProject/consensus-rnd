@@ -2062,6 +2062,88 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(candidate["target_ref"], "origin/dev")
         self.assertEqual(candidate["to_version"], "1.2.3-beta.5")
 
+    def test_release_dispatch_recovers_stale_applied_ledger_with_empty_target_ref(self) -> None:
+        self.write_release_dispatch_fixtures()
+        bad_candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        bad_candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        action = self.release_dispatch_action(
+            preconditions=[
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+                "release_candidate_target_ref_invalid",
+            ],
+        )
+        ledger = self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl"
+        ledger.write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(results[0].reason, "")
+        candidate = json.loads(bad_candidate.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["target_ref"], "origin/dev")
+        pending = (self.repo / ".refactor-loop/.controller-pending-events.log").read_text(encoding="utf-8")
+        self.assertIn(
+            f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action['action_id']}:target_ref_invalid",
+            pending,
+        )
+
+    def test_release_dispatch_valid_candidate_keeps_applied_ledger_duplicate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        existing = self.repo / ".refactor-loop/state/release-candidate.json"
+        existing.write_text(
+            json.dumps({"ready": True, "target_ref": "origin/dev", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        action = self.release_dispatch_action(
+            preconditions=[
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+                "release_candidate_target_ref_invalid",
+            ],
+        )
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        candidate = json.loads(existing.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["target_ref"], "origin/dev")
+
+    def test_release_dispatch_without_recovery_precondition_keeps_applied_ledger_duplicate(self) -> None:
+        self.write_release_dispatch_fixtures()
+        bad_candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        bad_candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+        action = self.release_dispatch_action()
+        (self.repo / ".refactor-loop/state/wakeup-runner-ledger.jsonl").write_text(
+            json.dumps({"action_id": action["action_id"], "status": "applied", "reason": ""}) + "\n",
+            encoding="utf-8",
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "skipped")
+        self.assertEqual(results[0].reason, "duplicate")
+        candidate = json.loads(bad_candidate.read_text(encoding="utf-8"))
+        self.assertEqual(candidate["target_ref"], "")
+
     def test_release_dispatch_rejects_existing_candidate_with_valid_target_ref(self) -> None:
         self.write_release_dispatch_fixtures()
         existing = self.repo / ".refactor-loop/state/release-candidate.json"

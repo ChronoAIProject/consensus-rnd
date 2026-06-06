@@ -1553,6 +1553,11 @@ class WakeupRunner:
             if status == "applied":
                 if _is_remote_ci_red_dispatch(action):
                     continue
+                if self._release_dispatch_stale_ledger_reason(action):
+                    self._append_pending_event(
+                        f"WAKEUP_RUNNER_STALE_RELEASE_DISPATCH_LEDGER:{action_id}:target_ref_invalid"
+                    )
+                    continue
                 stale_spawn_reason = self._applied_spawn_stale_reason(action)
                 if stale_spawn_reason:
                     self._append_pending_event(f"WAKEUP_RUNNER_STALE_SPAWN_LEDGER:{action_id}:{stale_spawn_reason}")
@@ -1561,6 +1566,19 @@ class WakeupRunner:
             if status == "blocked" and _terminal_blocked_reason(str(row.get("reason") or "")):
                 return True
         return False
+
+    def _release_dispatch_stale_ledger_reason(self, action: Mapping[str, Any]) -> str:
+        if action.get("kind") != "release-gate-dispatch":
+            return ""
+        if action.get("controller_action") != "dispatch_release_candidate":
+            return ""
+        preconditions = action.get("preconditions")
+        if not isinstance(preconditions, list) or "release_candidate_target_ref_invalid" not in preconditions:
+            return ""
+        candidate = self.ctx.paths.state / "release-candidate.json"
+        if not release_candidate_target_ref_invalid(read_json(candidate, {})):
+            return ""
+        return "target_ref_invalid"
 
     @property
     def remote_ci_fix_attempts_path(self) -> Path:
