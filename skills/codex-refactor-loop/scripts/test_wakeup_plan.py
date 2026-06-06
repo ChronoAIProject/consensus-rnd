@@ -782,6 +782,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             head_sha: str = "",
             body: str = "",
             updated_at: str = "2026-06-05T00:00:00Z",
+            is_draft: bool = False,
         ) -> dict[str, object]:
             return {
                 "kind": "PR",
@@ -791,6 +792,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                 "head_ref": head_ref or None,
                 "head_sha": head_sha,
                 "body": body,
+                "is_draft": is_draft,
                 "state": "open",
                 "updated_at": updated_at,
             }
@@ -930,6 +932,30 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
                     [managed, label_catalog.PHASE_REVIEWING, auto],
                     head_ref="refactor/iter506-issue-506",
                     updated_at="2026-05-03T00:00:00Z",
+                ),
+            ],
+            "draft_rollup_and_review_prs": [
+                pr(
+                    572,
+                    "draft rollup PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="rollup/integration-sha",
+                    head_sha="integration-sha",
+                    is_draft=True,
+                ),
+                pr(
+                    573,
+                    "ordinary draft review PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="refactor/iter573-fix",
+                    is_draft=True,
+                ),
+                pr(
+                    574,
+                    "non-draft rollup PR",
+                    [managed, label_catalog.PHASE_REVIEWING, auto],
+                    head_ref="rollup/integration-sha-2",
+                    head_sha="integration-sha-2",
                 ),
             ],
         }
@@ -4943,6 +4969,19 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             plan["concurrency"]["expected_breakdown"],
             [{"expected": 1, "id": "#255", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING}],
         )
+
+    def test_draft_release_rollup_is_not_expected_active_review_task(self) -> None:
+        plan = self.run_plan(fixture="draft_rollup_and_review_prs", ps_count=5)
+
+        self.assertEqual(
+            plan["concurrency"]["expected_breakdown"],
+            [
+                {"expected": 1, "id": "#573", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
+                {"expected": 1, "id": "#574", "kind": "pr", "phase": label_catalog.PHASE_REVIEWING},
+            ],
+        )
+        self.assertEqual(plan["concurrency"]["expected_from_active_tasks"], 2)
+        self.assertEqual(plan["hard_gate"]["dispatch_required"], 0)
 
     def test_pr_open_parent_issue_is_non_action_with_zero_expected_workers(self) -> None:
         plan = self.run_plan(fixture="pr_open_parent")

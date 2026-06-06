@@ -19,6 +19,8 @@ class ManagedItem:
     body: str = ""
     state: str = "open"
     title: str = ""
+    head_ref: str = ""
+    is_draft: bool = False
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,10 @@ def has_open_actionable_managed_work(items: Iterable[ManagedItem | Mapping[str, 
     return bool(open_actionable_managed_items(items))
 
 
+def is_draft_release_rollup_pr(item: ManagedItem) -> bool:
+    return item.kind == "pr" and item.state == "open" and item.is_draft is True and item.head_ref.startswith("rollup/")
+
+
 def linkage_mismatches(items: Iterable[ManagedItem | Mapping[str, object]]) -> tuple[str, ...]:
     return ManagedWorkProjection(items).linkage_mismatches()
 
@@ -187,6 +193,8 @@ def _coerce_item(item: ManagedItem | Mapping[str, object]) -> ManagedItem:
         body=str(item.get("body") or ""),
         state=_normalize_state(str(item.get("state") or "open")),
         title=str(item.get("title") or ""),
+        head_ref=str(item.get("head_ref") or ""),
+        is_draft=bool(item.get("is_draft") is True),
     )
 
 

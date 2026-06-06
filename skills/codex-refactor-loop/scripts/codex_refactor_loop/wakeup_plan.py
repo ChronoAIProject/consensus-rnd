@@ -49,7 +49,12 @@ from codex_refactor_loop.review_fix_dispatch import (
     ReviewThreadCompletionEvidence,
     validate_review_thread_completion,
 )
-from codex_refactor_loop.work_items import ManagedWorkProjection, extract_closing_issue_numbers, open_actionable_managed_items
+from codex_refactor_loop.work_items import (
+    ManagedWorkProjection,
+    extract_closing_issue_numbers,
+    is_draft_release_rollup_pr,
+    open_actionable_managed_items,
+)
 from codex_refactor_loop.workflow_spec import WorkflowSpecError, load_validated_workflow_spec
 from codex_refactor_loop.workflow_stages import assert_stage_slug
 
@@ -185,6 +190,7 @@ class GhItem:
     merge_state_status: str = ""
     body: str = ""
     updated_at: str = ""
+    is_draft: bool = False
 
     @property
     def item(self) -> str:
@@ -902,6 +908,8 @@ def expected_from_open_items(items: list[GhItem]) -> tuple[int, list[dict[str, A
     breakdown: list[dict[str, Any]] = []
     total = 0
     for item in ManagedWorkProjection(_projection_items(items)).effective_worker_items():
+        if is_draft_release_rollup_pr(item):
+            continue
         labels = set(item.labels)
         if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set(labels).canonical:
             continue
@@ -2123,6 +2131,7 @@ def load_github_items_with_status(repo_root: Path) -> tuple[list[GhItem], bool]:
                 head_sha=raw.head_sha if kind == "PR" else "",
                 body=raw.body if kind == "PR" else "",
                 updated_at=raw.updated_at,
+                is_draft=raw.is_draft if kind == "PR" else False,
             )
         )
     return items, True
@@ -3655,6 +3664,8 @@ def _projection_items(items: list[GhItem]) -> list[dict[str, Any]]:
             "body": item.body,
             "state": "open",
             "title": item.title,
+            "head_ref": item.head_ref or "",
+            "is_draft": item.is_draft,
         }
         for item in items
     ]

@@ -23,7 +23,7 @@ from .. import labels as label_catalog
 from ..managed_work_snapshot import load_open_managed_work_snapshot
 from ..state import read_json, write_json
 from ..update_check import parse_time
-from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work
+from ..work_items import ManagedWorkProjection, has_open_actionable_managed_work, is_draft_release_rollup_pr
 
 
 PROGRESS_MARKER_RE = re.compile(r"\b(PHASE|REVIEW|FIX|META)[A-Z_]*:")
@@ -334,6 +334,8 @@ class ConcurrencyMonitor:
                     "human": human,
                     "labels": label_names,
                     "body": entry.body,
+                    "head_ref": entry.head_ref or "",
+                    "is_draft": entry.is_draft,
                     "state": "open",
                 }
             )
@@ -343,6 +345,8 @@ class ConcurrencyMonitor:
         breakdown = []
         total = 0
         for item in ManagedWorkProjection(items).effective_worker_items():
+            if is_draft_release_rollup_pr(item):
+                continue
             if label_catalog.HUMAN_MAINTAINER_DECISION in label_catalog.normalize_label_set([item.human]).canonical:
                 continue
             phase = label_catalog.normalize_label_set([str(item.phase)]).phase or ""

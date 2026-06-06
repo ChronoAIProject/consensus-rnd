@@ -126,6 +126,48 @@ class PackageConcurrencyMonitorTests(unittest.TestCase):
             [{"id": "#255", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1}],
         )
 
+    def test_compute_expected_skips_draft_release_rollup_but_keeps_review_prs(self) -> None:
+        items = [
+            {
+                "number": 572,
+                "kind": "pr",
+                "phase": labels.PHASE_REVIEWING,
+                "human": labels.HUMAN_AUTO,
+                "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO],
+                "head_ref": "rollup/integration-sha",
+                "is_draft": True,
+            },
+            {
+                "number": 573,
+                "kind": "pr",
+                "phase": labels.PHASE_REVIEWING,
+                "human": labels.HUMAN_AUTO,
+                "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO],
+                "head_ref": "refactor/iter573-fix",
+                "is_draft": True,
+            },
+            {
+                "number": 574,
+                "kind": "pr",
+                "phase": labels.PHASE_REVIEWING,
+                "human": labels.HUMAN_AUTO,
+                "labels": [labels.MANAGED, labels.PHASE_REVIEWING, labels.HUMAN_AUTO],
+                "head_ref": "rollup/integration-sha-2",
+                "is_draft": False,
+            },
+        ]
+
+        expected, breakdown = self.monitor.compute_expected(items)
+
+        self.assertEqual(expected, 2)
+        self.assertEqual(
+            breakdown,
+            [
+                {"id": "#573", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1},
+                {"id": "#574", "kind": "pr", "phase": labels.PHASE_REVIEWING, "expected": 1},
+            ],
+        )
+
     def test_cli_count_and_list_use_canonical_spawn_filter(self) -> None:
         repo = self.ctx.repo_root
         fake_ps = (
