@@ -48,6 +48,8 @@ from codex_refactor_loop.wakeup_plan import (  # noqa: E402
     release_countdown_actions,
     release_rollup_auto_merge_actions,
     release_rollup_actions,
+    release_gate_dispatch_actions,
+    release_publish_actions,
     review_evidence_redispatch_actions,
     restore_hard_gate_for_dispatchable_actions,
     resolve_repo_root,
@@ -5259,6 +5261,97 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertNotIn("command", actions[0])
         self.assertNotIn("controller_action", actions[0])
         self.assertFalse(has_dispatchable_action(actions))
+
+    def test_release_gate_dispatch_projects_ready_decision_into_artifact_only_action(self) -> None:
+        def scorer(_: Path) -> dict:
+            return {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 100,
+                "ready": True,
+                "signals": {"fresh_heartbeats": {"passed": True}},
+                "blocked_reasons": [],
+            }
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(self.repo, scorer=scorer)
+
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["kind"], "release-gate-dispatch")
+        self.assertEqual(action["controller_action"], "dispatch_release_candidate")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertEqual(action["source_artifact"], ".refactor-loop/state/auto-release-signals.json")
+        self.assertNotIn("source_marker", action)
+        self.assertIn("release_gate_ready", action["preconditions"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertTrue(has_dispatchable_action(actions))
+        self.assertFalse((self.repo / ".refactor-loop/state/release-candidate.json").exists())
+
+    def test_release_gate_dispatch_does_not_project_when_candidate_exists(self) -> None:
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(json.dumps({"ready": True, "target_ref": "origin/review"}), encoding="utf-8")
+
+        with mock.patch.dict(os.environ, {"RELEASE_AUTO_ENABLE": "true"}):
+            actions = release_gate_dispatch_actions(
+                self.repo,
+                scorer=lambda _: {
+                    "from_version": "1.2.3-beta.4",
+                    "to_version": "1.2.3-beta.5",
+                    "stability_score": 100,
+                    "ready": True,
+                    "signals": {},
+                    "blocked_reasons": [],
+                },
+            )
+
+        self.assertEqual(actions, [])
+
+    def test_release_gate_dispatch_requires_host_opt_in(self) -> None:
+        actions = release_gate_dispatch_actions(
+            self.repo,
+            scorer=lambda _: {
+                "from_version": "1.2.3-beta.4",
+                "to_version": "1.2.3-beta.5",
+                "stability_score": 100,
+                "ready": True,
+                "signals": {},
+                "blocked_reasons": [],
+            },
+        )
+
+        self.assertEqual(actions, [])
+
+    def test_release_publish_projects_existing_candidate_into_publisher_action(self) -> None:
+        candidate = self.repo / ".refactor-loop/state/release-candidate.json"
+        candidate.write_text(
+            json.dumps({"ready": True, "target_ref": "origin/review", "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        actions = release_publish_actions(self.repo)
+
+        self.assertEqual(len(actions), 1)
+        action = actions[0]
+        self.assertEqual(action["kind"], "release-publish")
+        self.assertEqual(action["controller_action"], "publish_release_candidate")
+        self.assertEqual(action["candidate_path"], ".refactor-loop/state/release-candidate.json")
+        self.assertEqual(action["target_ref"], "origin/review")
+        self.assertEqual(action["source_marker"], "1.2.3-beta.5")
+        self.assertEqual(action["runner_authority"], "wakeup-runner-396")
+        self.assertTrue(action["no_generic_command"])
+        self.assertIn("release_publish_preflight", action["preconditions"])
+        self.assertFalse(action.get("status_only", False))
+        self.assertTrue(has_dispatchable_action(actions))
+
+    def test_release_publish_skips_candidate_without_target_ref(self) -> None:
+        (self.repo / ".refactor-loop/state/release-candidate.json").write_text(
+            json.dumps({"ready": True, "to_version": "1.2.3-beta.5"}),
+            encoding="utf-8",
+        )
+
+        self.assertEqual(release_publish_actions(self.repo), [])
 
     def test_release_countdown_default_goal_scorer_fallback_runs_once(self) -> None:
         calls: list[Path] = []

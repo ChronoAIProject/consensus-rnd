@@ -42,6 +42,7 @@ from codex_refactor_loop.pr_checks import PrChecksProjection
 from codex_refactor_loop.release.required_checks import ReleaseRequiredChecksProjection, required_release_checks
 from codex_refactor_loop.release.gate import decide_release_artifact
 from codex_refactor_loop.restart import restart_managed_daemon_names
+from codex_refactor_loop.state import read_json
 from codex_refactor_loop.transition_assessment import TransitionAssessmentReader, transition_rank_key
 from codex_refactor_loop.worker_markers import (
     log_has_clean_exit,
@@ -115,6 +116,7 @@ RUNNER_NAMED_HELPER_ACTIONS = {
     "close_managed_item_from_drop_marker",
     "review_gate",
     "auto_merge_release_rollup_pr_from_action",
+    "dispatch_release_candidate",
     "publish_release_candidate",
     "apply_issue_decomposition_plan",
 }
@@ -151,6 +153,8 @@ EXECUTABLE_ACTION_KINDS = {
     "release-rollup-needed",
     "ci-red",
     "release-rollup-auto-merge",
+    "release-gate-dispatch",
+    "release-publish",
     "review-evidence-redispatch",
 }
 NON_ACTION_PHASE_LABELS = {
@@ -3412,6 +3416,89 @@ def release_countdown_actions(repo_root: Path, items: list[GhItem], scorer: Any 
     ]
 
 
+def release_gate_dispatch_actions(repo_root: Path, scorer: Any | None = None) -> list[dict[str, Any]]:
+    if os.environ.get("RELEASE_AUTO_ENABLE") != "true":
+        return []
+    candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
+    if candidate_path.exists():
+        return []
+    score = _release_countdown_score(repo_root, scorer=scorer)
+    if not score.get("ready"):
+        return []
+    from_version = str(score.get("from_version") or "")
+    to_version = str(score.get("to_version") or "")
+    if not from_version or not to_version or from_version == to_version:
+        return []
+    return [
+        {
+            "priority": 2,
+            "kind": "release-gate-dispatch",
+            "action_id": f"release-gate-dispatch:{from_version}->{to_version}",
+            "item": "release",
+            "phase": "publish",
+            "actor": "controller",
+            "route": "release-gate-dispatch",
+            "controller_action": "dispatch_release_candidate",
+            "source": "release-gate",
+            "source_artifact": ".refactor-loop/state/auto-release-signals.json",
+            "target_kind": None,
+            "target_number": None,
+            "target": None,
+            "preconditions": [
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_gate_ready",
+                "decision_artifact_only",
+            ],
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+            "from_version": from_version,
+            "to_version": to_version,
+        }
+    ]
+
+
+def release_publish_actions(repo_root: Path) -> list[dict[str, Any]]:
+    candidate_path = repo_root / ".refactor-loop" / "state" / "release-candidate.json"
+    candidate = read_json(candidate_path, {})
+    if not isinstance(candidate, dict) or candidate.get("ready") is not True:
+        return []
+    target_ref = str(candidate.get("target_ref") or "").strip()
+    to_version = str(candidate.get("to_version") or "").strip()
+    if not target_ref:
+        return []
+    return [
+        {
+            "priority": 2,
+            "kind": "release-publish",
+            "action_id": f"release-publish:{to_version or target_ref}",
+            "item": "release",
+            "phase": "publish",
+            "actor": "controller",
+            "route": "release-publish",
+            "controller_action": "publish_release_candidate",
+            "source": "release-candidate",
+            "source_artifact": ".refactor-loop/state/release-candidate.json",
+            "source_marker": to_version or target_ref,
+            "candidate_path": ".refactor-loop/state/release-candidate.json",
+            "target_ref": target_ref,
+            "target_kind": None,
+            "target_number": None,
+            "target": None,
+            "preconditions": [
+                "active_controller_owner",
+                "release_auto_opt_in",
+                "release_candidate_artifact",
+                "release_publish_preflight",
+            ],
+            "runner_authority": RUNNER_AUTHORITY,
+            "no_generic_command": True,
+            "no_lifecycle_authority": True,
+        }
+    ]
+
+
 def _default_goal_milestone(repo_root: Path) -> dict[str, Any] | None:
     slug = github_repo_slug()
     if not slug:
@@ -3906,6 +3993,8 @@ def build_plan(repo_root: Path) -> dict[str, Any]:
     actions.extend(rebase_resolve_completed_marker_actions(repo_root, gh_items if gh_items_loaded else []))
     actions.extend(release_rollup_actions(repo_root))
     actions.extend(rollup_auto_merge_actions)
+    actions.extend(release_publish_actions(repo_root))
+    actions.extend(release_gate_dispatch_actions(repo_root))
     actions.extend(ci_red_actions(repo_root, gh_items, ctx))
     actions.extend(no_gap_actions(repo_root))
     host_actions, host_spec_error = load_host_workflow_projection(repo_root)
