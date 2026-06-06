@@ -2881,6 +2881,36 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         for forbidden in ("argv", "shell", "cmd", "command_line", "commands", "env", "git", "gh", "executor"):
             self.assertNotIn(forbidden, action)
 
+    def test_remote_ci_fix_done_duplicate_marker_projects_executable_ci_fix_publish(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
+            f"{marker}\n{marker}\ntokens used\nEXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        action = completed_marker_action(plan, "completed-marker:remote-ci-fix-pr77-contract-tests")
+        self.assertEqual(action["controller_action"], "dispatch_remote_ci_fix")
+        self.assertEqual(action["marker"], marker)
+        self.assertEqual(action["source_marker"], marker)
+        self.assertNotIn("status_only", action)
+
+    def test_remote_ci_fix_done_conflicting_duplicate_marker_fails_closed(self) -> None:
+        (self.logs / "remote-ci-fix-pr77-contract-tests.log").write_text(
+            "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
+            "REMOTE_CI_FIX_DONE:contract-tests:ok\n"
+            "tokens used\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+
+        plan = self.run_plan(fixture="open_pr_77")
+
+        rendered = json.dumps(plan, sort_keys=True)
+        self.assertNotIn("completed-marker:remote-ci-fix-pr77-contract-tests", rendered)
+        self.assertNotIn("REMOTE_CI_FIX_DONE:contract-tests:ok", rendered)
+
     def test_reviewing_pr_with_missing_reviewer_heads_projects_dispatch_reviewers(self) -> None:
         for role, verdict in (("architect", "approve"), ("tests", "approve"), ("quality", "comment")):
             (self.repo / ".refactor-loop" / "runs").mkdir(parents=True, exist_ok=True)

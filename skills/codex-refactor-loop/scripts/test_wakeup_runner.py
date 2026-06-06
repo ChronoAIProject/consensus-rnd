@@ -1880,6 +1880,79 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(actions.calls[0][1]["branch"], "refactor/iter77-issue-77")
         self.assertEqual(Path(actions.calls[0][1]["worktree"]).resolve(), worktree.resolve())
 
+    def test_duplicate_remote_ci_fix_done_commits_and_pushes_worker_output(self) -> None:
+        worktree = self.repo / ".worktrees" / "iter77-issue-77"
+        worktree.mkdir(parents=True, exist_ok=True)
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        log = self.repo / ".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log"
+        log.write_text(f"{marker}\n{marker}\ntokens used\nEXIT=0\n", encoding="utf-8")
+        action = self.remote_ci_fix_action(
+            kind="completed-marker",
+            action_id=f"completed-marker:{log.name}:{marker}",
+            source_artifact=".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log",
+            source_marker=marker,
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            head_sha=None,
+            check_name=None,
+        )
+        seen: list[list[str]] = []
+
+        def command_runner(command):
+            cmd = [str(part) for part in command]
+            seen.append(cmd)
+            if cmd[:3] == ["gh", "api", "repos/owner/repo/pulls/77"]:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"state": "open"}), "")
+            if cmd[:3] == ["gh", "pr", "view"] and "headRefName" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, json.dumps({"headRefName": "refactor/iter77-issue-77"}), "")
+            if cmd[:2] == ["git", "-C"] and len(cmd) > 3 and Path(cmd[2]).resolve() == self.repo.resolve() and cmd[3] == "worktree":
+                return subprocess.CompletedProcess(
+                    cmd,
+                    0,
+                    f"worktree {self.repo}\nbranch refs/heads/auto-refact-dev\n\n"
+                    f"worktree {worktree}\nbranch refs/heads/refactor/iter77-issue-77\n\n",
+                    "",
+                )
+            if "status" in cmd and "--porcelain" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, " M skills/x.py\n", "")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+
+        actions = FakeActions()
+        runner = WakeupRunner(self.ctx, plan_loader=lambda _repo: self.base_plan(action), actions=actions, command_runner=command_runner)
+        results = runner.run_once()
+
+        self.assertEqual(results[0].status, "applied")
+        git_subcmds = [cmd[3] for cmd in seen if cmd[0] == "git" and len(cmd) > 3]
+        self.assertIn("add", git_subcmds)
+        self.assertIn("commit", git_subcmds)
+        self.assertEqual(actions.calls[0][0], "safe_push")
+
+    def test_conflicting_remote_ci_fix_done_does_not_satisfy_source_marker(self) -> None:
+        marker = "REMOTE_CI_FIX_DONE:contract-tests:ok"
+        log = self.repo / ".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log"
+        log.write_text(
+            "REMOTE_CI_FIX_DONE:contract-tests:blocked\n"
+            f"{marker}\n"
+            "tokens used\n"
+            "EXIT=0\n",
+            encoding="utf-8",
+        )
+        action = self.remote_ci_fix_action(
+            kind="completed-marker",
+            action_id=f"completed-marker:{log.name}:{marker}",
+            source_artifact=".refactor-loop/logs/remote-ci-fix-pr77-contract-tests.log",
+            source_marker=marker,
+            preconditions=["active_controller_owner", "clean_exit_source_marker", "live_open_target_if_present"],
+            head_sha=None,
+            check_name=None,
+        )
+        actions = FakeActions()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "clean_exit_marker_missing")
+        self.assertEqual(actions.calls, [])
+
     def test_safe_push_routes_to_named_helper_after_head_and_clean_diff_revalidation(self) -> None:
         actions = FakeActions()
 
