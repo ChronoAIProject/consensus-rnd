@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,15 @@ FORBIDDEN_PLAN_FIELDS = frozenset(
         "close",
         "assignee",
         "milestone",
+        "proof",
+        "digest",
+        "plan_digest",
+        "controller_action",
+        "kind",
+        "executor",
+        "env",
+        "commands",
+        "command_line",
     }
 )
 CHILD_FIELDS = frozenset({"slug", "title", "scope", "non_goals", "body_artifact_path"})
@@ -68,7 +78,7 @@ def load_issue_decomposition_plan(ctx: LoopContext, plan_path: str | Path) -> Is
 def validate_issue_decomposition_plan(ctx: LoopContext, raw: Any) -> IssueDecompositionPlan:
     if not isinstance(raw, dict):
         raise IssueDecompositionError("IssueDecompositionPlan must be a JSON object")
-    _reject_forbidden_fields(raw, "plan")
+    _reject_forbidden_fields_recursive(raw, "plan")
     _require_exact_fields(raw, PLAN_FIELDS, "plan")
     if raw.get("schema") != SCHEMA:
         raise IssueDecompositionError("IssueDecompositionPlan schema must be IssueDecompositionPlan")
@@ -82,7 +92,7 @@ def validate_issue_decomposition_plan(ctx: LoopContext, raw: Any) -> IssueDecomp
     parent_update = raw.get("parent_update")
     if not isinstance(parent_update, dict):
         raise IssueDecompositionError("parent_update must be an object")
-    _reject_forbidden_fields(parent_update, "parent_update")
+    _reject_forbidden_fields_recursive(parent_update, "parent_update")
     _require_exact_fields(parent_update, PARENT_UPDATE_FIELDS, "parent_update")
     parent_comment_artifact_path = _validate_artifact_path(ctx, parent_update.get("comment_artifact_path"), "parent_update.comment_artifact_path")
     _validate_parent_comment(ctx, parent_comment_artifact_path, parent_issue)
@@ -92,7 +102,7 @@ def validate_issue_decomposition_plan(ctx: LoopContext, raw: Any) -> IssueDecomp
     for index, child_raw in enumerate(children_raw):
         if not isinstance(child_raw, dict):
             raise IssueDecompositionError(f"children[{index}] must be an object")
-        _reject_forbidden_fields(child_raw, f"children[{index}]")
+        _reject_forbidden_fields_recursive(child_raw, f"children[{index}]")
         _require_exact_fields(child_raw, CHILD_FIELDS, f"children[{index}]")
         slug = _required_text(child_raw.get("slug"), f"children[{index}].slug")
         if not SLUG_RE.fullmatch(slug):
@@ -124,6 +134,23 @@ def validate_issue_decomposition_plan(ctx: LoopContext, raw: Any) -> IssueDecomp
     )
 
 
+def issue_decomposition_plan_digest(raw: Any) -> str:
+    if not isinstance(raw, dict):
+        raise IssueDecompositionError("IssueDecompositionPlan must be a JSON object")
+    _reject_forbidden_fields_recursive(raw, "plan")
+    encoded = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def issue_decomposition_plan_file_digest(ctx: LoopContext, plan_path: str | Path) -> str:
+    path = _resolve_input_path(ctx, plan_path)
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise IssueDecompositionError(f"invalid IssueDecompositionPlan JSON: {exc}") from exc
+    return issue_decomposition_plan_digest(raw)
+
+
 def _resolve_input_path(ctx: LoopContext, plan_path: str | Path) -> Path:
     path = Path(plan_path)
     if path.is_absolute():
@@ -139,6 +166,16 @@ def _reject_forbidden_fields(value: dict[str, Any], context: str) -> None:
     forbidden = sorted(FORBIDDEN_PLAN_FIELDS.intersection(value))
     if forbidden:
         raise IssueDecompositionError(f"{context} contains forbidden lifecycle/command fields: {', '.join(forbidden)}")
+
+
+def _reject_forbidden_fields_recursive(value: Any, context: str) -> None:
+    if isinstance(value, dict):
+        _reject_forbidden_fields(value, context)
+        for key, child in value.items():
+            _reject_forbidden_fields_recursive(child, f"{context}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _reject_forbidden_fields_recursive(child, f"{context}[{index}]")
 
 
 def _require_exact_fields(value: dict[str, Any], allowed: frozenset[str], context: str) -> None:

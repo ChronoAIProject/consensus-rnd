@@ -23,6 +23,8 @@ WAKEUP_PLAN = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
 sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 from codex_refactor_loop import labels as label_catalog  # noqa: E402
+from codex_refactor_loop.context import LoopContext  # noqa: E402
+from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest  # noqa: E402
 from codex_refactor_loop.managed_work_snapshot import ManagedWorkSnapshotResult  # noqa: E402
 from codex_refactor_loop.restart import restart_managed_daemon_names  # noqa: E402
 from codex_refactor_loop.workflow_stages import assert_stage_slug  # noqa: E402
@@ -1222,6 +1224,71 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def write_issue_decomposition_artifacts(self, *, issue: int = 403, round_no: int = 6) -> tuple[str, str]:
+        runs = self.repo / ".refactor-loop" / "runs"
+        runs.mkdir(parents=True, exist_ok=True)
+        consensus = f".refactor-loop/runs/phase9-issue{issue}-r{round_no}-judge.md"
+        child_one = ".refactor-loop/runs/decompose-child-one.md"
+        child_two = ".refactor-loop/runs/decompose-child-two.md"
+        for path, scope, non_goals in (
+            (child_one, "First bounded scope", "No parent lifecycle mutation"),
+            (child_two, "Second bounded scope", "No public issue factory"),
+        ):
+            (self.repo / path).write_text(
+                "## child\n\n"
+                f"Parent issue: #{issue}\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+        parent_comment = ".refactor-loop/runs/decompose-parent-comment.md"
+        (self.repo / parent_comment).write_text(f"Parent issue: #{issue}\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = ".refactor-loop/runs/decomposition-plan.json"
+        (self.repo / plan_path).write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": issue,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent lifecycle mutation",
+                            "body_artifact_path": child_one,
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": child_two,
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        ctx = LoopContext.load(repo_root=self.repo, env={"CONSENSUS_RND_HOST_ENV": ".config/consensus-rnd/host.env"})
+        digest = issue_decomposition_plan_file_digest(ctx, plan_path)
+        (self.repo / consensus).write_text(
+            "---\nissue: 403\ncluster: issue-403\nconvergence_round: 6\ndecision: consensus\n---\n\n"
+            "## If consensus\n"
+            '- controller_action="apply_issue_decomposition_plan"\n'
+            f"- issue_decomposition_plan_path: {plan_path}\n"
+            f"- issue_decomposition_plan_digest: {digest}\n"
+            f"- issue_decomposition_proof: plan {plan_path} digest {digest} reached consensus for parent issue #{issue}\n\n"
+            "META_JUDGE_DONE:consensus:decompose\n",
+            encoding="utf-8",
+        )
+        return plan_path, digest
+
     def write_markerless_clean_log(self, name: str) -> Path:
         path = self.logs / name
         path.write_text("worker chatter with no standalone marker\nEXIT=0\n", encoding="utf-8")
@@ -2037,7 +2104,8 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
     def test_wakeup_plan_source_regression_has_shared_reader_only_implement_marker_detection(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
 
-        self.assertIn("read_worker_terminal_marker(log_path).marker", source)
+        self.assertIn("marker_read = read_worker_terminal_marker(log_path)", source)
+        self.assertIn("_implement_run_artifact_done_marker(log_path)", source)
         self.assertNotIn("_synthetic_markerless_implement_marker", source)
         self.assertNotIn('return f"IMPLEMENT_DONE:issue-{issue}:ok"', source)
         self.assertNotIn("_canonical_markerless_implement_has_output", source)
@@ -2165,6 +2233,56 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertIn("no_conflicting_open_implementation_pr", action["preconditions"])
         self.assertEqual(action["target_pr_number"], 320)
         self.assertNotIn("verified_pr_head", action["preconditions"])
+
+    def test_artifact_backed_completed_implementation_supersedes_stale_spawn_intent(self) -> None:
+        (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
+        self.write_implementation_pr_artifacts()
+        (self.logs / "implement-issue-20.log").write_text(
+            "summary\n⟦AI:AUTO-LOOP⟧\nIMPLEMENT_DONE:issue-20:ok\n"
+            "later echo\nIMPLEMENT_DONE:issue-20:ok\nEXIT=0\n",
+            encoding="utf-8",
+        )
+        self.write_run_artifact("implement-issue-20", "summary", "⟦AI:AUTO-LOOP⟧", "IMPLEMENT_DONE:issue-20:ok")
+        self.write_consensus_artifact()
+        self.write_completed_log("phase9-issue20-r5-judge.log", "META_JUDGE_DONE:consensus:structural")
+        self.append_harness_spawn_intent(
+            intent_id="dispatch-consensus-implementation:20",
+            task_id="implement-issue-20",
+            route="dispatch-consensus-implementation",
+            log=".refactor-loop/logs/implement-issue-20.log",
+        )
+
+        plan = self.run_plan(fixture="local_iter_branch_issue20", ps_count=0)
+
+        publish = next(
+            action
+            for action in plan["actions"]
+            if action.get("controller_action") == "publish_implementation_output"
+            and action.get("target_kind") == "issue"
+            and action.get("target_number") == 20
+        )
+        self.assertFalse(publish.get("status_only"))
+        self.assertEqual(publish["source_marker"], "IMPLEMENT_DONE:issue-20:ok")
+        self.assertEqual(publish["head_ref"], "refactor/iter20-issue-20")
+        self.assertEqual(Path(publish["worktree"]).resolve(), (self.repo / ".worktrees/iter20-issue-20").resolve())
+        stale_spawn = next(
+            action
+            for action in plan["actions"]
+            if action.get("kind") == "harness-spawn-intent"
+            and action.get("intent_id") == "dispatch-consensus-implementation:20"
+        )
+        self.assertTrue(stale_spawn["status_only"])
+        self.assertEqual(stale_spawn["suppressed_reason"], "implementation_ready_to_publish")
+        self.assertNotIn("runner_authority", stale_spawn)
+        self.assertFalse(
+            [
+                action
+                for action in plan["actions"]
+                if action.get("controller_action") == "dispatch_consensus_implementation"
+                and action.get("target_number") == 20
+                and not action.get("status_only")
+            ]
+        )
 
     def test_publish_implementation_marker_without_pr_artifacts_is_status_only(self) -> None:
         (self.repo / ".worktrees" / "iter20-issue-20").mkdir(parents=True)
@@ -2390,7 +2508,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertTrue(any(action_id.startswith("completed-marker:implement-worker-old.log") for action_id in action_ids))
         self.assertTrue(any(action_id.startswith("completed-marker:implement-worker-new.log") for action_id in action_ids))
 
-    def test_decompose_consensus_visible_only_as_generic_completed_marker(self) -> None:
+    def test_decompose_consensus_without_structured_apply_proof_visible_only_as_generic_completed_marker(self) -> None:
         self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
 
         plan = self.run_plan(fixture="open_issue_403")
@@ -2402,10 +2520,50 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(action["marker"], "META_JUDGE_DONE:consensus:decompose:real")
         self.assertNotEqual(action.get("controller_action"), "apply_issue_decomposition_plan")
         self.assertNotIn("IssueDecompositionPlan", json.dumps(action))
-        self.assertNotIn("issue-decomposition", json.dumps(action))
         self.assertNotIn("decomposition-plan", json.dumps(action))
 
-    def test_issue_decomposition_does_not_extend_wakeup_plan_public_projection(self) -> None:
+    def test_clean_plan_level_judge_artifact_emits_exact_issue_decomposition_named_action(self) -> None:
+        plan_path, digest = self.write_issue_decomposition_artifacts()
+        self.write_completed_log("phase9-issue403-r6-judge.log", "META_JUDGE_DONE:consensus:decompose")
+
+        plan = self.run_plan(fixture="open_issue_403")
+
+        action = plan["actions"][0]
+        self.assertEqual(action["kind"], "completed-marker")
+        self.assertEqual(action["controller_action"], "apply_issue_decomposition_plan")
+        self.assertNotEqual(action.get("kind"), "issue-decomposition-apply")
+        self.assertEqual(action["target_kind"], "issue")
+        self.assertEqual(action["target_number"], 403)
+        self.assertEqual(action["issue_decomposition_plan_path"], plan_path)
+        self.assertEqual(action["issue_decomposition_plan_digest"], digest)
+        self.assertIn(plan_path, action["issue_decomposition_proof"])
+        self.assertIn(digest, action["issue_decomposition_proof"])
+        self.assertEqual(
+            action["preconditions"],
+            [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "durable_consensus_artifact",
+                "issue_decomposition_plan_digest_match",
+                "live_parent_open_tracking",
+                "github_sentinel_idempotency_owner",
+            ],
+        )
+        rendered = json.dumps(action, sort_keys=True)
+        for forbidden in (
+            '"kind": "issue-decomposition-apply"',
+            '"gh"',
+            '"git"',
+            '"cmd"',
+            '"shell"',
+            '"executor"',
+            '"lifecycle_authority"',
+            '"lifecycle_owner"',
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, rendered)
+
+    def test_issue_decomposition_has_no_private_action_dialect_or_public_commands(self) -> None:
         source = (SKILL_ROOT / "scripts" / "codex_refactor_loop" / "wakeup_plan.py").read_text(encoding="utf-8")
         plan = self.run_plan()
         rendered = json.dumps(plan, sort_keys=True)
@@ -2413,10 +2571,7 @@ class WakeupPlanBehaviorTests(unittest.TestCase):
         self.assertEqual(plan["mode"], "closed-action-projection")
         self.assertTrue(plan["no_lifecycle_authority"])
         for token in (
-            "IssueDecompositionPlan",
-            "issue-decomposition",
-            "decomposition-plan",
-            "apply_issue_decomposition_plan",
+            '"kind": "issue-decomposition-apply"',
             "gh issue create",
             "gh issue edit",
             "gh issue close",

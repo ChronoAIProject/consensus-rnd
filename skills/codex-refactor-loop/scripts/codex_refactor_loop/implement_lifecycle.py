@@ -71,6 +71,8 @@ def classify_implement_attempt(
             return ImplementAttemptState("in_flight", "no_terminal_exit")
         return ImplementAttemptState("redispatch", "nonzero_exit")
     marker = marker_read.marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker_read.marker) else ""
+    if not marker and marker_read.reason == "duplicate_or_conflicting_log_marker":
+        marker = _implement_run_artifact_done_marker(log_path)
     if not marker:
         return ImplementAttemptState("redispatch", "markerless")
     identity = canonical_implementation_identity(repo_root, action, marker)
@@ -90,11 +92,15 @@ def classify_implement_attempt(
             return ImplementAttemptState("redispatch", "base_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
         if merge_base.stdout.strip() != current.stdout.strip():
             return ImplementAttemptState("refresh_needed", "stale_base", marker=marker, head_ref=head_ref, worktree=worktree)
-    diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
-    if diff.returncode == 0:
-        return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
-    if diff.returncode != 1:
+    status = runner(["git", "-C", str(worktree), "status", "--porcelain"])
+    if status.returncode != 0:
         return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
+    if not status.stdout.strip():
+        diff = runner(["git", "-C", str(worktree), "diff", "--quiet"])
+        if diff.returncode == 0:
+            return ImplementAttemptState("redispatch", "empty_scoped_diff", marker=marker, head_ref=head_ref, worktree=worktree)
+        if diff.returncode != 1:
+            return ImplementAttemptState("redispatch", "diff_unavailable", marker=marker, head_ref=head_ref, worktree=worktree)
     return ImplementAttemptState("publish_ready", marker=marker, head_ref=head_ref, worktree=worktree)
 
 
@@ -108,8 +114,15 @@ def is_implement_log(path: Path) -> bool:
 
 
 def _implement_run_artifact_done_marker(log_path: Path) -> str:
-    marker = read_worker_terminal_marker(log_path).marker
-    return marker if IMPLEMENT_DONE_OK_RE.fullmatch(marker) else ""
+    if not is_implement_log(log_path):
+        return ""
+    artifact = log_path.parent.parent / "runs" / f"{log_path.stem}.md"
+    try:
+        lines = artifact.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    markers = {line.strip().strip("`") for line in lines[-30:] if IMPLEMENT_DONE_OK_RE.fullmatch(line.strip().strip("`"))}
+    return markers.pop() if len(markers) == 1 else ""
 
 
 def terminal_exit_line(lines: list[str]) -> str | None:
