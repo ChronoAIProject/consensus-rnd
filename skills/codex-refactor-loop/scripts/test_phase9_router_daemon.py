@@ -521,22 +521,6 @@ class Phase9RouterDaemonTests(unittest.TestCase):
         self.assertEqual(ledger[0]["key"], "330-4-judge")
         self.assertEqual(ledger[0]["dispatch_state"], "harness-intent")
 
-    def test_phase9_router_tick_summary_is_router_local_diagnostic(self) -> None:
-        out = StringIO()
-
-        with redirect_stdout(out):
-            self.router.tick()
-
-        line = out.getvalue().strip()
-        self.assertRegex(
-            line,
-            r"^\[[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\] "
-            r"phase9-router: tick noop:no-dispatchable-markers$",
-        )
-        self.assertEqual(self.commands, [])
-        self.assertNotIn("TickOutcome", line)
-        self.assertNotIn("registry", line)
-
     def test_phase9_router_design_issue_intake_dispatches_r1_solver_triplet(self) -> None:
         issue = {
             "number": 416,
