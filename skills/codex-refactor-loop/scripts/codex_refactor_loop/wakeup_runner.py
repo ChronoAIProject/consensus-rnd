@@ -581,6 +581,7 @@ class WakeupRunner:
         for required in (
             "clean_exit_source_marker",
             "durable_consensus_artifact",
+            "plan_level_design_consensus_judge_artifact",
             "issue_decomposition_plan_digest_match",
             "live_parent_open_tracking",
             "github_sentinel_idempotency_owner",
@@ -607,8 +608,21 @@ class WakeupRunner:
         consensus_artifact = str(action.get("consensus_artifact") or "")
         if not consensus_artifact or plan.source_consensus_artifact != consensus_artifact:
             return "issue_decomposition_consensus_artifact_mismatch"
+        artifact_error = self._validate_consensus_artifact(action)
+        if artifact_error:
+            return "issue_decomposition_" + artifact_error
+        plan_level_artifact = str(action.get("plan_level_design_consensus_judge_artifact") or "")
+        if plan_level_artifact != consensus_artifact:
+            return "issue_decomposition_plan_level_judge_artifact_mismatch"
+        plan_level_log = _plan_level_judge_log_path(self.ctx.repo_root, plan_level_artifact)
+        if plan_level_log is None:
+            return "issue_decomposition_plan_level_judge_artifact_mismatch"
+        if str(action.get("source_artifact") or "") != plan_level_log.relative_to(self.ctx.repo_root).as_posix():
+            return "issue_decomposition_plan_level_judge_source_mismatch"
+        if not _source_log_has_clean_marker(plan_level_log, str(action.get("source_marker") or "")):
+            return "issue_decomposition_plan_level_judge_marker_missing"
         proof = str(action.get("issue_decomposition_proof") or "")
-        if digest not in proof or plan_path not in proof:
+        if digest not in proof or plan_path not in proof or consensus_artifact not in proof:
             return "issue_decomposition_proof_mismatch"
         sentinel_error = self._issue_decomposition_sentinel_error(plan.parent_issue, digest)
         if sentinel_error:
@@ -1563,6 +1577,14 @@ def _source_log_has_clean_marker(path: Path, marker: str) -> bool:
     if not is_implement_log(path):
         return False
     return _implement_run_artifact_done_marker(path) == marker
+
+
+def _plan_level_judge_log_path(repo_root: Path, artifact_path: str) -> Path | None:
+    artifact = repo_root / artifact_path
+    match = CONSENSUS_JUDGE_ARTIFACT_RE.fullmatch(artifact.name)
+    if match is None:
+        return None
+    return repo_root / ".refactor-loop" / "logs" / f"{artifact.name.removesuffix('.md')}.log"
 
 
 def _spawn_log_suppresses_retry(path: Path) -> bool:

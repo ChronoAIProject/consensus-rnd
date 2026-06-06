@@ -47,6 +47,33 @@ class PromptContractsTests(unittest.TestCase):
 
         self.assertEqual(tokens, {GITHUB_POST_RULES_CONTRACT_TOKEN})
 
+    def test_decomposition_apply_prompt_contract_requires_plan_level_judge_fields(self) -> None:
+        meta_judge = (PROMPTS_DIR / "meta-judge.md").read_text(encoding="utf-8")
+        implement = (PROMPTS_DIR / "implement.md").read_text(encoding="utf-8")
+
+        for needle in (
+            'controller_action="apply_issue_decomposition_plan"',
+            "plan_level_design_consensus_judge_artifact",
+            "issue_decomposition_plan_path",
+            "issue_decomposition_plan_digest",
+            "issue_decomposition_proof",
+            "first `META_JUDGE_DONE:consensus:decompose`",
+            "solver artifacts",
+            "prompt body",
+            "validator output",
+            "worker output",
+            "`.refactor-loop/host.env`",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, meta_judge)
+        for needle in (
+            "worker 输出、validator 通过、`.refactor-loop/host.env`、prompt body 或第一次 `consensus:decompose` 均不是 apply 授权来源",
+            'controller_action="apply_issue_decomposition_plan"',
+            "plan-level judge artifact 结构字段 + validated plan digest/proof + #191 owner + live parent open/tracking + sentinel idempotency",
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, implement)
+
 
 def github_post_section(body: str) -> str:
     match = re.search(r"(?ms)^## GitHub post.*?(?=^## |\Z)", body)

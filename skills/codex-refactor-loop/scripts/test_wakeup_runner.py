@@ -951,7 +951,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
     def issue_decomposition_action(self, **overrides) -> dict:
         consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
-        (self.repo / consensus).write_text("META_JUDGE_DONE:consensus:decompose\n", encoding="utf-8")
+        (self.repo / consensus).write_text(
+            "---\nissue: 403\nconvergence_round: 6\ndecision: consensus\n---\n\n"
+            "## If consensus\n"
+            "META_JUDGE_DONE:consensus:decompose\n",
+            encoding="utf-8",
+        )
 
         def write_child(name: str, scope: str, non_goals: str) -> str:
             path = f".refactor-loop/runs/{name}.md"
@@ -1010,6 +1015,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 "active_controller_owner",
                 "clean_exit_source_marker",
                 "durable_consensus_artifact",
+                "plan_level_design_consensus_judge_artifact",
                 "issue_decomposition_plan_digest_match",
                 "live_parent_open_tracking",
                 "github_sentinel_idempotency_owner",
@@ -1022,9 +1028,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "controller_action": "apply_issue_decomposition_plan",
             "no_generic_command": True,
             "consensus_artifact": consensus,
+            "consensus_issue": 403,
+            "consensus_round": 6,
+            "plan_level_design_consensus_judge_artifact": consensus,
             "issue_decomposition_plan_path": plan_path,
             "issue_decomposition_plan_digest": digest,
-            "issue_decomposition_proof": f"plan {plan_path} digest {digest} reached consensus",
+            "issue_decomposition_proof": f"plan-level judge {consensus} validated plan {plan_path} digest {digest} reached consensus",
         }
         action.update(overrides)
         return action
@@ -2670,7 +2679,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
 
-    def test_issue_decomposition_apply_accepts_partial_implement_source_marker(self) -> None:
+    def test_issue_decomposition_apply_rejects_partial_implement_source_marker(self) -> None:
         actions = FakeActions()
         action = self.issue_decomposition_action(
             action_id="completed-marker:implement-issue-403.log:IMPLEMENT_DONE:issue-403:partial:apply_issue_decomposition_plan",
@@ -2686,8 +2695,12 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         results = self.run_result(self.base_plan(action), actions=actions)
 
-        self.assertEqual(results[0].status, "applied")
-        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+        self.assert_blocked_before_dispatch(
+            results,
+            "completed-marker:implement-issue-403.log:IMPLEMENT_DONE:issue-403:partial:apply_issue_decomposition_plan",
+            "issue_decomposition_plan_level_judge_source_mismatch",
+            actions,
+        )
 
     def test_issue_decomposition_private_kind_dialect_fails_closed(self) -> None:
         cases = (
@@ -2715,6 +2728,24 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                 results = self.run_result(self.base_plan(action), actions=actions)
 
                 self.assert_blocked_before_dispatch(results, f"decompose:{reason}", reason, actions)
+
+    def test_issue_decomposition_plan_level_judge_source_mismatch_fails_closed(self) -> None:
+        actions = FakeActions()
+        action = self.issue_decomposition_action(
+            action_id="decompose:plan-level-source-mismatch",
+            source_artifact=".refactor-loop/logs/implement-issue-403.log",
+            source_marker="IMPLEMENT_DONE:issue-403:partial",
+        )
+        (self.repo / action["source_artifact"]).write_text("IMPLEMENT_DONE:issue-403:partial\nEXIT=0\n", encoding="utf-8")
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assert_blocked_before_dispatch(
+            results,
+            "decompose:plan-level-source-mismatch",
+            "issue_decomposition_plan_level_judge_source_mismatch",
+            actions,
+        )
 
     def test_issue_decomposition_parent_closed_or_unmanaged_fails_closed(self) -> None:
         closed_actions = FakeActions()
