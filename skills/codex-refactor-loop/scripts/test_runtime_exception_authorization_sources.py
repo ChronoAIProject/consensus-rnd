@@ -201,7 +201,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "no executor layer",
             "no generic effect-adapter runtime abstraction",
             "no public CLI command",
-            "no wakeup-plan decompose projection",
+            "no wakeup-plan decompose projection except the #396 evidence-bound named `controller_action=\"apply_issue_decomposition_plan\"`",
             "no second #403 apply schema",
             "no parent issue close/reopen/body-title edit",
             "no lifecycle_owner/lifecycle_authority/cmd/argv/args/shell/command_line/commands/env/gh/git/executor/close fields",
@@ -211,7 +211,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for needle in (
             "#403 是唯一大 issue 分解 carveout",
             "checked-in apply helper",
-            "`wakeup-plan` 不投射 issue-decomposition apply/status action",
+            "`wakeup-plan` 只可经 #396 evidence-bound named `controller_action=\"apply_issue_decomposition_plan\"` 投射 apply action",
             "父 epic 保持 open/tracking",
         ):
             with self.subTest(needle=needle):
@@ -226,15 +226,17 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(f'"{forbidden}"', cli_source)
+        self.assertIn("apply_issue_decomposition_plan", wakeup_source)
+        self.assertIn("issue_decomposition_plan_file_digest", wakeup_source)
         for forbidden in (
-            "IssueDecompositionPlan",
-            "issue-decomposition",
-            "decomposition-plan",
-            "apply_issue_decomposition_plan",
+            '"kind": "issue-decomposition-apply"',
+            "gh issue create",
+            "gh issue edit",
+            "gh issue close",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, wakeup_source)
-        self.assertIn("wakeup_plan.py` is not the #403 owner", skill_section)
+        self.assertIn("wakeup_plan.py` is not the #403 read-model/status/authorization owner", skill_section)
 
     def test_issue_403_and_wakeup_runner_396_share_effect_admission_boundary_language(self) -> None:
         issue_entry = mirror_entry(self.mirror, "issue-decomposition-403")
@@ -786,6 +788,7 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
             "allowlisted `release-rollup-body` generation that only writes `.refactor-loop/runs/release-rollup-pr-body.md`",
             "named helper `dispatch_consensus_implementation`",
             "named helper `publish_implementation_output`",
+            "named helper `apply_issue_decomposition_plan`",
             "then named helper `open_release_rollup_pr_from_action` after the body exists",
             "named helper `open_release_rollup_pr_from_action`",
             "publish worker output",
@@ -951,7 +954,8 @@ class RuntimeExceptionAuthorizationSourceTests(unittest.TestCase):
         for forbidden in (
             "no standalone lifecycle or escalation system",
             "no direct decompose",
-            "no `IssueDecompositionPlan` or `apply_issue_decomposition_plan` projection from `wakeup-plan`",
+            "no direct `IssueDecompositionPlan` apply outside the #396 named action",
+            "no private `kind=\"issue-decomposition-apply\"` dialect",
             "no close",
             "merge",
             "label",

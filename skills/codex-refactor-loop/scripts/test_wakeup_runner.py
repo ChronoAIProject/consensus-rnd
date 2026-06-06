@@ -22,6 +22,7 @@ REAL_EVENT = real_threading.Event
 REAL_THREAD = real_threading.Thread
 
 from codex_refactor_loop.context import LoopContext
+from codex_refactor_loop.issue_decomposition import issue_decomposition_plan_file_digest
 from codex_refactor_loop import labels
 from codex_refactor_loop.wakeup_runner import (
     WakeupRunner,
@@ -123,6 +124,10 @@ class FakeActions:
     def open_release_rollup_pr_from_action(self, action: dict) -> int:
         self.calls.append(("open_release_rollup_pr_from_action", dict(action)))
         return 0
+
+    def apply_issue_decomposition_plan(self, plan_path: str) -> tuple[tuple[int, str], ...]:
+        self.calls.append(("apply_issue_decomposition_plan", plan_path))
+        return ((501, "https://github.com/owner/repo/issues/501"),)
 
     def render_release_rollup_body_prompt(self, action: dict) -> Path:
         self.calls.append(("render_release_rollup_body_prompt", dict(action)))
@@ -321,6 +326,7 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         duplicate_prs: list[dict] | None = None,
         implementation_base: tuple[str, str] = ("base-sha", "base-sha"),
         actions=None,
+        issue_comments: list[dict] | None = None,
     ) -> list:
         def command_runner(command):
             if command[:2] == ["gh", "api"]:
@@ -356,6 +362,8 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
                         }
                     ]
                 return subprocess.CompletedProcess(command, 0, json.dumps(payload), "")
+            if command[:3] == ["gh", "issue", "view"] and "comments" in command:
+                return subprocess.CompletedProcess(command, 0, json.dumps({"comments": issue_comments or []}), "")
             if command[:3] == ["gh", "issue", "view"] or command[:3] == ["gh", "pr", "view"]:
                 if "labels,body" in command:
                     live_labels = gh_labels if gh_labels is not None else [labels.MANAGED]
@@ -765,6 +773,86 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             "scope_paths": "- skills/codex-refactor-loop/scripts/codex_refactor_loop/wakeup_plan.py",
             "old_pattern": "old",
             "new_principle": "new",
+        }
+        action.update(overrides)
+        return action
+
+    def issue_decomposition_action(self, **overrides) -> dict:
+        consensus = ".refactor-loop/runs/phase9-issue403-r6-judge.md"
+        (self.repo / consensus).write_text("META_JUDGE_DONE:consensus:decompose\n", encoding="utf-8")
+
+        def write_child(name: str, scope: str, non_goals: str) -> str:
+            path = f".refactor-loop/runs/{name}.md"
+            (self.repo / path).write_text(
+                "## child\n\n"
+                "Parent issue: #403\n"
+                f"Source consensus artifact: {Path(consensus).name}\n"
+                f"Scope: {scope}\n"
+                f"Non-goals: {non_goals}\n\n"
+                "<details>\n<summary>内联 artifact 1: decision.md</summary>\n\n"
+                "```markdown\nraw decision\n```\n\n</details>\n\n"
+                "⟦AI:AUTO-LOOP⟧\n",
+                encoding="utf-8",
+            )
+            return path
+
+        parent_comment = ".refactor-loop/runs/decompose-parent-comment.md"
+        (self.repo / parent_comment).write_text("Parent issue: #403\n\nChildren opened.\n\n⟦AI:AUTO-LOOP⟧\n", encoding="utf-8")
+        plan_path = ".refactor-loop/runs/decomposition-plan.json"
+        (self.repo / plan_path).write_text(
+            json.dumps(
+                {
+                    "schema": "IssueDecompositionPlan",
+                    "parent_issue": 403,
+                    "source_consensus_artifact": consensus,
+                    "children": [
+                        {
+                            "slug": "first-child",
+                            "title": "First child",
+                            "scope": "First bounded scope",
+                            "non_goals": "No parent lifecycle mutation",
+                            "body_artifact_path": write_child("child-one", "First bounded scope", "No parent lifecycle mutation"),
+                        },
+                        {
+                            "slug": "second-child",
+                            "title": "Second child",
+                            "scope": "Second bounded scope",
+                            "non_goals": "No public issue factory",
+                            "body_artifact_path": write_child("child-two", "Second bounded scope", "No public issue factory"),
+                        },
+                    ],
+                    "parent_update": {"comment_artifact_path": parent_comment},
+                }
+            ),
+            encoding="utf-8",
+        )
+        digest = issue_decomposition_plan_file_digest(self.ctx, plan_path)
+        marker = "META_JUDGE_DONE:consensus:decompose"
+        log = self.repo / ".refactor-loop/logs/phase9-issue403-r6-judge.log"
+        log.write_text(f"{marker}\nEXIT=0\n", encoding="utf-8")
+        action = {
+            "kind": "completed-marker",
+            "action_id": "completed-marker:phase9-issue403-r6-judge.log:META_JUDGE_DONE:consensus:decompose",
+            "runner_authority": "wakeup-runner-396",
+            "preconditions": [
+                "active_controller_owner",
+                "clean_exit_source_marker",
+                "durable_consensus_artifact",
+                "issue_decomposition_plan_digest_match",
+                "live_parent_open_tracking",
+                "github_sentinel_idempotency_owner",
+            ],
+            "source_artifact": ".refactor-loop/logs/phase9-issue403-r6-judge.log",
+            "source_marker": marker,
+            "target_kind": "issue",
+            "target_number": 403,
+            "target": {"kind": "issue", "number": 403},
+            "controller_action": "apply_issue_decomposition_plan",
+            "no_generic_command": True,
+            "consensus_artifact": consensus,
+            "issue_decomposition_plan_path": plan_path,
+            "issue_decomposition_plan_digest": digest,
+            "issue_decomposition_proof": f"plan {plan_path} digest {digest} reached consensus",
         }
         action.update(overrides)
         return action
@@ -1468,6 +1556,17 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
             with self.subTest(forbidden_runtime_abstraction=forbidden_runtime_abstraction):
                 self.assertNotIn(forbidden_runtime_abstraction, source)
 
+    def test_nested_forbidden_fields_fail_closed(self) -> None:
+        action = self.issue_decomposition_action(
+            action_id="decompose:nested-forbidden",
+            proof_payload={"executor": "shell", "nested": [{"env": {"TOKEN": "x"}}]},
+        )
+
+        results = self.run_result(self.base_plan(action), actions=FakeActions())
+
+        self.assertEqual(results[0].status, "blocked")
+        self.assertEqual(results[0].reason, "forbidden_fields:proof_payload.executor,proof_payload.nested[0].env")
+
     def test_malformed_plan_envelope_blocks_before_dispatch_and_records_ledger(self) -> None:
         actions = FakeActions()
         plan = self.base_plan(self.spawn_action())
@@ -1960,6 +2059,82 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
 
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "dispatch_consensus_implementation")
+
+    def test_issue_decomposition_apply_revalidates_digest_live_parent_and_dispatches_existing_helper(self) -> None:
+        actions = FakeActions()
+        action = self.issue_decomposition_action()
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual(actions.calls, [("apply_issue_decomposition_plan", ".refactor-loop/runs/decomposition-plan.json")])
+
+    def test_issue_decomposition_private_kind_dialect_fails_closed(self) -> None:
+        cases = (
+            ("issue-decomposition-apply", "unsupported_kind:issue-decomposition-apply"),
+            ("decompose-apply", "unsupported_kind:decompose-apply"),
+        )
+        for kind, reason in cases:
+            with self.subTest(kind=kind):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(kind=kind, action_id=f"decompose:private-kind:{kind}")
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assert_blocked_before_dispatch(results, f"decompose:private-kind:{kind}", reason, actions)
+
+    def test_issue_decomposition_digest_and_proof_mismatch_fail_closed(self) -> None:
+        for reason, overrides in (
+            ("issue_decomposition_digest_mismatch", {"issue_decomposition_plan_digest": "0" * 64}),
+            ("issue_decomposition_proof_mismatch", {"issue_decomposition_proof": "wrong proof"}),
+        ):
+            with self.subTest(reason=reason):
+                actions = FakeActions()
+                action = self.issue_decomposition_action(action_id=f"decompose:{reason}", **overrides)
+
+                results = self.run_result(self.base_plan(action), actions=actions)
+
+                self.assert_blocked_before_dispatch(results, f"decompose:{reason}", reason, actions)
+
+    def test_issue_decomposition_parent_closed_or_unmanaged_fails_closed(self) -> None:
+        closed_actions = FakeActions()
+        closed = self.issue_decomposition_action(action_id="decompose:closed-parent")
+        closed_results = self.run_result(self.base_plan(closed), gh_state="CLOSED", actions=closed_actions)
+        self.assert_blocked_before_dispatch(closed_results, "decompose:closed-parent", "target_not_open:CLOSED", closed_actions)
+
+        unmanaged_actions = FakeActions()
+        unmanaged = self.issue_decomposition_action(action_id="decompose:unmanaged-parent")
+        unmanaged_results = self.run_result(self.base_plan(unmanaged), gh_labels=[], actions=unmanaged_actions)
+        self.assert_blocked_before_dispatch(
+            unmanaged_results,
+            "decompose:unmanaged-parent",
+            "issue_decomposition_parent_not_managed",
+            unmanaged_actions,
+        )
+
+    def test_issue_decomposition_single_parent_sentinel_skips_and_multiple_hits_fail_closed(self) -> None:
+        base = self.issue_decomposition_action()
+        digest = base["issue_decomposition_plan_digest"]
+        single_actions = FakeActions()
+        single = self.issue_decomposition_action(action_id="decompose:single-sentinel")
+        comments = [{"body": f"tracked\nIssueDecompositionPlan digest: {digest}\n"}]
+
+        single_results = self.run_result(self.base_plan(single), actions=single_actions, issue_comments=comments)
+
+        self.assertEqual(single_results[0].status, "skipped")
+        self.assertEqual(single_results[0].reason, "issue_decomposition_duplicate_sentinel")
+        self.assertEqual(single_actions.calls, [])
+
+        multiple_actions = FakeActions()
+        multiple = self.issue_decomposition_action(action_id="decompose:multiple-sentinels")
+        multiple_results = self.run_result(self.base_plan(multiple), actions=multiple_actions, issue_comments=comments * 2)
+
+        self.assert_blocked_before_dispatch(
+            multiple_results,
+            "decompose:multiple-sentinels",
+            "issue_decomposition_multiple_sentinels",
+            multiple_actions,
+        )
 
     def test_dispatch_consensus_implementation_blocks_precondition_string_only_projection(self) -> None:
         actions = FakeActions()
