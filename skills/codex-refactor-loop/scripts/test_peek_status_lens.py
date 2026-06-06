@@ -6,19 +6,25 @@ from __future__ import annotations
 import json
 import os
 import json
+import io
 import subprocess
 import sys
 import tempfile
 import textwrap
 import time
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT_PATH = Path(__file__).resolve()
 SKILL_ROOT = SCRIPT_PATH.parents[1]
 REPO_ROOT = SCRIPT_PATH.parents[3]
 PEEK = SKILL_ROOT / "scripts" / "consensus-rnd-cli"
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
+
+from codex_refactor_loop import peek
 
 
 class PeekStatusLensBehaviorTests(unittest.TestCase):
@@ -31,6 +37,8 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
         self.fakebin.mkdir(parents=True)
         self.logs.mkdir(parents=True)
         self.runs.mkdir(parents=True)
+        self.git_should_fail = False
+        self.gh_should_fail = False
         self.write_fake_git()
         self.write_fake_gh()
 
@@ -39,6 +47,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
 
     def write_fake_git(self, *, fail: bool = False) -> None:
         git = self.fakebin / "git"
+        self.git_should_fail = fail
         if fail:
             git.write_text("#!/usr/bin/env bash\nprintf 'unexpected git call\\n' >&2\nexit 42\n", encoding="utf-8")
             git.chmod(0o755)
@@ -72,6 +81,7 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
 
     def write_fake_gh(self, *, fail: bool = False) -> None:
         gh = self.fakebin / "gh"
+        self.gh_should_fail = fail
         if fail:
             gh.write_text("#!/usr/bin/env bash\nprintf 'unexpected gh call\\n' >&2\nexit 43\n", encoding="utf-8")
             gh.chmod(0o755)
@@ -295,14 +305,164 @@ class PeekStatusLensBehaviorTests(unittest.TestCase):
             represented_parent=represented_parent,
             missing_link_pr=missing_link_pr,
         )
-        return subprocess.run(
+        stdout = io.StringIO()
+        stderr = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("os.getcwd", return_value=str(self.root)):
+                with mock.patch("codex_refactor_loop.context.subprocess.run", side_effect=self.fake_subprocess_run):
+                    with mock.patch("codex_refactor_loop.peek.subprocess.run", side_effect=self.fake_subprocess_run):
+                        with mock.patch("codex_refactor_loop.pr_checks.subprocess.run", side_effect=self.fake_subprocess_run):
+                            with mock.patch("codex_refactor_loop.wakeup_plan.subprocess.run", side_effect=self.fake_subprocess_run):
+                                with redirect_stdout(stdout), redirect_stderr(stderr):
+                                    try:
+                                        returncode = peek.main(args or [])
+                                    except SystemExit as exc:
+                                        returncode = int(exc.code or 0) if isinstance(exc.code, int) else 1
+        return subprocess.CompletedProcess(
             [sys.executable, str(PEEK), "peek", *(args or [])],
-            cwd=self.root,
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
+            returncode,
+            stdout.getvalue(),
+            stderr.getvalue(),
         )
+
+    def fake_subprocess_run(self, command, **_kwargs):
+        argv = [str(part) for part in command]
+        if argv[:2] == ["git", "rev-parse"] and "--show-toplevel" in argv:
+            return subprocess.CompletedProcess(argv, 0, f"{self.root}\n", "")
+        if argv and argv[0] == "git" and "-C" in argv:
+            return self.fake_git(argv)
+        if argv and argv[0] == "gh":
+            return self.fake_gh(argv)
+        if len(argv) >= 3 and argv[0] == sys.executable and argv[2] == "concurrency":
+            if "--count-only" in argv:
+                return subprocess.CompletedProcess(argv, 0, "0\n", "")
+            if "--list-codex" in argv:
+                return subprocess.CompletedProcess(argv, 0, "", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def fake_git(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if self.git_should_fail:
+            self.fail(f"unexpected git call: {' '.join(argv)}")
+        args_start = argv.index("-C") + 2 if "-C" in argv else 1
+        args = " ".join(argv[args_start:])
+        if "fetch origin --quiet" in args:
+            return subprocess.CompletedProcess(argv, 0, "", "")
+        if "worktree list --porcelain" in args:
+            stdout = ""
+            if os.environ.get("PEEK_TEST_UNPUSHED") == "1":
+                stdout += (
+                    f"worktree {self.root}/.worktrees/pr{os.environ.get('PEEK_TEST_PR')}\n"
+                    f"branch refs/heads/refactor/iter{os.environ.get('PEEK_TEST_PR')}-worker\n\n"
+                )
+            if os.environ.get("PEEK_TEST_STALE_WORKTREE") == "1":
+                stdout += f"worktree {self.root}/.worktrees/impl-issue332\nbranch refs/heads/impl/issue332-peek-fact-only\n\n"
+            return subprocess.CompletedProcess(argv, 0, stdout, "")
+        if "ls-remote --exit-code --heads origin impl/issue332-peek-fact-only" in args:
+            return subprocess.CompletedProcess(argv, 2, "", "")
+        if "rev-parse --verify HEAD" in args:
+            return subprocess.CompletedProcess(argv, 0, "local-sha\n", "")
+        if "rev-parse --verify refs/remotes/origin/refactor/iter" in args:
+            return subprocess.CompletedProcess(argv, 0, "remote-sha\n", "")
+        if "rev-list --count refs/remotes/origin/refactor/iter" in args:
+            return subprocess.CompletedProcess(argv, 0, "3\n", "")
+        if "rev-parse" in args:
+            return subprocess.CompletedProcess(argv, 0, f"{self.root}\n", "")
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
+    def fake_gh(self, argv: list[str]) -> subprocess.CompletedProcess[str]:
+        if self.gh_should_fail:
+            self.fail(f"unexpected gh call: {' '.join(argv)}")
+        args = " ".join(argv)
+        pr = os.environ.get("PEEK_TEST_PR", "")
+        if argv[1:3] == ["issue", "list"]:
+            return subprocess.CompletedProcess(argv, 0, self.fake_issue_list(args), "")
+        if argv[1:3] == ["issue", "view"]:
+            stdout = "OPEN\n" if "--json state" in args else '{"comments":[]}\n'
+            return subprocess.CompletedProcess(argv, 0, stdout, "")
+        if argv[1:3] == ["pr", "list"]:
+            return subprocess.CompletedProcess(argv, 0, self.fake_pr_list(args, pr), "")
+        if argv[1:3] == ["pr", "view"]:
+            stdout = '{"comments":[]}\n' if "--json comments" in args else "CLEAN\n"
+            return subprocess.CompletedProcess(argv, 0, stdout, "")
+        if argv[1:2] == ["api"]:
+            if "check-runs" in args:
+                return subprocess.CompletedProcess(
+                    argv,
+                    0,
+                    '[{"check_runs":[{"name":"unit","status":"completed","conclusion":"success"},{"name":"lint","status":"completed","conclusion":"success"},{"name":"types","status":"completed","conclusion":"success"}]}]\n',
+                    "",
+                )
+            return subprocess.CompletedProcess(argv, 0, '{"head":{"sha":"peek-sha"}}\n', "")
+        return subprocess.CompletedProcess(argv, 0, "[]\n", "")
+
+    def fake_issue_list(self, args: str) -> str:
+        if os.environ.get("PEEK_TEST_CLOSED_LABEL_FIXTURES") == "1" and "--state closed" in args:
+            if "--label crnd:lifecycle:managed" not in args:
+                self.fail(f"dirty closed query must prove managed membership: {args}")
+            if '--search label:"crnd:phase:reviewing"' in args:
+                return '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]},{"number":302,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:closed"},{"name":"crnd:human:auto"}]},{"number":305,"state":"CLOSED","labels":[{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+            if '--search label:"crnd:lifecycle:stuck"' in args:
+                return '[{"number":301,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
+            if "--label crnd:lifecycle:managed" in args and "--search" not in args:
+                if "--limit 20" not in args:
+                    self.fail(f"closed managed query must use bounded recent window: {args}")
+                return '[{"number":302,"state":"CLOSED","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:closed"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_PR_OPEN_ISSUE") == "1":
+            if "--label crnd:lifecycle:managed" in args:
+                return '[{"number":239,"title":"parent issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:pr-open"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_REPRESENTED_PARENT") == "1":
+            if "--label crnd:lifecycle:managed" in args:
+                return '[{"number":239,"title":"represented parent","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:implementing"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_MILESTONE_FIXTURES") == "1":
+            if "--label crnd:milestone:current" in args:
+                return '[{"number":20,"title":"milestone issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+            if "--jq" in args:
+                return "  • #10 labels=[crnd:phase:design-solving] — ordinary issue\n"
+            return '[{"number":10,"title":"ordinary issue","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:design-solving"},{"name":"crnd:human:auto"}]}]\n'
+        return "[]\n"
+
+    def fake_pr_list(self, args: str, pr: str) -> str:
+        if os.environ.get("PEEK_TEST_CLOSED_LABEL_FIXTURES") == "1" and "--state closed" in args:
+            if "--label crnd:lifecycle:managed" not in args:
+                self.fail(f"dirty closed query must prove managed membership: {args}")
+            if '--search label:"crnd:phase:fixing"' in args:
+                return '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]},{"number":306,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:phase:fixing"},{"name":"crnd:human:auto"}]}]\n'
+            if '--search label:"crnd:lifecycle:stuck"' in args:
+                return '[{"number":303,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:fixing"},{"name":"crnd:lifecycle:stuck"},{"name":"crnd:human:auto"}]}]\n'
+            if "--label crnd:lifecycle:managed" in args and "--search" not in args:
+                if "--limit 20" not in args:
+                    self.fail(f"closed managed query must use bounded recent window: {args}")
+                return '[{"number":304,"state":"CLOSED","mergedAt":null,"labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:closed"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_MILESTONE_FIXTURES") == "1":
+            if "--label crnd:milestone:current" in args:
+                return '[{"number":30,"title":"milestone PR","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:milestone:current"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+            if "--state closed" in args or "--state merged" in args:
+                return "[]\n"
+        if "--state merged" in args:
+            return ""
+        if "--state closed" in args:
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_REPRESENTED_PARENT") == "1":
+            if "--label crnd:lifecycle:managed" in args:
+                return '[{"number":255,"title":"child PR","headRefName":"impl/issue239","body":"Closes #239","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if os.environ.get("PEEK_TEST_MISSING_LINK_PR") == "1":
+            if "--label crnd:lifecycle:managed" in args:
+                return '[{"number":256,"title":"missing link PR","headRefName":"impl/missing","body":"","labels":[{"name":"crnd:lifecycle:managed"},{"name":"crnd:phase:reviewing"},{"name":"crnd:human:auto"}]}]\n'
+            return "[]\n"
+        if not pr:
+            return "" if "--jq" in args else "[]\n"
+        if "--jq .[].number" in args or "--jq '.[].number'" in args:
+            return f"{pr}\n"
+        if "--jq .[]" in args or "--jq '.[]'" in args:
+            return f'{{"number":{pr},"title":"stub PR"}}\n'
+        if os.environ.get("PEEK_TEST_UNPUSHED") == "1":
+            return f'[{{"number":{pr},"title":"stub PR","headRefName":"refactor/iter{pr}-worker","labels":[{{"name":"crnd:lifecycle:managed"}},{{"name":"crnd:phase:reviewing"}},{{"name":"crnd:human:auto"}}]}}]\n'
+        return f'[{{"number":{pr},"title":"stub PR","labels":[]}}]\n'
 
     def write_managed_work_snapshot(
         self,
