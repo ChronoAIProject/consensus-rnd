@@ -3178,6 +3178,35 @@ class WakeupRunnerBehaviorTests(unittest.TestCase):
         self.assertEqual(results[0].status, "applied")
         self.assertEqual(actions.calls[0][0], "close_managed_item_from_drop_marker")
 
+    def test_phase9_reflector_drop_log_routes_to_close_helper_with_clean_marker_evidence(self) -> None:
+        actions = FakeActions()
+        marker = "META_RESOLVED:drop:no-actionable-framing-after-4-rounds"
+        log = self.repo / ".refactor-loop/logs/phase9-issue554-r4-reflector.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(
+            "raw prose is diagnostic only\n"
+            f"{marker}\n"
+            "EXIT=0\n"
+            "DONE_AT=2026-06-06T02:33:09Z\n",
+            encoding="utf-8",
+        )
+        action = self.close_action(
+            action_id="completed-marker:phase9-issue554-r4-reflector.log:" + marker,
+            source_artifact=".refactor-loop/logs/phase9-issue554-r4-reflector.log",
+            source_marker=marker,
+            target_number=554,
+            target={"kind": "issue", "number": 554},
+        )
+
+        results = self.run_result(self.base_plan(action), actions=actions)
+
+        self.assertEqual(results[0].status, "applied")
+        self.assertEqual([call[0] for call in actions.calls], ["close_managed_item_from_drop_marker"])
+        helper_action = actions.calls[0][1]
+        self.assertEqual(helper_action["source_artifact"], ".refactor-loop/logs/phase9-issue554-r4-reflector.log")
+        self.assertEqual(helper_action["source_marker"], marker)
+        self.assertEqual(helper_action["target_number"], 554)
+
     def test_close_managed_item_from_drop_marker_blocks_non_managed_open_target_before_helper(self) -> None:
         actions = FakeActions()
         action = self.close_action(action_id="close-managed-item:non-managed")
